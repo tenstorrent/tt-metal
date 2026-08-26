@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM2
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU, TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
+from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 
 
 SINGLE_CHIP_MESH_PARAMS = [
@@ -306,19 +307,7 @@ def _isl_params(active_sweep, only_models=None):
     return params
 
 
-def _ci_unsupported_param_combos_functional(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
-    x_row_major = params["x_row_major"]
-
-    if not (is_ci_env or is_ci_v2_env):
-        return False
-    if x_row_major is False:
-        return True
-    return False
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_functional)
+@pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
 @pytest.mark.parametrize("allocated_tokens, active_tokens, emb_dim, hidden_dim", _isl_params(_ISL_FUNCTIONAL_SWEEP))
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 def test_single_routed_expert_functional(
@@ -339,19 +328,7 @@ def test_single_routed_expert_functional(
     )
 
 
-def _ci_unsupported_param_combos_isl_sweep(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
-    x_row_major = params["x_row_major"]
-
-    if not (is_ci_env or is_ci_v2_env):
-        return False
-    if x_row_major is False:
-        return True
-    return False
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_isl_sweep)
+@pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
 @pytest.mark.parametrize(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),

@@ -15,18 +15,10 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 
 
-def _ci_unsupported_param_combos(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
-
-    if not (is_ci_env or is_ci_v2_env):
-        return False
-    return True
-
-
-pytestmark = pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
+pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
 
 
 GLOBAL_ROWS = 64

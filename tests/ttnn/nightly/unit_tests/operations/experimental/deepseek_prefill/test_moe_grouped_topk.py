@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     grouped_gate_golden_act,
     score_activation,
 )
+from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 
 
 TEST_PARAMS = [(1, 1, 1), (1, 1, 33), (1, 1, 128), (1, 1, 3200)]
@@ -46,19 +47,6 @@ INPUT_DTYPES = [ttnn.float32, ttnn.bfloat16]
 INPUT_DTYPE_IDS = ["in_fp32", "in_bf16"]
 
 
-def _ci_unsupported_param_combos_moe_grouped_topk(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
-    is_bh = params["is_bh"]
-    input_dtype = params["input_dtype"]
-
-    if not (is_ci_env or is_ci_v2_env):
-        return False
-    if is_bh and input_dtype == ttnn.float32:
-        return True
-    return False
-
-
 # Selected-weight PCC thresholds
 WEIGHTS_PCC_THRESHOLD_FP32 = 0.96
 WEIGHTS_PCC_THRESHOLD_BF16 = 0.85
@@ -66,7 +54,7 @@ WEIGHTS_PCC_THRESHOLD_BF16 = 0.85
 BIASED_PCC_THRESHOLD = 0.999
 
 
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_moe_grouped_topk)
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_fp32_input)
 @pytest.mark.parametrize("input_dtype", INPUT_DTYPES, ids=INPUT_DTYPE_IDS)
 @pytest.mark.parametrize("score_func", SCORE_FUNCS)
 @pytest.mark.parametrize(

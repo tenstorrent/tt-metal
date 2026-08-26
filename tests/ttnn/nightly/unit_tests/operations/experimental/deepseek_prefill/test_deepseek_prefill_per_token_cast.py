@@ -18,6 +18,7 @@ from loguru import logger
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from tests.ttnn.utils_for_testing import comp_pcc, assert_equal
+from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 
 pytestmark = pytest.mark.use_module_device
 
@@ -106,20 +107,7 @@ def assert_quality(result, ref, *, pcc_threshold, rtol, atol, label=""):
 # ---------------------------------------------------------------------------
 
 
-def _ci_unsupported_param_combos_cast_to_fp8_scale(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
-    is_bh = params["is_bh"]
-    input_layout = params["input_layout"]
-
-    if not (is_ci_env or is_ci_v2_env):
-        return False
-    if is_bh and input_layout == ttnn.ROW_MAJOR_LAYOUT:
-        return True
-    return False
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_cast_to_fp8_scale)
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_row_major_input)
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 def test_cast_to_fp8_scale(device, dtype, input_layout):
@@ -144,20 +132,7 @@ def test_cast_to_fp8_scale(device, dtype, input_layout):
     assert_equal(scale, ref)
 
 
-def _ci_unsupported_param_combos_cast_to_fp8_scale_values(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
-    is_bh = params["is_bh"]
-    input_layout = params["input_layout"]
-
-    if not (is_ci_env or is_ci_v2_env):
-        return False
-    if is_bh and input_layout == ttnn.ROW_MAJOR_LAYOUT:
-        return True
-    return False
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_cast_to_fp8_scale_values)
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_row_major_input)
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", SHAPES)
@@ -191,20 +166,7 @@ def test_cast_to_fp8_scale_values(device, dtype, shape, input_layout):
     assert_quality(scale, ref, pcc_threshold=0.999, rtol=1e-2, atol=1e-9, label=f"scale {dtype} shape={shape}")
 
 
-def _ci_unsupported_param_combos_power_of_two_scale_for_sparse_kv(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
-    is_bh = params["is_bh"]
-    input_layout = params["input_layout"]
-
-    if not (is_ci_env or is_ci_v2_env):
-        return False
-    if is_bh and input_layout == ttnn.ROW_MAJOR_LAYOUT:
-        return True
-    return False
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_power_of_two_scale_for_sparse_kv)
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_row_major_input)
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", [(1, 512), (30, 512), (2, 3, 32, 512)])
@@ -284,20 +246,7 @@ def test_cast_to_fp8_power_of_two_scale_e4m3fn_boundary(device):
 # ---------------------------------------------------------------------------
 
 
-def _ci_unsupported_param_combos_cast_back_dequant(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
-    is_bh = params["is_bh"]
-    narrow_scales_to_bf16 = params["narrow_scales_to_bf16"]
-
-    if not (is_ci_env or is_ci_v2_env):
-        return False
-    if is_bh and narrow_scales_to_bf16:
-        return True
-    return False
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_cast_back_dequant)
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_narrow_scales_to_bf16)
 @pytest.mark.parametrize("narrow_scales_to_bf16", [False, True], ids=["scales_kept_at_fp32", "scales_narrow_to_bf16"])
 @pytest.mark.parametrize("out_dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", SHAPES)
@@ -353,20 +302,7 @@ def test_cast_back_dequant(device, out_dtype, shape, narrow_scales_to_bf16):
 # ---------------------------------------------------------------------------
 
 
-def _ci_unsupported_param_combos_round_trip_random(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
-    is_bh = params["is_bh"]
-    input_layout = params["input_layout"]
-
-    if not (is_ci_env or is_ci_v2_env):
-        return False
-    if is_bh and input_layout == ttnn.ROW_MAJOR_LAYOUT:
-        return True
-    return False
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_round_trip_random)
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_row_major_input)
 # Output layout is always ROW_MAJOR.
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
@@ -437,20 +373,7 @@ def _pack_scale_metadata(input_scale):
     return meta
 
 
-def _ci_unsupported_param_combos_token_count_aware_cast_back(**params):
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
-    is_bh = params["is_bh"]
-    scales_from_metadata = params["scales_from_metadata"]
-
-    if not (is_ci_env or is_ci_v2_env):
-        return False
-    if is_bh and not scales_from_metadata:
-        return True
-    return False
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_token_count_aware_cast_back)
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_scales_not_from_metadata)
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("scales_from_metadata", [False, True])
 @pytest.mark.parametrize("label, counts", TOKEN_COUNT_AWARE_CASES, ids=[c[0] for c in TOKEN_COUNT_AWARE_CASES])
