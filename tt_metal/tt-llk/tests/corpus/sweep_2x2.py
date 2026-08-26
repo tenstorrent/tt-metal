@@ -1000,30 +1000,6 @@ KNOB_MODES = {
     # knob; promotion requires an R9 witness and ON-vs-ON attribution
     # ceremony.
     "crossrow-pairing-seed": "on-plus",
-    # GJ window-pairing-stride remains a default-off on-plus knob at pin-28;
-    # promotion requires an R9 witness and ON-vs-ON attribution ceremony.
-    "window-pairing-stride": "on-plus",
-    # GP crossrow-pairing: default-off Init(0) booking knob; the pairing
-    # phase runs before the region schedulers and composes with the
-    # ON-28 replay capture (record + halved launches).  on-plus while a
-    # booking knob; promotion requires an R9 witness and ON-vs-ON
-    # attribution ceremony.
-    "crossrow-pairing": "on-plus",
-    # GQ record-hoist-peel: default-off on-plus booking knob — the peel
-    # rescues a record-hoist refusal, so its shape only exists on the
-    # reviewed-ON pipeline (record-hoist is in the ON set); the booking
-    # A/B is (ON + flag) vs plain ON.
-    "record-hoist-peel": "on-plus",
-    # GW native-compare: default-off Init(0) booking knob; a pure
-    # expansion-time lowering choice (no scheduler interaction beyond
-    # shorter CC webs).  on-plus while a booking knob; promotion requires
-    # an R9 witness and ON-vs-ON attribution ceremony.
-    "native-compare": "on-plus",
-    # GV pressure-park: default-off on-plus knob — the residency classes
-    # it widens run in the ON set (const-residency), so attribution is
-    # ON vs ON+flag.  Promotion requires an R9 witness and the ON-vs-ON
-    # attribution ceremony.
-    "pressure-park": "on-plus",
     # HH launch-flatten: default-off Init(0) booking knob; a pure
     # GIMPLE unroll-request (delivery-shape change only, dynamic word
     # stream unchanged by construction).  on-plus while a booking knob;
