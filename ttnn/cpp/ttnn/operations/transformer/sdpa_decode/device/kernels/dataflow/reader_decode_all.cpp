@@ -284,8 +284,8 @@ void kernel_main() {
 
         for (uint32_t tile = 0; tile < PNHt; ++tile) {
             // Use noc.async_read with explicit size instead of noc.async_read_page because
-            // the CB may use half tiles (16x32) while the DRAM buffer stores full tiles (32x32).
-            // noc.async_read_page would read buffer->aligned_page_size() bytes, overflowing the CB.
+            // the DFB may use half tiles (16x32) while the DRAM buffer stores full tiles (32x32).
+            // noc.async_read_page would read buffer->aligned_page_size() bytes, overflowing the DFB.
             noc.async_read(
                 attention_sink_reader,
                 CoreLocalMem<uint32_t>(attention_sink_write_ptr),

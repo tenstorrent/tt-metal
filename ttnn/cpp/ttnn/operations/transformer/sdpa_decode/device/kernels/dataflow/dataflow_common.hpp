@@ -708,7 +708,7 @@ uint32_t read_k(
                     {.page_id = physical_k_tile_id},
                     {});
                 physical_k_tile_id += 1;                               // Go to next tile in row
-                k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in CB
+                k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in the DFB
 
                 if (++barrier_count == barrier_threshold) {
                     noc.async_read_barrier();

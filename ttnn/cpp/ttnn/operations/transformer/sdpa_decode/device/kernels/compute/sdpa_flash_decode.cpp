@@ -83,7 +83,7 @@ void kernel_main() {
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    // CB index definitions (each exists only where the host bound it — see #ifdef gates).
+    // DFB accessors (each exists only where the host bound it — see #ifdef gates).
     constexpr auto dfb_q_in = dfb::q_in;
     constexpr auto dfb_k_in = dfb::k_in;
     constexpr auto dfb_v_in = dfb::v_in;
@@ -105,8 +105,8 @@ void kernel_main() {
 #endif
     constexpr auto dfb_zero_in = dfb::zero_in;
 #ifdef USE_CUR_POS_TENSOR
-    // #44366: compute reads cur_pos from compute_cur_pos (legacy c_15; writer reads
-    // writer_cur_pos, legacy c_8) — see reader_decode_all.cpp.
+    // #44366: compute reads cur_pos from compute_cur_pos (writer reads writer_cur_pos)
+    // — see reader_decode_all.cpp.
     constexpr auto dfb_cur_pos = dfb::cur_pos;
 #endif
 
@@ -177,7 +177,7 @@ void kernel_main() {
             cur_pos = cur_pos_arg;
         } else {
 #ifdef USE_CUR_POS_TENSOR
-            // Read cur_pos from CB using mailbox-based synchronization (issue #27979).
+            // Read cur_pos from the DFB using mailbox-based synchronization (issue #27979).
             DataflowBuffer dfb_cur_pos_buf(dfb_cur_pos);
             dfb_cur_pos_buf.wait_front(1);
             cur_pos = dfb_cur_pos_buf.read_tile_value(0, cur_batch / q_heads_parallel_factor);
@@ -420,7 +420,7 @@ void kernel_main() {
 
             /* QK += MASK */
             // Apply block padding mask for every chunk when block_size < TILE_HEIGHT.
-            // Uses <false> to NOT pop the mask CB so it can be reused for subsequent chunks.
+            // Uses <false> to NOT pop the mask DFB so it can be reused for subsequent chunks.
             // Applied outside mask_fusion conditional since it's always needed independently.
 #ifdef HAS_BLOCK_PADDING
             reconfig_data_format(dfb_qk_im, dfb_block_pad_mask);
@@ -601,8 +601,8 @@ void kernel_main() {
                     // * 5. PREV_SUM *= EXP_MAX_DIFF
                     // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
                     correction_block<scale_fp32, vector_mode>(
-                        dfb_m_in,        // cb child max
-                        dfb_prev_sum_2,  // cb child sum
+                        dfb_m_in,        // child max
+                        dfb_prev_sum_2,  // child sum
                         dfb_cur_max,
                         dfb_prev_max,
                         dfb_cur_sum,
@@ -708,11 +708,11 @@ void kernel_main() {
             //   - dfb_out_accumulate_im: O
             //   - dfb_prev_sum: L
             //   - dfb_prev_max: M
-            // Move O to output CB
+            // Move O to the output DFB
             move_block<true>(dfb_out_accumulate_im, dfb_out_o, out_chunk_tiles);
-            // Move M to output CB
+            // Move M to the output DFB
             move_block<true>(dfb_prev_max, dfb_out_m, Sq_chunk_t);
-            // Move L to output CB
+            // Move L to the output DFB
             move_block<true>(dfb_prev_sum, dfb_out_l, Sq_chunk_t);
         }
     }

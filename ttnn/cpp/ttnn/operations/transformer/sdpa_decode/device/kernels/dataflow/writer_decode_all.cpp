@@ -83,7 +83,7 @@ void kernel_main() {
     constexpr auto dfb_out_m = dfb::out_m;
     constexpr auto dfb_out_l = dfb::out_l;
 #ifdef HAS_INTERMED_OUT
-    // this cb holds the output intermediates from other worker cores
+    // this DFB holds the output intermediates from other worker cores
     constexpr auto dfb_intermed_out = dfb::intermed_out;
 #endif
     constexpr auto dfb_out = dfb::out;

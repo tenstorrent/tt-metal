@@ -618,7 +618,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         });
     };
 
-    // c_0 q_in / c_10 q_rm — config-flip.
+    // q_in / q_rm — config-flip.
     //   tilize_q  : reader fills q_rm (P); compute tilizes q_rm->q_in (q_in self-loop), consumes q_rm.
     //   !tilize_q : reader fills q_in (P); compute consumes q_in. q_rm not used (dropped).
     add_dfb(
@@ -629,7 +629,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         &q_tile,
         q_locally_available ? std::optional<TensorParamName>(Q) : std::nullopt);
     if (tilize_q) {
-        // c_10 (q_rm) is never borrowed — matching legacy add_cb(c_10, ...) which passes no buffer. Only c_0
+        // q_rm is never borrowed — matching legacy, which gave it no backing buffer. Only q_in
         // (the tilize output / borrowed-Q input) borrows Q under q_locally_available, as legacy does. (A
         // borrow here would alias the tilize source and output when q_locally_available && tilize_q — a
         // combination MLA never produces, since MLA Q is tiled — but the port must not add a borrow legacy
@@ -644,7 +644,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(compute_dfb, DFB_Q_IN, "q_in", DFBEndpointType::CONSUMER);
     }
 
-    // c_1 k_in / c_2 v_in — reader produces, compute consumes.
+    // k_in / v_in — reader produces, compute consumes.
     add_dfb(DFB_K_IN, k_tile_size, k_tiles, k_df, nullptr);
     bind(reader_dfb, DFB_K_IN, "k_in", DFBEndpointType::PRODUCER);
     bind(compute_dfb, DFB_K_IN, "k_in", DFBEndpointType::CONSUMER);
@@ -652,7 +652,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     bind(reader_dfb, DFB_V_IN, "v_in", DFBEndpointType::PRODUCER);
     bind(compute_dfb, DFB_V_IN, "v_in", DFBEndpointType::CONSUMER);
 
-    // c_3 mask_in — producer depends on config; compute always references it (matmul mask arg).
+    // mask_in — producer depends on config; compute always references it (matmul mask arg).
     add_dfb(DFB_MASK_IN, mask_tile_size, qk_tiles, mask_df, &mask_tile);
     if (is_causal) {
         bind(writer_dfb, DFB_MASK_IN, "mask_in", DFBEndpointType::PRODUCER);
@@ -666,19 +666,19 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(compute_dfb, DFB_MASK_IN, "mask_in", DFBEndpointType::CONSUMER);
     }
 
-    // c_4 attention_sink — reader produces, compute consumes (conditional).
+    // attention_sink — reader produces, compute consumes (conditional).
     if (use_attention_sink) {
         add_dfb(DFB_ATTN_SINK, stats_tile_size, statistics_tiles, stats_df, &stats_tile);
         bind(reader_dfb, DFB_ATTN_SINK, "attention_sink", DFBEndpointType::PRODUCER);
         bind(compute_dfb, DFB_ATTN_SINK, "attention_sink", DFBEndpointType::CONSUMER);
     }
 
-    // c_5 identity_scale — writer produces, compute consumes.
+    // identity_scale — writer produces, compute consumes.
     add_dfb(DFB_IDENTITY_SCALE, scalar_tile_size, scale_tiles, scalar_df, &scalar_tile);
     bind(writer_dfb, DFB_IDENTITY_SCALE, "identity_scale_in", DFBEndpointType::PRODUCER);
     bind(compute_dfb, DFB_IDENTITY_SCALE, "identity_scale_in", DFBEndpointType::CONSUMER);
 
-    // c_6 m_in / c_7 l_in — writer produces (receives child stats), compute consumes.
+    // m_in / l_in — writer produces (receives child stats), compute consumes.
     add_dfb(DFB_M_IN, stats_tile_size, statistics_tiles, stats_df, &stats_tile);
     bind(writer_dfb, DFB_M_IN, "m_in", DFBEndpointType::PRODUCER);
     bind(compute_dfb, DFB_M_IN, "m_in", DFBEndpointType::CONSUMER);
@@ -686,15 +686,14 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     bind(writer_dfb, DFB_L_IN, "l_in", DFBEndpointType::PRODUCER);
     bind(compute_dfb, DFB_L_IN, "l_in", DFBEndpointType::CONSUMER);
 
-    // c_8 writer_cur_pos / c_15 compute_cur_pos — reader produces, writer/compute consume (conditional).
+    // writer_cur_pos / compute_cur_pos — reader produces, writer/compute consume (conditional).
     if (use_cur_pos_tensor) {
         // #44366: cur_pos is consumed by both the writer and compute kernels.
         // A single shared DFB races: whichever consumer pops first drains the
         // count and the other hangs waiting for tiles. Use one DFB per consumer —
-        // writer_cur_pos (legacy c_8) for the writer, compute_cur_pos (legacy c_15)
-        // for compute — each with capacity 1. The reader fills writer_cur_pos
-        // (from DRAM, or via the borrowed sharded buffer) then does an L1->L1 copy
-        // into compute_cur_pos.
+        // writer_cur_pos for the writer, compute_cur_pos for compute — each with
+        // capacity 1. The reader fills writer_cur_pos (from DRAM, or via the
+        // borrowed sharded buffer) then does an L1->L1 copy into compute_cur_pos.
         add_dfb(
             DFB_WRITER_CUR_POS,
             cur_pos_stick_size,
@@ -709,7 +708,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(compute_dfb, DFB_COMPUTE_CUR_POS, "cur_pos", DFBEndpointType::CONSUMER);
     }
 
-    // c_9 page_table — reader fills + raw-reads its own buffer (self-loop) (conditional).
+    // page_table — reader fills + raw-reads its own buffer (self-loop) (conditional).
     if (is_paged_attention) {
         uint32_t page_table_num_entries = is_page_table_sharded ? B : 1;
         add_dfb(
@@ -723,7 +722,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(reader_dfb, DFB_PAGE_TABLE, "page_table", DFBEndpointType::CONSUMER);
     }
 
-    // c_11 col_identity — writer produces; no consumer in sdpa_decode's compute (dead-but-kept).
+    // col_identity — writer produces; no consumer in sdpa_decode's compute (dead-but-kept).
     // (It is consumed by sdpa *prefill*'s matmul_reduce, so this reads as carried-over dead code from a
     // matmul-based reduce path. Removing it is an ops-team cleanup, not a port drop, so it is preserved
     // here as a single-toucher self-loop with zero functional effect.)
@@ -731,33 +730,33 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     bind(writer_dfb, DFB_COL_IDENTITY, "col_identity", DFBEndpointType::PRODUCER);
     bind(writer_dfb, DFB_COL_IDENTITY, "col_identity", DFBEndpointType::CONSUMER);
 
-    // c_12 zero_in — writer produces, compute consumes.
+    // zero_in — writer produces, compute consumes.
     add_dfb(DFB_ZERO_IN, scalar_tile_size, scale_tiles, scalar_df, &scalar_tile);
     bind(writer_dfb, DFB_ZERO_IN, "zero_in", DFBEndpointType::PRODUCER);
     bind(compute_dfb, DFB_ZERO_IN, "zero_in", DFBEndpointType::CONSUMER);
 
-    // c_13 sliding_window_mask — writer produces, compute consumes (conditional).
+    // sliding_window_mask — writer produces, compute consumes (conditional).
     if (sliding_window_size > 0) {
         add_dfb(DFB_SLIDING_MASK, mask_tile_size, qk_tiles, mask_df, &mask_tile);
         bind(writer_dfb, DFB_SLIDING_MASK, "sliding_window_mask_in", DFBEndpointType::PRODUCER);
         bind(compute_dfb, DFB_SLIDING_MASK, "sliding_window_mask_in", DFBEndpointType::CONSUMER);
     }
 
-    // c_14 block_pad_mask — writer produces, compute consumes (conditional).
+    // block_pad_mask — writer produces, compute consumes (conditional).
     if (has_block_padding) {
         add_dfb(DFB_BLOCK_PAD_MASK, mask_tile_size, qk_tiles, mask_df, &mask_tile);
         bind(writer_dfb, DFB_BLOCK_PAD_MASK, "block_pad_mask", DFBEndpointType::PRODUCER);
         bind(compute_dfb, DFB_BLOCK_PAD_MASK, "block_pad_mask", DFBEndpointType::CONSUMER);
     }
 
-    // c_16 out_o/out_worker — tree-reduction multi-binding (writer P+C, compute P+C).
+    // out_o/out_worker — tree-reduction multi-binding (writer P+C, compute P+C).
     add_dfb(DFB_OUT_O, stats_tile_size, out_tiles, stats_df, &stats_tile, std::nullopt, /*multi=*/true);
     bind(writer_dfb, DFB_OUT_O, "out_o", DFBEndpointType::PRODUCER);
     bind(writer_dfb, DFB_OUT_O, "out_worker", DFBEndpointType::CONSUMER);
     bind(compute_dfb, DFB_OUT_O, "out_o", DFBEndpointType::PRODUCER);
     bind(compute_dfb, DFB_OUT_O, "out_o", DFBEndpointType::CONSUMER);
 
-    // c_17 out_m / c_18 out_l — compute produces, writer consumes.
+    // out_m / out_l — compute produces, writer consumes.
     add_dfb(DFB_OUT_M, stats_tile_size, statistics_tiles, stats_df, &stats_tile);
     bind(compute_dfb, DFB_OUT_M, "out_m", DFBEndpointType::PRODUCER);
     bind(writer_dfb, DFB_OUT_M, "out_m", DFBEndpointType::CONSUMER);
@@ -765,14 +764,14 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     bind(compute_dfb, DFB_OUT_L, "out_l", DFBEndpointType::PRODUCER);
     bind(writer_dfb, DFB_OUT_L, "out_l", DFBEndpointType::CONSUMER);
 
-    // c_19 intermed_out — writer raw cross-core read/write (self-loop) (conditional).
+    // intermed_out — writer raw cross-core read/write (self-loop) (conditional).
     if (intermed_output_tiles > 0) {
         add_dfb(DFB_INTERMED_OUT, stats_tile_size, intermed_output_tiles, stats_df, &stats_tile);
         bind(writer_dfb, DFB_INTERMED_OUT, "intermed_out", DFBEndpointType::PRODUCER);
         bind(writer_dfb, DFB_INTERMED_OUT, "intermed_out", DFBEndpointType::CONSUMER);
     }
 
-    // c_20 out — compute produces, writer consumes (final output shard).
+    // out — compute produces, writer consumes (final output shard).
     add_dfb(
         DFB_OUT,
         out_tile_size,
@@ -783,7 +782,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     bind(compute_dfb, DFB_OUT, "out", DFBEndpointType::PRODUCER);
     bind(writer_dfb, DFB_OUT, "out", DFBEndpointType::CONSUMER);
 
-    // c_21..c_31 compute intermediates — compute self-loop.
+    // Compute intermediates — compute self-loop.
     auto add_compute_intermediate = [&](const DFBSpecName& name,
                                         std::string accessor,
                                         uint32_t entry,
@@ -831,14 +830,14 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         add_tensor(CUR_POS, cur_pos_tensor.value());
         reader_tensors.push_back(TensorBinding{.tensor_parameter_name = CUR_POS, .accessor_name = "cur_pos"});
     } else if (use_cur_pos_tensor) {
-        // sharded: borrowed into c_8; borrow keeps the parameter "used" with no TensorBinding.
+        // sharded: borrowed into writer_cur_pos; the borrow keeps the parameter "used" with no TensorBinding.
         add_tensor(CUR_POS, cur_pos_tensor.value());
     }
     if (is_paged_attention && !is_page_table_sharded) {
         add_tensor(PAGE_TABLE, page_table_tensor.value());
         reader_tensors.push_back(TensorBinding{.tensor_parameter_name = PAGE_TABLE, .accessor_name = "page_table"});
     } else if (is_paged_attention) {
-        // sharded: borrowed into c_9.
+        // sharded: borrowed into page_table.
         add_tensor(PAGE_TABLE, page_table_tensor.value());
     }
     if (use_attention_mask) {
@@ -853,7 +852,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     if (!is_output_sharded) {
         writer_tensors.push_back(TensorBinding{.tensor_parameter_name = OUT_T, .accessor_name = "out"});
     }
-    // Note: when output is sharded, c_20 borrows from OUT_T; the writer still writes the shard via the
+    // Note: when output is sharded, the out DFB borrows from OUT_T; the writer still writes the shard via the
     // borrowed DFB / peer reads. The writer's out_writer TensorAccessor is only used on the !sharded path,
     // so it is bound only there. On the sharded path OUT_T stays "used" via the borrow.
 
@@ -1010,8 +1009,8 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     set_flag(compute_defines, "HAS_BLOCK_PADDING", has_block_padding);
     set_flag(compute_defines, "USE_CUR_POS_TENSOR", use_cur_pos_tensor);
 
-    // HAS_BLOCK_PADDING is derived kernel-side from IS_PAGED_ATTENTION + original_block_size on reader/writer;
-    // emit it directly on the writer too (it gates c_14 there).
+    // HAS_BLOCK_PADDING is derived kernel-side from IS_PAGED_ATTENTION + original_block_size on the reader;
+    // it is emitted directly on the compute and writer kernels (it gates block_pad_mask there).
     set_flag(writer_defines, "HAS_BLOCK_PADDING", has_block_padding);
 
     // ---- Compute hardware config (Style A: resolve the op's ComputeKernelConfig, translate) ----
