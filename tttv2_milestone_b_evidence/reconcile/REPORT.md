@@ -213,6 +213,9 @@ one process at a time, never piped.
 | 4 | `models/common/tests/modules`, host-only subset | **`260 passed, 1 warning in 42.20s`**, exit=0 | `FINAL_gate4_modules_hostonly.log` |
 | 5 *(extra, not in the brief)* | all of `models/common/tests/models` (`--ignore-glob="*_wh_galaxy*.py"`) | `5 failed, 575 passed, 3 skipped, 3 deselected in 162.29s` | `FINAL_gate5_all_model_host.log` |
 
+Every gate was run twice: once at `52def65194c` (`FINAL_*.log`) and again at the branch tip after the
+documentation commits (`TIP_*.log`). Identical results, including the same five gate-5 failures.
+
 Gate 4 is the brief's "full module set, 1D included" with the 1D **device** suites removed, for the
 reason in §7.2. Files run: `test_attention_1d_arch_config.py`, `test_attention_2d.py`,
 `test_embedding_2d.py`, `test_lm_head_2d.py`, `test_mlp_1d_arch_config.py`, `test_mlp_2d.py`,
