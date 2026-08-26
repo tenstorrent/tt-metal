@@ -144,19 +144,26 @@ def _run(
 
 
 @pytest.mark.parametrize(
-    ("widths", "channel_chunk_size"),
-    [((512, 512, 512), 1536), ((1024, 1024, 1024), 768), ((512, 256, 128), 896)],
+    ("widths", "channel_chunk_size", "full_contract"),
+    [
+        pytest.param((512, 512, 512), 1536, False, id="single-block"),
+        pytest.param((1024, 1024, 1024), 768, False, id="multiple-blocks"),
+        pytest.param((512, 256, 128), 896, True, id="asymmetric-split-full-contract"),
+    ],
 )
 def test_qkv_causal_conv1d_silu_contract(
-    device: ttnn.Device, widths: tuple[int, int, int], channel_chunk_size: int
+    device: ttnn.Device,
+    widths: tuple[int, int, int],
+    channel_chunk_size: int,
+    full_contract: bool,
 ) -> None:
-    """Cover one/multiple channel blocks, split widths, tap order, and runtime gates."""
+    """Cover every geometry numerically and the invariant output/trace contract once."""
     host, device_inputs = _device_inputs(device, widths=widths)
     inputs, history, taps = host
     input_tt, history_tt, taps_tt = device_inputs
     expected = _reference(inputs, history, taps, widths)
     input_tensors = (input_tt, history_tt, *taps_tt)
-    snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in input_tensors)
+    snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in input_tensors) if full_contract else ()
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -164,30 +171,32 @@ def test_qkv_causal_conv1d_silu_contract(
 
     outputs = run()
     for output, width in zip(outputs, widths, strict=True):
-        assert output.dtype == ttnn.bfloat16
-        assert output.layout == ttnn.TILE_LAYOUT
-        assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
         assert tuple(ttnn.to_torch(output).shape) == (1, _SEQUENCE, width)
-        assert all(output.buffer_address() != tensor.buffer_address() for tensor in input_tensors)
+        if full_contract:
+            assert output.dtype == ttnn.bfloat16
+            assert output.layout == ttnn.TILE_LAYOUT
+            assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+            assert all(output.buffer_address() != tensor.buffer_address() for tensor in input_tensors)
 
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    traced_outputs = run()
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    for _ in range(2):
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-
-    for name, golden, output, traced in zip(("q", "k", "v"), expected, outputs, traced_outputs, strict=True):
+    for name, golden, output in zip(("q", "k", "v"), expected, outputs, strict=True):
         actual = ttnn.to_torch(output)
         assert_accurate(golden, actual, name=name, pcc_threshold=0.999)
-        assert_bit_identical(actual, ttnn.to_torch(traced), name=f"{name} trace replay")
 
-    for name, before, tensor in zip(
-        ("input", "history", "tap0", "tap1", "tap2", "tap3"), snapshots, input_tensors, strict=True
-    ):
-        assert_bit_identical(before, ttnn.to_torch(tensor), name=f"{name} immutability")
+    if full_contract:
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        traced_outputs = run()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        for _ in range(2):
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(device)
 
-    ttnn.release_trace(device, trace_id)
+        for name, output, traced in zip(("q", "k", "v"), outputs, traced_outputs, strict=True):
+            assert_bit_identical(ttnn.to_torch(output), ttnn.to_torch(traced), name=f"{name} trace replay")
+        for name, before, tensor in zip(
+            ("input", "history", "tap0", "tap1", "tap2", "tap3"), snapshots, input_tensors, strict=True
+        ):
+            assert_bit_identical(before, ttnn.to_torch(tensor), name=f"{name} immutability")
+        ttnn.release_trace(device, trace_id)
 
 
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
