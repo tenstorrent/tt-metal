@@ -647,9 +647,10 @@ sfpi_inline void _two_pass_finish_shifted_mean_(std::uint32_t reciprocal_bits)
 template <bool dual_m2>
 sfpi_inline void _two_pass_store_split_mean_var_to_dst_row_(std::uint32_t reciprocal_bits)
 {
-    static_assert(dual_m2, "The split-mean finalizer requires LREG7 to retain the anchor");
-
-    TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, 0);
+    if constexpr (dual_m2)
+    {
+        TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, 0);
+    }
 
     // Form anchor - mean so the fused FPU finalizer can seed DEST with the
     // correction and accumulate x - anchor into it.
@@ -700,6 +701,16 @@ sfpi_inline void _two_pass_store_split_mean_var_to_dst_row_(std::uint32_t recipr
     TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset + offset1);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG6, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset + offset2);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset + offset3);
+}
+
+sfpi_inline void _two_pass_store_anchor_to_dst_()
+{
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 0);
+}
+
+sfpi_inline void _two_pass_load_anchor_from_dst_()
+{
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 0);
 }
 
 sfpi_inline void _two_pass_clear_stats_()

@@ -15,6 +15,7 @@
 #include "api/compute/welford.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/experimental/layernorm.h"
 #include "api/compute/transpose.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
@@ -529,6 +530,7 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     constexpr uint32_t last_block_n = W - last_block_start;
     const uint32_t full_block_n_bits = generic::bit_cast<uint32_t>(static_cast<float>(full_block_n));
     const uint32_t last_block_n_bits = generic::bit_cast<uint32_t>(static_cast<float>(last_block_n));
+    constexpr uint32_t anchor_dst = mean_dst + 2;
 
     reconfig_data_format_srca(dfb_x_welford);
     transpose_init(dfb_x_welford);
@@ -559,7 +561,7 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             two_pass_stats_update_shifted_rows<false>(input_dst, 0, rows);
             block_n += rows;
         }
-        two_pass_stats_finish_shifted_mean(reciprocal_lut[block_n - 1]);
+        two_pass_stats_finish_shifted_mean<true, true>(reciprocal_lut[block_n - 1]);
 
         // The block remains at the CB front, so the second SFPU traversal is
         // an L1 reread rather than another DRAM traversal.
@@ -570,6 +572,9 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             two_pass_stats_update_rows<true>(input_dst, 0, rows);
         }
 
+        if (block.is_first()) {
+            two_pass_stats_save_anchor(anchor_dst);
+        }
         if (block.is_first()) {
             two_pass_stats_save_state(mean_dst);
         } else {
@@ -587,7 +592,8 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     }
 
     welford_restore_state(mean_dst);
-    two_pass_stats_finalize_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
+    two_pass_stats_restore_anchor(anchor_dst);
+    two_pass_stats_finalize_split_mean_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
     tile_regs_commit();
 }
 
@@ -833,10 +839,15 @@ void kernel_main() {
             tile_regs_acquire();
             constexpr auto dfb_normalize_in = fused_pre_add_replay ? dfb_x_replay : dfb_in;
             reconfig_data_format(dfb_normalize_in, dfb_ex);
-            sub_bcast_cols_init(dfb_normalize_in, dfb_ex);
             // x-E[x]
-            for (auto i : block.local()) {
-                sub_tiles_bcast_cols(dfb_normalize_in, dfb_ex, i, 0, i);
+            if constexpr (fuse_pre_add) {
+                sub_bcast_cols_init(dfb_normalize_in, dfb_ex);
+                for (auto i : block.local()) {
+                    sub_tiles_bcast_cols(dfb_normalize_in, dfb_ex, i, 0, i);
+                }
+            } else {
+                sub_bcast_cols_compensated_init(dfb_normalize_in, dfb_ex);
+                sub_bcast_cols_compensated(dfb_normalize_in, dfb_ex, 0, 0, block.size());
             }
             if constexpr (fused_pre_add_replay) {
                 dfb_x_replay_obj.pop_front(block.full_block_size());

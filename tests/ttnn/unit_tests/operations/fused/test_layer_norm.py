@@ -113,16 +113,15 @@ def test_layer_norm(device, h, w, use_welford, dtype):
     assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
-def test_layer_norm_welford_large_offset(device):
+@pytest.mark.parametrize("width", [256, 16384])
+def test_layer_norm_welford_large_offset(device, width):
     """The final subtraction must preserve variations below the large row mean."""
     torch.manual_seed(19)
-    rows, width = 64, 256
+    rows = 64
     torch_input = (10000.0 + 64.0 * torch.randn((rows, width))).to(torch.bfloat16)
     reference = torch.nn.functional.layer_norm(torch_input.to(torch.float64), [width])
 
     input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
-    weight = ttnn.from_torch(torch.ones(width, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    bias = ttnn.from_torch(torch.zeros(width, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -132,8 +131,6 @@ def test_layer_norm_welford_large_offset(device):
     )
     output = ttnn.layer_norm(
         input_tensor,
-        weight=weight,
-        bias=bias,
         program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
         recip_tensor=create_recip_tensor(device, width, use_welford=True),
         compute_kernel_config=compute_kernel_config,

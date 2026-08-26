@@ -26,10 +26,16 @@ struct BlackholeStatsSelectorParams {
 
 // Crossover points measured against the centred tile-reduction path.
 // Parameter-free FP32 remains on tile reductions for its better ULP behaviour.
+// Parameter-free BF16 uses shifted two-pass statistics at every width to avoid
+// cancellation when subtracting a large row mean. It is faster through width
+// 128 and costs at most 3% in the measured 256-2880 range.
 // BFP8 remains on tile reductions except for the calibrated fused residual and
 // full-affine case.
 constexpr bool use_blackhole_sfpu_stats(const BlackholeStatsSelectorParams& params) {
     const bool has_full_affine = params.has_gamma && params.has_beta;
+    if (!params.has_gamma && !params.has_beta && params.input_format == tt::DataFormat::Float16_b) {
+        return true;
+    }
     // This large fused shape cannot use the compact allocation, but retaining
     // the post-add row and multicasting affine parameters makes SFPU two-pass
     // substantially faster than the tile reducer on a full Blackhole grid.

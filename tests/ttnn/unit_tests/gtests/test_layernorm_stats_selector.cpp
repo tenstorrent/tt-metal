@@ -59,16 +59,22 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
     auto bf16_residual_wide = bf16_residual_middle;
     bf16_residual_wide.padded_width = 2880;
 
-    auto bf16_plain_below = bf16_affine;
-    bf16_plain_below.has_gamma = false;
-    bf16_plain_below.has_beta = false;
-    bf16_plain_below.padded_width = 3231;
+    auto bf16_plain_narrow = bf16_affine;
+    bf16_plain_narrow.has_gamma = false;
+    bf16_plain_narrow.has_beta = false;
+    bf16_plain_narrow.padded_width = 32;
 
-    auto bf16_plain_at = bf16_plain_below;
+    auto bf16_plain_at = bf16_plain_narrow;
     bf16_plain_at.padded_width = 3232;
+
+    auto bf16_plain_large = bf16_plain_at;
+    bf16_plain_large.compact_two_pass_fits_in_l1 = false;
 
     auto bf16_gamma_only = bf16_plain_at;
     bf16_gamma_only.has_gamma = true;
+
+    auto bf16_gamma_only_below = bf16_gamma_only;
+    bf16_gamma_only_below.padded_width = 3231;
 
     auto bfp8_affine = default_params();
     bfp8_affine.input_format = tt::DataFormat::Bfp8_b;
@@ -109,8 +115,10 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
         {"bf16 residual narrow", bf16_residual_narrow, true},
         {"bf16 residual middle", bf16_residual_middle, false},
         {"bf16 residual wide", bf16_residual_wide, true},
-        {"bf16 parameter-free below crossover", bf16_plain_below, false},
+        {"bf16 parameter-free narrow", bf16_plain_narrow, true},
         {"bf16 parameter-free at crossover", bf16_plain_at, true},
+        {"bf16 parameter-free large tensor", bf16_plain_large, true},
+        {"bf16 gamma-only below crossover", bf16_gamma_only_below, false},
         {"bf16 gamma-only at parameter-free crossover", bf16_gamma_only, true},
         {"bfp8 affine", bfp8_affine, false},
         {"bfp8 residual affine", bfp8_residual, true},
