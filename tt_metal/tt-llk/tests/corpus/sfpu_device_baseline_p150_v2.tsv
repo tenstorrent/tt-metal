@@ -7,7 +7,8 @@
 # update is a REVIEWED manual step (review the run's KERNEL-DELTA.md alongside).
 # Pin anchors (conf_lint R5b/R6b enforce these against sweep_2x2.conf):
 #  CANDIDATE 29. 45ba7169920924fd6ebeb6eeb3766156b413dbf895e091b53603bed1e35e7d79 (UNRATIFIED SUPERSEDED; never a baseline anchor) — proposed pin 29 (2026-08-25)
-#  30. 106e98daddc7cb9b15f65e65bc11d97fd5e9509b50dc9e6a019378c065f83f1b (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 30 = pin 29 + composition wave HB/HC/HF/HH (2026-08-26)
+#  31. 4182e7a23ab770c4864f5b302f452a96f6a936bb0669125d17596ece7b399786 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 31 = pin 30 + march-to-zero wave HM/HL/HJ (2026-08-26)
+#  30. 106e98daddc7cb9b15f65e65bc11d97fd5e9509b50dc9e6a019378c065f83f1b (superseded by 31; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 30 = pin 29 + composition wave HB/HC/HF/HH (2026-08-26)
 #  29. f47f72b40b8a5de3896c8c292d53d6062ecf290184604e8c35ce24a22f2967d6 (superseded by 30; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 29 = pin 28 + five-lane win wave GP/GQ/GU/GW/GV (2026-08-25)
 #  28. 2a71feada1d944b4c5b8c114495a8e084c722dd1dbb4cea3ac617f0ae25d69af (superseded by 29; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 28 = pin 27 + GJ window-pairing stride-phase (2026-08-24)
 #  27. 981d8af93ff044da5cb564df76b2a1e4907c9780501cdb8f1c68f1f17defd8bd (superseded by 28; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 27 = pin 26 + GA MAD-PAIR residency + FZ record-hoist composition pricing (2026-08-23)
