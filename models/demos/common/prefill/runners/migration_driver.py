@@ -514,8 +514,8 @@ class MigrationDriver:
 
 def _cache_plan(table, migrated_layers) -> list:
     """One entry per cache (config id): ``rows`` {global_layer: row on that cache's axis} or None to
-    leave the cache alone, ``head_dim`` (None => not decodable), ``identity`` (row == global layer),
-    ``why`` for the log.
+    leave the cache alone, ``head_dim`` (None => not decodable), ``kind`` (which cache this is),
+    ``unaddressed`` (layers a subset migrate could not reach), ``why`` for the log.
 
     Layers do not all carry the same caches, and a cache that skips layers may be COMPACTED: GLM-5.2's
     index cache is keyed by full-indexer rank, so global layer 6 is row 3. Axis, in order: the adapter's
@@ -523,15 +523,16 @@ def _cache_plan(table, migrated_layers) -> list:
     implements), else identity when the cache holds every layer, else the full-indexer rank convention,
     else None -- a short cache is ambiguous and a guessed row reads another layer's bytes.
 
-    Non-identity rows are dropped under PREFILL_MIGRATION_LAYERS: migrate() sends ONE layer number for
-    the whole table and the engine replays it per config (``DcnSenderBackend::migrate_slot``), so a
+    Non-identity rows are filtered out under PREFILL_MIGRATION_LAYERS: migrate() sends ONE layer number
+    for the whole table and the engine replays it per config (``DcnSenderBackend::migrate_slot``), so a
     subset addresses ROW L of every cache. Arbitrary M-of-N needs a config field in ``MigrateSpec``.
 
-    Publishing on the LAYER axis makes row == layer identity, so a still-compacted cache is refused here.
+    Publishing on the LAYER axis makes row == layer identity, so nothing is filtered out for it.
     """
     from models.demos.common.prefill.runners import prefill_producer as producer
 
     num_layers = int(producer.NUM_LAYERS)
+    n_model_configs = producer._num_model_configs(table)  # decimal-named only; a drafter's dflash_* are not caches here
     adapter = producer.ADAPTER
     rows_hook = getattr(adapter, "cache_layer_rows", None)
     head_dim_hook = getattr(adapter, "cache_head_dim", None)
@@ -547,6 +548,7 @@ def _cache_plan(table, migrated_layers) -> list:
     plan = []
     for cfg_id in range(table.num_configs()):
         cfg = table.config() if cfg_id == 0 else table.config(cfg_id)
+        is_index = cfg_id == 1 and n_model_configs > 1  # config 1 is the index cache iff the MODEL published two
         n_rows = int(cfg.num_layers)
         rows, why = None, ""
         if rows_hook is not None:
@@ -567,19 +569,24 @@ def _cache_plan(table, migrated_layers) -> list:
         head_dim = head_dim_hook(cfg_id) if head_dim_hook is not None else None
         if head_dim is None and cfg_id == 0 and hasattr(mc, "KV_LORA_RANK") and hasattr(mc, "QK_ROPE_HEAD_DIM"):
             head_dim = mc.KV_LORA_RANK + mc.QK_ROPE_HEAD_DIM
-        if head_dim is None and cfg_id == 1 and (why.startswith("DSA index cache") or table.num_configs() == 2):
-            # Deployed sparse shape is KVPE + index-key; a third cache needs the cache_head_dim() hook.
+        if head_dim is None and is_index:
             head_dim = getattr(mc, "INDEX_HEAD_DIM", None)
 
-        identity = rows is not None and all(l == r for l, r in rows.items())
-        if rows is not None and migrated_layers and not identity:
-            rows, why = None, f"{why}, but a subset migration by global layer id addressed other rows of it"
+        # Keep the rows a subset migrate did land on (row == layer) rather than dropping the whole cache.
+        unaddressed = []
+        if rows is not None and migrated_layers:
+            # Reported against what the migrate ASKED for; the rest is filtered either way, not missing coverage.
+            unaddressed = sorted(l for l, r in rows.items() if l != r and l in set(migrated_layers))
+            rows = {l: r for l, r in rows.items() if l == r} or None
+            if unaddressed:
+                why = f"{why}; a subset migration by global layer id cannot address layer(s) {unaddressed}"
         plan.append(
             {
                 "config_id": cfg_id,
                 "rows": rows,
                 "head_dim": None if head_dim is None else int(head_dim),
-                "identity": identity,
+                "kind": "index" if is_index else ("kvpe" if cfg_id == 0 else "other"),
+                "unaddressed": unaddressed,
                 "why": why,
             }
         )
@@ -593,7 +600,9 @@ def _log_cache_plan(plan, tag: str) -> None:
         if rows is None:
             logger.warning(f"[migration_driver] {tag}: cache config {cfg_id} SKIPPED -- {entry['why']}")
         else:
-            logger.info(
+            # Partial coverage warns: a filtered cache still reports a layer count, so a count alone misleads.
+            log = logger.warning if entry["unaddressed"] else logger.info
+            log(
                 f"[migration_driver] {tag}: cache config {cfg_id} carries {len(rows)} layer(s) "
                 f"({entry['why']}; head_dim={entry['head_dim']})"
             )
