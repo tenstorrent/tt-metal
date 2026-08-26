@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstddef>
+#include <cstdlib>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
 #include <numeric>
@@ -337,6 +338,35 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        const bool is_tensix_dm =
+            params.core_type == HalProgrammableCoreType::TENSIX && params.processor_class == HalProcessorClassType::DM;
+        const char* program_att_env = std::getenv("TT_METAL_ATT_PROGRAM_FOR_TEST");
+        const char* att_config_env = std::getenv("TT_METAL_NOC_ATT");
+        const bool program_att_for_test = program_att_env != nullptr && program_att_env[0] == '1';
+        const std::string att_config = att_config_env == nullptr ? "" : att_config_env;
+
+        // Temporary host bridge only: the selected value becomes a JIT define
+        // consumed by device code. Runtime can replace this environment switch
+        // with its own define once ATT configuration is part of compile metadata.
+        const bool att_disabled = att_config.empty() || att_config == "0";
+        const bool use_grendel_config = att_config == "grendel_qsr1";
+        const bool use_aether_config = att_config == "quasar_aether_2x3";
+        if (!att_disabled && !use_grendel_config && !use_aether_config) {
+            TT_THROW("Unknown TT_METAL_NOC_ATT '{}'; expected '0', 'grendel_qsr1', or 'quasar_aether_2x3'", att_config);
+        }
+        if (program_att_for_test && att_disabled) {
+            TT_THROW("TT_METAL_ATT_PROGRAM_FOR_TEST requires an explicit TT_METAL_NOC_ATT configuration");
+        }
+
+        const bool use_att = !att_disabled;
+        if (use_att && is_tensix_dm) {
+            defines.push_back("NOC_ATT_ENABLED=1");
+            defines.push_back(
+                use_aether_config ? "NOC_ATT_CONFIG_QUASAR_AETHER_2X3=1" : "NOC_ATT_CONFIG_GRENDEL_QSR1=1");
+            if (params.is_fw && program_att_for_test) {
+                defines.push_back("ATT_PROGRAM_FOR_TEST=1");
+            }
+        }
         return defines;
     }
 
