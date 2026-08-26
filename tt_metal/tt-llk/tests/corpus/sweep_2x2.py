@@ -760,18 +760,23 @@ KNOBS = {
     # `instrn_buffer[0] = word` shape; volatile loads refuse), which
     # unlocks the merge/rebuild ii-loops.  MEASURED (lane HH 2026-08-26,
     # 3-rep cycle-exact): topk-perf sem KERNEL 6022 -> 5708 (vs hand
-    # 5755 booked / 5768 same-leg = L +4.64 -> WIN -0.82); TOPK_BODY
+    # 5755 = L +4.64 -> WIN -0.82; the hand arm is raw-spelling and is
+    # byte-untouched by the knob under the final binary); TOPK_BODY
     # 5317 -> 4974 (sem faster than hand in the sort body); corr 12/12
-    # device-golden + paired CRAQ 12/12 at knob flags.  KNOB-SCOPE FACTS
-    # (named, promotion-blocking at current pricing): flattening large
-    # launch loops on NON-target rows can regress e2e (topkxl profile
-    # under the knob: production 11070 -> 11493, x6 11075 -> 11198 --
-    # i-fetch-bound loop class), and a near-full TU can overflow its
-    # TRISC code region as a LOUD link error (topk_xl K=2048 corr
-    # vehicles, TRISC1_CODE +1836 bytes; the function-level census
-    # budget XTT_LAUNCH_FLATTEN_FN_BUDGET_WORDS bounds growth but is an
-    # estimate, not linker knowledge).  Booking lever for topk-perf
-    # only; never a blanket ON candidate at this pricing.
+    # device-golden + paired CRAQ 12/12 at knob flags.  SCOPE RULE
+    # (typed-content requirement, final binary): the request demands at
+    # least one typed SFPU word in the body -- a raw-only body (raw
+    # .ttinsn words, computed-word stores, TTREPLAY/TTSETRWC owners) IS
+    # the raw-spelling world whose size pricing is already word-accurate,
+    # and bypassing it granted raw launch loops an unroll pricing
+    # correctly refused: the topk_xl K=2048 corr vehicles overflowed
+    # TRISC1_CODE (+1836 bytes, loud link error) and the topkxl profile
+    # regressed (production 11070 -> 11493, x6 11075 -> 11198;
+    # i-fetch-bound loop class) under the earlier raw-admitting build.
+    # With the rule, raw-spelling TUs are untouched BY CONSTRUCTION
+    # (refusal launch-flatten-no-typed-content), and the function-level
+    # census budget XTT_LAUNCH_FLATTEN_FN_BUDGET_WORDS stays as a belt.
+    # Booking lever for topk-perf; typed-delivery rows only.
     "launch-flatten": "-mtt-tensix-optimize-launch-flatten",
 }
 
