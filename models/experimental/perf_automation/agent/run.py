@@ -70,10 +70,23 @@ class Run:
         runs_root: str | os.PathLike[str],
         config: dict[str, Any] | None = None,
         run_id: str | None = None,
+        label: str | None = None,
     ) -> "Run":
-        """Create runs/<id>/ (+ profiles/), point runs/latest at it, write manifest."""
+        """Create runs/<id>/ (+ profiles/), point runs/latest at it, write manifest.
+
+        ``label`` names the model in the directory itself. Every model's runs land in one flat
+        ``runs/``, so a bare timestamp meant opening manifest.json to tell two models' runs apart.
+        Appended, never prefixed: the id stays timestamp-first, so name-sorting is still
+        chronological and globs that assume a leading year (demo_route) keep matching. Only the
+        leaf is used, so a path-shaped label cannot introduce a directory level. Ignored when
+        ``run_id`` is passed explicitly.
+        """
         runs_root = Path(runs_root)
-        run_id = run_id or datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        if not run_id:
+            run_id = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+            leaf = Path(label).name if label else ""
+            if leaf:
+                run_id = f"{run_id}-{leaf}"
         run = cls(runs_root, run_id)
         run.profiles_dir.mkdir(parents=True, exist_ok=True)
 

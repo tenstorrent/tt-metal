@@ -376,7 +376,7 @@ def before_loop(
     model_root = Path(config["model_root"]).resolve()
     tt_root = Path(tt_metal_root or os.environ.get("TT_METAL_HOME", PKG_ROOT.parents[2]))
 
-    run = Run.create(runs_root, config=None)
+    run = Run.create(runs_root, config=None, label=model_root.name)
     stages = _Stages(run.dir / "events.jsonl")
     print(f"run: {run.run_id}  ->  {run.dir}", file=sys.stderr, flush=True)
     _sep = "=" * 78
