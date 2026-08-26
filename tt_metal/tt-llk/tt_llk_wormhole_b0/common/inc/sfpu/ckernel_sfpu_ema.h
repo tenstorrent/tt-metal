@@ -89,15 +89,33 @@ sfpi_inline void _compute_ema_math_()
     // Scaling every input by beta up front instead leaves one MAD per row on the chain
     // (row_i = alpha * row_{i-1} + beta_scaled_i, a single fused multiply-add), and the
     // four scaling multiplies are mutually independent, so they can be dealt into the
-    // chain's latency slots rather than stalling behind it. Same arithmetic, half the
+    // chain's latency slots rather than stalling behind it. Same algebra, half the
     // chain: 8 MADs and 2 NOPs instead of 8 MADs and 8 NOPs.
     //
-    // This reassociates the rounding -- the old form rounded alpha*prev alone and fused
-    // beta*input into the add, this one rounds beta*input alone and fuses alpha*prev --
-    // so it is not bit-identical in fp32. It is bit-identical at the output, because DEST
-    // here is bfloat16 and an fp32 reassociation lands ~2^-24 relative, far under
-    // bfloat16's 2^-9. Verified over 24 stimulus sets (8 seeds x 3 amplitudes, 172032
-    // outputs): every value identical to the two-MAD form.
+    // It is NOT the same floating-point arithmetic, and this is not a reordering of
+    // independent instructions -- it is a reassociation. SFPMAD performs exactly one
+    // rounding per instruction (see WormholeB0 SFPMAD.md: partially fused, single
+    // rounding, and "adding zero ... equivalent to a standalone multiply"), so both forms
+    // round the same number of times but round *different quantities*: the old form gave
+    // alpha*prev its own rounding and partially fused beta*input, this one gives beta*input
+    // its own rounding and partially fuses alpha*prev.
+    //
+    // Consequences, measured on Wormhole n300 over a 1000-alpha sweep (alpha = k/1000,
+    // 2048 outputs each, run on both kernels -- test_sfpu_ema_alpha_sweep.py):
+    //
+    //   * Accuracy is unchanged. Against an fp64 reference the two forms have a mean RMS
+    //     error ratio of 1.000001 and an identical worst peak error; no alpha differs by
+    //     more than 2%. Neither form is systematically closer to the true recurrence.
+    //   * Results are NOT bit-identical in general. 923 of 1000 alphas came out identical,
+    //     but 87 of 2048000 outputs differ, 84 of them by exactly one bfloat16 ULP. Only
+    //     the alphas that are exact binary fractions are structurally safe -- there
+    //     alpha*prev cannot round, so there is nothing to reassociate.
+    //
+    // Do not be tempted by the argument that an fp32 perturbation of ~2^-24 cannot survive
+    // a bfloat16 store at 2^-9. It is false: a perturbation far below one ULP still flips
+    // the rounded result whenever the exact value sits near a rounding midpoint. It makes
+    // disagreement rare, not impossible. An earlier version of this comment claimed
+    // otherwise on exactly that reasoning, and the sweep above disproves it.
     //
     // Pre-scale in0/in1 by beta. Independent of everything below.
     TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, 0);
