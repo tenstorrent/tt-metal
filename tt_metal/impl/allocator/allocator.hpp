@@ -41,6 +41,15 @@ public:
     void set_hybrid_device_allocators(const std::vector<AllocatorImpl*>& device_allocators);
     void clear_hybrid_device_allocators();
 
+    // Per-bank ranges reserved on devices this rank does not drive, appended to the locally
+    // gathered ranges in allocate_buffer(). set_hybrid_device_allocators() reaches only local
+    // devices, so on a submesh co-owned by several ranks each co-owner would otherwise subtract a
+    // smaller occupied set and place the same replicated buffer at a different address over the
+    // same physical L1. MeshBuffer::create collects these by all-gather over the co-owning ranks.
+    // Empty on a single-rank mesh.
+    void set_hybrid_remote_occupied_ranges(std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges);
+    void clear_hybrid_remote_occupied_ranges();
+
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
@@ -163,6 +172,9 @@ private:
 
     // HYBRID mode: device allocators to query per-bank ranges during lockstep allocation.
     std::vector<AllocatorImpl*> hybrid_device_allocators_;
+
+    // HYBRID mode: per-bank ranges occupied on co-owning ranks' devices (see the setter).
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> hybrid_remote_occupied_ranges_;
 
     // config_ is stored in a unique_ptr because AllocatorConfig is currently an incomplete type in API directory.
     //

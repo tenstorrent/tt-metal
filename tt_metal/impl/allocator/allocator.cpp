@@ -190,6 +190,11 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                     }
                 }
             }
+            // The loop above reaches only local devices; co-owning ranks' per-bank reservations
+            // arrive here. compute_available_addresses() sorts and coalesces the combined list,
+            // so unsorted and overlapping ranges are fine.
+            additional_ranges.insert(
+                additional_ranges.end(), hybrid_remote_occupied_ranges_.begin(), hybrid_remote_occupied_ranges_.end());
             address = l1_manager_->allocate_buffer(
                 size,
                 page_size,
@@ -265,6 +270,16 @@ void AllocatorImpl::set_hybrid_device_allocators(const std::vector<AllocatorImpl
 void AllocatorImpl::clear_hybrid_device_allocators() {
     std::lock_guard<std::mutex> lock(mutex_);
     hybrid_device_allocators_.clear();
+}
+
+void AllocatorImpl::set_hybrid_remote_occupied_ranges(std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hybrid_remote_occupied_ranges_ = std::move(ranges);
+}
+
+void AllocatorImpl::clear_hybrid_remote_occupied_ranges() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hybrid_remote_occupied_ranges_.clear();
 }
 
 std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_allocated_ranges(
