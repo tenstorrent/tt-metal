@@ -113,7 +113,10 @@ def checked_interpreter(python: str) -> str:
     resolved = shutil.which(python)
     if resolved is None:
         raise SystemExit(f"error: {python!r} is not an executable Python interpreter.")
-    return str(Path(resolved).resolve())
+    # Absolutize WITHOUT following symlinks: a venv's bin/python is a symlink to the
+    # base interpreter, and resolving it would silently escape the venv -- the matrix
+    # would then probe an environment that does not contain the wheel under test.
+    return os.path.abspath(resolved)
 
 
 def find_models_root(python: str, cwd: str) -> Path:
