@@ -1,5 +1,6 @@
 # Stage: 01-sca-rebatch-on-device
 
+- source commit: [`4048ef2bbf1`](https://github.com/tenstorrent/tt-metal/commit/4048ef2bbf14158b14d27a58911944d604b0c926)
 - harness: `tests/perf/test_layer_perf.py`, one encoder layer, N150
 - kernel time: **682.0 ms** (+26.4 ms)
 - op-to-op gap: **218.3 ms** (−2198.2 ms)
