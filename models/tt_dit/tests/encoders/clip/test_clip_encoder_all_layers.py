@@ -166,11 +166,11 @@ def test_clip_stack_all_layers(
         current_hidden_states = hf_hidden_states
 
         for layer_idx in range(hf_model.config.num_hidden_layers):
+            # transformers 5.x merged causal_attention_mask into attention_mask and returns
+            # the hidden states directly instead of a tuple.
             layer_output = hf_model.text_model.encoder.layers[layer_idx](
-                current_hidden_states, None, hf_causal_mask  # hidden_states, attention_mask, causal_attention_mask
-            )[
-                0
-            ]  # HF returns tuple (hidden_states, attentions)
+                current_hidden_states, hf_causal_mask  # hidden_states, attention_mask
+            )
             hf_all_hidden_states.append(layer_output)
             current_hidden_states = layer_output
 

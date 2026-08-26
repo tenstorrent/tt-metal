@@ -158,14 +158,12 @@ def test_clip_encoder_layer(
         hf_causal_mask.masked_fill_(mask_cond < (mask_cond + 1).view(hf_causal_mask.size(-1), 1), 0)
         hf_causal_mask = hf_causal_mask[None, None, :, :].expand(batch_size, 1, tgt_len, tgt_len)
 
-        # run the first encoder layer
+        # run the first encoder layer. transformers 5.x merged causal_attention_mask into
+        # attention_mask and returns the hidden states directly instead of a tuple.
         hf_layer_output = hf_model.text_model.encoder.layers[0](
             hf_hidden_states,  # hidden_states
-            None,  # attention_mask (we don't have one)
-            hf_causal_mask,  # causal_attention_mask
-        )[
-            0
-        ]  # HF returns tuple (hidden_states, attentions)
+            hf_causal_mask,  # attention_mask
+        )
 
         hf_end_time = time.time()
         hf_execution_time = hf_end_time - hf_start_time
