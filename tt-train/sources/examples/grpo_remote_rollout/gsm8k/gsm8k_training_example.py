@@ -17,6 +17,7 @@ Run:
 from __future__ import annotations
 
 import gc
+import logging
 import os
 import re
 import sys
@@ -324,6 +325,8 @@ def _ttt_main() -> None:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True)
+
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
 
