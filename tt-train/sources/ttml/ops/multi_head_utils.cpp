@@ -17,14 +17,16 @@
 namespace ttml::ops {
 
 std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_creation(
-    const autograd::TensorPtr& qkv, uint32_t num_heads) {
-    // qkv shape is (B, 1, S, E * 3)
-    // q, k, v shapes are (B, num_heads, S, E / num_heads)
+    const autograd::TensorPtr& qkv, uint32_t num_heads, std::optional<uint32_t> num_groups) {
+    // qkv shape is (B, 1, S, (num_heads + 2 * num_kv_heads) * head_dim), laid out [Q | K | V].
+    // q: (B, num_heads, S, head_dim); k, v: (B, num_kv_heads, S, head_dim).
+    // num_groups defaults to num_heads (standard MHA); num_groups < num_heads selects GQA.
+    const uint32_t num_kv_heads = num_groups.value_or(num_heads);
     auto [q, k, v] = ttnn::experimental::nlp_create_qkv_heads(
         qkv->get_value(),
         std::nullopt,
         num_heads,
-        num_heads,
+        num_kv_heads,
         /* transpose_k */ false,
         /* kv_tied */ false,
         /* memory_config */ std::nullopt,
