@@ -41,19 +41,17 @@ void kernel_main() {
     const uint32_t tile_width = get_arg_val<uint32_t>(3);
     const uint32_t tile_height = get_arg_val<uint32_t>(4);
 
-    // Compile-time args (SAME layout as gather_reader.cpp)
+    // Compile-time args. No core count: this factory hands each core a contiguous output-tile
+    // range, so no row is ever derived from a core ordinal.
     constexpr uint32_t cb_input = get_compile_time_arg_val(0);
     constexpr uint32_t cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t cb_output = get_compile_time_arg_val(2);
     constexpr uint32_t Wt_input = get_compile_time_arg_val(3);
     constexpr uint32_t Wt_index = get_compile_time_arg_val(4);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(5);  // unused (kept for CT/accessor parity)
-    constexpr uint32_t index_valid_h_last = get_compile_time_arg_val(6);
-    constexpr uint32_t index_valid_w_last = get_compile_time_arg_val(7);
-    constexpr uint32_t index_ht_per_batch = get_compile_time_arg_val(8);
-    constexpr auto index_ta_args = TensorAccessorArgs<9>();
-
-    (void)num_cores;
+    constexpr uint32_t index_valid_h_last = get_compile_time_arg_val(5);
+    constexpr uint32_t index_valid_w_last = get_compile_time_arg_val(6);
+    constexpr uint32_t index_ht_per_batch = get_compile_time_arg_val(7);
+    constexpr auto index_ta_args = TensorAccessorArgs<8>();
 
     constexpr uint32_t one_tile = 1;
     const uint32_t tile_width_mask = tile_width - 1;

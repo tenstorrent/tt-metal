@@ -28,8 +28,22 @@ struct GatherGeometry {
 
 GatherGeometry compute_gather_geometry(const Tensor& input_tensor, const Tensor& input_index_tensor);
 
-// Whether the row-buffered kernel's three CBs (Wt_input + 1 + max(4, Wt_index) tile pages, the SAME
-// depths the Interleaved/Tiled factories allocate) fit the device's real per-core L1 budget.
+// Output tiles the row-buffered writers batch into one NoC write burst before syncing
+// (kernels/gather_writer.cpp, gather_writer_tiled.cpp).
+constexpr uint32_t kGatherWriteBatchTiles = 4;
+
+// Depth of the row-buffered plans' output CB, in output tile pages. A row shorter than one write
+// batch still has to hold a whole batch, or the writer's wait_front() for it can never be satisfied.
+// The writers clamp each burst against this same depth to keep a flat multi-tile read off the ring
+// wrap, so they take it as a compile-time arg rather than recomputing it: a writer that disagreed
+// with the CB it pops would clamp to the wrong wrap point.
+constexpr uint32_t gather_output_cb_tiles(uint32_t Wt_index) {
+    return Wt_index > kGatherWriteBatchTiles ? Wt_index : kGatherWriteBatchTiles;
+}
+
+// Whether the row-buffered kernel's three CBs (Wt_input + 1 + gather_output_cb_tiles(Wt_index) tile
+// pages, the SAME depths the Interleaved/Tiled factories allocate) fit the device's real per-core L1
+// budget.
 bool gather_interleaved_fits_l1(
     const Tensor& input_tensor, const Tensor& input_index_tensor, uint32_t Wt_input, uint32_t Wt_index);
 

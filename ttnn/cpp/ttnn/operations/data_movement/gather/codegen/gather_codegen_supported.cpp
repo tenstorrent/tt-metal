@@ -107,7 +107,7 @@ bool supported_by_codegen(const Tensor& input_tensor, int8_t dim, const Tensor& 
     }
 
     // Device-resource feasibility. Both dimension-scaled CB plans (row-buffered/tiled: Wt_input and
-    // max(4, Wt_index) tile pages; streaming: chunk_tiles input pages) scale down to the streaming
+    // gather_output_cb_tiles(Wt_index) tile pages; streaming: chunk_tiles input pages) scale down to the streaming
     // floor, so a call is feasible exactly when that floor fits per-core L1. Only answerable with a
     // real device behind the tensors; the prim's validation step raises native's structural error
     // for anything else.

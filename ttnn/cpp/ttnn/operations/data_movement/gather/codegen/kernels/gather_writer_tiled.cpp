@@ -31,21 +31,20 @@ void kernel_main() {
     const uint32_t start = get_arg_val<uint32_t>(2);
     const uint32_t n = get_arg_val<uint32_t>(3);
 
-    // Compile-time args (SAME layout as gather_writer.cpp)
+    // Compile-time args. No core count: this factory hands each core a contiguous output-tile
+    // range, so no row is ever derived from a core ordinal.
     constexpr uint32_t cb_input = get_compile_time_arg_val(0);
     constexpr uint32_t cb_output = get_compile_time_arg_val(1);
     constexpr uint32_t Wt_input = get_compile_time_arg_val(2);
     constexpr uint32_t Wt_index = get_compile_time_arg_val(3);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(4);  // unused (kept for CT/accessor parity)
-    constexpr auto input_ta_args = TensorAccessorArgs<5>();
+    // Both come from gather_output_cb_tiles()/kGatherWriteBatchTiles, the same values the factory
+    // sizes cb_output with -- the Phase 2 wrap clamp below is only correct against the real depth.
+    constexpr uint32_t OUT_CB_DEPTH = get_compile_time_arg_val(4);
+    constexpr uint32_t WRITE_BATCH = get_compile_time_arg_val(5);
+    constexpr auto input_ta_args = TensorAccessorArgs<6>();
     constexpr auto output_ta_args = TensorAccessorArgs<input_ta_args.next_compile_time_args_offset()>();
 
-    (void)num_cores;
-
     constexpr uint32_t READ_BATCH = 4;
-    constexpr uint32_t WRITE_BATCH = 4;
-    // Must match the factory's output CB depth: std::max<uint32_t>(4, Wt_index).
-    constexpr uint32_t OUT_CB_DEPTH = (Wt_index > 4) ? Wt_index : 4;
     // Read-pointer position within the output CB ring (see the Phase 2 clamp below).
     uint32_t out_cb_pos = 0;
 
@@ -112,7 +111,9 @@ void kernel_main() {
                     {.page_id = g + tiles_written + b, .offset_bytes = 0});
                 l1_offset += output_tile_bytes;
             }
-            noc.async_write_barrier();
+            // Popping the slot only needs the write off the local NoC, not landed at the
+            // destination; completion is claimed once for the whole kernel below.
+            noc.async_writes_flushed();
             output_buffer.pop_front(batch);
             tiles_written += batch;
             out_cb_pos += batch;
@@ -124,4 +125,6 @@ void kernel_main() {
         g += w_count;
         remaining -= w_count;
     }
+
+    noc.async_write_barrier();
 }

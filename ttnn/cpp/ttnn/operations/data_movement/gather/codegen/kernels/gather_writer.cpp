@@ -30,13 +30,14 @@ void kernel_main() {
     constexpr uint32_t Wt_input = get_compile_time_arg_val(2);
     constexpr uint32_t Wt_index = get_compile_time_arg_val(3);
     constexpr uint32_t num_cores = get_compile_time_arg_val(4);
-    constexpr auto input_ta_args = TensorAccessorArgs<5>();
+    // Both come from gather_output_cb_tiles()/kGatherWriteBatchTiles, the same values the factory
+    // sizes cb_output with -- the Phase 2 wrap clamp below is only correct against the real depth.
+    constexpr uint32_t OUT_CB_DEPTH = get_compile_time_arg_val(5);
+    constexpr uint32_t WRITE_BATCH = get_compile_time_arg_val(6);
+    constexpr auto input_ta_args = TensorAccessorArgs<7>();
     constexpr auto output_ta_args = TensorAccessorArgs<input_ta_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t READ_BATCH = 4;
-    constexpr uint32_t WRITE_BATCH = 4;
-    // Must match the factory's output CB depth: std::max<uint32_t>(4, Wt_index).
-    constexpr uint32_t OUT_CB_DEPTH = (Wt_index > 4) ? Wt_index : 4;
     // Read-pointer position within the output CB ring (see the Phase 2 clamp below).
     uint32_t out_cb_pos = 0;
 
@@ -99,7 +100,9 @@ void kernel_main() {
                     {.page_id = h * Wt_index + tiles_written + b, .offset_bytes = 0});
                 l1_offset += output_tile_bytes;
             }
-            noc.async_write_barrier();
+            // Popping the slot only needs the write off the local NoC, not landed at the
+            // destination; completion is claimed once for the whole kernel below.
+            noc.async_writes_flushed();
             output_buffer.pop_front(batch);
             tiles_written += batch;
             out_cb_pos += batch;
@@ -108,4 +111,6 @@ void kernel_main() {
             }
         }
     }
+
+    noc.async_write_barrier();
 }

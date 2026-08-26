@@ -189,10 +189,10 @@ bool gather_interleaved_fits_l1(
     const uint64_t index_page = input_index_tensor.buffer()->aligned_page_size();
     const uint64_t output_page = input_page;
     const uint64_t footprint =
-        static_cast<uint64_t>(Wt_input) * input_page + index_page + std::max<uint64_t>(4, Wt_index) * output_page;
+        static_cast<uint64_t>(Wt_input) * input_page + index_page + gather_output_cb_tiles(Wt_index) * output_page;
     // Every term is checked, with no short-circuit for a narrow row: the gathered axis is the one
     // axis whose index extent is NOT bounded by the input extent, so a narrow row with a very wide
-    // index would clear any Wt_input floor while its max(4, Wt_index)-deep output CB does not fit,
+    // index would clear any Wt_input floor while its gather_output_cb_tiles(Wt_index)-deep output CB does not fit,
     // and the row-buffered plan would fail CB allocation instead of reaching the streaming one.
     return footprint <= gather_usable_l1(input_tensor);
 }
@@ -257,7 +257,7 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_d
     desc.cbs.push_back(make_tile_cb(kCbInput, in_t, geometry.Wt_input, split.core_range));
     desc.cbs.push_back(make_tile_cb(kCbIndex, index_t, 1, split.core_range));
     desc.cbs.push_back(
-        make_tile_cb(kCbOutput, output_tensor, std::max<uint32_t>(4, geometry.Wt_index), split.core_range));
+        make_tile_cb(kCbOutput, output_tensor, gather_output_cb_tiles(geometry.Wt_index), split.core_range));
 
     KernelDescriptor::CompileTimeArgs reader_ct = {
         kCbInput,
@@ -280,7 +280,13 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_d
     reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor::CompileTimeArgs writer_ct = {
-        kCbInput, kCbOutput, geometry.Wt_input, geometry.Wt_index, split.num_cores};
+        kCbInput,
+        kCbOutput,
+        geometry.Wt_input,
+        geometry.Wt_index,
+        split.num_cores,
+        gather_output_cb_tiles(geometry.Wt_index),
+        kGatherWriteBatchTiles};
     TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
 
@@ -331,7 +337,7 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descrip
     desc.cbs.push_back(make_tile_cb(kCbInput, in_t, geometry.Wt_input, split.core_range));
     desc.cbs.push_back(make_tile_cb(kCbIndex, index_t, 1, split.core_range));
     desc.cbs.push_back(
-        make_tile_cb(kCbOutput, output_tensor, std::max<uint32_t>(4, geometry.Wt_index), split.core_range));
+        make_tile_cb(kCbOutput, output_tensor, gather_output_cb_tiles(geometry.Wt_index), split.core_range));
 
     KernelDescriptor::CompileTimeArgs reader_ct = {
         kCbInput,
@@ -339,7 +345,6 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descrip
         kCbOutput,
         geometry.Wt_input,
         geometry.Wt_index,
-        split.num_cores,
         geometry.index_valid_h_last,
         geometry.index_valid_w_last,
         geometry.index_ht_per_batch,
@@ -354,7 +359,12 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descrip
     reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor::CompileTimeArgs writer_ct = {
-        kCbInput, kCbOutput, geometry.Wt_input, geometry.Wt_index, split.num_cores};
+        kCbInput,
+        kCbOutput,
+        geometry.Wt_input,
+        geometry.Wt_index,
+        gather_output_cb_tiles(geometry.Wt_index),
+        kGatherWriteBatchTiles};
     TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
 

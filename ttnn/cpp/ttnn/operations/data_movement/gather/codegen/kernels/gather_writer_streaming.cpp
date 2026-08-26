@@ -100,10 +100,14 @@ void kernel_main() {
                 output_tile_bytes,
                 {.offset_bytes = 0},
                 {.page_id = h * Wt_index + current_index_tile_id, .offset_bytes = 0});
-            noc.async_write_barrier();
+            // Popping the slot only needs the write off the local NoC, not landed at the
+            // destination; completion is claimed once for the whole kernel below.
+            noc.async_writes_flushed();
             output_buffer.pop_front(one_tile);
 
             current_index_tile_id += num_cores;
         }  // core_loop
     }  // Ht loop
+
+    noc.async_write_barrier();
 }
