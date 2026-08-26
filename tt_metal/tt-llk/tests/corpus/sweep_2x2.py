@@ -762,7 +762,16 @@ KNOBS = {
     # 3-rep cycle-exact): topk-perf sem KERNEL 6022 -> 5708 (vs hand
     # 5755 booked / 5768 same-leg = L +4.64 -> WIN -0.82); TOPK_BODY
     # 5317 -> 4974 (sem faster than hand in the sort body); corr 12/12
-    # device-golden + paired CRAQ 12/12 at knob flags.
+    # device-golden + paired CRAQ 12/12 at knob flags.  KNOB-SCOPE FACTS
+    # (named, promotion-blocking at current pricing): flattening large
+    # launch loops on NON-target rows can regress e2e (topkxl profile
+    # under the knob: production 11070 -> 11493, x6 11075 -> 11198 --
+    # i-fetch-bound loop class), and a near-full TU can overflow its
+    # TRISC code region as a LOUD link error (topk_xl K=2048 corr
+    # vehicles, TRISC1_CODE +1836 bytes; the function-level census
+    # budget XTT_LAUNCH_FLATTEN_FN_BUDGET_WORDS bounds growth but is an
+    # estimate, not linker knowledge).  Booking lever for topk-perf
+    # only; never a blanket ON candidate at this pricing.
     "launch-flatten": "-mtt-tensix-optimize-launch-flatten",
 }
 
