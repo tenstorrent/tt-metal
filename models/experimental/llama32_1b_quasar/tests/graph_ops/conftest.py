@@ -17,9 +17,11 @@ dict:
   * any L1-sharded input whose captured grid needs more
     than ``_EMU_MAX_CORES`` cores                        -> not emulator
 
-Note the row cap deliberately applies to arg 0 only: a matmul weight or a paged KV
-cache is legitimately tall, and judging it by row count would drop every ``linear``
-and cache case. Bulk is handled by the footprint rule instead.
+Note the row cap deliberately applies to the *activation* only: a matmul weight or a
+paged KV cache is legitimately tall, and judging it by row count would drop every
+``linear`` and cache case. That is arg 0 for most ops, but arg 1 for the paged-cache
+ops, whose arg 0 is the cache (see ``_PRIMARY_ARG``). Bulk is handled by the
+footprint rule instead.
 
 These are collection-time estimates, and every case remains runnable without
 ``-m emulator``. The authoritative check happens at run time in
@@ -68,6 +70,23 @@ def _cores_of(shard) -> int:
     return sum((x1 - x0 + 1) * (y1 - y0 + 1) for x0, y0, x1, y1 in shard["grid"])
 
 
+# Ops whose first argument is a persistent cache rather than an activation. The row
+# cap exists to drop prefill-sized *activations*; a paged KV cache is legitimately
+# tall (128 pages x 8 heads x 32 rows), so judging these by arg 0 would exclude them
+# from the emulator subset for the one tensor the exemption is about. Their
+# activation — the tensor being written into the cache — is arg 1.
+_PRIMARY_ARG = {
+    "ttnn.experimental.paged_update_cache": 1,
+    "ttnn.experimental.paged_fill_cache": 1,
+}
+
+
+def _primary_input(case):
+    """The activation whose height decides whether this is a prefill-sized case."""
+    start = _PRIMARY_ARG.get(case.get("op"), 0)
+    return next((a for a in case["args"][start:] if a.get("k") == "t"), None)
+
+
 def _tensor_specs(case):
     for spec in list(case["args"]) + list(case["kwargs"].values()):
         if spec.get("k") == "t":
@@ -90,7 +109,7 @@ def _fits_emulator(item) -> bool:
     if not isinstance(case, dict):
         return True
 
-    primary = next((a for a in case["args"] if a.get("k") == "t"), None)
+    primary = _primary_input(case)
     if primary is not None and _rows_of(primary["shape"]) > _EMU_MAX_ROWS:
         return False
 

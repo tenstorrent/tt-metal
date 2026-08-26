@@ -109,9 +109,36 @@ ORIENTATION = {"ROW_MAJOR": ttnn.ShardOrientation.ROW_MAJOR, "COL_MAJOR": ttnn.S
 # them); everything else gets bfloat16 noise.
 _INT_DTYPES = {"UINT32", "INT32", "UINT16", "UINT8"}
 
-# PCC floor per output dtype — bfloat8_b block-float paths lose real precision.
+# The bar is PCC > 0.999 against the torch reference. Every floor below it is a
+# property of the call, not a blanket allowance, and each mirrors the number the
+# hand-written tests/ops suite settled on for the same op on real hardware:
+#
+#   * block-float dtypes quantize to a per-face exponent, so the reference (built in
+#     fp32) cannot be reproduced to 0.999 no matter how correct the op is;
+#   * a K-deep matmul accumulates rounding over the reduction — tests/ops/test_linear.py:30
+#     uses 0.99, and 0.98 for the K=8192 down-projection;
+#   * rms_norm (reduction + rsqrt), embedding (gather of a quantized table) and
+#     typecast (the captured casts are bf16 -> bfloat8_b) are 0.99 in tests/ops for
+#     the same reasons — test_rms_norm.py:56, test_embedding.py:58, test_typecast.py:26.
+#
+# On top of that, ``compute_kernel_config`` is not reconstructible from a capture
+# (see the module docstring), so these run at each op's default math fidelity rather
+# than the fidelity the model asked for — which costs precision on exactly the
+# reduction-heavy ops listed here.
+_DEFAULT_PCC = 0.999
 _PCC_BY_DTYPE = {"BFLOAT8_B": 0.97, "BFLOAT4_B": 0.90}
-_DEFAULT_PCC = 0.99
+_PCC_BY_OP = {
+    "ttnn.linear": 0.99,
+    "ttnn.experimental.minimal_matmul": 0.99,
+    "ttnn.rms_norm": 0.99,
+    "ttnn.embedding": 0.99,
+    "ttnn.typecast": 0.99,
+}
+# Ops that reduce along the input's last dimension, and the depth past which they get
+# the looser floor tests/ops uses for the K=8192 down-projection.
+_REDUCTION_OPS = frozenset({"ttnn.linear", "ttnn.experimental.minimal_matmul", "ttnn.rms_norm"})
+_DEEP_K = 4096
+_DEEP_K_PCC = 0.98
 
 NO_GOLDEN = os.environ.get("TTNN_GRAPH_OPS_NO_GOLDEN", "") not in ("", "0", "false", "False")
 
@@ -816,10 +843,25 @@ def _check_output(out, case, mesh_device, op_name):
         _check_finite(from_tt(t, mesh_device), case, op_name, i)
 
 
-def _golden_pcc(case):
+def _golden_pcc(case, op_name):
+    """Floor for this case: 0.999 unless the call itself costs precision.
+
+    Every reason to go below the bar is spelled out where the tables are defined
+    (``_PCC_BY_DTYPE`` / ``_PCC_BY_OP`` / ``_DEEP_K``); the lowest applicable floor
+    wins, so a bfloat8_b matmul is judged on its dtype rather than its op.
+    """
+    floors = [_DEFAULT_PCC, _PCC_BY_OP.get(op_name, _DEFAULT_PCC)]
+
     dtypes = [out["dtype"] for out in case.get("outs") or [] if out is not None]
     dtypes += [a["dtype"] for a in case["args"] if a["k"] == "t"]
-    return min([_PCC_BY_DTYPE.get(d, _DEFAULT_PCC) for d in dtypes] or [_DEFAULT_PCC])
+    floors += [_PCC_BY_DTYPE.get(d, _DEFAULT_PCC) for d in dtypes]
+
+    if op_name in _REDUCTION_OPS and case["args"] and case["args"][0]["k"] == "t":
+        shape = case["args"][0]["shape"]
+        if shape and shape[-1] >= _DEEP_K:
+            floors.append(_DEEP_K_PCC)
+
+    return min(floors)
 
 
 def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
@@ -849,6 +891,6 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     if ref_fn is not None:
         ref = ref_fn(torch_inputs, kwargs, case)
         if ref is not None:
-            U.assert_pcc(ref, _first_output(out), pcc=pcc or _golden_pcc(case), mesh_device=mesh_device)
+            U.assert_pcc(ref, _first_output(out), pcc=pcc or _golden_pcc(case, op_name), mesh_device=mesh_device)
 
     return out

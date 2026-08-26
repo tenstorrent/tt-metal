@@ -141,7 +141,7 @@ have to guess whether a failure is a real bug or a reconstruction artifact.
 | --- | --- | --- |
 | Derived from | reading the model source | a recorded run |
 | Configs | idealized — interleaved, no program_config, so the op runs anywhere | verbatim — sharded grids, DRAM-sharded weights, real program configs |
-| Correctness signal | strong: torch golden per op, tuned PCC | golden where unambiguous; otherwise shape/dtype/finite |
+| Correctness signal | strong: torch golden per op, tuned PCC | golden where unambiguous (PCC > 0.999, lowered only for block-float dtypes and reduction-heavy ops — see `graph_case._PCC_BY_DTYPE` / `_PCC_BY_OP`); otherwise shape/dtype/placement/finite |
 | Coverage | the call sites a human found | every call the model actually made, with call counts |
 | Catches | wrong math in an op | shape/shard/program-config-specific hangs, faults, allocation failures |
 | Cost to add a model | hours of reading per model | minutes: one capture + one generator run |
@@ -169,10 +169,13 @@ Source: `generated/ttnn/reports/llama32_1b_demo_aug20_0223/graph_capture.python_
   `ttnn.deallocate` (nothing to assert), `ttnn.from_torch` / `ttnn.as_tensor`
   (exercised by every case's input upload), `ttnn.load_tensor` (needs a
   `model_cache/` file the demo produces), `ttnn.to_torch` (used by every assertion).
-- **29 of 74 cases are marked `emulator`**, spread over 16 of the 27 ops. The
+- **30 of 74 cases are marked `emulator`**, spread over 17 of the 27 ops. The
   remaining cases are prefill-shaped (1024-row activations) or width-sharded across
   32 captured cores, which the emulator's grid cannot allocate — `graph_case`
-  skips those at run time with the grid it finds, so they are not failures.
+  skips those at run time with the grid it finds, so they are not failures. The row
+  cap is measured on the *activation*, which is arg 1 for the paged-cache ops
+  (`conftest._PRIMARY_ARG`): their arg 0 is a legitimately tall KV cache, not a
+  prefill-sized input.
 
 ## Extending
 
