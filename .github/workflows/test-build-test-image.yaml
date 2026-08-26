@@ -20,6 +20,11 @@ permissions:
   contents: read
   packages: write
 
+# One run per PR or branch; a new push supersedes the old build and hw leg.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: "Build packages"
