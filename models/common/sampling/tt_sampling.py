@@ -156,9 +156,12 @@ class TTSampling(LightweightModule):
         super().__init__()
         self.mesh_device = mesh_device
         # Use the fast unstable top-k network; _adjust_values_for_tiebreak guarantees the greedy
-        # pick host-side. stable=True (lowest-index tie-break, WH/BH only) costs ~2.5-3x on the
-        # SFPU sort network. The attribute and its plumbing to the ttnn.topk calls are kept so
-        # re-enabling is a one-line change.
+        # pick host-side. stable=True (lowest-index tie-break, WH/BH only) is only cheap where the
+        # multi-core factory can pack [bf16 value | u16 index] fused keys: the single-core chunks
+        # of the multi-step path pay ~2.5-3x on the SFPU sort stage, and the BH topk_large_indices
+        # route has no stable mode at all, so the host-side tie-break must stay regardless --
+        # keeping every call unstable buys the guarantee at zero device cost. The attribute and
+        # its plumbing to the ttnn.topk calls are kept so re-enabling is a one-line change.
         self._topk_stable = False
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
@@ -669,10 +672,15 @@ class TTSampling(LightweightModule):
         sub-device. Random users (k>1) get boost==0 => their values are bit-identical => their
         sampling is byte-for-byte unchanged. All ops honor self.sub_core_grids.
 
-        Stable top-k (`stable=True`) would make this pass redundant, but costs ~2.5-3x on the
-        SFPU sort network, so sampling opts out (`self._topk_stable` is False) and keeps this
-        host-side pass as the greedy-pick guarantee instead. Removing this method, `_greedy_col`
-        and `_greedy_col_dims` in favour of `stable=True` trades the sort-network cost back.
+        Stable top-k (`stable=True`) on EVERY local top-k call would make this pass redundant, but
+        stable is not uniformly cheap: multicore-eligible bf16 calls take the fused-key engine
+        (packed [bf16 value | u16 index] words on the plain unstable network -- ~free by design,
+        unmeasured on decode shapes), while the single-core chunks of the multi-step path pay
+        ~2.5-3x on the SFPU sort stage and the BH topk_large_indices route has no stable mode at
+        all. Redundancy needs ALL routes stable, so sampling opts out (`self._topk_stable` is
+        False) and keeps this host-side pass as the greedy-pick guarantee instead. Removing this
+        method, `_greedy_col` and `_greedy_col_dims` in favour of `stable=True` becomes a pure win
+        once the remaining routes grow a cheap stable mode.
 
         With stable top-k enabled this pass would be redundant, because candidate position and
         global token id are ordered the same way BY CONSTRUCTION: the gathered buffer is laid out as
@@ -687,7 +695,7 @@ class TTSampling(LightweightModule):
         device shard holds more than `max_top_k` (32) maxima tied at the same value, its top-k
         breaks the tie by array position and drops all but 32 of them, so the true lowest-id token
         may never reach the gathered set and this pass cannot recover it. Enabling `stable=True`
-        (at the sort-network cost) would close that window.
+        on every route (at the costs above) would close that window.
 
         is_winner = (value == rowmax) AND (global_index == lowest_index_among_maxima)  # exactly one candidate
             lowest_index_among_maxima = min(global_index + not_max * SENTINEL)          # == idx at maxima, huge else
@@ -908,7 +916,9 @@ class TTSampling(LightweightModule):
             # (topk_would_route_to_large_indices mirrors
             # should_route_to_topk_large_indices in topk.cpp; KEEP IN SYNC).
             # Sampling opts out of stable topk for decode perf (_topk_stable is
-            # False; the comparator network costs ~2-3x on the SFPU sort stage);
+            # False): these chunks route to the single-core factory (see the
+            # #53167 note below), where stable pays ~2-3x on the SFPU sort
+            # stage -- the ~free fused-key engine is multi-core only.
             # _adjust_values_for_tiebreak is what guarantees the greedy
             # pick after the gather, regardless of per-device tie order. Calls
             # that would not route keep today's arguments bit-for-bit, and a
@@ -958,9 +968,11 @@ class TTSampling(LightweightModule):
                 )
             # Perform local top-k on each device. Drop stable=True ONLY when the
             # relaxed call would take the Blackhole topk_large_indices composite
-            # (mirror of topk.cpp's predicate; KEEP IN SYNC) -- sampling opts out
-            # of stable for decode perf anyway (_topk_stable is False) and
-            # _adjust_values_for_tiebreak guarantees the greedy pick.
+            # (mirror of topk.cpp's predicate; KEEP IN SYNC) -- sampling keeps
+            # every call unstable (_topk_stable is False): this multicore-eligible
+            # call would usually get the ~free fused-key stable engine, but the
+            # greedy guarantee must hold on ALL routes (see _topk_stable), and
+            # _adjust_values_for_tiebreak already provides it host-side.
             # Sub-grid-constrained calls never relax.
             use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
                 x_bf16, self.max_top_k, self.mesh_device
@@ -1053,7 +1065,7 @@ class TTSampling(LightweightModule):
             sub_core_grids=self._sampling_sub_core_grids,
         )
         # Perform the actual sampling with top-k, top-p, and temperature.
-        # Host-side tie-break (in lieu of the slower stable top-k network):
+        # Host-side tie-break (in lieu of stable=True on every top-k route; see _topk_stable):
         # for argmax users (k==1) only, boost the single lowest-GLOBAL-INDEX tied maximum in the
         # sampling INPUT so ttnn.sampling's argmax picks it regardless of how the top-k network
         # ordered the tied candidates. Random users are byte-for-byte unchanged. Correcting the INPUT
