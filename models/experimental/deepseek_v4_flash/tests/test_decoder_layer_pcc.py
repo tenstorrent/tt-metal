@@ -142,6 +142,7 @@ def _reference_main() -> None:
     torch.manual_seed(1234)
     hc_mult = config.hc_mult
     streams = torch.randn(batch, seq_len, hc_mult, config.hidden_size, dtype=dtype)
+    input_ids = torch.randint(0, config.vocab_size, (batch, seq_len), dtype=torch.long)
     position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1)
 
     rotary = M.DeepseekV4RotaryEmbedding(config).to(dtype)
@@ -169,6 +170,7 @@ def _reference_main() -> None:
     with torch.no_grad():
         output = layer(
             streams,
+            input_ids=input_ids if config.mlp_layer_types[layer_idx] == "hash_moe" else None,
             position_embeddings=position_embeddings,
             position_ids=position_ids,
             attention_mask=mask,
@@ -178,6 +180,7 @@ def _reference_main() -> None:
     bundle.update(
         {
             "streams": streams,
+            "input_ids": input_ids,
             "cos_q": cos_q[0].contiguous(),
             "sin_q": sin_q[0].contiguous(),
             "mask": mask,
@@ -203,6 +206,7 @@ def _reference_main() -> None:
                 "hc_mult": config.hc_mult,
                 "hc_sinkhorn_iters": config.hc_sinkhorn_iters,
                 "hc_eps": config.hc_eps,
+                "mlp_layer_types": list(config.mlp_layer_types),
             },
         }
     )

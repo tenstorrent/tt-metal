@@ -302,7 +302,13 @@ inline void build_routing_scalars(
 //            `down_prefetch` of the block's down slices so DRAM keeps streaming through the barrier.
 //   Phase 2: fetch the block's remaining down slices. The compute kernel runs the down matmul for
 //            the block's experts against the now-resident activations and accumulates.
-template <bool IsLeader, typename GateUpArgs, typename DownArgs>
+//
+// When `num_expert_groups > 1` (the 6-expert / 96-core path), the 12x8 grid is partitioned into
+// groups of `cores_per_expert` cores, one group per hit expert. Each core covers `i_shards_per_core`
+// gate_up/I shards (I/32 / 16; one shard at TP I=512, four at I=2048) and `shards_per_core` down/H
+// shards (always 4 of the 64). The gather/broadcast is per-group, and the 6 groups' matching
+// H-slices are reduced onto group 0 (see the writer / compute kernels).
+template <typename GateUpArgs, typename DownArgs>
 inline void run_reader_loop(
     const Noc& noc,
     uint32_t num_active,
@@ -344,9 +350,148 @@ inline void run_reader_loop(
     uint32_t rscalar_tile_h,
     uint32_t rscalar_face_r_dim,
     uint32_t rscalar_num_face_rows,
-    uint32_t rscalar_tile_bytes) {
+    uint32_t rscalar_tile_bytes,
+    uint32_t cores_per_expert,
+    uint32_t shards_per_core,
+    uint32_t i_shards_per_core,
+    uint32_t num_expert_groups,
+    bool is_group_leader,
+    uint32_t sem_reduce_id,
+    uint32_t cb_reduce_id) {
+    constexpr uint32_t kOutTilesPerCore = 2;
+
+    // ---- 6-expert path: 16 cores per expert; I-shards scale with local I, H-shards stay 4. ----
+    if (num_expert_groups > 1) {
+        const uint32_t local_idx = core_index % cores_per_expert;
+        const uint32_t expert_group = core_index / cores_per_expert;
+        const uint32_t swiglu_tiles = i_tiles / (cores_per_expert * i_shards_per_core);
+        const uint32_t gate_up_slice_tiles = k_tiles * (2u * swiglu_tiles);
+        const bool is_root = expert_group == 0;
+        const uint32_t out_tiles = shards_per_core * kOutTilesPerCore;
+        const uint32_t reduce_tiles = (num_expert_groups - 1u) * out_tiles;
+
+        CircularBuffer cb_act(cb_act_id);
+        if (is_group_leader) {
+            cb_act.reserve_back(i_tiles);
+        }
+        if (is_root) {
+            CircularBuffer cb_reduce(cb_reduce_id);
+            cb_reduce.reserve_back(reduce_tiles);
+        }
+
+        {
+            DeviceZoneScopedN("FE_PHASE1_GATE_UP");
+            for (uint32_t s = 0; s < i_shards_per_core; ++s) {
+                fetch_weight_one(
+                    noc,
+                    cb_bcast_id,
+                    cb_weights_id,
+                    expert_group,
+                    gate_up_slice_tiles,
+                    gate_up_reserve_tiles,
+                    gate_up_tile_bytes,
+                    local_idx * i_shards_per_core + s,
+                    gate_up_args,
+                    ct_gu_addr_base);
+            }
+        }
+
+        {
+            DeviceZoneScopedN("FE_RSCALARS");
+            build_routing_scalars(
+                cb_bcast_id,
+                cb_rscalar_id,
+                expert_group,
+                1u,
+                weight_base,
+                batch,
+                rscalar_tile_h,
+                rscalar_face_r_dim,
+                rscalar_num_face_rows,
+                rscalar_tile_bytes);
+        }
+
+        uint32_t j_down = 0;
+        if (!is_group_leader) {
+            DeviceZoneScopedN("FE_DOWN_PREFETCH");
+            const uint32_t prefetch = down_prefetch < shards_per_core ? down_prefetch : shards_per_core;
+            for (; j_down < prefetch; ++j_down) {
+                fetch_weight_one(
+                    noc,
+                    cb_bcast_id,
+                    cb_down_w_id,
+                    expert_group,
+                    down_slice_tiles,
+                    down_reserve_tiles,
+                    down_tile_bytes,
+                    local_idx * shards_per_core + j_down,
+                    down_args,
+                    ct_down_addr_base);
+            }
+        }
+
+        {
+            DeviceZoneScopedN("FE_SYNC");
+            if (is_group_leader) {
+                const uint32_t act_l1 = cb_act.get_write_ptr();
+                leader_gather_broadcast_block(
+                    noc,
+                    cb_act_id,
+                    act_l1,
+                    i_tiles,
+                    0u,
+                    act_tile_bytes,
+                    num_producers,
+                    sem_gather_id,
+                    sem_bcast_id,
+                    /*blocks_done=*/1u,
+                    mcast_start_x,
+                    mcast_start_y,
+                    mcast_end_x,
+                    mcast_end_y,
+                    num_dests);
+            } else {
+                receiver_recv_act_block(
+                    noc,
+                    cb_act_id,
+                    i_tiles,
+                    sem_bcast_id,
+                    /*blocks_done=*/1u,
+                    /*send_slot_free_ack=*/false,
+                    sem_gather_id,
+                    leader_noc_x,
+                    leader_noc_y);
+            }
+        }
+
+        {
+            DeviceZoneScopedN("FE_PHASE2_DOWN");
+            for (; j_down < shards_per_core; ++j_down) {
+                fetch_weight_one(
+                    noc,
+                    cb_bcast_id,
+                    cb_down_w_id,
+                    expert_group,
+                    down_slice_tiles,
+                    down_reserve_tiles,
+                    down_tile_bytes,
+                    local_idx * shards_per_core + j_down,
+                    down_args,
+                    ct_down_addr_base);
+            }
+        }
+
+        if (is_root) {
+            Semaphore<>(sem_reduce_id).wait(num_expert_groups - 1u);
+            CircularBuffer cb_reduce(cb_reduce_id);
+            cb_reduce.push_back(reduce_tiles);
+        }
+        return;
+    }
+
     // Both the gate_up and the down DRAM shards for this core are shard `core_index`; the
     // first `num_producers` cores also own a slice of the SwiGLU I dim.
+    (void)i_shards_per_core;
     const bool swiglu_core = core_index < num_producers;
     const uint32_t shard_id = core_index;
     const uint32_t swiglu_tiles = i_tiles / num_producers;
@@ -356,7 +501,7 @@ inline void run_reader_loop(
     // Cores that own no slice of the I dim produce no activation chunk, so they have to ack the
     // gather once per block instead (see receiver_recv_act_block). Only the leader needs the count,
     // and only the leader is given the grid size (as the multicast destination count).
-    const uint32_t slot_free_acks_per_block = IsLeader ? (num_dests + 1u - num_producers) : 0u;
+    const uint32_t slot_free_acks_per_block = is_group_leader ? (num_dests + 1u - num_producers) : 0u;
 
     auto fetch_down = [&](uint32_t e) {
         fetch_weight_one(
@@ -376,7 +521,7 @@ inline void run_reader_loop(
     // claimed here; every later block's is claimed by the previous block's broadcast step, which is
     // what lets the other cores scatter into it (see leader_gather_broadcast_block).
     CircularBuffer cb_act(cb_act_id);
-    if constexpr (IsLeader) {
+    if (is_group_leader) {
         const uint32_t first_block = num_active < experts_block ? num_active : experts_block;
         cb_act.reserve_back(first_block * i_tiles);
     }
@@ -442,7 +587,7 @@ inline void run_reader_loop(
         // capped at the block, whose experts are the only ones compute will consume next.
         // The leader is excluded: its broadcast gates every other core, so it syncs first.
         uint32_t j_down = 0;
-        if constexpr (!IsLeader) {
+        if (!is_group_leader) {
             DeviceZoneScopedN("FE_DOWN_PREFETCH");
             const uint32_t prefetch = down_prefetch < block_experts ? down_prefetch : block_experts;
             for (; j_down < prefetch; ++j_down) {
@@ -453,7 +598,7 @@ inline void run_reader_loop(
         // ---- Synchronization: gather the block's activations + broadcast the block. ----
         {
             DeviceZoneScopedN("FE_SYNC");
-            if constexpr (IsLeader) {
+            if (is_group_leader) {
                 // Cumulative target: the semaphore counts up across blocks so it never needs a reset.
                 gather_target += num_producers * block_experts + slot_free_acks_per_block;
                 const uint32_t act_l1 = cb_act.get_write_ptr();
