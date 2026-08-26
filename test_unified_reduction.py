@@ -60,7 +60,8 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, op="sum", single_s
     cores = [ttnn.CoreCoord(x, y) for y in range(grid_h) for x in range(grid_w)]
 
     # CT args: [num_blocks, in_ht, in_wt, num_cores_y] then accessors for in0, in1, out
-    ct_args = [num_blocks, ht, wt, grid_h]
+    ct_args = []
+    named_ct_args = [("num_blocks", num_blocks), ("in_ht", ht), ("in_wt", wt), ("num_cores_y", grid_h)]
     for t in (ta, tb, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
@@ -82,6 +83,7 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, op="sum", single_s
         cores=cores,
         cbs=cbs,
         compile_time_args=ct_args,
+        named_compile_time_args=named_ct_args,
         runtime_args=rt_args,
         defines=(
             ([("RT_MAX", "1")] if op == "max" else [])

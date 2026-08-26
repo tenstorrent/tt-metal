@@ -103,7 +103,8 @@ def run(
         core_ranges, core_list = core_block(ncores)
         shares = split_evenly(nunits, ncores)
 
-    ct_args = [mt, ktot, ntot, kt, nt]
+    ct_args = []
+    named_ct_args = [("mt", mt), ("ktot", ktot), ("ntot", ntot), ("kt", kt), ("nt", nt)]
     for t in (ta, tb, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     addrs = [t.buffer_address() for t in (ta, tb, tout)]
@@ -142,6 +143,7 @@ def run(
         cores=core_list,
         cbs=cbs,
         compile_time_args=ct_args,
+        named_compile_time_args=named_ct_args,
         runtime_args=rt_args,
         defines=(
             ([("MMB_ACC_DST", "1")] if acc == "dst" else [])
