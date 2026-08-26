@@ -147,7 +147,7 @@ jobs:
         run: |
           set -euo pipefail
           src=".llk-review-knowledge-src/dashboard/pr_review/knowledge"
-          review_instructions="tt_metal/tt-llk/pr-review/llk-code-review.md"
+          review_instructions="tt_metal/tt-llk/.claude/commands/llk-code-review.md"
           out="${GITHUB_WORKSPACE}/.llk-review-system-prompt.md"
           required=(
             pinned-rules.md
