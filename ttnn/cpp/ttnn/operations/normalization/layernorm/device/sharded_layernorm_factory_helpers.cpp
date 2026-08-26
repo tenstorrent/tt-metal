@@ -595,7 +595,7 @@ void add_dfb(
         .entry_size = entry_size,
         .num_entries = total_size / entry_size,
         .data_format_metadata = data_format,
-        .borrowed_from = borrowed_from,
+        .borrowed_from = std::move(borrowed_from),
     });
 }
 
