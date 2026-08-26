@@ -1760,7 +1760,7 @@ CONFIG_TC_TEST_2_0(DMTest1xDFB2Sx4BConfig, DM, DM, 2, 4, STRIDED, ALL, 4, 2)
 // =====================================================================================
 
 // Host-only: DFB pool is [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], allocated top-down in ascending blocks.
-TEST(TxnIdAllocatorTest, AllocatesTopDownFromDfbPool) {
+TEST(TxnIdAllocatorTest, CPU_AllocatesTopDownFromDfbPool) {
     using tt::tt_metal::experimental::dfb::detail::TxnIdAllocator;
     TxnIdAllocator alloc;
 

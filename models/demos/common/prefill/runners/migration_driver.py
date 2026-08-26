@@ -101,6 +101,9 @@ is warned about rather than honoured:
                                     slots [0,N) migrate to dst slots [N,2N); the KV table needs >= 2N slots).
   PREFILL_MIGRATION_LAYERS          "0,3" => migrate ONLY those layer rows, one migrate() per layer;
                                     unset (default) => the whole [0, num_layers) range in one shot.
+                                    Not a per-cache selector: the engine replays the number per cache, so
+                                    layer L moves ROW L of each. A compacted DSA index cache cannot be
+                                    addressed this way, and ``_cache_plan`` drops it.
   PREFILL_MIGRATION_HANDOFF_PATH    path of the JSON handoff for a cross-endpoint decode consumer;
                                     unset (default) => not written at all.
   PREFILL_MIGRATION_TIMEOUT_MS      per-migration wait_complete timeout (default 3600000).
@@ -509,19 +512,123 @@ class MigrationDriver:
         return pairs
 
 
+def _cache_plan(table, migrated_layers) -> list:
+    """One entry per cache (config id): ``rows`` {global_layer: row on that cache's axis} or None to
+    leave the cache alone, ``head_dim`` (None => not decodable), ``kind`` (which cache this is),
+    ``unaddressed`` (layers a subset migrate could not reach), ``why`` for the log.
+
+    Layers do not all carry the same caches, and a cache that skips layers may be COMPACTED: GLM-5.2's
+    index cache is keyed by full-indexer rank, so global layer 6 is row 3. Axis, in order: the adapter's
+    ``cache_layer_rows(config_id, num_layers)`` / ``cache_head_dim(config_id)`` hooks (what a new model
+    implements), else identity when the cache holds every layer, else the full-indexer rank convention,
+    else None -- a short cache is ambiguous and a guessed row reads another layer's bytes.
+
+    Non-identity rows are filtered out under PREFILL_MIGRATION_LAYERS: migrate() sends ONE layer number
+    for the whole table and the engine replays it per config (``DcnSenderBackend::migrate_slot``), so a
+    subset addresses ROW L of every cache. Arbitrary M-of-N needs a config field in ``MigrateSpec``.
+
+    Publishing on the LAYER axis makes row == layer identity, so nothing is filtered out for it.
+    """
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    num_layers = int(producer.NUM_LAYERS)
+    n_model_configs = producer._num_model_configs(table)  # decimal-named only; a drafter's dflash_* are not caches here
+    adapter = producer.ADAPTER
+    rows_hook = getattr(adapter, "cache_layer_rows", None)
+    head_dim_hook = getattr(adapter, "cache_head_dim", None)
+    mc = adapter.model_config
+
+    full_layers = None
+    if table.num_configs() > 1:
+        try:
+            full_layers = producer._full_indexer_layer_indices(num_layers)  # None when every layer owns one
+        except Exception as e:  # a non-DSA model has no indexer_types map to read
+            logger.debug(f"[migration_driver] no full-indexer layer map available ({e}); DSA convention off")
+
+    plan = []
+    for cfg_id in range(table.num_configs()):
+        cfg = table.config() if cfg_id == 0 else table.config(cfg_id)
+        is_index = cfg_id == 1 and n_model_configs > 1  # config 1 is the index cache iff the MODEL published two
+        n_rows = int(cfg.num_layers)
+        rows, why = None, ""
+        if rows_hook is not None:
+            mapped = rows_hook(cfg_id, num_layers)
+            if mapped:
+                rows, why = {int(l): int(r) for l, r in dict(mapped).items()}, "adapter cache_layer_rows()"
+        if rows is None and n_rows >= num_layers:
+            rows, why = {l: l for l in range(num_layers)}, "all-layers cache (row == global layer)"
+        if rows is None and full_layers is not None and len(full_layers) == n_rows:
+            rows, why = {lid: r for r, lid in enumerate(full_layers)}, "DSA index cache (row == full-indexer rank)"
+        if rows is None:
+            why = (
+                f"UNKNOWN axis -- {n_rows} row(s) for {num_layers} layers, no cache_layer_rows() hook, and "
+                f"a prefix cache looks like a compacted one from here"
+            )
+
+        # Decode width: the dump needs it, the byte check does not.
+        head_dim = head_dim_hook(cfg_id) if head_dim_hook is not None else None
+        if head_dim is None and cfg_id == 0 and hasattr(mc, "KV_LORA_RANK") and hasattr(mc, "QK_ROPE_HEAD_DIM"):
+            head_dim = mc.KV_LORA_RANK + mc.QK_ROPE_HEAD_DIM
+        if head_dim is None and is_index:
+            head_dim = getattr(mc, "INDEX_HEAD_DIM", None)
+
+        # Keep the rows a subset migrate did land on (row == layer) rather than dropping the whole cache.
+        unaddressed = []
+        if rows is not None and migrated_layers:
+            # Reported against what the migrate ASKED for; the rest is filtered either way, not missing coverage.
+            unaddressed = sorted(l for l, r in rows.items() if l != r and l in set(migrated_layers))
+            rows = {l: r for l, r in rows.items() if l == r} or None
+            if unaddressed:
+                why = f"{why}; a subset migration by global layer id cannot address layer(s) {unaddressed}"
+        plan.append(
+            {
+                "config_id": cfg_id,
+                "rows": rows,
+                "head_dim": None if head_dim is None else int(head_dim),
+                "kind": "index" if is_index else ("kvpe" if cfg_id == 0 else "other"),
+                "unaddressed": unaddressed,
+                "why": why,
+            }
+        )
+    return plan
+
+
+def _log_cache_plan(plan, tag: str) -> None:
+    """One line per cache: what was covered, and why anything was dropped."""
+    for entry in plan:
+        cfg_id, rows = entry["config_id"], entry["rows"]
+        if rows is None:
+            logger.warning(f"[migration_driver] {tag}: cache config {cfg_id} SKIPPED -- {entry['why']}")
+        else:
+            # Partial coverage warns: a filtered cache still reports a layer count, so a count alone misleads.
+            log = logger.warning if entry["unaddressed"] else logger.info
+            log(
+                f"[migration_driver] {tag}: cache config {cfg_id} carries {len(rows)} layer(s) "
+                f"({entry['why']}; head_dim={entry['head_dim']})"
+            )
+
+
 def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None:
-    """Save each source slot's KV to ``<dump_dir>/src_slot<N>.pt`` as ``{"ref_kvpe_list": [...]}`` indexed
-    BY LAYER, for a decode-side consumer to PCC its received copy against (blaze's
-    ``--migration-validate-src-kv-pt``). That check tests the TRANSFER rather than the model: comparing
-    decode's destination to the exact bytes prefill held beats comparing it to a golden trace, which would
-    also fold in any model error.
+    """Save each source slot's KV to ``<dump_dir>/src_slot<N>.pt`` for a decode-side consumer to PCC its
+    received copy against (blaze's ``--migration-validate-src-kv-pt``). That check tests the TRANSFER
+    rather than the model: comparing decode's destination to the exact bytes prefill held beats comparing
+    it to a golden trace, which would also fold in any model error.
+
+    One per-layer list per cache, all indexed BY GLOBAL LAYER whatever axis the cache itself uses::
+
+        {"ref_cache_lists": {config_id: [tensor | None] * num_layers},  # every cache dumped
+         "ref_kvpe_list": [...], "ref_index_k_list": [...]}             # aliases for configs 0 and 1
+
+    ``_cache_plan`` picks the caches; one needs a known axis, a known decode width, and rows the migrate
+    addressed. A dropped index cache leaves decode checking KVPE alone, so skips are logged loudly.
 
     Read device-lessly over UMD via the runner's published table -- the same path the producer's PCC uses,
     reusing its table lookup and cache decode. Rows outside ``layers`` stay None: they are never read, and
     a full 78-layer slot would be ~10 GB. Values are stored in the DEVICE rope frame exactly as read, with
     no re-interleave, because that is the frame decode compares in.
 
-    MLA only -- the M3 triple cache has no single kvpe tensor to write.
+    MLA layouts only -- ``_decode_kv_chunk`` covers the 576-wide MLA formats and the DSA index chunk,
+    not the M3 triple cache.
     """
     import torch
 
@@ -540,48 +647,91 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
         logger.error("[migration_driver] no device map available; skipping the src-KV dump.")
         return
 
-    head_dim = producer.ADAPTER.model_config.KV_LORA_RANK + producer.ADAPTER.model_config.QK_ROPE_HEAD_DIM
     tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     wanted = set(layers) if layers else set(range(producer.NUM_LAYERS))
     base_dir = os.path.abspath(os.path.expanduser(dump_dir))
     os.makedirs(base_dir, exist_ok=True)
+
+    # Which caches are writable: a per-run decision, not per-slot.
+    plan = _cache_plan(table, layers)
+    _log_cache_plan(plan, "src-KV dump")
+    dumpable = []  # (config_id, {global layer: row}, head_dim)
+    for entry in plan:
+        cfg_id, rows = entry["config_id"], entry["rows"]
+        if rows is None:
+            continue
+        if entry["head_dim"] is None:
+            logger.warning(
+                f"[migration_driver] src-KV dump: cache config {cfg_id} not dumped -- axis known, but no "
+                f"decode width (no cache_head_dim() hook)."
+            )
+            continue
+        selected = {l: r for l, r in rows.items() if l in wanted}
+        if not selected:
+            logger.warning(
+                f"[migration_driver] src-KV dump: cache config {cfg_id} carries none of layer(s) "
+                f"{sorted(wanted)}; not dumped."
+            )
+            continue
+        dumpable.append((cfg_id, selected, entry["head_dim"]))
+    if not any(cfg_id == 0 for cfg_id, _, _ in dumpable):
+        logger.error(
+            "[migration_driver] src-KV dump: cache config 0 is not readable (see the plan above), so there "
+            "is no reference to write; skipping the dump."
+        )
+        return
 
     for slot_id, res in sorted(stats.resident.items()):
         real_len = res.real_len
         if real_len <= 0:
             continue
         read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block  # round to a block
-        ref_kvpe_list = [None] * producer.NUM_LAYERS
-        for layer in sorted(wanted):
-            decoded_rows = []
-            for pos in range(0, read_len, tokens_per_block):
-                loc = table.lookup(layer, pos, slot_id)
-                unique_id = producer._resolve_unique_id(
-                    table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
-                )
-                raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
-                decoded_rows.append(producer._decode_kv_chunk(raw, head_dim))
-            device_kv = torch.cat(decoded_rows, dim=0)[:real_len]  # natural order (the table un-rotates)
-            ref_kvpe_list[layer] = device_kv.unsqueeze(0).unsqueeze(0)
+
+        refs = {}  # config_id -> per-GLOBAL-layer list
+        for cfg_id, selected, head_dim in dumpable:
+            per_layer = [None] * producer.NUM_LAYERS
+            for layer, row in sorted(selected.items()):
+                # A layer-axis cache is SPARSE: an unwritten row reads back 0 bytes, so leave it None.
+                if table.lookup(row, 0, slot_id, cfg_id).size_bytes == 0:
+                    continue
+                decoded_rows = []
+                for pos in range(0, read_len, tokens_per_block):
+                    loc = table.lookup(row, pos, slot_id, cfg_id)  # keyed on this cache's own axis
+                    unique_id = producer._resolve_unique_id(
+                        table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+                    )
+                    raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
+                    # Dispatch is by raw byte size, so MLA and index chunks both land right.
+                    decoded_rows.append(producer._decode_kv_chunk(raw, head_dim))
+                device_kv = torch.cat(decoded_rows, dim=0)[:real_len]  # natural order (the table un-rotates)
+                per_layer[layer] = device_kv.unsqueeze(0).unsqueeze(0)  # stored by global layer
+            refs[cfg_id] = per_layer
+
         # dump_dir is the safelisted base; only the derived basename varies. Confirm the join stays inside
         # it before writing.
         out = os.path.abspath(os.path.join(base_dir, f"src_slot{int(slot_id)}.pt"))
         if not out.startswith(base_dir + os.sep):
             raise ValueError(f"src-KV dump path {out!r} escapes its base directory {base_dir!r}")
-        torch.save({"ref_kvpe_list": ref_kvpe_list}, out)
+        blob = {"ref_cache_lists": refs, "ref_kvpe_list": refs[0]}
+        if 1 in refs:
+            blob["ref_index_k_list"] = refs[1]  # back-compat alias for the DSA index cache
+        torch.save(blob, out)
+        counts = ", ".join(f"cfg{c}={sum(t is not None for t in lst)}" for c, lst in sorted(refs.items()))
         logger.success(
             f"[migration_driver] slot {slot_id} src KV dumped -> {out} "
-            f"(layers {sorted(wanted)}, positions [0,{real_len}))"
+            f"(layers {sorted(wanted)}, positions [0,{real_len}), layer(s) per cache: {counts})"
         )
 
 
-def _verify_dst_vs_src_bytes(table, device_map: dict, triples: list, layers, *, max_report: int = 10) -> bool:
+def _verify_dst_vs_src_bytes(
+    table, device_map: dict, triples: list, layers, *, migrated_layers=None, max_report: int = 10
+) -> bool:
     """Golden-free DESTINATION check: assert every migrated dst slot holds byte-identical KV to its src
     slot, over every config / layer / position the migrate covered. Returns True on full agreement.
 
     This asks the dst==src question the runner's retired ``validate_migrations_pairwise`` used to ask, but
     over the device-less UMD path instead of the runner's in-memory cache — so it runs in the driver
-    process, needs no per-model adapter hook, and leaves the runner a pure serving loop.
+    process, needs no per-model layout branch, and leaves the runner a pure serving loop.
 
     Byte equality rather than PCC: migration is a byte copy, so the correct dst is bit-identical. That
     removes the whole reason the old runner-side version needed a 0.99 threshold and an all-zero
@@ -597,10 +747,9 @@ def _verify_dst_vs_src_bytes(table, device_map: dict, triples: list, layers, *, 
     it is a property of identical sources, not of the comparison.)
 
     Scope limits, all logged rather than silently absorbed:
-      * ``layers`` (the migrated subset, PREFILL_MIGRATION_LAYERS) restricts which layer rows are read;
-        with a subset only config 0 is checked, because a sparse model's index config can be COMPACTED
-        (its layer axis is the full-indexer rank, not the global layer id) and a global id would index
-        the wrong row.
+      * ``layers`` (``--verify-migration-layers``) picks which rows are read -- a pure cost knob.
+        ``migrated_layers`` (PREFILL_MIGRATION_LAYERS) feeds ``_cache_plan``, which drops any cache a
+        by-global-layer subset could not address; every cache it keeps is checked.
       * Only whole chunks inside [0, real_len) are compared. A real_len that is not a multiple of the
         config's chunk_n_tokens leaves a trailing partial chunk unchecked, since whether the engine
         copies it whole is its business, not this gate's.
@@ -610,33 +759,41 @@ def _verify_dst_vs_src_bytes(table, device_map: dict, triples: list, layers, *, 
     """
     from models.demos.common.prefill.runners import prefill_producer as producer
 
-    n_configs = table.num_configs()
-    if layers and n_configs > 1:
-        logger.warning(
-            f"[migration_driver] verify: layer subset {sorted(set(layers))} given, so only config 0 is "
-            f"checked ({n_configs} configs in the table). A compacted index config indexes rows by "
-            "full-indexer rank, not global layer id, so a global id would read the wrong row."
+    plan = _cache_plan(table, migrated_layers)
+    _log_cache_plan(plan, "verify bytes")
+    # (config_id, [(global layer, row)]) per readable cache, limited to the sampled layers.
+    checkable = []
+    for entry in plan:
+        rows = entry["rows"]
+        if rows is None:
+            continue
+        picked = sorted((l, r) for l, r in rows.items() if not layers or l in set(layers))
+        if picked:
+            checkable.append((entry["config_id"], picked))
+    if not checkable:
+        logger.error(
+            "[migration_driver] verify bytes: no cache has an addressable axis (see the plan above), so "
+            "nothing would be compared. Treating as a FAILURE."
         )
-        n_configs = 1
+        return False
 
     failures, checked, skipped, tail_tokens = [], 0, 0, 0
     for src, dst, real_len in triples:
-        for cfg_id in range(n_configs):
+        for cfg_id, picked in checkable:
             tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
-            stride, cfg_layers = int(tcfg.chunk_n_tokens), int(tcfg.num_layers)
+            stride = int(tcfg.chunk_n_tokens)
             n_full = (real_len // stride) * stride  # whole chunks only; see the docstring
             tail_tokens += real_len - n_full
-            wanted = [l for l in sorted(set(layers)) if l < cfg_layers] if layers else list(range(cfg_layers))
             logger.info(
                 f"[migration_driver] verify bytes: slot {src} -> {dst} config {cfg_id}: "
-                f"{len(wanted)} layer(s) x {n_full // stride} chunk(s) of {stride} token(s) "
-                f"= {2 * len(wanted) * (n_full // stride)} UMD read(s)"
+                f"{len(picked)} layer(s) x {n_full // stride} chunk(s) of {stride} token(s) "
+                f"= {2 * len(picked) * (n_full // stride)} UMD read(s)"
             )
-            for layer in wanted:
+            for layer, row in picked:
                 mismatches_in_layer = 0
                 for pos in range(0, n_full, stride):
-                    src_loc = table.lookup(layer, pos, src, cfg_id)
-                    dst_loc = table.lookup(layer, pos, dst, cfg_id)
+                    src_loc = table.lookup(row, pos, src, cfg_id)
+                    dst_loc = table.lookup(row, pos, dst, cfg_id)
                     try:
                         src_uid = producer._resolve_unique_id(
                             table.get_device_group(src_loc.device_group_index).fabric_node_ids, device_map
@@ -773,7 +930,8 @@ def _verify_migrated_slots(
         MEANINGFUL to read at the destination.
       * ``layers`` (``--verify-migration-layers``, defaulting to ``migrated_layers``) — which rows this
         run should bother reading. A pure cost knob: a subset makes a PASS a sample.
-    ``dst-bytes`` takes ``layers`` and honours both. ``dst-golden`` can honour neither — its reader walks
+    ``dst-bytes`` honours both: ``layers`` picks its rows, ``migrated_layers`` tells ``_cache_plan``
+    which caches the migrate could address. ``dst-golden`` can honour neither — its reader walks
     the full depth — so the gate below runs it only when the whole model was migrated, and says so
     otherwise instead of PCCing rows that hold nothing.
     """
@@ -803,7 +961,7 @@ def _verify_migrated_slots(
 
     ok = True
     if mode in ("dst-bytes", "both"):
-        ok = _verify_dst_vs_src_bytes(table, device_map, triples, layers) and ok
+        ok = _verify_dst_vs_src_bytes(table, device_map, triples, layers, migrated_layers=migrated_layers) and ok
     if mode in ("dst-golden", "both"):
         if migrated_layers:
             # PARTIAL MIGRATION + golden check: refuse, don't guess. The golden reader walks every layer
