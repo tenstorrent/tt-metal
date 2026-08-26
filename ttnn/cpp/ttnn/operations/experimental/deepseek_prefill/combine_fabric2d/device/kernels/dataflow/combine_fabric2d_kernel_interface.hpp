@@ -57,6 +57,11 @@ struct L1Layout {
     // [region_offsets: num_routed_experts], all uint32. Unlike everything above it, nothing on another chip
     // addresses this, so it can sit at the end — but it is still computed identically everywhere.
     uint32_t control;
+    // The untilizers' batch ring and their own copy of the control tables. Untilizer cores are disjoint from
+    // the cores everything above sits on, so these could have shared those addresses; they are placed past
+    // them instead because one layout is easier to hold than two.
+    uint32_t unt_ring;
+    uint32_t unt_control;
 };
 
 struct DramBuffers {
@@ -79,6 +84,31 @@ struct KernelPlan {
     uint32_t fwd_arrived_addr = 0;
 };
 
+// The other end of one untilizer handshake: the core to address, and the counter that core's peer owns there.
+struct HandshakePeer {
+    CoreCoord noc;
+    uint32_t counter_addr = 0;
+};
+
+// The untilizer group serving one reader, from that reader's side.
+struct ReaderUntilizers {
+    uint32_t ring_addr = 0;
+    uint32_t my_freed_addr = 0;  // the counter this reader owns on each untilizer core
+    std::vector<HandshakePeer> peers;
+};
+
+// The per-core values an untilizer needs that are not read off the arguments.
+struct UntilizerPlan {
+    uint32_t my_expert_base = 0;
+    uint32_t my_index = 0;   // position in the group
+    uint32_t num_peers = 0;  // cores in the group
+    uint32_t walks_down = 0;
+    uint32_t ring_addr = 0;
+    uint32_t control_addr = 0;
+    uint32_t produced_addr = 0;  // the counter this core owns on each of its consumers
+    std::vector<HandshakePeer> consumers;
+};
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
 
 namespace cmbf2d {
@@ -98,6 +128,15 @@ constexpr uint32_t BATCH = NUM_L1_SLOTS / 2;
 // keep. The host sizes the control region with these; the reader indexes the pads with them.
 constexpr uint32_t META_PREFETCH = 64;
 constexpr uint32_t META_PAD_STRIDE = 64;
+
+// Rows one untilize produces, which is one tile-row of the dispatched buffer. The least it can produce,
+// whatever the tokens wanted, so it is the unit a group of untilizers hands over.
+constexpr uint32_t UNT_BATCH_ROWS = 32;
+// Batches an untilizer keeps in flight, so the next one can be built while its consumers work through the
+// one before it.
+constexpr uint32_t UNT_RING_BATCHES = 2;
+// Words per entry in a handshake block: [noc_x, noc_y, counter_addr].
+constexpr uint32_t UNT_PEER_WORDS = 3;
 
 // Words per assignment in the reader's assignment block: [dst_chip_id, dst_dg_index, split_idx, split_count].
 constexpr uint32_t ASSIGNMENT_WORDS = 4;

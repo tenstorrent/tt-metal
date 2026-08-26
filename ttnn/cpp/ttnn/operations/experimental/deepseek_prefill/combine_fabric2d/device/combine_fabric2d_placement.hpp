@@ -42,7 +42,12 @@ constexpr uint32_t untilizer_group_of(StreamId stream) { return stream % UNTILIZ
 // there is something to tune. Above 5 a group no longer fits one row next to its senders.
 constexpr uint32_t UNTILIZERS_PER_GROUP = 4;
 
-using UntilizerGroups = std::array<std::vector<CoreCoord>, UNTILIZER_GROUPS>;
+struct UntilizerPlacement {
+    CoreCoord logical;
+    CoreCoord worker_virtual;  // what a reader on this chip addresses
+};
+
+using UntilizerGroups = std::array<std::vector<UntilizerPlacement>, UNTILIZER_GROUPS>;
 
 struct DevicePlacement {
     StreamPlacements streams;

@@ -38,6 +38,7 @@ struct WorkerCandidate {
 UntilizerGroups decide_untilizers(
     const StreamPlacements& streams,
     std::set<CoreCoord>& taken,
+    tt::tt_metal::IDevice* dev,
     const CoreCoord& grid,
     const tt::tt_fabric::FabricNodeId& who) {
     std::array<std::vector<std::size_t>, UNTILIZER_GROUPS> columns;
@@ -67,7 +68,8 @@ UntilizerGroups decide_untilizers(
                 i,
                 g,
                 core);
-            groups[g].push_back(core);
+            groups[g].push_back(
+                UntilizerPlacement{core, dev->virtual_core_from_logical_core(core, tt::CoreType::WORKER)});
         }
     }
     return groups;
@@ -146,7 +148,7 @@ DevicePlacement decide_device_placement(
         assign(stream, candidate, worker);
     }
     return DevicePlacement{
-        placements, decide_untilizers(placements, taken, mesh->compute_with_storage_grid_size(), self_node)};
+        placements, decide_untilizers(placements, taken, dev, mesh->compute_with_storage_grid_size(), self_node)};
 }
 
 }  // namespace
