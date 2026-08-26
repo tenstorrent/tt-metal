@@ -510,6 +510,41 @@ KNOBS = {
     # extension, never strip the long-standing parent with it (the
     # on-plus-era parent token existed purely for the dedup note above).
     "lut-select-fp16": "-mtt-tensix-optimize-lut-select-fp16",
+    "lut-select-fp16": "-mtt-tensix-optimize-lut-select "
+    "-mtt-tensix-optimize-lut-select-fp16",
+    # HC (lut-prefix-hoist, 2026-08-25): crosscall CONFIG-PREFIX +
+    # placement RESIDENCY — the geluappx-fresh +6.25 residual's named
+    # "per-tile table-prefix/crosscall-residency" class.  The licensed
+    # gelu body's vConstFloatPrgm0=0.5 pair (sfploadi + sfpwriteconfig_v
+    # dest 12) killed the whole 6-value fp16-LUT crosscall contract
+    # (crosscall-callee-vector-outside-loop); under the flag the pair
+    # JOINS the contract (hoisted ahead of the table loads, deleted from
+    # the callee) and the committed placement lifts across enclosing
+    # caller loops under the same caller-epoch scan — tile loop -> batch
+    # loop -> kernel entry, the hand once-per-kernel init discipline.
+    # The callee becomes the bare 5-word row loop (one word SHORTER than
+    # hand's 6).  sigmoidlut/tanhlut contracts (already firing) gain the
+    # residency lift.  Composed with the fp16 surface (the target rows'
+    # shape only exists under it); the config-prefix-only attribution
+    # A/B is laneHC-evidence-20260825 (ON-28+fp16 vs +config-prefix).
+    # atan2-fresh = named no-fire control (fully inlined, no call
+    # boundary; its 27-word residual is the 295t peel-placement class,
+    # crossloop-cc-unproven at the face loop — a different member).
+    # MEASURED (laneHC-evidence-20260825, BH p150, off = ON-28 +
+    # lut-select-fp16 = the GU booking legs reproduced EXACTLY
+    # (30651/29845/20771), knob = + crosscall-config-prefix, 3 reps
+    # cycle-identical, paired CRAQ PASS pinned sim 32489dda + device
+    # corr PASS before any perf): KERNEL mean(MATH_ISOLATE) —
+    # geluappx-fresh 30651 -> 28857 (-5.85% knob-causal; vs-hand
+    # +6.25 -> +0.03 = the residual KILLED, hand 28849);
+    # sigmoidlut-fresh 29845 -> 29755 (-0.30%; vs-hand -0.94 -> -1.24
+    # WIN extends); tanhlut-fresh 20771 -> 20666 (-0.51%; vs-hand
+    # +0.56 -> +0.05, hand 20656).  atan2-fresh (ON-28+pressure-park
+    # legs) + hardsigmoid-fresh + tanhderivlut-fresh + geluappx hand
+    # arm: REFUSAL_BYTE_IDENTICAL under the knob (measured controls).
+    "crosscall-config-prefix": "-mtt-tensix-optimize-lut-select "
+    "-mtt-tensix-optimize-lut-select-fp16 "
+    "-mtt-tensix-optimize-crosscall-config-prefix",
     # CN (representation-propagation): bit-involution pair cancellation
     # on audited choose-webs; corpus 0-changed at the CN gate (fire
     # evidence lives in the dg twins) — the knob leg surfaces any pin-14
@@ -876,6 +911,8 @@ KNOB_MODES = {
     "replay-loop-unroll": "on-plus",
     "int-abs": "on-plus",
     "lut-select-leaf-ext": "on-plus",
+    "lut-select-fp16": "on-plus",
+    "crosscall-config-prefix": "on-plus",
     "repr-prop": "on-plus",
     # pin-15 crown-jewel booking flags (lane DZ): shapes only materialize
     # on the reviewed-ON baseline (the allocator/scheduler act on the
