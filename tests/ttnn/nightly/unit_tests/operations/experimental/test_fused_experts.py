@@ -38,8 +38,9 @@ import random
 from models.common.utility_functions import comp_pcc, comp_allclose
 
 
-# fused_experts uses an 8x8 compute grid; each active core owns a 2-tile SwiGLU output
-# slice (64 cols), reading a [H, 128] (gate 64 | up 64) gate_up shard.
+# fused_experts DRAM: one [H, 64] [gate_32|up_32] shard per I-tile, and 64 [I, H/64]
+# down shards. With 6 selected experts the op runs on a 12x8 = 96-core grid (16 cores
+# per expert). Each core covers (I/32)/16 gate_up shards and 4 down shards.
 FUSED_EXPERTS_GRID = 8
 FUSED_EXPERTS_NUM_CORES = FUSED_EXPERTS_GRID * FUSED_EXPERTS_GRID
 BH_NUM_DRAM_BANKS = 8

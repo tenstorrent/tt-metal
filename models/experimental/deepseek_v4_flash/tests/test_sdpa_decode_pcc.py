@@ -32,12 +32,16 @@ _MASK_NEG = -1.0e9
 PCC_THRESHOLD = 0.99
 
 
-def _make_attention(device, num_heads: int, head_dim: int, sinks_torch: torch.Tensor) -> DeepSeekV4Attention:
+def _make_attention(
+    device, num_heads: int, head_dim: int, sinks_torch: torch.Tensor, tp_size: int = 1
+) -> DeepSeekV4Attention:
     """Build a bare attention instance carrying only the state ``_sdpa_decode``
     touches (no projection weights — the test feeds q/kv/mask directly)."""
     attn = DeepSeekV4Attention.__new__(DeepSeekV4Attention)
     attn.device = device
     attn.num_heads = num_heads
+    attn.tp_size = tp_size
+    attn.local_num_heads = num_heads // tp_size
     attn.head_dim = head_dim
     attn.scaling = head_dim**-0.5
 
@@ -45,7 +49,13 @@ def _make_attention(device, num_heads: int, head_dim: int, sinks_torch: torch.Te
     # Pre-divided, tile-padded sink for the fused op (see production __init__).
     sdpa_sink = attn.sinks_torch.reshape(num_heads, 1) / attn.scaling
     sdpa_sink = torch.nn.functional.pad(sdpa_sink, (0, ttnn.TILE_SIZE - 1), "constant", value=0.0)
-    attn.sdpa_sinks_tt = ttnn.from_torch(sdpa_sink, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    attn.sdpa_sinks_tt = ttnn.from_torch(
+        sdpa_sink,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0) if tp_size > 1 else None,
+    )
     attn._sdpa_pcfg = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=0,

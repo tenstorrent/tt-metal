@@ -9,6 +9,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "tt-metalium/work_split.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::experimental::matmul_decode {
 
@@ -22,6 +23,9 @@ MatmulDecodeDeviceOperation::program_factory_t MatmulDecodeDeviceOperation::sele
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1) {
         return BatchedWidthSharded{};
+    }
+    if (operation_attributes.all_gather) {
+        return AllGatherFullWidth{};
     }
     if (operation_attributes.partial_width_sharded) {
         return PartialWidthSharded{};
@@ -38,6 +42,40 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     // chosen factory will consume.
     const bool batched = input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1;
     const bool partial = !batched && operation_attributes.partial_width_sharded;
+
+    if (operation_attributes.mesh_coords.has_value()) {
+        TT_FATAL(!operation_attributes.mesh_coords->empty(), "matmul_decode mesh_coords cannot be empty");
+        TT_FATAL(!batched, "matmul_decode mesh_coords is not supported with the batched width-sharded factory");
+        TT_FATAL(
+            !operation_attributes.all_gather,
+            "matmul_decode mesh_coords and all_gather are mutually exclusive; broadcast the restricted result "
+            "explicitly");
+        TT_FATAL(
+            !operation_attributes.global_cb.has_value(),
+            "matmul_decode mesh_coords is not supported with global_cb because every prefetched rank must consume "
+            "its queued weight pages");
+        for (const auto& coord : *operation_attributes.mesh_coords) {
+            TT_FATAL(
+                input_tensor_a.device()->get_view().contains(coord),
+                "matmul_decode mesh coordinate {} is outside the input mesh",
+                coord);
+        }
+    }
+
+    if (operation_attributes.all_gather) {
+        TT_FATAL(
+            operation_attributes.ring_size > 1,
+            "matmul_decode all_gather requires a multi-device mesh, but the input mesh has {} device(s)",
+            operation_attributes.ring_size);
+        TT_FATAL(
+            !operation_attributes.global_cb.has_value(),
+            "matmul_decode all_gather is not supported with global_cb (tensor prefetcher)");
+        TT_FATAL(!batched, "matmul_decode all_gather is not supported with the batched width-sharded factory");
+        TT_FATAL(
+            !partial,
+            "matmul_decode all_gather is not supported with partial_width_sharded; "
+            "the partial-width all-gather implementation is not available");
+    }
 
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input tensor A must be in tile layout");
     TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Input tensor B must be in tile layout");
@@ -494,8 +532,12 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     // Use operation N (not B's logical last dim) so folded partial-B layouts still yield [..., M, N].
+    // all_gather concatenates each device's N-shard, so the returned width is N * ring_size.
+    const int output_N = operation_attributes.all_gather
+                             ? operation_attributes.N * static_cast<int>(operation_attributes.ring_size)
+                             : operation_attributes.N;
     ttnn::Shape output_shape(input_tensor_a.logical_shape());
-    output_shape[-1] = operation_attributes.N;
+    output_shape[-1] = output_N;
 
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
 
@@ -543,7 +585,7 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
                 output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
         }
     }
-    int per_core_output_width = tt::div_up(operation_attributes.N, output_num_cores);
+    int per_core_output_width = tt::div_up(output_N, output_num_cores);
     const uint32_t shard_height =
         tt::round_up(operation_attributes.M, input_tensor_a.tensor_spec().tile().get_height());
     std::array<uint32_t, 2> shard_shape = {shard_height, per_core_output_width};
@@ -577,9 +619,24 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t global_cb_k_blocks,
-    const std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec>& packed_weight) {
+    const std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec>& packed_weight,
+    bool all_gather,
+    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation;
     using ttnn::operations::experimental::matmul_decode::gcb_num_receivers;
+
+    auto with_all_gather = [&](OperationType::operation_attributes_t attrs) {
+        attrs.all_gather = all_gather;
+        attrs.mesh_coords = mesh_coords;
+        if (all_gather) {
+            attrs.ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor_a, std::nullopt);
+            TT_FATAL(
+                attrs.ring_size > 1,
+                "matmul_decode all_gather requires a multi-device mesh, but the input mesh has {} device(s)",
+                attrs.ring_size);
+        }
+        return attrs;
+    };
 
     // `compute_output_specs` runs before `validate_on_program_cache_miss` and already reads the
     // weight's ND shard shape on the GCB path, so these preconditions have to sit ahead of both --
@@ -641,7 +698,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
             pw.k_blocks,
             pw.batch,
             pw.b_blocks);
-        auto operation_attributes = OperationType::operation_attributes_t{
+        auto operation_attributes = with_all_gather(OperationType::operation_attributes_t{
             M,
             static_cast<int>(pw.N),
             static_cast<int>(pw.K),
@@ -654,7 +711,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
             /*global_cb=*/std::nullopt,
             /*global_cb_k_blocks=*/1,
             packed_weight,
-        };
+        });
         auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
         return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
     }
@@ -713,7 +770,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
                 Bc,
                 b_blocks,
                 n_blocks);
-            auto operation_attributes = OperationType::operation_attributes_t{
+            auto operation_attributes = with_all_gather(OperationType::operation_attributes_t{
                 M,
                 N,
                 K,
@@ -725,7 +782,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
                 n_blocks,
                 global_cb,
                 global_cb_k_blocks,
-            };
+            });
             auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
             return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
         }
@@ -751,7 +808,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     }
     log_debug(
         tt::LogOp, "matmul_decode partial_width_sharded={} with M={}, N={}, K={}", partial_width_sharded, M, N, K);
-    auto operation_attributes = OperationType::operation_attributes_t{
+    auto operation_attributes = with_all_gather(OperationType::operation_attributes_t{
         M,
         N,
         K,
@@ -763,7 +820,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         /*n_blocks=*/1,
         global_cb,
         global_cb_k_blocks,
-    };
+    });
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

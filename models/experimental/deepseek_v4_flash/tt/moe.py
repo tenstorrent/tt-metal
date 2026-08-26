@@ -3,8 +3,13 @@ from typing import NamedTuple, Optional
 import ttnn
 import torch
 
-from .common import FULL_TILE, SINGLE_USER_TILE, DeepSeekV4Module, _profile, _region, with_shard_height
-from .decode_prefetch import check_decode_layout, decode_prefetch_page_bytes, make_decode_prefetch_buffers
+from .common import DeepSeekV4Module, _profile, _region
+from .decode_prefetch import (
+    check_decode_layout,
+    decode_prefetch_page_bytes,
+    make_decode_prefetch_buffers,
+    tp_gate_up_layout,
+)
 from .layers import Linear, LinearDecode
 from .l1_weights import packed_weight_spec
 from .system_config import active_system_config
@@ -65,12 +70,14 @@ class DeepSeekV4MLP(DeepSeekV4Module):
     Used as the always-on *shared expert*: ``down(silu(gate(x)) * up(x))`` with
     no clamp (the routed experts clamp; the shared expert does not).
 
-    ``use_prefetcher=True`` runs the three projections as :class:`LinearDecode` on
-    DRISC-prefetched weights, streamed through the same GCB the attention block uses (see
-    ``decode_prefetch``) instead of reading them from DRAM on every call. That path is decode
-    shaped: it width-shards the tokens over one tile-row, which caps it at the 32 rows a tile
-    holds, so a prefill-width input has to use the default ``ttnn.linear`` path. It also needs
-    ``config``, to check the fixed weight layouts against the shapes this model wants.
+    ``use_prefetcher=True`` runs the three projections as :class:`LinearDecode`. Down
+    stays on the shared 64-core decode GCB. Under TP, gate and up cannot join that ring
+    (``N = I/TP`` is only 8 cores) and a private GCB on those cores collides with
+    ``fused_hyperconnection`` static CBs, so they use the transient DRAM->L1 copy.
+    That path is decode shaped: it width-shards the tokens over one tile-row, which
+    caps it at the 32 rows a tile holds, so a prefill-width input has to use the
+    default ``ttnn.linear`` path. It also needs ``config``, to check the fixed weight
+    layouts against the shapes this model wants.
     """
 
     def __init__(
@@ -84,10 +91,17 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         packed_weights=None,
+        tp_size: int = 1,
     ):
         cache = _as_cache(cache)
         self.device = device
         self.use_prefetcher = use_prefetcher
+        self.tp_size = tp_size
+        # After transpose, gate/up are ``[H, I]`` (column-parallel: shard N) and down
+        # is ``[I, H]`` (row-parallel: shard K).
+        gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=1) if tp_size > 1 else None
+        down_mapper = ttnn.ShardTensorToMesh(device, dim=0) if tp_size > 1 else None
+        tp_tag = f".tp{tp_size}" if tp_size > 1 else ""
         if packed_weights is not None:
             tensor, layout, slot = packed_weights
 
@@ -114,54 +128,89 @@ class DeepSeekV4MLP(DeepSeekV4Module):
             return
         if not use_prefetcher:
             self.gate_proj = Linear(
-                weights[f"{prefix}.gate_proj.weight"], device, cache.file(f"{prefix}.gate_proj"), dtype=weight_dtype
+                weights[f"{prefix}.gate_proj.weight"],
+                device,
+                cache.file(f"{prefix}.gate_proj{tp_tag}"),
+                dtype=weight_dtype,
+                mesh_mapper=gate_up_mapper,
             )
             self.up_proj = Linear(
-                weights[f"{prefix}.up_proj.weight"], device, cache.file(f"{prefix}.up_proj"), dtype=weight_dtype
+                weights[f"{prefix}.up_proj.weight"],
+                device,
+                cache.file(f"{prefix}.up_proj{tp_tag}"),
+                dtype=weight_dtype,
+                mesh_mapper=gate_up_mapper,
             )
             self.down_proj = Linear(
-                weights[f"{prefix}.down_proj.weight"], device, cache.file(f"{prefix}.down_proj"), dtype=weight_dtype
+                weights[f"{prefix}.down_proj.weight"],
+                device,
+                cache.file(f"{prefix}.down_proj{tp_tag}"),
+                dtype=weight_dtype,
+                mesh_mapper=down_mapper,
             )
             return
 
         hidden, inter = config.hidden_size, config.moe_intermediate_size
+        local_inter = inter // tp_size if tp_size > 1 else inter
         if prefetch_buffers is None:
             prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype)
-        prefetch = {"use_prefetcher": True, "global_cb_page_bytes": decode_prefetch_page_bytes(weight_dtype)}
+        page_bytes = decode_prefetch_page_bytes(weight_dtype)
+        gate_up_layout = dict(check_decode_layout("shared_gate_proj", hidden, inter))
+        down_layout = dict(check_decode_layout("shared_down_proj", inter, hidden))
+        gate_up_prefetch = {
+            "use_prefetcher": True,
+            "global_cb": prefetch_buffers["shared_gate_proj"],
+            "global_cb_page_bytes": page_bytes,
+        }
+        down_cb = prefetch_buffers["shared_down_proj"]
+        decode_gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=-1) if tp_size > 1 else None
+        decode_down_mapper = ttnn.ShardTensorToMesh(device, dim=-2) if tp_size > 1 else None
+        if tp_size > 1:
+            # Per-rank gate/up is N=I/TP (8 cores at I=2048, TP=4) and cannot join the
+            # 64-receiver shared GCB. A private GCB on those cores also collides with
+            # fused_hyperconnection static CBs on (0,0), so they stay on DRAM->L1.
+            # Down only cuts K and stays on 64 cores.
+            gate_up_layout = tp_gate_up_layout(tp_size, hidden, local_inter)
+            down_layout = {"K": local_inter, "N": hidden}
+            gate_up_prefetch = {"use_prefetcher": False}
         self.gate_proj = LinearDecode(
             weights[f"{prefix}.gate_proj.weight"],
             device,
-            cache.file(f"{prefix}.gate_proj"),
+            cache.file(f"{prefix}.gate_proj{tp_tag}.decode" if tp_size > 1 else f"{prefix}.gate_proj{tp_tag}"),
             dtype=weight_dtype,
-            **check_decode_layout("shared_gate_proj", hidden, inter),
-            global_cb=prefetch_buffers["shared_gate_proj"],
-            **prefetch,
+            mesh_mapper=decode_gate_up_mapper,
+            **gate_up_layout,
+            **gate_up_prefetch,
         )
         self.up_proj = LinearDecode(
             weights[f"{prefix}.up_proj.weight"],
             device,
-            cache.file(f"{prefix}.up_proj"),
+            cache.file(f"{prefix}.up_proj{tp_tag}.decode" if tp_size > 1 else f"{prefix}.up_proj{tp_tag}"),
             dtype=weight_dtype,
-            **check_decode_layout("shared_up_proj", hidden, inter),
-            global_cb=prefetch_buffers["shared_up_proj"],
-            **prefetch,
+            mesh_mapper=decode_gate_up_mapper,
+            **gate_up_layout,
+            **gate_up_prefetch,
         )
         self.down_proj = LinearDecode(
             weights[f"{prefix}.down_proj.weight"],
             device,
-            cache.file(f"{prefix}.down_proj"),
+            cache.file(f"{prefix}.down_proj{tp_tag}"),
             dtype=weight_dtype,
-            **check_decode_layout("shared_down_proj", inter, hidden),
-            global_cb=prefetch_buffers["shared_down_proj"],
-            **prefetch,
+            mesh_mapper=decode_down_mapper,
+            global_cb=down_cb,
+            global_cb_page_bytes=page_bytes,
+            num_inputA_cores=max(1, local_inter // 64) if tp_size > 1 else 32,
+            use_prefetcher=True,
+            **down_layout,
         )
 
     def prefetch_weights(self):
         """Stage the three projection weights ahead of the :meth:`forward` that uses them.
 
-        Queued gate, up, down: the order :meth:`forward` runs them, which is the order they
-        must come off the shared GCB's single FIFO. The attention block's weights precede
-        them, since it runs first in the decoder layer.
+        Queued gate, up, then down. Under TP, gate/up are DRAM->L1 copies (they cannot
+        join the shared 64-core GCB); down uses that GCB. Queue order still has to match
+        :meth:`forward` on the shared buffer. The attention block's weights precede down
+        on it, since attention runs first in the decoder layer.
         """
         if not self.use_prefetcher:
             return
@@ -177,9 +226,9 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         would decode as T one-token matmuls -- and it is what the caller already built for the
         router, so nothing is reshaped here.
         """
-        # Prefetched, gate and up leave their results width-sharded over the 32 cores holding
-        # 64 columns each, which is exactly how down_proj wants its activation sharded along
-        # K, so the product feeds it where it already sits and nothing reshards in between.
+        # Prefetched, gate and up leave their results width-sharded over the cores
+        # holding 64 columns each, which is how down_proj wants its activation
+        # sharded along K, so the product feeds it where it already sits.
         out = self.down_proj(ttnn.multiply(ttnn.silu(self.gate_proj(x)), self.up_proj(x)))
         return out
 
@@ -332,6 +381,7 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
+            mesh_mapper=(ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None),
         )
         return SparseRouting(scores=scores, indices=self._select(ids_tt, t))
 
@@ -347,12 +397,12 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
 #
 # ``ttnn.experimental.deepseek.moe.fused_experts`` runs the whole routed-expert
 # FFN (gate_up + SwiGLU + down + routing-weighted accumulation) for one token in
-# a single device op. It is hard-wired to the real V4-Flash sizes -- an 8x8 (64)
-# compute grid where each core owns 2 output tiles, so the hidden size must be
-# exactly ``_FUSED_HIDDEN`` (64 * 2 * 32) -- and is decode-only (``T == 1``). The
-# weights must be DRAM ND-sharded with one shard per core (see below), a layout
-# distinct from the plain matmul weights used by the prefill loop, so the decode
-# path keeps its own copy.
+# a single device op. Weights are DRAM ND-sharded 64 ways (one shard per original
+# 8x8 core); H must be exactly ``_FUSED_HIDDEN`` (64 * 2 * 32). With 6 selected
+# experts the op runs on a 12x8 (96-core) grid, 16 cores per expert. It is
+# decode-native (``T == 1``). The weights must be DRAM ND-sharded with one shard
+# per original compute core (see below), a layout distinct from the plain matmul
+# weights used by the prefill loop, so the decode path keeps its own copy.
 # --------------------------------------------------------------------------- #
 # The tile is a hardware invariant, unlike the core count and bank count, which are
 # ``moe.fused_num_cores`` / ``moe.fused_dram_banks`` in the system profile.
@@ -366,16 +416,71 @@ def _fused_hidden(num_cores: int) -> int:
 
 
 def _swiglu_cols_per_core(intermediate: int, num_cores: Optional[int] = None) -> int:
-    """SwiGLU output columns each core owns, i.e. the I dim spread over every core.
+    """SwiGLU output columns in each DRAM shard, i.e. the I dim spread over shards.
 
-    The op splits I across *all* cores (one 32-column tile each at I == 2048) rather than
-    giving 64 columns to half of them: gate_up is the DRAM-bound phase, so every core's NoC
-    port should be fetching. Mirrors ``swiglu_tiles_per_core_for`` in the program factory.
+    One 32-column I-tile per shard at I == 2048, and still one tile when TP slices I
+    below 2048, so gate_up stays DRAM-busy on every NoC port. Mirrors
+    ``swiglu_tiles_per_shard_for`` in the program factory. On the 6-expert path those
+    shards are spread across the 16 cores of each expert group (4 shards/core at
+    I=2048, 1 at I=512).
     """
     if num_cores is None:
         num_cores = active_system_config().moe.fused_num_cores
     i_tiles = intermediate // _FUSED_TILE
     return _FUSED_TILE * max(1, i_tiles // num_cores)
+
+
+def _tp_cluster_axis(device: ttnn.MeshDevice) -> int:
+    """Mesh axis that holds the TP group. A 1xN submesh shards along axis 1."""
+    shape = tuple(device.shape)
+    if len(shape) == 2 and shape[1] > 1:
+        return 1
+    return 0
+
+
+def _pack_gate_up_for_tp(gate_up: torch.Tensor, tp_size: int) -> torch.Tensor:
+    """Reorder ``[2I, H]`` so rank ``r`` owns ``cat(gate[r], up[r])`` along dim 0.
+
+    Naive sharding of ``[gate | up]`` would split mid-gate on later ranks. After this
+    pack, ``ShardTensorToMesh(dim=0)`` gives each chip ``[2 * I/tp, H]``.
+    """
+    two_i, hidden = gate_up.shape
+    intermediate = two_i // 2
+    if intermediate % tp_size:
+        raise ValueError(f"moe_intermediate_size {intermediate} is not divisible by tp_size {tp_size}")
+    i_local = intermediate // tp_size
+    parts = []
+    for rank in range(tp_size):
+        lo, hi = rank * i_local, (rank + 1) * i_local
+        parts.append(torch.cat([gate_up[lo:hi], gate_up[intermediate + lo : intermediate + hi]], dim=0))
+    return torch.cat(parts, dim=0)
+
+
+def _interleave_gate_up_tp(gate_up: torch.Tensor, tp_size: int, swiglu_cols: int) -> torch.Tensor:
+    """Per-rank ``fused_experts`` interleave of a packed ``[2I, H]`` gate_up.
+
+    Each rank's ``[H, 2*I_local]`` is interleaved independently (the op only sees
+    ``I_local``), then concatenated on the column axis so ``ShardTensorToMesh(dim=1)``
+    yields one rank's interleaved weight.
+    """
+    packed = _pack_gate_up_for_tp(gate_up, tp_size)
+    two_i, _ = packed.shape
+    i_local_two = two_i // tp_size
+    parts = []
+    for rank in range(tp_size):
+        local = packed[rank * i_local_two : (rank + 1) * i_local_two]
+        parts.append(_interleave_gate_up(local.t().contiguous(), swiglu_cols))
+    return torch.cat(parts, dim=1)
+
+
+def _tp_all_reduce(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """Sum TP partials (row-parallel down-proj) back to a replicated ``[... H]``."""
+    return ttnn.all_reduce(
+        tensor,
+        cluster_axis=_tp_cluster_axis(device),
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+    )
 
 
 def _interleave_gate_up(w: torch.Tensor, block: int) -> torch.Tensor:
@@ -417,6 +522,7 @@ def _load_fused_weight(
     *,
     cache_file_name: Optional[str] = None,
     dtype: ttnn.DataType = ttnn.bfloat4_b,
+    mesh_mapper=None,
 ) -> ttnn.Tensor:
     """Load a ``fused_experts`` weight as a DRAM ND-sharded tensor.
 
@@ -432,6 +538,7 @@ def _load_fused_weight(
         device=device,
         memory_config=nd_config,
         cache_file_name=cache_file_name,
+        mesh_mapper=mesh_mapper,
     )
     return sharded
 
@@ -441,10 +548,13 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
 
     The whole routed-expert FFN for one token (gate_up + SwiGLU + down +
     routing-weighted accumulation) runs in a single ``fused_experts`` device op.
-    The op is hard-wired to the real V4-Flash sizes -- an 8x8 (64) compute grid
-    where each core owns 2 output tiles, so ``H`` must be exactly ``_FUSED_HIDDEN``
-    (``64 * 2 * 32 == 4096``) and ``I`` a multiple of the 64-column per-core
-    slice. Both prefill and decode go through the op: it is natively single-token
+    The op is hard-wired to the real V4-Flash sizes -- down weights 64-way
+    sharded along H (each shard 2 output tiles), so ``H`` must be exactly
+    ``_FUSED_HIDDEN`` (``64 * 2 * 32 == 4096``). Gate_up is one I-tile per
+    DRAM shard, so a TP-sliced ``I`` (e.g. 512) yields fewer, still-full
+    16-core groups rather than idle cores. With 6 selected experts compute
+    uses a 12x8 grid (16 cores per expert).
+    Both prefill and decode go through the op: it is natively single-token
     (``T == 1``), so **prefill is computed by decode** -- each of the ``T`` tokens
     runs as its own op and the per-token outputs are concatenated.
 
@@ -470,6 +580,7 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         dtype: Optional[ttnn.DataType] = None,
         cache: Optional[WeightCache] = None,
         system_config=None,
+        tp_size: int = 1,
     ):
         # The system profile supplies the fused-op geometry, the L1 expert block size
         # and the default weight precision; an explicit ``dtype`` still wins.
@@ -482,9 +593,15 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         dtype = dtype if dtype is not None else sys_cfg.decode.ttnn_weight_dtype
 
         self.device = device
+        self.tp_size = tp_size
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
-        self.intermediate = config.moe_intermediate_size
+        intermediate_full = config.moe_intermediate_size
+        if intermediate_full % tp_size:
+            raise ValueError(f"moe_intermediate_size {intermediate_full} is not divisible by tp_size {tp_size}")
+        # Each TP rank runs fused_experts on its I-slice; the full width is recovered
+        # by all-reducing the down-proj partials in :class:`DeepSeekV4SparseMoeBlock`.
+        self.intermediate = intermediate_full // tp_size
         self.hidden = config.hidden_size
         self.limit = config.swiglu_limit
         # Applied inside the op on the sparse path, where the weights are derived here
@@ -512,24 +629,58 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         # skipped entirely; the ND-shard layout can't round-trip the tile cache,
         # so the interleaved weight is cached in standard DRAM and resharded on
         # device (see :func:`_load_fused_weight`).
+        gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=1) if self.tp_size > 1 else None
+        down_mapper = ttnn.ShardTensorToMesh(device, dim=0) if self.tp_size > 1 else None
+        tp_tag = f".tp{self.tp_size}" if self.tp_size > 1 else ""
+
         self._gate_up_fused: list[ttnn.Tensor] = []
         self._down_fused: list[ttnn.Tensor] = []
         for e in range(self.num_experts):
-            gu_f_name, dn_f_name = f"experts.{e}.gate_up_fused", f"experts.{e}.down_fused"
+            gu_f_name, dn_f_name = f"experts.{e}.gate_up_fused{tp_tag}", f"experts.{e}.down_fused{tp_tag}"
             need_torch = not (cache.hit(gu_f_name, dtype) and cache.hit(dn_f_name, dtype))
             if cache.require_cache and need_torch:
                 raise RuntimeError(f"weight cache miss for routed expert {e} (gate_up/down) with require_cache=True")
             gate_up_w, down_w = provider(e) if need_torch else (None, None)
             # Provider gives gate_up [2I, H] / down [H, I]; transpose to matmul-ready
             # [H, 2I] / [I, H] (memoized so each is materialized at most once).
-            gate_up_t = _memo((lambda gw=gate_up_w: gw.t().contiguous()) if gate_up_w is not None else (lambda: None))
-            down_t = _memo((lambda dw=down_w: dw.t().contiguous()) if down_w is not None else (lambda: None))
-            gu_il = _materialize(lambda: _interleave_gate_up(gate_up_t(), swiglu_cols), cache.file(gu_f_name), dtype)
+            if self.tp_size > 1:
+                gu_il = _materialize(
+                    (
+                        (lambda gw=gate_up_w: _interleave_gate_up_tp(gw, self.tp_size, swiglu_cols))
+                        if gate_up_w is not None
+                        else (lambda: None)
+                    ),
+                    cache.file(gu_f_name),
+                    dtype,
+                )
+                down_t = _memo((lambda dw=down_w: dw.t().contiguous()) if down_w is not None else (lambda: None))
+            else:
+                gate_up_t = _memo(
+                    (lambda gw=gate_up_w: gw.t().contiguous()) if gate_up_w is not None else (lambda: None)
+                )
+                down_t = _memo((lambda dw=down_w: dw.t().contiguous()) if down_w is not None else (lambda: None))
+                gu_il = _materialize(
+                    lambda: _interleave_gate_up(gate_up_t(), swiglu_cols), cache.file(gu_f_name), dtype
+                )
             self._gate_up_fused.append(
-                _load_fused_weight(gu_il, device, gate_up_nd, cache_file_name=cache.file(gu_f_name), dtype=dtype)
+                _load_fused_weight(
+                    gu_il,
+                    device,
+                    gate_up_nd,
+                    cache_file_name=cache.file(gu_f_name),
+                    dtype=dtype,
+                    mesh_mapper=gate_up_mapper,
+                )
             )
             self._down_fused.append(
-                _load_fused_weight(down_t(), device, down_nd, cache_file_name=cache.file(dn_f_name), dtype=dtype)
+                _load_fused_weight(
+                    down_t(),
+                    device,
+                    down_nd,
+                    cache_file_name=cache.file(dn_f_name),
+                    dtype=dtype,
+                    mesh_mapper=down_mapper,
+                )
             )
 
     def _run_fused(self, x_tok: ttnn.Tensor, routing: SparseRouting) -> ttnn.Tensor:
@@ -546,8 +697,6 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         the knob to turn when the op's static CBs collide with the L1 buffers live at the
         call; the cost is one extra chip-wide gather/broadcast barrier per block.
         """
-        x_tok_single_tile_memory_config = with_shard_height(x_tok.memory_config(), 1)
-        x_tok = ttnn.tilize(x_tok, tile=SINGLE_USER_TILE, memory_config=x_tok_single_tile_memory_config)
         indices = ttnn.to_memory_config(routing.indices, ttnn.DRAM_MEMORY_CONFIG)
         scores = ttnn.to_memory_config(routing.scores, ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.experimental.deepseek.moe.fused_experts(
@@ -564,8 +713,6 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             routing_eps=self.routing_eps,
             experts_block_size=self.experts_block_size,
         )  # [1, 1, H]
-        out_full_tile_memory_config = with_shard_height(out.memory_config(), 32)
-        out = ttnn.tilize(out, tile=FULL_TILE, memory_config=out_full_tile_memory_config)
         return ttnn.reshape(out, [1, 1, 1, self.hidden])
 
     def _token_routing(self, routing: SparseRouting, i: int) -> SparseRouting:
@@ -627,10 +774,12 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         packed_weights=None,
+        tp_size: int = 1,
     ):
         self.device = device
         self.hidden = config.hidden_size
         self.packed_weights = packed_weights
+        self.tp_size = tp_size
         cache = _as_cache(cache)
         # ``gate`` may be injected (e.g. a :class:`DeepSeekV4HashRouter` for the
         # first ``num_hash_layers`` layers); otherwise the learned top-k router.
@@ -654,6 +803,7 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             packed_weights=packed_weights,
+            tp_size=tp_size,
         )
 
     def prefetch_weights(self):
@@ -684,8 +834,12 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
 
         _profile(self.device)
 
-        # Summed on the packed rows and unpacked once, rather than unpacking each half.
-        return ttnn.reshape(ttnn.add(routed, shared), [b, s, 1, h])
+        # Both halves are I-sliced under TP, so their H-partials add first and one
+        # all-reduce recovers the full residual (Megatron MLP TP).
+        combined = ttnn.add(routed, shared)
+        if self.tp_size > 1:
+            combined = _tp_all_reduce(combined, self.device)
+        return ttnn.reshape(combined, [b, s, 1, h])
 
     def decode_static(self, hidden: ttnn.Tensor, hash_token: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """Trace-safe single-token-per-user MoE. ``hidden`` ``[B, 1, 1, H]`` -> same.
@@ -713,4 +867,7 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         shared = self.shared_experts(x_flat)  # [1, 1, B, H]
         if self.packed_weights is not None:
             shared = ttnn.to_memory_config(shared, routed.memory_config())
-        return ttnn.reshape(ttnn.add(routed, shared), [b, 1, 1, h])
+        combined = ttnn.add(routed, shared)
+        if self.tp_size > 1:
+            combined = _tp_all_reduce(combined, self.device)
+        return ttnn.reshape(combined, [b, 1, 1, h])

@@ -5,9 +5,11 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/experimental/matmul_decode/packed_weight_spec.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
 
@@ -27,6 +29,9 @@ using PackedWeightSpec = ttnn::operations::experimental::matmul_decode::PackedWe
 // equal one-tile-wide shard per core; see packed_weight_spec.hpp). All weight geometry -- grid,
 // slab shape, N and the K/batch cut -- then comes from the spec, and `partial_width_sharded` is
 // ignored (the spec's k_blocks/batch pick the mode). Mutually exclusive with `global_cb`.
+// `all_gather`: when true, fabric all-gather of the local N-shard is fused into the same program
+// so every device receives `[..., M, N_local * ring_size]`. The ring is the full mesh of A.
+// Requires a multi-device mesh; mutually exclusive with `global_cb` and the batched factory.
 Tensor matmul_decode(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -35,6 +40,8 @@ Tensor matmul_decode(
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
     uint32_t global_cb_k_blocks = 1,
-    const std::optional<PackedWeightSpec>& packed_weight = std::nullopt);
+    const std::optional<PackedWeightSpec>& packed_weight = std::nullopt,
+    bool all_gather = false,
+    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt);
 
 }  // namespace ttnn::experimental
