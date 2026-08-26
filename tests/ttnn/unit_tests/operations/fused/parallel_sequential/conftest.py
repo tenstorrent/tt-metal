@@ -19,7 +19,8 @@ def _skip_branches_needing_layernorm_descriptors(monkeypatch):
     A fusion branch drives a factory's ``create_descriptor`` and consumes the ``ProgramDescriptor``
     it returns; both layernorm factories now produce a ``ProgramSpec``, which no branch can consume
     yet. Standing in for the missing method, rather than marking whole tests, skips only the tests
-    that actually reach the call, and stops doing anything once a factory exposes it again.
+    that actually reach the ``create_descriptor`` call, and will become a no-op once a factory
+    exposes it again. Issue #54365.
     """
     missing = [factory for factory in _LAYERNORM_FACTORIES if not hasattr(factory, "create_descriptor")]
     if not missing:
