@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import threading
 from itertools import chain
 
@@ -273,7 +272,8 @@ def test_argmax_reduce_all_multicore_no_deadlock(device):
 
 @pytest.mark.parametrize("dim", [-1, None])
 def test_argmax_multicore_two_rectangles_cached(device, dim):
-    """Exercise both helper control wires, including the free-running reduce-all path."""
+    """Multi-rectangle sub_core_grids argmax, run twice so the second launch hits the
+    cached program and would catch semaphore state left over from the first."""
     torch.manual_seed(0)
     tensor = torch.randn((4, 64, 512), dtype=torch.bfloat16)
     device_tensor = ttnn.from_torch(tensor, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -288,31 +288,3 @@ def test_argmax_multicore_two_rectangles_cached(device, dim):
     for _ in range(2):
         result = ttnn.argmax(device_tensor, dim=dim, sub_core_grids=two_rectangles)
         assert_equal(reference, ttnn.to_torch(ttnn.from_device(result)).to(torch.int32))
-
-
-@pytest.mark.parametrize("case", ["perf_64x128", "perf_two_rectangles"])
-def test_argmax_multicore_mcast_perf(device, case):
-    if not os.environ.get("TT_ARGMAX_MCAST_PERF"):
-        pytest.skip("matched migration profiling only")
-
-    if case == "perf_64x128":
-        shape = (64, 128)
-        sub_core_grids = None
-    else:
-        shape = (4, 64, 512)
-        sub_core_grids = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
-                ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(1, 2)),
-            }
-        )
-
-    tensor = torch.randn(shape, dtype=torch.bfloat16)
-    device_tensor = ttnn.from_torch(tensor, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    outputs = [
-        ttnn.argmax(device_tensor, dim=-1, sub_core_grids=sub_core_grids)
-        for _ in range(int(os.environ.get("TT_ARGMAX_MCAST_PERF_ITERS", "25")))
-    ]
-    ttnn.synchronize_device(device)
-    for output in outputs:
-        ttnn.deallocate(output)

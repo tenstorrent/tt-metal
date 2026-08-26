@@ -1,5 +1,17 @@
 # coordinator_single_row_multi_core.cpp — MIGRATED API v10
 
+> **REVERTED 2026-08-26** — during the rebase from `dc9282be7d5` onto `e6d0562cfaa`.
+> Upstream Metal-2.0-ported the whole `SortProgramFactorySingleRowMultiCore` (#52528): positional
+> `get_arg_val` / `get_compile_time_arg_val` became declarative named args via
+> `experimental/kernel_args.h` (`get_arg(args::name)`), and the factory now builds `SemaphoreSpec` /
+> `TensorParameter` / `DFBBinding` groups. This migration was authored against the old positional
+> API, so bringing it back is a **re-authoring, not a conflict resolution** — the `McastArgs` decoder
+> currently assumes positional CT/RT slots.
+> Ledger status is `deferred`, flag `blocked:needs-metal2-named-args`. Re-migrate once the rollout
+> supports the Metal 2.0 named-argument surface. The audit assertion
+> `test_sort_row_start_readiness_is_pipe_owned` was removed with the revert; restore it with the
+> migration.
+
 Tier 5 atomic unit: `sort-single-row-control`. Code: `7337302b564`.
 
 ## Migrated role

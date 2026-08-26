@@ -7,7 +7,7 @@ rebase audits are `../archive/reconciliation/reconcile_2026-08-16-plan-inventory
 `../archive/reconciliation/reconcile_2026-08-14-rebase-dc9282.md`.
 
 - Branch: `sjovic/mcast-migration`; feedback intake head `cea14afbea9`.
-- Baseline: `origin/llk_helper_library` at `dc9282be7d5`.
+- Baseline: `origin/llk_helper_library` at `e6d0562cfaa` (rebased 2026-08-26; was `dc9282be7d5`).
 - Ledger API: v14.
 - Materialized helper API: v14.
 
@@ -52,13 +52,18 @@ BFLOAT16 block-Conv hang are recorded in
 
 ## API-v14 verified migrated units
 
+> **Rebase 2026-08-26 (`dc9282be7d5` → `e6d0562cfaa`).** Two units were reverted to the baseline:
+> `sort-single-row-control` (upstream Metal 2.0 port #52528) and `argmax-multicore-control`
+> (needs a pipe semaphore restore for trace replay). Both are `deferred` with blocker flags.
+> Full detail: `archive/reconciliation/reconcile_2026-08-26-rebase-e6d0562.md`.
+
 | Unit | Kernels | Bindings | Existing evidence |
 |---|---:|---:|---|
 | `conv2d-weights-single-sender-rect` | 2 | 1 | Conv height inventory, DRAM routes, host/helper tests |
 | `conv2d-weights-fixed-line` | 2 | 1 | Conv block inventory, PerRow/PerColumn, DRAM routes |
 | `matmul-in1-mcast-padding-host` | 2 | 4 | `MM-IN1-ALL` 302 passed / 188 expected skips |
 | `groupnorm-sharded-v2-mcast-host` | 4 | 4 | legacy/Welford inventories and matched performance |
-| `sort-single-row-control` | 2 | 1 | exact JIT, long 7/7, deadlock 2/2, matched performance |
+| ~~`sort-single-row-control`~~ | 2 | 1 | **REVERTED 2026-08-26** — upstream Metal 2.0 port (#52528); re-migration is a re-authoring |
 | `conv2d-activation-width-sharded` | 1 | 1 | exact JIT, features 48/16, DRAM route |
 | `topk-multicore-final-readiness` | 2 | 1 | exact JIT, 14 passed / 12 expected xfails |
 | `layernorm-sharded-pre-allgather` | 2 | 1 | pre 126, post 136, sharded 208 |

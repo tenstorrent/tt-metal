@@ -125,7 +125,8 @@ def test_mixed_role_kernels_use_direct_mcast_pipe_aliases():
         REPO_ROOT / "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
         "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
         REPO_ROOT / "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp",
-        REPO_ROOT / "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+        # argmax removed 2026-08-26: reverted to the llk_helper_library baseline (needs a pipe
+        # semaphore restore for trace replay). Re-add with the migration.
         REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/"
         "reader_mcast_transformer_group_attn_matmul.cpp",
     ]
@@ -168,20 +169,8 @@ def test_migrated_kernels_use_objects_for_offsets_and_reserve_aliases_for_pipe_t
     )
 
 
-def test_sort_row_start_readiness_is_pipe_owned():
-    kernels, factories = _migrated_sources()
-    sort_kernels = [path for path in kernels if "single_row_multi_core.cpp" in path.name]
-    sort_factories = [path for path in factories if path.name == "sort_program_factory.cpp"]
-
-    assert len(sort_factories) == 1
-    violations = [
-        str(path.relative_to(REPO_ROOT)) for path in sort_kernels if "cores_to_coordinator_ready" in path.read_text()
-    ]
-    factory_source = sort_factories[0].read_text()
-    assert ".handshake = true" in factory_source
-    assert "row_start_mcast" in factory_source and "substage_mcast" in factory_source
-    assert not violations, "Sort row-start readiness must remain inside the handshaked Pipe:\n" + "\n".join(violations)
-
+# REMOVED 2026-08-26: sort was reverted to the llk_helper_library baseline (upstream Metal 2.0 port #52528); the sort kernels are no longer helper-migrated.
+# Restore this assertion together with the migration.
 
 OPAQUE_BOUNDARY_RULES = {
     "reader_bmm_tile_layout_in1_sender_writer_padding.cpp": [
@@ -424,22 +413,8 @@ def test_sdpa_decode_read_k_uses_opaque_fixed_star_and_keeps_blackhole_completio
     assert "k_mcasts[mcast_index].append_runtime_args_to(reader_rt_args, core);" in factory
 
 
-def test_argmax_multicore_composes_two_counter_wires_and_keeps_done_fanin():
-    base = REPO_ROOT / "ttnn/cpp/ttnn/operations/reduction/argmax/device"
-    kernel = (base / "kernels/reader_argmax_interleaved_multicore.cpp").read_text()
-    factory = (base / "argmax_multi_core_program_factory.cpp").read_text()
-
-    assert "McastArgs<operation_compile_time_args_end, 7>" in kernel
-    assert kernel.index("TensorAccessorArgs<18>()") < kernel.index("McastArgs<operation_compile_time_args_end, 7>")
-    assert "group0_start_args.next_compile_time_args_offset()" in kernel
-    assert "group0_start_args.next_runtime_args_offset()" in kernel
-    assert kernel.count("send_signal();") == 2
-    assert kernel.count("start_receiver->receive_signal();") == 2
-    assert "set_multicast" not in kernel
-    assert "done_sem.up(" in kernel and "done_sem.wait(num_cores)" in kernel
-    assert factory.count("DataReadyMode::Counter") == 1
-    assert factory.count("group0_start_mcast.append_runtime_args_to(reader_runtime_args, core);") == 2
-    assert factory.count("group1_start_mcast.append_runtime_args_to(reader_runtime_args, core);") == 2
+# REMOVED 2026-08-26: argmax was reverted to the llk_helper_library baseline (needs a pipe semaphore restore for trace replay; see migration/log/reader_argmax_interleaved_multicore.md).
+# Restore this assertion together with the migration.
 
 
 def test_migrated_kernels_keep_fixed_operation_prefixes_before_helper_decoders():
@@ -605,5 +580,8 @@ def test_move_overlap_composes_three_release_wires_and_keeps_return_counter():
     assert factory.count("mcast.append_compile_time_args_to(compile_time_args);") == 1
     assert factory.count("mcast.append_runtime_args_to(runtime_args, core);") == 1
     assert "mcast_dest_noc" not in factory
-    assert "case MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP" in cache_override
-    assert "a[0] = src_addr;" in cache_override and "a[1] = dst_addr;" in cache_override
+    # Upstream #51637 moved override_runtime_arguments onto the program factory, so the strategy
+    # switch is gone and the sharded override re-derives the chunk arithmetic instead of rewriting
+    # raw src/dst addresses. Assert the current shape.
+    assert "MoveShardedProgramFactory::override_runtime_arguments" in cache_override
+    assert "a[0] = total_size_bytes;" in cache_override and "a[1] = num_chunks;" in cache_override

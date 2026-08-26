@@ -6,12 +6,10 @@
   "bootstrapped": "2026-06-19",
   "source_of_truth_note": "Current v14 status carries 31 migrated kernels and 27 migrated host bindings on the tagged self-describing CT wire: seven words when present and one word when absent. The 2026-08-23 feedback pass made RT_BASE the only McastArgs runtime-base source, placed runtime-sized and genuinely optional compile-time operation tails after their opaque helper blocks, closed the Conv terminal-drain, source-lifetime, role-naming, and ACK-population review, and made every migrated-kernel offset chain object-qualified while reserving aliases for nested pipe types, without changing the static API or wire; detailed evidence is in migration_feedback_tracker.md. The inherited v13 pass verified append-style host emission, intrinsic optionality, and directly nameable mixed-role pipe types across the existing migrated fleet. Tier 2 source anchors include Interleaved GroupNorm 40e209daad9, SDPA-decode f760425fe06, Argmax 5aaaf5b5aa5, and Move overlap a25603ae2c0; Group-attention Matmul, Conv3D, and post-allgather LayerNorm are anchored by 6e8eb763885, a290ce20281, and 6cc49825476. DeepSeek B1 sampling is anchored by 2840fc28361. After the 2026-08-14 rebase, Sharded LayerNorm pre-allgather is anchored by production migration commit e58c66ef531 after builder-split prerequisite d0c459f8358. TopK final readiness is anchored by 4cf2edb7e75. The earlier fully end-to-end migrations are anchored by Conv2d single-sender rectangle aff48ae35a2, fixed-line a5009c349b4, width-sharded activation c3f5e53a19a, Matmul in1 bcf1c9d5b5e, GroupNorm v2 402a063d4c9, and Sort single-row control 46a781123f1. Historical pre-rebase and v8/v9 commits and results remain in dated logs.",
   "latest_validation": {
-    "date": "2026-08-23",
-    "api_version": 14,
-    "scope": "MCAST-005 through MCAST-007 argument-tail and object-qualified offset rules plus completed Conv migration-feedback audit",
-    "evidence": "migration_feedback_tracker.md",
-    "result": "release host build passed; host helper gtests 36/36; helper device suite 80/80 under --dev; source audit 33/33; sequential focused Matmul, width/height/block Conv2D, Conv3D, tiled/row-major Move, sharded/interleaved legacy and Welford GroupNorm, and pre/post-allgather LayerNorm operation gates passed",
-    "inventory_effect": "31 migrated kernels and 27 migrated host bindings stamped v14; the 2026-08-23 documentation reconciliation later added four deferred TT-Train inventory rows without changing validation or rollout status"
+    "date": "2026-08-26",
+    "event": "rebase onto origin/llk_helper_library e6d0562cfaa (from dc9282be7d5)",
+    "result": "argmax and sort units reverted to baseline and re-deferred; matmul/sparse-matmul/conv3d/groupnorm units retained",
+    "note": "Two defects were introduced by files git auto-merged WITHOUT a conflict, not by the 19 resolved conflicts: the argmax kernel splice recorded above, and reader_bmm_tile_layout_in1_sender_writer_padding.cpp reading compact_output at upstream's CT slot 32 instead of 28 after the migration removed 4 mcast args (silent wrong values, no compile error; caught by test_sparse_matmul_indexed.py::test_indices_absent_is_unchanged). Auto-merged behavior-sensitive paths must be audited regardless of what git reports."
   },
   "inventory_contract": "Single source of truth: entries[].kernel/op_family/role/tag/inventory_note are the durable call-site inventory; status/version/commit/validation/flags are mutable rollout state. The former census.txt contained 91 paths when it was merged here on 2026-08-14; the approved plan reconciliation added 13 receiver/call-site companions on 2026-08-16, and the repository-wide recall sweep added four TT-Train production kernel faces on 2026-08-23. Where historical text has stale role, tag, status, or note wording, this ledger's audited value wins.",
   "inventory_method": "Recall-converged block inventory grouped by op_family. Discovery covered raw and object API spellings plus full op-family directory sweeps; pure receiver halves with only Semaphore::set/up/wait remain intentional entries even when they contain no multicast token.",
@@ -353,7 +351,11 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["tier:2.12", "fully-end-to-end", "fixed-three-rectangle-wire"]
+      "flags": [
+        "tier:2.12",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire"
+      ]
     },
     {
       "id": "groupnorm-interleaved:welford:mcast",
@@ -375,7 +377,11 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["tier:2.12", "fully-end-to-end", "fixed-three-rectangle-wire"]
+      "flags": [
+        "tier:2.12",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire"
+      ]
     },
     {
       "id": "groupnorm-interleaved:no-mcast",
@@ -396,7 +402,11 @@
       ],
       "coverage_confidence": "medium",
       "last_verified": "2026-08-16",
-      "flags": ["tier:2.12", "inactive-helper-wire", "shared-cache-abi"]
+      "flags": [
+        "tier:2.12",
+        "inactive-helper-wire",
+        "shared-cache-abi"
+      ]
     },
     {
       "id": "sdpa-decode:read-k-fixed-column-star",
@@ -418,7 +428,12 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["tier:2.13", "fully-end-to-end", "fresh-jit-verified", "fixed-column-star"]
+      "flags": [
+        "tier:2.13",
+        "fully-end-to-end",
+        "fresh-jit-verified",
+        "fixed-column-star"
+      ]
     },
     {
       "id": "argmax:multicore-two-rectangle-control",
@@ -428,19 +443,20 @@
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp"
       ],
       "migration_unit": "argmax-multicore-control",
-      "status": "migrated",
-      "migrated_api_version": 14,
-      "commit": "5aaaf5b5aa5",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
       "validation_set": [
-        "build_metal.sh: passed; fresh-JIT two-rectangle reduce-all passed under Watcher with 0/19 hits",
-        "unit Argmax 69 passed; explicit two-rectangle last-dim and reduce-all cache routes passed",
-        "nightly Argmax 16 passed / 8 declared skips; source audit 21 passed",
-        "production LOC: factory 49/61 and kernel 25/40 additions/deletions",
-        "matched 800 MHz Tracy: [64,128] -0.28%; multi-round two-rectangle +0.30%"
+        "2026-08-26 rebase onto e6d0562cfaa: reverted with its kernels"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["tier:2.14", "fully-end-to-end", "fresh-jit-verified", "two-control-wires"]
+      "flags": [
+        "tier:2.14",
+        "fully-end-to-end",
+        "fresh-jit-verified",
+        "two-control-wires"
+      ]
     },
     {
       "id": "move:overlap-three-rectangle-control",
@@ -463,7 +479,12 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["tier:2.15", "fully-end-to-end", "fresh-jit-verified", "three-control-wires"]
+      "flags": [
+        "tier:2.15",
+        "fully-end-to-end",
+        "fresh-jit-verified",
+        "three-control-wires"
+      ]
     },
     {
       "id": "sort:single-row-multi-core:control",
@@ -475,17 +496,11 @@
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp"
       ],
       "migration_unit": "sort-single-row-control",
-      "status": "migrated",
-      "migrated_api_version": 14,
-      "commit": "46a781123f1aaf89350044bffb0b6841d6e631dd",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
       "validation_set": [
-        "build_metal.sh: passed",
-        "exact test_sort_long_tensor[shape=[1, 524288]-dim=-1-descending=False] under --dev from a fresh isolated JIT cache: passed; coordinator, reader, and writer artifacts confirmed",
-        "test_sort_multi_row_multi_core_no_deadlock: 2 passed (descending false and true)",
-        "test_sort_long_tensor: 7 passed",
-        "test_mcast_pipe.py: 72 passed, including four control-only Counter cases",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
-        "API v10 Gate 5: handshaked row-start plus no-handshake sub-stage Pipes; build, helper 77/77, Sort long 7/7, deadlock 2/2, and 1.5% performance gate passed on 2026-08-05"
+        "2026-08-26 rebase onto e6d0562cfaa: reverted with its kernels"
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
@@ -547,7 +562,12 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:2", "atomic-unit:topk-multicore-final-readiness", "fully-end-to-end", "counter-signal-only"]
+      "flags": [
+        "tier:2",
+        "atomic-unit:topk-multicore-final-readiness",
+        "fully-end-to-end",
+        "counter-signal-only"
+      ]
     },
     {
       "id": "layernorm:sharded:distributed-reduce",
@@ -577,7 +597,12 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["tier:2", "atomic-unit:layernorm-sharded-distributed-reduce", "fully-end-to-end", "builder-split-prerequisite:d0c459f8358"]
+      "flags": [
+        "tier:2",
+        "atomic-unit:layernorm-sharded-distributed-reduce",
+        "fully-end-to-end",
+        "builder-split-prerequisite:d0c459f8358"
+      ]
     },
     {
       "id": "matmul-in0-mcast:reuse-1d:legacy",
@@ -591,10 +616,16 @@
       "status": "pending",
       "migrated_api_version": null,
       "commit": null,
-      "validation_set": ["MM-IN0-INTERLEAVED"],
+      "validation_set": [
+        "MM-IN0-INTERLEAVED"
+      ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:4", "source-integrated", "apply-verification-pending"]
+      "flags": [
+        "tier:4",
+        "source-integrated",
+        "apply-verification-pending"
+      ]
     },
     {
       "id": "matmul-in0-mcast:reuse-1d:descriptor",
@@ -608,10 +639,16 @@
       "status": "pending",
       "migrated_api_version": null,
       "commit": null,
-      "validation_set": ["MM-IN0-INTERLEAVED"],
+      "validation_set": [
+        "MM-IN0-INTERLEAVED"
+      ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:4", "source-integrated", "apply-verification-pending"]
+      "flags": [
+        "tier:4",
+        "source-integrated",
+        "apply-verification-pending"
+      ]
     },
     {
       "id": "matmul-in0-mcast:reuse-2d:legacy",
@@ -625,10 +662,16 @@
       "status": "pending",
       "migrated_api_version": null,
       "commit": null,
-      "validation_set": ["MM-IN0-INTERLEAVED"],
+      "validation_set": [
+        "MM-IN0-INTERLEAVED"
+      ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:4", "source-integrated", "apply-verification-pending"]
+      "flags": [
+        "tier:4",
+        "source-integrated",
+        "apply-verification-pending"
+      ]
     },
     {
       "id": "matmul-in0-mcast:reuse-2d:descriptor",
@@ -642,10 +685,16 @@
       "status": "pending",
       "migrated_api_version": null,
       "commit": null,
-      "validation_set": ["MM-IN0-INTERLEAVED"],
+      "validation_set": [
+        "MM-IN0-INTERLEAVED"
+      ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:4", "source-integrated", "apply-verification-pending"]
+      "flags": [
+        "tier:4",
+        "source-integrated",
+        "apply-verification-pending"
+      ]
     },
     {
       "id": "matmul-in0-mcast:sparse-1d:legacy",
@@ -665,7 +714,12 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "flags": ["tier:4", "source-integrated", "apply-verification-pending", "fresh-jit-verified"]
+      "flags": [
+        "tier:4",
+        "source-integrated",
+        "apply-verification-pending",
+        "fresh-jit-verified"
+      ]
     },
     {
       "id": "matmul-in0-mcast:block-sharded:reuse-1d:legacy",
@@ -685,7 +739,9 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["fully-end-to-end"]
+      "flags": [
+        "fully-end-to-end"
+      ]
     },
     {
       "id": "matmul-in0-mcast:block-sharded:reuse-1d:descriptor",
@@ -705,7 +761,9 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["fully-end-to-end"]
+      "flags": [
+        "fully-end-to-end"
+      ]
     },
     {
       "id": "matmul-in0-mcast:block-sharded:reuse-2d:legacy",
@@ -725,7 +783,9 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["fully-end-to-end"]
+      "flags": [
+        "fully-end-to-end"
+      ]
     },
     {
       "id": "matmul-in0-mcast:block-sharded:reuse-2d:descriptor",
@@ -745,7 +805,9 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["fully-end-to-end"]
+      "flags": [
+        "fully-end-to-end"
+      ]
     },
     {
       "id": "deepseek-b1-sampling:single-device-loop-barrier",
@@ -768,7 +830,11 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["tier:1", "fully-end-to-end", "known-blackhole-selection-mismatch"]
+      "flags": [
+        "tier:1",
+        "fully-end-to-end",
+        "known-blackhole-selection-mismatch"
+      ]
     },
     {
       "id": "group-attn-matmul:rotating-reader",
@@ -789,7 +855,11 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["tier:2", "fully-end-to-end", "fresh-jit-verified"]
+      "flags": [
+        "tier:2",
+        "fully-end-to-end",
+        "fresh-jit-verified"
+      ]
     },
     {
       "id": "conv3d:weight-share-mcast",
@@ -811,7 +881,12 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
-      "flags": ["tier:2", "fully-end-to-end", "fresh-jit-verified", "chain-path-out-of-scope"]
+      "flags": [
+        "tier:2",
+        "fully-end-to-end",
+        "fresh-jit-verified",
+        "chain-path-out-of-scope"
+      ]
     }
   ],
   "entries": [
@@ -952,7 +1027,9 @@
       "coverage_confidence": "high",
       "last_verified": "2026-08-16",
       "inventory_note": "Migrated at API v11 with independent rotating senders and restored receiver geometry; correctness and inherited matched performance gates passed.",
-      "flags": ["fully-end-to-end"]
+      "flags": [
+        "fully-end-to-end"
+      ]
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp",
@@ -1701,21 +1778,20 @@
       "op_family": "data_movement + reduction",
       "role": "hybrid",
       "tag": "clean",
-      "status": "migrated",
-      "migrated_api_version": 14,
-      "commit": "5aaaf5b5aa5",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
       "validation_set": [
-        "fresh-JIT two-rectangle reduce-all passed under Watcher with 0/19 hits",
-        "unit Argmax 69 passed; explicit two-rectangle last-dim and reduce-all cache routes passed",
-        "nightly Argmax 16 passed / 8 declared skips; source audit 21 passed",
-        "matched [64,128] and multi-round two-rectangle performance: -0.28% and +0.30%"
+        "2026-08-26 rebase onto e6d0562cfaa: reverted; see migration/log/reader_argmax_interleaved_multicore.md"
       ],
-      "coverage_confidence": "high",
-      "last_verified": "2026-08-16",
-      "inventory_note": "MIGRATED: two fixed no-handshake Counter control wires adopt the existing start semaphore and preserve monotone reduce-all readiness. Rectangle 0 contains and excludes the reducer; rectangle 1 uses the reducer as a separate sender. The disjoint wires share no receiver cells. Result unicasts and the operation-owned worker-arrival counter remain independent.",
+      "coverage_confidence": "n/a-reverted",
+      "last_verified": "2026-08-26",
+      "inventory_note": "REVERTED to the llk_helper_library baseline on 2026-08-26 during the rebase onto e6d0562cfaa. Upstream added an end-of-kernel semaphore restore (done_sem.set(0) plus start_sem.set(0) and a start_sem.set_multicast to BOTH control rectangles) because trace replay does not re-run the dispatcher's semaphore initialization: a stale count lets the reducer's k==0 wait pass immediately and collate stale partials. Git auto-merged that new tail onto the migrated kernel with no textual conflict, producing a kernel that does not compile ('start_sem' was not declared in this scope, plus the eight rectangle-coordinate identifiers and num_cores1). BLOCKER: the upstream defect applies to the migrated form too -- a Counter is monotone and reset-free by design and ReceiverPipe's round counter is kernel-local, so on a replayed trace the data_ready semaphore keeps its final count while receivers restart at round 0. v14 exposes no sender-side way to restore a data_ready semaphore across the multicast rectangle. A by-hand reset is expressible via McastArgs::rect() plus data_ready, but it reintroduces raw set_multicast into a migrated kernel and so violates the rollout's own audit invariant.",
       "flags": [
-        "tier:2.14",
+        "blocked:needs-pipe-semaphore-restore",
         "fully-end-to-end",
+        "reverted-on-rebase",
+        "tier:2.14",
         "two-control-wires"
       ]
     },
@@ -1724,24 +1800,21 @@
       "op_family": "data_movement + reduction",
       "role": "sender",
       "tag": "refactor",
-      "status": "migrated",
-      "migrated_api_version": 14,
-      "commit": "46a781123f1aaf89350044bffb0b6841d6e631dd",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
       "validation_set": [
-        "build_metal.sh: passed",
-        "test_sort_long_tensor: 7 passed; exact [1,524288] --dev case confirmed coordinator/reader/writer JIT paths from a fresh isolated cache",
-        "test_sort_multi_row_multi_core_no_deadlock: 2 passed",
-        "test_mcast_pipe.py: 72 passed",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
-        "API v10 Gate 5: build, helper 77/77, Sort long 7/7, deadlock 2/2, and 1.5% performance gate passed on 2026-08-05"
+        "2026-08-26 rebase onto e6d0562cfaa: reverted; upstream Metal 2.0 port (#52528)"
       ],
-      "coverage_confidence": "high",
-      "last_verified": "2026-08-05",
-      "inventory_note": "API v11 verified from the v10 migration: handshaked row-start Counter SenderPipe and separate no-handshake sub-stage Counter SenderPipe. Helper owns readiness; writer-done remains an independent operation counter.",
+      "coverage_confidence": "n/a-reverted",
+      "last_verified": "2026-08-26",
+      "inventory_note": "REVERTED to the llk_helper_library baseline on 2026-08-26 during the rebase onto e6d0562cfaa. Upstream Metal-2.0-ported the whole SortProgramFactorySingleRowMultiCore (#52528): positional get_arg_val/get_compile_time_arg_val were replaced by declarative named args via experimental/kernel_args.h (get_arg(args::name)), and the factory now builds SemaphoreSpec / TensorParameter / DFBBinding groups. The migration was authored against the old positional API, so this is a re-authoring rather than a conflict resolution. BLOCKER: re-migrate only once the rollout supports the Metal 2.0 named-argument surface; the helper's McastArgs decoder currently assumes positional CT/RT slots.",
       "flags": [
-        "tier:5",
         "atomic-unit:sort-single-row-control",
-        "fully-end-to-end"
+        "blocked:needs-metal2-named-args",
+        "fully-end-to-end",
+        "reverted-on-rebase",
+        "tier:5"
       ]
     },
     {
@@ -1749,24 +1822,21 @@
       "op_family": "data_movement + reduction",
       "role": "receiver",
       "tag": "refactor",
-      "status": "migrated",
-      "migrated_api_version": 14,
-      "commit": "46a781123f1aaf89350044bffb0b6841d6e631dd",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
       "validation_set": [
-        "build_metal.sh: passed",
-        "test_sort_long_tensor: 7 passed; exact [1,524288] --dev case confirmed coordinator/reader/writer JIT paths from a fresh isolated cache",
-        "test_sort_multi_row_multi_core_no_deadlock: 2 passed",
-        "test_mcast_pipe.py: 72 passed",
-        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
-        "API v10 Gate 5: build, helper 77/77, Sort long 7/7, deadlock 2/2, and 1.5% performance gate passed on 2026-08-05"
+        "2026-08-26 rebase onto e6d0562cfaa: reverted; upstream Metal 2.0 port (#52528)"
       ],
-      "coverage_confidence": "high",
-      "last_verified": "2026-08-05",
-      "inventory_note": "API v11 verified from the v10 migration: handshaked row-start Counter ReceiverPipe acknowledges readiness before waiting; a separate no-handshake Counter ReceiverPipe handles sub-stage events. The raw reader-ready semaphore is gone.",
+      "coverage_confidence": "n/a-reverted",
+      "last_verified": "2026-08-26",
+      "inventory_note": "REVERTED to the llk_helper_library baseline on 2026-08-26 during the rebase onto e6d0562cfaa. Upstream Metal-2.0-ported the whole SortProgramFactorySingleRowMultiCore (#52528): positional get_arg_val/get_compile_time_arg_val were replaced by declarative named args via experimental/kernel_args.h (get_arg(args::name)), and the factory now builds SemaphoreSpec / TensorParameter / DFBBinding groups. The migration was authored against the old positional API, so this is a re-authoring rather than a conflict resolution. BLOCKER: re-migrate only once the rollout supports the Metal 2.0 named-argument surface; the helper's McastArgs decoder currently assumes positional CT/RT slots.",
       "flags": [
-        "tier:5",
         "atomic-unit:sort-single-row-control",
-        "fully-end-to-end"
+        "blocked:needs-metal2-named-args",
+        "fully-end-to-end",
+        "reverted-on-rebase",
+        "tier:5"
       ]
     },
     {
@@ -1778,17 +1848,17 @@
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
-        "build_metal.sh: passed",
-        "test_sort_long_tensor: 7 passed; exact [1,524288] --dev case confirmed writer JIT path from a fresh isolated cache",
-        "test_sort_multi_row_multi_core_no_deadlock: 2 passed"
+        "2026-08-26 rebase onto e6d0562cfaa: reverted; upstream Metal 2.0 port (#52528)"
       ],
-      "coverage_confidence": "high",
-      "last_verified": "2026-08-03",
-      "inventory_note": "Helper-neutral companion in the migrated sort-single-row-control atomic unit: retains the explicit writer-done Semaphore::up return leg and received coupled dead-runtime-argument cleanup, but is not a Pipe caller and remains deferred as a standalone helper candidate.",
+      "coverage_confidence": "n/a-reverted",
+      "last_verified": "2026-08-26",
+      "inventory_note": "REVERTED to the llk_helper_library baseline on 2026-08-26 during the rebase onto e6d0562cfaa. Upstream Metal-2.0-ported the whole SortProgramFactorySingleRowMultiCore (#52528): positional get_arg_val/get_compile_time_arg_val were replaced by declarative named args via experimental/kernel_args.h (get_arg(args::name)), and the factory now builds SemaphoreSpec / TensorParameter / DFBBinding groups. The migration was authored against the old positional API, so this is a re-authoring rather than a conflict resolution. BLOCKER: re-migrate only once the rollout supports the Metal 2.0 named-argument surface; the helper's McastArgs decoder currently assumes positional CT/RT slots.",
       "flags": [
-        "tier:5",
+        "atomic-unit:sort-single-row-control",
+        "blocked:needs-metal2-named-args",
         "helper-neutral",
-        "atomic-unit:sort-single-row-control"
+        "reverted-on-rebase",
+        "tier:5"
       ]
     },
     {
@@ -2945,14 +3015,18 @@
     "verified_existing_migrated_kernels": 17,
     "verified_existing_migrated_host_bindings": 14,
     "cleared_needs_recheck": 12,
-    "migrated_units": ["matmul-in0-mcast-block-sharded"],
-    "retained_pending_units": ["matmul-in0-mcast-interleaved"],
+    "migrated_units": [
+      "matmul-in0-mcast-block-sharded"
+    ],
+    "retained_pending_units": [
+      "matmul-in0-mcast-interleaved"
+    ],
     "validation": "build passed; exact route probes and complete mapped inventories passed; helper device 80/80, source audit 17/17, host fixture 32/32",
     "claude_review": "PASS: v11 fleet stamp and Tier 0.2 write-back permitted; Tier 0.1 remains pending without separately authorized historical matched baseline"
   },
-  "reconciled": "2026-08-23",
+  "reconciled": "2026-08-26",
   "current_api_version": 14,
-  "baseline_ref": "origin/llk_helper_library @ dc9282be7d5e9d5a4b9137c1bf327de8d923e18e",
+  "baseline_ref": "origin/llk_helper_library @ e6d0562cfaabdd780fd2112b1dcf6bdf107fdb5c",
   "reconcile_history": [
     {
       "date": "2026-08-03",
@@ -3207,6 +3281,19 @@
       "host_bindings": "The two TT-Train factories are discovery-only mappings in test_map.json. The ledger host_bindings convention remains migrated or source-integrated pending bindings only.",
       "approval": "The user approved the exact reconciliation and archival cleanup proposal on 2026-08-23.",
       "validation": "Static reconciliation only: all recorded paths exist; all migrated kernels retain helper use; JSON, Markdown links, inventory counts, and exact multicast-specific recall were checked. No production migration, build, or device test was performed."
+    },
+    {
+      "date": "2026-08-26",
+      "report": "archive/reconciliation/reconcile_2026-08-26-rebase-e6d0562.md",
+      "base_from": "dc9282be7d5e9d5a4b9137c1bf327de8d923e18e (recorded rollout baseline)",
+      "base_to": "e6d0562cfaabdd780fd2112b1dcf6bdf107fdb5c (fetched llk_helper_library tip)",
+      "api_version": "14 (unchanged; upstream's divergent v11 line superseded -- see report)",
+      "buckets": {
+        "reverted": 2,
+        "clobbered_by_automerge": 2,
+        "auto_merged_unaudited": 13
+      },
+      "follow_up": "Port mcast_pipe_spec.hpp / mcast_spec.py / toy_spec_mcast onto the v14 wire; port upstream's 15 gtest + 8 pytest cases (num_active -> ack_count); audit the remaining 13 auto-merged behavior-sensitive paths by counting host CT emission against each kernel's hardcoded base; re-migrate sort and argmax once their blockers clear."
     }
   ]
 }

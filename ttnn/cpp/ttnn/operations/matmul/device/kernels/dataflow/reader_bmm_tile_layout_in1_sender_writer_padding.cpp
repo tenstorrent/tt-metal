@@ -82,7 +82,7 @@ void kernel_main() {
     // batch args
     constexpr uint32_t MtNt = get_compile_time_arg_val(24);  // if 0
     // Don't need batch; same as batch from READER args
-    constexpr bool compact_output = get_compile_time_arg_val(32);
+    constexpr bool compact_output = get_compile_time_arg_val(28);
 
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;

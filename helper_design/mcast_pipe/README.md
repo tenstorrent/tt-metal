@@ -6,7 +6,7 @@ resumed for the 2026-08-22 migration-feedback pass.
 
 - Reviewed: 2026-08-23
 - Branch/head at feedback intake: `sjovic/mcast-migration` / `cea14afbea9`
-- Recorded branch baseline: `llk_helper_library` at `dc9282be7d5`
+- Recorded branch baseline: `llk_helper_library` at `e6d0562cfaa` (rebased 2026-08-26; was `dc9282be7d5`)
 - Materialized helper API: v14
 - Ledger write-back API: v14
 
