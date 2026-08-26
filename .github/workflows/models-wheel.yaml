@@ -32,11 +32,23 @@ on:
     outputs:
       artifact-name:
         value: ${{ jobs.build-models-wheel.outputs.artifact_name }}
+  # PR-time gate: the class of defect this catches -- an entry point importing from a
+  # pruned test directory, a data file missing from the wheel, an undeclared dependency
+  # -- is introduced by changes under models/, and is invisible there until the next
+  # scheduled wheel build. Runs on a plain runner in a few minutes; no C++ build.
+  pull_request:
+    paths:
+      - "models/**"
+      - "packaging/tt-metal-models/**"
+      - ".github/workflows/models-wheel.yaml"
+  workflow_dispatch:
 
 jobs:
   build-models-wheel:
     name: "🐍 Build tt-metal-models wheel"
-    runs-on: ${{ inputs.runs-on }}
+    # The `inputs` context is empty on pull_request/workflow_dispatch, so both
+    # expressions need a fallback matching the workflow_call defaults.
+    runs-on: ${{ inputs.runs-on || 'ubuntu-22.04' }}
     timeout-minutes: 20
     outputs:
       artifact_name: ${{ steps.artifact-name.outputs.name }}
@@ -76,7 +88,7 @@ jobs:
       # target distro (see packaging/tt-metal-models/README.md); build_native_packages.py
       # refuses to guess rather than emit a broken package.
       - name: Build python3-tt-metal-models (.deb)
-        if: ${{ inputs.build-native-packages }}
+        if: ${{ inputs.build-native-packages != false }}
         run: |
           python packaging/tt-metal-models/build_native_packages.py \
             --wheel dist/tt_metal_models-*.whl --output-dir dist --deb
