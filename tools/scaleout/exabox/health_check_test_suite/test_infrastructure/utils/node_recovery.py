@@ -40,12 +40,15 @@ def should_reboot(*, exit_code: int, enabled: bool, slurm_job_id: str, restart_c
     return exit_code != 0 and enabled and slurm_job_id != "unknown" and restart_count < cap
 
 
-def reboot_and_requeue(node: str, slurm_job_id: str) -> bool:
+def reboot_and_requeue(node: str, slurm_job_id: str) -> str | None:
     """Arm a reboot (`scontrol reboot ASAP nextstate=RESUME` drains then
     auto-resumes the node) and `scontrol requeue` the job. The caller must return
     immediately without blocking: an earlier version slept and wedged the node at
     ALLOCATED+DRAIN+REBOOT_REQUESTED. Reboot needs sudo; `-n` fails fast so the
     caller can fall through to ticketing.
+
+    Returns ``None`` on success, else a short failure reason (e.g.
+    ``scontrol: command not found``) so a failed reboot isn't a silent no-op.
     """
     commands = (
         [
@@ -61,20 +64,19 @@ def reboot_and_requeue(node: str, slurm_job_id: str) -> bool:
         ["scontrol", "requeue", slurm_job_id],
     )
     for cmd in commands:
-        log.info("Running `%s` ...", " ".join(cmd))
+        printable = " ".join(cmd)
+        log.info("Running `%s` ...", printable)
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         # Any spawn failure (scontrol absent, sudo not executable) has to stay
         # non-fatal: crashing here would lose the JIRA ticket for a real failure.
         except (OSError, subprocess.TimeoutExpired) as exc:
-            log.warning("Could not run `%s`: %s", " ".join(cmd), exc)
-            return False
+            reason = f"`{printable}` could not run: {exc}"
+            log.warning(reason)
+            return reason
         if result.returncode != 0:
-            log.warning(
-                "`%s` failed (rc=%d): %s",
-                " ".join(cmd),
-                result.returncode,
-                (result.stderr or result.stdout).strip(),
-            )
-            return False
-    return True
+            detail = (result.stderr or result.stdout).strip()
+            reason = f"`{printable}` failed (rc={result.returncode}): {detail}"
+            log.warning(reason)
+            return reason
+    return None
