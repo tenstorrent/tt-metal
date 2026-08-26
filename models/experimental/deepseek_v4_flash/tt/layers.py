@@ -318,6 +318,7 @@ class Linear(DeepSeekV4Module):
         device: ttnn.MeshDevice,
         cache_file_name: Optional[str] = None,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        mesh_mapper=None,
     ):
         w = _materialize(weight, cache_file_name, dtype)
         self.weight = _load_weight(
@@ -325,6 +326,7 @@ class Linear(DeepSeekV4Module):
             device,
             cache_file_name=cache_file_name,
             dtype=dtype,
+            mesh_mapper=mesh_mapper,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:

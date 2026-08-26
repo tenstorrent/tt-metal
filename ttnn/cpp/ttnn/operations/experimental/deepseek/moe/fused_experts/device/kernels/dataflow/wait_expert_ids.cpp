@@ -79,8 +79,14 @@ void kernel_main() {
     constexpr uint32_t rscalar_face_r_dim = get_compile_time_arg_val(25);
     constexpr uint32_t rscalar_num_face_rows = get_compile_time_arg_val(26);
     constexpr uint32_t rscalar_tile_bytes = get_compile_time_arg_val(27);
+    constexpr uint32_t cores_per_expert = get_compile_time_arg_val(28);
+    constexpr uint32_t shards_per_core = get_compile_time_arg_val(29);
+    constexpr uint32_t i_shards_per_core = get_compile_time_arg_val(30);
+    constexpr uint32_t num_expert_groups = get_compile_time_arg_val(31);
+    constexpr uint32_t sem_reduce_id = get_compile_time_arg_val(32);
+    constexpr uint32_t cb_reduce_id = get_compile_time_arg_val(33);
 
-    constexpr auto gate_up_args = TensorAccessorArgs<28>();
+    constexpr auto gate_up_args = TensorAccessorArgs<34>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
     // The gate_up then down weight base addresses (one per expert) follow the accessor args
     // in the compile-time args, indexed by the runtime-selected expert id.
@@ -90,6 +96,12 @@ void kernel_main() {
     const uint32_t core_index = get_arg_val<uint32_t>(0);
     const uint32_t leader_noc_x = get_arg_val<uint32_t>(1);
     const uint32_t leader_noc_y = get_arg_val<uint32_t>(2);
+    const uint32_t group_mcast_start_x = get_arg_val<uint32_t>(3);
+    const uint32_t group_mcast_start_y = get_arg_val<uint32_t>(4);
+    const uint32_t group_mcast_end_x = get_arg_val<uint32_t>(5);
+    const uint32_t group_mcast_end_y = get_arg_val<uint32_t>(6);
+    const uint32_t group_num_dests = get_arg_val<uint32_t>(7);
+    const bool is_group_leader = get_arg_val<uint32_t>(8) != 0;
 
     // Activation arrived via multicast: publish it to the compute kernel.
     Semaphore<>(sem_input_id).wait(1);
@@ -98,7 +110,7 @@ void kernel_main() {
     // Expert ids arrived, then run the per-expert reader loop.
     Semaphore<>(sem_id).wait(1);
     Noc noc;
-    run_reader_loop<false>(
+    run_reader_loop(
         noc,
         num_active,
         core_index,
@@ -115,11 +127,11 @@ void kernel_main() {
         cb_act_id,
         sem_gather_id,
         sem_bcast_id,
-        /*mcast_start_x=*/0,
-        /*mcast_start_y=*/0,
-        /*mcast_end_x=*/0,
-        /*mcast_end_y=*/0,
-        /*num_dests=*/0,
+        group_mcast_start_x,
+        group_mcast_start_y,
+        group_mcast_end_x,
+        group_mcast_end_y,
+        group_num_dests,
         gate_up_args,
         kGateUpAddrBase,
         down_args,
@@ -136,5 +148,12 @@ void kernel_main() {
         rscalar_tile_h,
         rscalar_face_r_dim,
         rscalar_num_face_rows,
-        rscalar_tile_bytes);
+        rscalar_tile_bytes,
+        cores_per_expert,
+        shards_per_core,
+        i_shards_per_core,
+        num_expert_groups,
+        is_group_leader,
+        sem_reduce_id,
+        cb_reduce_id);
 }

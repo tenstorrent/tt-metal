@@ -95,8 +95,14 @@ void kernel_main() {
     constexpr uint32_t rscalar_face_r_dim = get_compile_time_arg_val(27);
     constexpr uint32_t rscalar_num_face_rows = get_compile_time_arg_val(28);
     constexpr uint32_t rscalar_tile_bytes = get_compile_time_arg_val(29);
+    constexpr uint32_t cores_per_expert = get_compile_time_arg_val(30);
+    constexpr uint32_t shards_per_core = get_compile_time_arg_val(31);
+    constexpr uint32_t i_shards_per_core = get_compile_time_arg_val(32);
+    constexpr uint32_t num_expert_groups = get_compile_time_arg_val(33);
+    constexpr uint32_t sem_reduce_id = get_compile_time_arg_val(34);
+    constexpr uint32_t cb_reduce_id = get_compile_time_arg_val(35);
 
-    constexpr auto input_args = TensorAccessorArgs<30>();
+    constexpr auto input_args = TensorAccessorArgs<36>();
     constexpr auto gate_up_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
     // The gate_up then down weight base addresses (one per expert) follow the accessor args
@@ -154,7 +160,7 @@ void kernel_main() {
 
     // ---- 5. Wait for the expert-id broadcast, then run the per-expert reader loop. ----
     Semaphore<>(sem_id).wait(1);
-    run_reader_loop<false>(
+    run_reader_loop(
         noc,
         num_active,
         core_index,
@@ -192,5 +198,12 @@ void kernel_main() {
         rscalar_tile_h,
         rscalar_face_r_dim,
         rscalar_num_face_rows,
-        rscalar_tile_bytes);
+        rscalar_tile_bytes,
+        cores_per_expert,
+        shards_per_core,
+        i_shards_per_core,
+        num_expert_groups,
+        /*is_group_leader=*/false,
+        sem_reduce_id,
+        cb_reduce_id);
 }
