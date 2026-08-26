@@ -243,6 +243,9 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc_address_backend.h
     inc/internal/tt-2xx/quasar/noc_cmd_buf_common.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api.h
+    inc/internal/tt-2xx/quasar/noc_nonblocking_api_v1.h
+    inc/internal/tt-2xx/quasar/noc_nonblocking_api_v2.h
+    inc/internal/tt-2xx/quasar/noc_nonblocking_api_v3.h
     inc/internal/tt-2xx/quasar/stream_interface.h
     inc/internal/tt-2xx/quasar/stream_io_map.h
     inc/internal/tt-2xx/quasar/tdma_xmov.h

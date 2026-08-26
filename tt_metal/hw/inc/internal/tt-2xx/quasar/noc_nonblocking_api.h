@@ -42,14 +42,19 @@
 //
 // =============================================================================
 
-#if defined(NOC_API_V1)
+#if defined(NOC_API_V3)
+#include "noc_nonblocking_api_v3.h"
+#elif defined(NOC_API_V1)
 #include "noc_nonblocking_api_v1.h"
 #else
 #define NOC_API_V2
 #include "noc_nonblocking_api_v2.h"
+#endif
 
-// Legacy per-processor cmd_buf aliases for dataflow_cmd_bufs.h compatibility.
-// Complex buffers 0,1 are addressed by index; simple buffer (2) uses scmdbuf instructions.
+#if !defined(NOC_API_V1)
+// Legacy per-processor cmd_buf aliases for dataflow_cmd_bufs.h compatibility (V1 defines
+// its own). Complex buffers 0,1 are addressed by index; simple buffer (2) uses scmdbuf
+// instructions.
 constexpr uint32_t NCRISC_WR_CMD_BUF = OVERLAY_WR_CMD_BUF;
 constexpr uint32_t NCRISC_RD_CMD_BUF = OVERLAY_RD_CMD_BUF;
 constexpr uint32_t NCRISC_WR_REG_CMD_BUF = OVERLAY_WR_CMD_BUF;
@@ -59,7 +64,6 @@ constexpr uint32_t BRISC_WR_CMD_BUF = OVERLAY_WR_CMD_BUF;
 constexpr uint32_t BRISC_RD_CMD_BUF = OVERLAY_RD_CMD_BUF;
 constexpr uint32_t BRISC_WR_REG_CMD_BUF = OVERLAY_WR_CMD_BUF;
 constexpr uint32_t BRISC_AT_CMD_BUF = OVERLAY_AT_CMD_BUF;
-
-#endif  // NOC_API_V2
+#endif
 
 #endif  // !defined(COMPILE_FOR_TRISC)
