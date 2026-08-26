@@ -655,13 +655,21 @@ class TPAttention:
         q = ttnn.rms_norm(q, weight=tw["q_norm"], epsilon=1e-6, memory_config=_L1)
         k = ttnn.rms_norm(k, weight=tw["k_norm"], epsilon=1e-6, memory_config=_L1)
 
-        # Q must come back in DRAM: SDPA-decode requires Q height-sharded or DRAM-interleaved
-        # (sdpa_decode_device_operation.cpp:82-92). K only feeds pad -> paged_update_cache, so it
-        # can stay L1 and keep the rest of head-prep L1-resident. Every intermediate inside the
-        # helper is L1 either way; bit-identical, just fewer DRAM round trips and 2 fewer
-        # dispatches per call (the helper's redundant to_memory_config copies are gone).
+        # Both q and k come back in DRAM. Q must: SDPA-decode requires Q height-sharded or
+        # DRAM-interleaved (sdpa_decode_device_operation.cpp:82-92).
+        #
+        # K must too, and this is load-bearing: returning K in L1 corrupts per-user paged decode
+        # at B=32 -- test_attention_tp_paged_peruser drops to PCC 0.91 with a subset of users
+        # wrong and the rest exact, while B=8 stays at 1.00000. An earlier revision of this file
+        # returned K in L1 on the theory that it only feeds pad -> paged_update_cache and so
+        # carries no placement requirement. That theory is wrong at B=32; do not reinstate it
+        # without a per-user paged decode run at B=32.
+        #
+        # The intermediates inside the helper stay in L1 regardless, which is where the win was:
+        # fewer DRAM round trips and 2 fewer dispatches per call (the redundant to_memory_config
+        # copies are gone). Only the returned tensor goes back to DRAM.
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
-        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim, out_memory_config=_L1)
+        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
         # SDPA-decode grid: use the real device grid (11x10=110 cores on P150x4), not a
         # hardcoded 64. cores_per_head = grid_total/B (sdpa_decode_program_factory.cpp), so a
