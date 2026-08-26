@@ -597,10 +597,128 @@ def _ref_embedding(inputs, kwargs, case):
     return torch.nn.functional.embedding(ids.reshape(-1), table.reshape(-1, table.shape[-1]))
 
 
-# Ops whose output is a deterministic function of the inputs we generated.
-# Everything absent from this table is checked for shape / dtype / finiteness only
-# (correct behaviour for rope, sdpa, the nlp_* head reshapes and the paged caches,
-# whose semantics are not recoverable from the capture alone).
+def _out_shapes(case):
+    """Captured output shapes, or None when any of them was never observed."""
+    outs = case.get("outs") or []
+    if not outs or any(o is None for o in outs):
+        return None
+    return [tuple(o["shape"]) for o in outs]
+
+
+def _ref_view(inputs, kwargs, case):
+    """Ops that reinterpret the same row-major data: reshape, unsqueeze_to_4D.
+
+    The captured output shape is the reference: same elements, same order. It can be
+    *smaller* than the input — ``ttnn.reshape(x, (1,1,1,3072), (1,1,32,3072))`` keeps
+    one logical row of a batch-padded decode tensor — in which case the reference is
+    the leading elements, which is where row-major puts that row.
+    """
+    shapes = _out_shapes(case)
+    if not shapes:
+        return None
+    flat = inputs["0"].float().reshape(-1)
+    n = math.prod(shapes[0])
+    if n > flat.numel():
+        return None  # output larger than the input: the extra is padding we cannot define
+    return flat[:n].reshape(shapes[0])
+
+
+# The head ops below mirror the references the hand-written tests/ops suite verified
+# on hardware — test_nlp_create_qkv_heads.py:57-60, test_nlp_create_qkv_heads_decode.py:110-113,
+# test_nlp_concat_heads.py:51 — so a permutation or a mis-split of the fused QKV is
+# caught here too, instead of only shape/dtype. Each returns None if the captured
+# shapes do not match the layout it models, so an unfamiliar capture falls back to the
+# structural checks rather than failing against a reference that does not apply.
+def _qkv_dims(x, shapes):
+    """(batch/seq-carrying view, q_dim, kv_dim) for a fused-QKV split, or None."""
+    if len(shapes) != 3:
+        return None
+    q_shape, k_shape, v_shape = shapes
+    if k_shape != v_shape or len(q_shape) != 4 or len(k_shape) != 4:
+        return None
+    head_dim = q_shape[3]
+    q_dim, kv_dim = q_shape[1] * head_dim, k_shape[1] * head_dim
+    return (q_dim, kv_dim) if x.shape[-1] == q_dim + 2 * kv_dim else None
+
+
+def _ref_create_qkv_heads(inputs, kwargs, case):
+    """Prefill: [1,1,seq,QKV] -> Q [1,heads,seq,hd], K/V [1,kv_heads,seq,hd]."""
+    shapes = _out_shapes(case)
+    if not shapes:
+        return None
+    x = inputs["0"].float()
+    dims = _qkv_dims(x, [(s[0], s[1], s[2], s[3]) for s in shapes])
+    if dims is None or case["kwargs"].get("transpose_k_heads", {}).get("v") is not False:
+        return None
+    q_dim, kv_dim = dims
+    seq = shapes[0][2]
+
+    def heads(chunk, count):
+        return chunk.reshape(1, seq, count, shapes[0][3]).permute(0, 2, 1, 3)
+
+    return [
+        heads(x[..., :q_dim], shapes[0][1]),
+        heads(x[..., q_dim : q_dim + kv_dim], shapes[1][1]),
+        heads(x[..., q_dim + kv_dim :], shapes[2][1]),
+    ]
+
+
+def _ref_create_qkv_heads_decode(inputs, kwargs, case):
+    """Decode: [1,1,batch,QKV] -> Q [1,batch,heads,hd], K/V [1,batch,kv_heads,hd]."""
+    shapes = _out_shapes(case)
+    if not shapes or len(shapes[0]) != 4:
+        return None
+    x = inputs["0"].float()
+    batch, n_heads, head_dim = shapes[0][1], shapes[0][2], shapes[0][3]
+    n_kv = shapes[1][2]
+    q_dim, kv_dim = n_heads * head_dim, n_kv * head_dim
+    if x.shape[-1] != q_dim + 2 * kv_dim or x.shape[2] < batch:
+        return None
+    rows = x[:, :, :batch, :]
+    return [
+        rows[..., :q_dim].reshape(1, batch, n_heads, head_dim),
+        rows[..., q_dim : q_dim + kv_dim].reshape(1, batch, n_kv, head_dim),
+        rows[..., q_dim + kv_dim :].reshape(1, batch, n_kv, head_dim),
+    ]
+
+
+def _ref_concat_heads(inputs, kwargs, case):
+    """Prefill: [1,heads,seq,hd] -> [1,1,seq,heads*hd]."""
+    x = inputs["0"].float()
+    if x.dim() != 4:
+        return None
+    _, n_heads, seq, head_dim = x.shape
+    return x.permute(0, 2, 1, 3).reshape(1, 1, seq, n_heads * head_dim)
+
+
+def _ref_concat_heads_decode(inputs, kwargs, case):
+    """Decode: [1,batch,heads,hd] -> [1,1,batch,heads*hd] (batch padded in the output).
+
+    The captured output is padded up to a tile row, so the reference covers only the
+    real batch; ``assert_pcc`` compares it against the leading elements, which is
+    where row-major puts those users.
+    """
+    x = inputs["0"].float()
+    n_heads = case["kwargs"].get("num_heads", {}).get("v")
+    if x.dim() != 4 or n_heads is None or x.shape[2] != n_heads:
+        return None
+    batch, head_dim = x.shape[1], x.shape[3]
+    return x.reshape(1, 1, batch, n_heads * head_dim)
+
+
+# Ops whose output is a deterministic function of the inputs we generated. A
+# reference here is worth more than the structural checks: it catches a permutation,
+# a mis-split or a wrong reduction that every shape/dtype/placement assertion passes.
+#
+# Everything absent from this table is checked for shape / dtype / placement /
+# finiteness only. What is left out, and why:
+#   * rope — the Meta-format cos/sin plus the tile-wise transformation matrix make a
+#     torch reference fiddly and easy to get subtly wrong; the hand-written
+#     tests/ops/test_rotary_embedding_llama.py:33 came to the same conclusion;
+#   * SDPA — the captured page tables/positions describe the KV geometry, but a
+#     reference would have to reimplement chunked flash attention;
+#   * the paged caches — value semantics are checked by POSTCONDITION instead, which
+#     verifies the write landed where the page table says it should.
 GOLDEN = {
     "ttnn.to_memory_config": _ref_identity,
     "ttnn.to_device": _ref_identity,
@@ -618,6 +736,12 @@ GOLDEN = {
     "ttnn.Tensor.__getitem__": _ref_getitem,
     "ttnn.rms_norm": _ref_rms_norm,
     "ttnn.embedding": _ref_embedding,
+    "ttnn.reshape": _ref_view,
+    "ttnn.unsqueeze_to_4D": _ref_view,
+    "ttnn.experimental.nlp_create_qkv_heads": _ref_create_qkv_heads,
+    "ttnn.experimental.nlp_create_qkv_heads_decode": _ref_create_qkv_heads_decode,
+    "ttnn.experimental.nlp_concat_heads": _ref_concat_heads,
+    "ttnn.experimental.nlp_concat_heads_decode": _ref_concat_heads_decode,
 }
 
 
@@ -680,23 +804,104 @@ def _derived_spec(case, op_name, index):
 # =============================================================================
 
 
-def _check_cache_written(args, case, op_name, mesh_device):
-    """A paged-cache op must actually write the cache it was handed.
+# Paged KV cache layout, from the op's own tests
+# (tests/ttnn/nightly/unit_tests/operations/transformers/test_paged_update_cache.py:449-530
+# for the decode update, :641-700 for the prefill fill):
+#
+#   cache      [max_num_blocks, n_heads, block_size, head_dim]   (physical pages)
+#   page_table [num_users, max_num_blocks_per_seq]               virtual -> physical
+#   token at position p of user b lives in page_table[b, p // block_size], slot p % block_size
+#
+# The suite generates both the page table (``_arange_pages``) and the positions
+# (``_small_position``), so the destination is known and can be asserted, not just
+# the amount written. If a capture ever has a geometry this does not describe, the
+# region comes back None and only the count is checked.
+def _paged_write_region(torch_inputs, case, op_name, cache_shape):
+    """Mask of the cache cells this call must write, or None if not modelled."""
+    if len(cache_shape) != 4:
+        return None
+    n_pages, cache_heads, block_size, head_dim = cache_shape
+    update = case["args"][1]["shape"]
+    if len(update) != 4 or update[3] != head_dim:
+        return None
+    mask = torch.zeros(cache_shape, dtype=torch.bool)
+
+    if op_name.endswith("paged_update_cache"):
+        page_table = torch_inputs.get("page_table")
+        positions = torch_inputs.get("update_idxs_tensor")
+        if page_table is None or positions is None:
+            return None
+        batch, heads = update[1], update[2]
+        if heads > cache_heads:
+            return None
+        page_table = page_table.reshape(batch, -1)
+        positions = positions.reshape(-1)
+        for user in range(batch):
+            pos = int(positions[user])
+            block = pos // block_size
+            if block >= page_table.shape[1]:
+                return None
+            page = int(page_table[user, block])
+            if not 0 <= page < n_pages:
+                return None
+            mask[page, :heads, pos % block_size, :] = True
+        return mask
+
+    # paged_fill_cache(cache, x, page_table, batch_idx=user): the whole sequence.
+    page_table = torch_inputs.get("2")
+    if page_table is None:
+        return None
+    user = case["kwargs"].get("batch_idx", {}).get("v", 0)
+    heads, seq = update[1], update[2]
+    if heads > cache_heads or page_table.dim() != 2 or user >= page_table.shape[0]:
+        return None
+    for start in range(0, seq, block_size):
+        block = start // block_size
+        if block >= page_table.shape[1]:
+            return None
+        page = int(page_table[user, block])
+        if not 0 <= page < n_pages:
+            return None
+        mask[page, :heads, : min(block_size, seq - start), :] = True
+    return mask
+
+
+def _check_cache_written(args, torch_inputs, case, op_name, mesh_device):
+    """A paged-cache op must write what it was given, where the page table says.
 
     The capture never sees these outputs again, so without this the case passes as
     long as the (unchanged, finite) cache comes back. The tensor being written is
-    filled with ``CACHE_SENTINEL`` instead of noise, so the write is visible by
-    counting how much of the cache holds that value afterwards. Only the count is
-    asserted, never the position — where a paged write lands is the op's business
-    and is not reconstructible from the capture.
+    filled with ``CACHE_SENTINEL`` instead of noise, so the write is visible in the
+    cache afterwards — and since the page table and positions are generated here, so
+    is the destination: a write to the wrong page or slot shows up as sentinel values
+    outside the region, which is what the second assertion is for.
     """
-    cache, update = args[0], case["args"][1]
-    host = from_tt(cache, mesh_device)
-    written = int(((host - CACHE_SENTINEL).abs() <= _CACHE_SENTINEL_TOL).sum())
-    want = _numel(update["shape"])
-    assert written >= want, (
-        f"{op_name}: {written} of the {want} written value(s) are in the cache afterwards "
-        f"— the op did not write what it was given (cache holds {host.numel()} elements)"
+    cache_shape = case["args"][0]["shape"]
+    host = from_tt(args[0], mesh_device)
+    hits = (host - CACHE_SENTINEL).abs() <= _CACHE_SENTINEL_TOL
+
+    region = _paged_write_region(torch_inputs, case, op_name, cache_shape)
+    if region is None or host.numel() != region.numel():
+        want = _numel(case["args"][1]["shape"])
+        written = int(hits.sum())
+        assert written >= want, (
+            f"{op_name}: {written} of the {want} written value(s) are in the cache afterwards "
+            f"— the op did not write what it was given (cache holds {host.numel()} elements)"
+        )
+        return
+
+    hits = hits.reshape(cache_shape)
+    want = int(region.sum())
+    inside = int((hits & region).sum())
+    outside = int((hits & ~region).sum())
+    assert inside == want, (
+        f"{op_name}: {inside} of the {want} cell(s) the page table maps hold the written value "
+        f"— the op did not write the region "
+        f"[pages/heads/slots the generated page table and positions select] (see _paged_write_region)"
+    )
+    assert outside == 0, (
+        f"{op_name}: {outside} written value(s) landed outside the region the page table maps "
+        f"— wrong page or slot (see _paged_write_region for the layout this assumes)"
     )
 
 
@@ -709,10 +914,6 @@ POSTCONDITION = {
 # =============================================================================
 # Case runner
 # =============================================================================
-
-
-def _first_output(out):
-    return out[0] if isinstance(out, (list, tuple)) else out
 
 
 def _input_elements(case):
@@ -885,12 +1086,19 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
 
     post_fn = POSTCONDITION.get(op_name)
     if post_fn is not None:
-        post_fn(args, case, op_name, mesh_device)
+        post_fn(args, torch_inputs, case, op_name, mesh_device)
 
     ref_fn = None if NO_GOLDEN else GOLDEN.get(op_name)
     if ref_fn is not None:
         ref = ref_fn(torch_inputs, kwargs, case)
         if ref is not None:
-            U.assert_pcc(ref, _first_output(out), pcc=pcc or _golden_pcc(case, op_name), mesh_device=mesh_device)
+            # A reference may cover every output (the qkv splits return Q, K and V),
+            # so compare position by position rather than only the first tensor.
+            refs = list(ref) if isinstance(ref, (list, tuple)) else [ref]
+            tensors = list(out) if isinstance(out, (list, tuple)) else [out]
+            floor = pcc or _golden_pcc(case, op_name)
+            for i, one in enumerate(refs):
+                if one is not None and i < len(tensors):
+                    U.assert_pcc(one, tensors[i], pcc=floor, mesh_device=mesh_device)
 
     return out

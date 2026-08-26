@@ -153,6 +153,15 @@ def parse_literal(text: str):
 
 
 def parse_memory_config(text: str):
+    """Parse a captured MemoryConfig; None when it does not parse *completely*.
+
+    Failing closed matters here: a partially parsed config is indistinguishable from
+    a real one. A ShardSpec that stopped matching would leave ``shard: None``, which
+    is also what a genuine "sharded layout, no shard spec, the op derives it" capture
+    looks like — and the case would then run interleaved while claiming to reproduce
+    a sharded call. Callers turn None into an unreconstructible argument instead, so
+    the case is dropped and reported rather than silently weakened.
+    """
     m = _MEM_RE.search(text)
     if not m:
         return None
@@ -162,12 +171,13 @@ def parse_memory_config(text: str):
         ranges = [[int(v) for v in r] for r in _SHARD_RANGE_RE.findall(shard)]
         shape = _SHARD_SHAPE_RE.search(shard)
         orient = _SHARD_ORIENT_RE.search(shard)
-        if ranges and shape and orient:
-            spec["shard"] = {
-                "grid": ranges,
-                "shape": [int(shape.group(1)), int(shape.group(2))],
-                "orientation": orient.group(1),
-            }
+        if not (ranges and shape and orient):
+            return None  # an explicit ShardSpec we could not read
+        spec["shard"] = {
+            "grid": ranges,
+            "shape": [int(shape.group(1)), int(shape.group(2))],
+            "orientation": orient.group(1),
+        }
     return spec
 
 
@@ -219,20 +229,28 @@ def parse_argument(text: str):
     """One captured argument repr -> a spec dict understood by graph_case."""
     m = _TENSOR_RE.match(text)
     if m:
+        mem = parse_memory_config(m.group("mem"))
+        if mem is None:
+            # The repr carries a MemoryConfig we could not read; running the case with
+            # a default placement would not be the captured call (see parse_memory_config).
+            return {"k": "skip", "repr": text}
         return {
             "k": "t",
             "shape": _shape(m.group("shape")),
             "dtype": m.group("dtype"),
             "layout": m.group("layout"),
-            "mem": parse_memory_config(m.group("mem")),
+            "mem": mem,
         }
 
     if text.startswith("[ttnn.Tensor("):
-        tensors = [
-            {"k": "t", "shape": _shape(sh), "dtype": dt, "layout": lay, "mem": None}
-            for sh, dt, lay in _TENSOR_IN_LIST_RE.findall(text)
-        ]
-        return {"k": "tlist", "tensors": tensors} if tensors else {"k": "skip", "repr": text}
+        # Every element must be accounted for: findall over a list whose element repr
+        # changed would quietly return a subset, and a concat case would then run with
+        # fewer operands than the captured call and still pass.
+        found = _TENSOR_IN_LIST_RE.findall(text)
+        if not found or len(found) != text.count("ttnn.Tensor("):
+            return {"k": "skip", "repr": text}
+        tensors = [{"k": "t", "shape": _shape(sh), "dtype": dt, "layout": lay, "mem": None} for sh, dt, lay in found]
+        return {"k": "tlist", "tensors": tensors}
 
     if text.startswith("MemoryConfig("):
         spec = parse_memory_config(text)
@@ -319,6 +337,31 @@ def file_stem(op: str) -> str:
     return "test_" + op.split(".")[-1]
 
 
+def merge_outs(old, new, conflicts, op):
+    """Combine two observations of the same call's outputs, position by position.
+
+    Identical calls appear many times in a capture and their outputs are not equally
+    well observed: an output is only recoverable if that tensor is used again later,
+    so the same call can yield a spec on one occurrence and None on another. Keeping
+    whichever came first would make the generated suite depend on capture order, so
+    the strongest observation wins instead. Two *different* non-None observations of
+    the same position are contradictory (the same call cannot produce two placements),
+    so that position is dropped to None and reported rather than silently picked.
+    """
+    merged = []
+    for i in range(max(len(old), len(new))):
+        a = old[i] if i < len(old) else None
+        b = new[i] if i < len(new) else None
+        if a is None or a == b:
+            merged.append(b if a is None else a)
+        elif b is None:
+            merged.append(a)
+        else:
+            conflicts[op] += 1
+            merged.append(None)
+    return merged
+
+
 def canonical(spec) -> str:
     """Dedup key: everything except volatile identity (tensor_id, addresses)."""
     return json.dumps(spec, sort_keys=True)
@@ -349,6 +392,7 @@ def build_cases(capture: Path, verbose=False):
     order: list[str] = []
     raw_counts = collections.Counter()
     dropped_kwargs: dict[str, set] = collections.defaultdict(set)
+    out_conflicts = collections.Counter()  # same call, contradictory output observations
 
     records = list(iter_records(capture))
 
@@ -404,6 +448,7 @@ def build_cases(capture: Path, verbose=False):
             order.append(op)
         if dedup in bucket:
             bucket[dedup]["count"] += 1
+            bucket[dedup]["outs"] = merge_outs(bucket[dedup]["outs"], outs, out_conflicts, op)
         else:
             case["count"] = 1
             bucket[dedup] = case
@@ -411,6 +456,8 @@ def build_cases(capture: Path, verbose=False):
     if verbose:
         for op in order:
             print(f"  {op:<58} {raw_counts[op]:>6} calls -> {len(per_op[op]):>3} distinct")
+    for op, n in sorted(out_conflicts.items()):
+        print(f"  NOTE {op}: {n} output(s) observed with two different specs for the same call; left unchecked")
 
     return {op: list(per_op[op].values()) for op in order}, raw_counts, dropped_kwargs
 
