@@ -12,7 +12,8 @@
 //   [SCALAR_CT_ARGS ..)          schedule, `schedule_len` words
 //   [schedule end ..)            own assignments, ASSIGNMENT_WORDS each
 //   [assignments end ..)         forwarding chunk descriptors, CHUNK_WORDS each
-//   [descriptors end ..)         TensorAccessorArgs, chained on by the program factory
+//   [descriptors end ..)         the untilizers of this stream's group, UNT_PEER_WORDS each
+//   [untilizers end ..)          TensorAccessorArgs, chained on by the program factory
 
 #include "combine_fabric2d_kernel_interface.hpp"
 
@@ -24,7 +25,7 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the schedule starts at. Asserted against
 // the field list below, so it cannot drift out of step with it.
-constexpr uint32_t READER_SCALAR_CT_ARGS = 31;
+constexpr uint32_t READER_SCALAR_CT_ARGS = 35;
 
 struct ReaderCtArgs {
     uint32_t num_l1_slots;
@@ -61,6 +62,13 @@ struct ReaderCtArgs {
     // for a clockwise stream that is descending dispatch-group index, hence descending page: matching the
     // pages to it turns the whole own-assignment phase into one continuous sweep of the expert's region.
     uint32_t walks_down;
+    // The batch ring an untilizer stages tokens into. Same address on every untilizer core, so a row is
+    // named by core and offset with nothing per-core to pass.
+    uint32_t unt_ring_addr;
+    uint32_t unt_ring_batches;
+    uint32_t num_untilizers;
+    // The counter this reader owns on each untilizer core, bumped once per batch it is done with.
+    uint32_t unt_freed_addr;
 
 #ifndef KERNEL_BUILD
     ReaderCtArgs(
@@ -71,7 +79,8 @@ struct ReaderCtArgs {
         const std::vector<op::Assignment>& work,
         const op::L1Layout& l1,
         const op::KernelPlan& plan,
-        const op::DramBuffers& dram) :
+        const op::DramBuffers& dram,
+        const op::ReaderUntilizers& untilizers) :
         num_l1_slots(NUM_L1_SLOTS),
         token_size_bytes(op::token_size_bytes(tensor_args)),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
@@ -106,7 +115,11 @@ struct ReaderCtArgs {
         my_dg_index(op::my_dg_index(args, coord)),
         control_addr(l1.control),
         meta_prefetch_cap(META_PREFETCH),
-        walks_down(op::stream_is_cw(plan.stream)) {
+        walks_down(op::stream_is_cw(plan.stream)),
+        unt_ring_addr(untilizers.ring_addr),
+        unt_ring_batches(UNT_RING_BATCHES),
+        num_untilizers(static_cast<uint32_t>(untilizers.peers.size())),
+        unt_freed_addr(untilizers.my_freed_addr) {
         // Schedule: the work order, relays tagged. An own entry carries its index into the table that
         // follows.
         uint32_t own_idx = 0;
@@ -132,6 +145,13 @@ struct ReaderCtArgs {
         num_forwarding_chunks = static_cast<uint32_t>(forwarding.size());
         for (const auto& c : forwarding) {
             c.append_to(blocks_);
+        }
+        // The untilizers of this stream's group, in the order that indexes their round-robin share of the
+        // batches. Each carries the counter it owns on THIS core.
+        for (const auto& u : untilizers.peers) {
+            blocks_.push_back(u.noc.x);
+            blocks_.push_back(u.noc.y);
+            blocks_.push_back(u.counter_addr);
         }
     }
 
@@ -167,7 +187,11 @@ struct ReaderCtArgs {
             my_dg_index,
             control_addr,
             meta_prefetch_cap,
-            walks_down};
+            walks_down,
+            unt_ring_addr,
+            unt_ring_batches,
+            num_untilizers,
+            unt_freed_addr};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -203,14 +227,20 @@ struct ReaderCtArgs {
         my_dg_index(get_compile_time_arg_val(27)),
         control_addr(get_compile_time_arg_val(28)),
         meta_prefetch_cap(get_compile_time_arg_val(29)),
-        walks_down(get_compile_time_arg_val(30)) {}
+        walks_down(get_compile_time_arg_val(30)),
+        unt_ring_addr(get_compile_time_arg_val(31)),
+        unt_ring_batches(get_compile_time_arg_val(32)),
+        num_untilizers(get_compile_time_arg_val(33)),
+        unt_freed_addr(get_compile_time_arg_val(34)) {}
 
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
     static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(16);  // schedule_len
     static constexpr uint32_t forwarding_chunk_base =
         assignment_base + ASSIGNMENT_WORDS * get_compile_time_arg_val(15);  // num_assignments
-    static constexpr uint32_t accessor_base =
+    static constexpr uint32_t untilizer_base =
         forwarding_chunk_base + CHUNK_WORDS * get_compile_time_arg_val(12);  // num_forwarding_chunks
+    static constexpr uint32_t accessor_base =
+        untilizer_base + UNT_PEER_WORDS * get_compile_time_arg_val(33);  // num_untilizers
 
     // One accessor per DRAM buffer the program factory chained on, in that order.
     static constexpr auto dram_in_args = TensorAccessorArgs<accessor_base>();
