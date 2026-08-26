@@ -1,0 +1,40 @@
+name: "Cleanup prebuilt tests images"
+# Prebuilt tests images are throwaways: one per (commit x build config x base),
+# pushed on every PR update, so without this they accumulate indefinitely.
+#
+# Keeps the newest N and deletes the rest. Count rather than age is deliberate:
+# it bounds storage regardless of how busy a day gets. N must comfortably exceed
+# the number pushed while a CI run is in flight, or a run could lose the image
+# it is running from -- roughly 6/hour today, so 50 is about eight hours.
+#
+# This deletes irreversibly. It is scoped to the one package the
+# build-prebuilt-tests-image producer creates, and never touches a base image.
+
+permissions:
+  packages: write
+
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+    inputs:
+      min-versions-to-keep:
+        description: "Newest versions to keep. Set very high for a safe no-op run."
+        required: false
+        type: string
+        default: "50"
+
+jobs:
+  cleanup:
+    name: "Delete aged-out prebuilt tests images"
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+        with:
+          # Literal, not a context expression: this is what stops the job ever
+          # resolving to a package it should not touch.
+          owner: tenstorrent
+          package-name: tt-metal/prebuilt-tests-image
+          package-type: container
+          min-versions-to-keep: ${{ inputs.min-versions-to-keep || '50' }}

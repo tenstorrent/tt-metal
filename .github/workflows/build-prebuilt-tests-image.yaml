@@ -1,4 +1,4 @@
-name: "Build test image"
+name: "Build prebuilt tests image"
 # Bakes a build's output into the container image hardware test jobs already pull,
 # so those jobs download no GHA artifact and run no install step.
 #
@@ -35,7 +35,7 @@ on:
       dockerfile:
         required: true
         type: string
-        description: "Path to the Dockerfile, e.g. dockerfile/Dockerfile.test-image-packages"
+        description: "Path to the Dockerfile, e.g. dockerfile/Dockerfile.prebuilt-tests-packages"
       build-args:
         required: false
         type: string
@@ -44,7 +44,7 @@ on:
       image-name:
         required: false
         type: string
-        default: "test-image"
+        default: "prebuilt-tests-image"
         description: "ghcr package name, under ghcr.io/<repository>/"
       checkout-source:
         required: false
@@ -84,7 +84,7 @@ on:
       dockerfile:
         required: true
         type: string
-        description: "Path to the Dockerfile, e.g. dockerfile/Dockerfile.test-image-packages"
+        description: "Path to the Dockerfile, e.g. dockerfile/Dockerfile.prebuilt-tests-packages"
       build-args:
         required: false
         type: string
@@ -93,7 +93,7 @@ on:
       image-name:
         required: false
         type: string
-        default: "test-image"
+        default: "prebuilt-tests-image"
         description: "ghcr package name, under ghcr.io/<repository>/"
       checkout-source:
         required: false

@@ -1,27 +1,22 @@
-name: "Test build-test-image"
-# Exercises the build-test-image producer end to end: build the packages, bake
+name: "Test build-prebuilt-tests-image"
+# Exercises the build-prebuilt-tests-image producer end to end: build the packages, bake
 # them into the ci-test image, then run a real gtest on hardware from that image
 # with no artifact download and no install step. A green run here is the whole
 # claim of the change, so this stays as the producer's regression test.
 
 on:
-  push:
-    branches:
-      # TEMPORARY iteration trigger; remove before this leaves draft.
-      - tdabasinskas/ci-test-image-producer
   pull_request:
     paths:
-      - ".github/workflows/build-test-image.yaml"
-      - ".github/workflows/test-build-test-image.yaml"
-      - "dockerfile/Dockerfile.test-image-packages"
+      - ".github/workflows/build-prebuilt-tests-image.yaml"
+      - ".github/workflows/test-build-prebuilt-tests-image.yaml"
+      - "dockerfile/Dockerfile.prebuilt-tests-packages"
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
 
-# One run per branch. head_ref and ref_name both give the bare branch name, so a
-# push and its PR share a group instead of each starting a build and a hw leg.
+# One run per branch, so a superseded run does not keep a hardware leg busy.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
@@ -48,9 +43,9 @@ jobs:
       checkout-filter: tree:0
 
   bake:
-    name: "Bake packages into the test image"
+    name: "Bake packages into the prebuilt tests image"
     needs: build
-    uses: ./.github/workflows/build-test-image.yaml
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
     permissions:
       contents: read
       packages: write
@@ -59,7 +54,7 @@ jobs:
     with:
       artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       base-image: ${{ needs.build.outputs.ci-test-docker-image }}
-      dockerfile: dockerfile/Dockerfile.test-image-packages
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
       build-args: PRODUCT=tt-metalium
 
   verify:

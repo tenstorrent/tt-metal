@@ -1,6 +1,6 @@
 # Test image, package payload: the build's .deb packages installed into the
 # image a hardware test job already pulls, so the job downloads no artifact and
-# runs no install step. Built by .github/workflows/build-test-image.yaml, which
+# runs no install step. Built by .github/workflows/build-prebuilt-tests-image.yaml, which
 # puts the packages artifact at artifact/ in the build context.
 
 # The producer always passes BASE; the default is only so this builds standalone.
