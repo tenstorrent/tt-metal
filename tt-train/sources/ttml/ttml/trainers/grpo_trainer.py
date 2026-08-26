@@ -847,7 +847,11 @@ class GRPOTrainer:
         # get a chance to populate ``self.metrics`` before the monitor writes
         # a row.
         if not self.config.disable_default_monitor:
-            if not any(isinstance(cb, GRPOMonitor) for cb in self.callbacks):
+            # Detect the framework GRPOMonitor (or a subclass) by isinstance, and
+            # a legacy local class also named ``GRPOMonitor`` by class name — pre-
+            # refactor forks used to define their own monitor with that name.
+            # Either way we skip auto-appending to avoid duplicate CSV writes.
+            if not any(isinstance(cb, GRPOMonitor) or type(cb).__name__ == "GRPOMonitor" for cb in self.callbacks):
                 self.callbacks.append(GRPOMonitor(self.config))
 
     def _init_rewards(

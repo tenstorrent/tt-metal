@@ -359,6 +359,13 @@ Every numeric scalar metric is forwarded to wandb under the `grpo/` namespace
 If the `wandb` package is not installed, the monitor logs a one-time warning
 and quietly falls back to console + CSV only.
 
+If you have a pre-existing custom step logger (from before this framework
+absorbed `GRPOMonitor`), the auto-append is skipped for any callback that is
+either a subclass of `ttml.trainers.GRPOMonitor` or whose class is named
+`GRPOMonitor`. If your custom logger uses a different class name, set
+`GRPOConfig.disable_default_monitor=True` to opt out of the built-in one
+and avoid duplicate CSV writes.
+
 ## Callbacks
 
 Subclass `TrainerCallback` and override any hooks you need. In practice most
