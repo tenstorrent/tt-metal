@@ -286,7 +286,12 @@ it is what they all need.
 
 ## Explicitly not fruit
 
-**D17**, named runtime arguments, is the three-hang problem and remains real work.
+**D17**, named runtime arguments, is the three-hang problem and remains real work. Specced in
+`unified_named_args_spec.md`, whose finding is uncomfortable: of the three named-argument
+mechanisms in the tree, the compile-time one (D18) is reachable from our path today, and the
+runtime one (D17, every hang) is not -- Metal 2.0 proper is gated behind a host API with no
+Python bindings, and the only reachable runtime option is a Blaze feature whose own README
+says not to use it. So the easy phase is not the phase that hurts.
 
 **The B and C uniformity classes** need a per-thread trace of circular-buffer operations,
 cross-checked at kernel end -- push counts against wait counts, per CB, per projection. That
