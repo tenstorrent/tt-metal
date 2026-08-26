@@ -575,6 +575,75 @@ def initialize_test_inputs(
     return x, weights, indices
 
 
+def initialize_hot_expert_test_inputs(
+    dispatch_group_size: int,
+    seq_len_per_chip: int,
+    emb_dim: int,
+    num_routed_experts: int,
+    num_experts_per_tok: int,
+    max_dispatched_tokens_per_expert: int,
+    hot_expert: int = 0,
+    validate: bool = True,
+    num_dispatch_groups: int = 1,
+    seed: int = None,
+):
+    """
+    Initialize test inputs where one expert receives every token in the dispatch group.
+
+    Same shapes and same random data as initialize_test_inputs, except that every token spends one
+    of its top-k picks on `hot_expert`. That expert then holds dispatch_group_size *
+    seq_len_per_chip tokens, which is exactly max_dispatched_tokens_per_expert — the most the
+    dispatch buffer is sized for. The other picks are spread over the remaining experts, so the
+    rest of the ring still has work; only this one expert's regions are extreme.
+
+    This is the case for any stage that is sized or batched PER EXPERT. A balanced router gives an
+    expert roughly seq_len_per_chip * num_experts_per_tok / num_routed_experts tokens per source
+    chip, so a per-expert batch is small and nothing is stressed; here it is the whole dispatch
+    group at once, which is what a per-expert buffer bound has to survive and what a fixed row of
+    workers cannot chew through in one pass.
+
+    Args:
+        hot_expert: Which of the num_routed_experts receives every token. Any value works; the
+            dispatch group that hosts it is the one under load.
+
+    Returns: x, weights, indices — same shapes as initialize_test_inputs.
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    x = torch.randn((dispatch_group_size, seq_len_per_chip, emb_dim), dtype=torch.bfloat16)
+
+    weights_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
+    weights = torch.randn(weights_shape, dtype=torch.bfloat16)
+    weights = torch.sigmoid(weights.float()).to(torch.bfloat16)
+    weights = weights / weights.sum(dim=-1, keepdim=True)
+
+    # The remaining picks are drawn from the experts that are NOT hot — draw from one fewer expert
+    # and step over the hot one — so the hot expert gets exactly one copy per token. Drawing freely
+    # would let a token pick it twice, which makes the load merely large instead of an exact
+    # dispatch_group_size * seq_len_per_chip.
+    indices_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
+    others = torch.randint(0, num_routed_experts - 1, indices_shape, dtype=torch.int32)
+    indices = others + (others >= hot_expert).to(torch.int32)
+    indices[:, :, 0] = hot_expert
+
+    if validate:
+        expert_activations = torch.bincount(indices.flatten().to(torch.int64), minlength=num_routed_experts)
+        checksum = expert_activations.sum().item()
+        assert (
+            checksum == dispatch_group_size * seq_len_per_chip * num_experts_per_tok
+        ), f"Expected checksum {dispatch_group_size * seq_len_per_chip * num_experts_per_tok}, got {checksum}"
+        assert (
+            expert_activations[hot_expert].item() == dispatch_group_size * seq_len_per_chip
+        ), f"Expected expert {hot_expert} to hold every token ({dispatch_group_size * seq_len_per_chip}), got {expert_activations[hot_expert].item()}"
+        assert (
+            expert_activations.max().item() <= max_dispatched_tokens_per_expert
+        ), f"Expected max activations per expert to be <= {max_dispatched_tokens_per_expert}, got {expert_activations.max().item()}"
+
+    logger.debug(f"[initialize_hot_expert_test_inputs] {hot_expert=} holds {dispatch_group_size * seq_len_per_chip}")
+    return x, weights, indices
+
+
 def initialize_predictable_test_inputs(
     dispatch_group_size: int,
     seq_len_per_chip: int,

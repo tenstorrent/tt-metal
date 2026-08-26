@@ -38,6 +38,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_ep_mesh_mapper,
     get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
+    initialize_hot_expert_test_inputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
@@ -73,10 +74,13 @@ def run_combine(
     cmb_version,
     is_ci_env,
     is_ci_v2_env,
+    iterations,
+    hot_expert=None,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
-    num_experts_per_tok) shape axis."""
+    num_experts_per_tok) shape axis, and on whether the router is balanced or sends every token to
+    one expert (`hot_expert`)."""
     num_devices = mesh_device.get_num_devices()
     if num_devices >= 8 and not run_pcc_check and use_predictable_data:
         pytest.skip("8-chip perf only runs with random data")
@@ -101,6 +105,12 @@ def run_combine(
     # non-BH; skip cleanly here so this surfaces as "skipped" instead of an error.
     if use_fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
         pytest.skip("fp8 combine output requires Blackhole hardware")
+
+    # combine_fabric2d takes its tokens one DRAM page per row, so TILE input needs an untilize
+    # stage it does not have yet — the op rejects TILE outright rather than producing wrong output.
+    # Delete this skip when the untilizer cores land and TILE becomes part of the op's contract.
+    if cmb_version == 2 and dispatched_buffer_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("combine_fabric2d does not untilize yet; TILE input arrives with the untilizer cores")
 
     # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
     if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -151,7 +161,19 @@ def run_combine(
 
     # Step 1: Generate initial inputs using torch
     # For 2D mesh, generate different weights per EP rank
-    if use_predictable_data:
+    if hot_expert is not None:
+        x, weights, indices = initialize_hot_expert_test_inputs(
+            dispatch_group_size,
+            seq_len_per_chip,
+            emb_dim,
+            num_routed_experts,
+            num_experts_per_tok,
+            max_dispatched_tokens_per_expert,
+            hot_expert=hot_expert,
+            num_dispatch_groups=num_dispatch_groups,
+        )
+        logger.debug(f"Using HOT EXPERT test data, expert {hot_expert} holds every token")
+    elif use_predictable_data:
         x, weights, indices = initialize_predictable_test_inputs(
             dispatch_group_size,
             seq_len_per_chip,
@@ -314,15 +336,15 @@ def run_combine(
     # counters fit for the next one.
     #
     # Gated on > 1 so the default really is one launch: capture does not execute, so the block below costs
-    # 1 eager + perf_iterations replays. Ungated it would double the device time of every PCC case in the
+    # 1 eager + `iterations` replays. Ungated it would double the device time of every PCC case in the
     # matrix — 2240 collected — to sample a number nobody asked for.
-    if perf_iterations() > 1:
+    if iterations > 1:
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(tt_output)
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_output = tt_combine(*combine_inputs)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        for _ in range(perf_iterations()):
+        for _ in range(iterations):
             ttnn.synchronize_device(mesh_device)
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
@@ -462,6 +484,17 @@ def _mesh_id(mesh, fabric_cfg):
     return f"{profile}-{mesh[0]}x{mesh[1]}"
 
 
+# The two operating points every combine test runs at: a short sequence for checking the output, and
+# the production length for timing it. Named here because both the matrix below and the
+# combine_fabric2d sweep walk them, and a scenario that drifted between the two would silently stop
+# being comparable.
+_CMB_TEST_SCENARIOS = (
+    # (id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc)
+    ("pcc", 128, 4, True),
+    ("perf_no_pcc", 640, 8, False),
+)
+
+
 def _cross_product_conflated_cmb_test_dimensions():
     params = []
     for model_name, model_config_class, is_extended_model, test_meshes in COMBINE_MODELS:
@@ -480,11 +513,7 @@ def _cross_product_conflated_cmb_test_dimensions():
                     if is_extended_model
                     else (mesh_requirements_marker)
                 )
-                test_scenarios = [
-                    ("pcc", 128, 4, True),
-                    ("perf_no_pcc", 640, 8, False),
-                ]
-                for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
+                for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in _CMB_TEST_SCENARIOS:
                     model_config = _model_scaledown_for_combine(
                         model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc
                     )
@@ -584,4 +613,126 @@ def test_ttnn_combine(
         cmb_version,
         is_ci_env,
         is_ci_v2_env,
+        perf_iterations(),
     )
+
+
+_CMB_VERSION_FABRIC2D = 2
+
+# The router shapes combine_fabric2d has to survive. A balanced router is the common case; one expert
+# holding every token of the dispatch group is the case a balanced router cannot produce, and it is
+# what the per-destination forwarding bound and the per-expert batching are sized for.
+_CMB_SWEEP_TRAFFIC = (
+    # (id, hot_expert)
+    ("balanced", None),
+    ("hot_expert", 0),
+)
+
+# TILE is here so that deleting the untilizer skip in run_combine is all it takes to turn these into
+# real coverage; until then they report as skipped rather than being absent.
+_CMB_SWEEP_LAYOUTS = (
+    ("row_major", ttnn.ROW_MAJOR_LAYOUT),
+    ("tile", ttnn.TILE_LAYOUT),
+)
+
+
+def _cmb_sweep_dimensions():
+    """The single configuration the sweep runs on: dsv3 across the full 8x4 torus-xy mesh, on
+    combine_fabric2d. Traffic shape, layout and scenario are deliberately NOT here — the sweep walks
+    all of them inside one test so they share one open mesh."""
+    wanted_mesh = "torus-xy-8x4"
+    params = []
+    for model_name, model_config_class, _is_extended_model, test_meshes in COMBINE_MODELS:
+        if model_name != "dsv3":
+            continue
+        for target_mesh, fabric_cfg in test_meshes.target_meshes.items():
+            if _mesh_id(target_mesh, fabric_cfg) != wanted_mesh:
+                continue
+            model_config = _model_scaledown_for_combine(
+                model_config_class(), test_meshes.full_model_mesh, target_mesh, False
+            )
+            params.append(
+                pytest.param(
+                    target_mesh,
+                    fabric_to_device_params(fabric_cfg, _CMB_VERSION_FABRIC2D),
+                    model_config.EMB_SIZE,
+                    model_config.NUM_ROUTED_EXPERTS,
+                    model_config.NUM_EXPERTS_PER_TOKEN,
+                    marks=pytest.mark.requires_mesh_topology(
+                        mesh_shape=target_mesh, topology=_topo_marker(target_mesh, fabric_cfg)
+                    ),
+                    id=f"{model_name}-{wanted_mesh}",
+                )
+            )
+    # A mesh id that stopped matching would leave this test with nothing to run and still pass.
+    assert len(params) == 1, f"expected exactly one {wanted_mesh} dsv3 configuration, got {len(params)}"
+    return params
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, emb_dim, num_routed_experts, num_experts_per_tok",
+    _cmb_sweep_dimensions(),
+    indirect=["mesh_device", "device_params"],
+)
+def test_ttnn_combine2d_sweep(mesh_device, device_params, emb_dim, num_routed_experts, num_experts_per_tok):
+    """Every scenario combine_fabric2d supports, in one open mesh.
+
+    Opening the 8x4 mesh and building the fabric costs far more than any single workload here, so
+    correctness and timing for both router shapes run as phases of ONE test rather than as separate
+    cases. Each phase is a full launch of the op with its own program and buffers; what they share is
+    the device. A phase that fails is recorded and the rest still run, so one bad configuration does
+    not hide the state of the others.
+
+    The scenario decides what a phase is for: the short-sequence one checks output against the torch
+    reference, the production-length one is traced and replayed `CMBF2D_PERF_ITERS` times so the
+    profiler gets that many samples of the op with the setup cost paid once.
+    """
+    topology = per_axis_topology(device_params["fabric_config"])[0]
+    phases = []
+    for layout_id, layout in _CMB_SWEEP_LAYOUTS:
+        for traffic_id, hot_expert in _CMB_SWEEP_TRAFFIC:
+            for scenario_id, seq_len_per_chip, capacity_factor, run_pcc in _CMB_TEST_SCENARIOS:
+                # Timing wants many launches of one program; checking the output wants exactly one.
+                iterations = 1 if run_pcc else perf_iterations()
+                name = f"{layout_id}-{traffic_id}-{scenario_id}"
+                logger.info(f"[sweep] === {name} === seq_len={seq_len_per_chip} {iterations=}")
+                try:
+                    run_combine(
+                        mesh_device,
+                        seq_len_per_chip,
+                        emb_dim,
+                        num_routed_experts,
+                        num_experts_per_tok,
+                        capacity_factor,
+                        2,  # num_links — 1-link coverage lives in the CI matrix, not here
+                        topology,
+                        False,  # use_predictable_data — both traffic shapes supply their own data
+                        run_pcc,
+                        layout,
+                        False,  # use_fp8_output — fp8 needs TILE, which this op does not take yet
+                        _CMB_VERSION_FABRIC2D,
+                        False,  # is_ci_env — the sweep is a local investigation, not a CI gate
+                        False,  # is_ci_v2_env
+                        iterations,
+                        hot_expert=hot_expert,
+                    )
+                # A phase the op does not support yet raises pytest's Skipped, which derives from
+                # BaseException and so needs its own clause ahead of the failure one.
+                except pytest.skip.Exception as e:
+                    logger.info(f"[sweep] {name} skipped: {e}")
+                    phases.append((name, "skip", iterations, str(e)))
+                    continue
+                except Exception as e:  # noqa: BLE001 - a phase's outcome is data here, not control flow
+                    logger.exception(f"[sweep] {name} failed")
+                    phases.append((name, "FAIL", iterations, str(e)))
+                    continue
+                phases.append((name, "pass", iterations, ""))
+
+    # One launch eagerly, then `iterations` replays of the captured trace — see run_combine.
+    logger.info("[sweep] phase summary (launches per chip in the profiler CSV, in this order):")
+    for name, outcome, iterations, detail in phases:
+        launches = 0 if outcome != "pass" else (1 if iterations <= 1 else 1 + iterations)
+        logger.info(f"[sweep]   {outcome:<4} {name:<34} launches={launches} {detail}")
+
+    failed = [f"{name}: {detail}" for name, outcome, _iterations, detail in phases if outcome == "FAIL"]
+    assert not failed, "sweep phases failed:\n" + "\n".join(failed)
