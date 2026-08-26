@@ -30,4 +30,6 @@ RUN --mount=type=bind,source=artifact,target=/tmp/pkgs \
     && if [ "${#pkgs[@]}" -eq 0 ]; then echo "No packages matched in artifact/" >&2; exit 1; fi \
     && apt-get update \
     && apt-get install -y "${pkgs[@]}" \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg-query -W -f='${Package} ${Version}\n' 'tt-metalium*' 'tt-nn*' \
+        > /etc/prebuilt-tests-manifest

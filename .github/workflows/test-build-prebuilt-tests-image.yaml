@@ -24,8 +24,8 @@ concurrency:
 jobs:
   build:
     name: "Build packages"
-    # Forks cannot push the image, so don't spend a full build to skip the rest.
-    if: ${{ github.event.pull_request.head.repo.fork != true }}
+    # Forks cannot push the image, and drafts should not spend a hardware leg.
+    if: ${{ github.event.pull_request.head.repo.fork != true && !github.event.pull_request.draft }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -86,8 +86,13 @@ jobs:
       - name: The payload came from the image, not from an artifact
         run: |
           set -euo pipefail
+          # Written by the Dockerfile's install layer, so its presence proves the
+          # bake ran. Checking only that the binary exists would also pass if the
+          # base image happened to ship these packages itself.
+          test -s /etc/prebuilt-tests-manifest
+          cat /etc/prebuilt-tests-manifest
+          grep -q '^tt-metalium ' /etc/prebuilt-tests-manifest
           command -v tt-metalium-validation-smoke
-          dpkg-query -W -f='${Package} ${Version}\n' 'tt-metalium*'
 
       - name: Run one smoke test against the baked packages
         timeout-minutes: 10

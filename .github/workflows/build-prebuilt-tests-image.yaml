@@ -46,6 +46,14 @@ on:
         type: string
         default: "prebuilt-tests-image"
         description: "ghcr package name, under ghcr.io/<repository>/"
+      tag-suffix:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Extra tag discriminator. Needed when one caller builds several images
+          from the same artifact and base, since nothing else in the tag reflects
+          the dockerfile or build-args.
       checkout-source:
         required: false
         type: boolean
@@ -95,6 +103,11 @@ on:
         type: string
         default: "prebuilt-tests-image"
         description: "ghcr package name, under ghcr.io/<repository>/"
+      tag-suffix:
+        required: false
+        type: string
+        default: ""
+        description: "Extra tag discriminator when several images share an artifact and base"
       checkout-source:
         required: false
         type: boolean
@@ -126,6 +139,7 @@ jobs:
           BASE_IMAGE: ${{ inputs.base-image }}
           IMAGE_NAME: ${{ inputs.image-name }}
           DOCKERFILE: ${{ inputs.dockerfile }}
+          TAG_SUFFIX: ${{ inputs.tag-suffix }}
         run: |
           set -euo pipefail
           # required: true still lets '' through, and an empty name would make
@@ -137,10 +151,12 @@ jobs:
           # Names end in <ref><sep><runid>, but packages joins with '-' and the
           # tarball with '_', so strip by shape rather than by position.
           CONFIG=$(printf '%s' "$ARTIFACT_NAME" | sed -E 's/[-_][0-9a-f]{7,40}[-_][0-9]+$//')
-          # Different bases must not collide on one artifact's tag.
+          # Different bases must not collide on one artifact's tag. The tag says
+          # nothing about the dockerfile or build-args, so a caller building
+          # several images from one artifact and base must set tag-suffix.
           BASE_SLUG="${BASE_IMAGE##*/}"
           BASE_SLUG="${BASE_SLUG%%:*}"
-          TAG=$(printf '%s-%s-%s' "${GITHUB_SHA:0:12}" "$CONFIG" "$BASE_SLUG" | tr -c 'a-zA-Z0-9_.-' '-')
+          TAG=$(printf '%s-%s-%s%s' "${GITHUB_SHA:0:12}" "$CONFIG" "$BASE_SLUG" "${TAG_SUFFIX:+-$TAG_SUFFIX}" | tr -c 'a-zA-Z0-9_.-' '-')
           if [ "${#TAG}" -gt 128 ]; then
             echo "::error::Computed tag is ${#TAG} chars, over Docker's 128 limit: $TAG"
             exit 1
@@ -237,4 +253,4 @@ jobs:
           # would leave behind holding the layers alive.
           provenance: false
           outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+            type=registry,push=true,compression=zstd,compression-level=3,oci-mediatypes=true

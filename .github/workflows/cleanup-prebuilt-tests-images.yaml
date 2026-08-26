@@ -2,10 +2,16 @@ name: "Cleanup prebuilt tests images"
 # Prebuilt tests images are throwaways: one per (commit x build config x base),
 # pushed on every PR update, so without this they accumulate indefinitely.
 #
-# Keeps the newest N and deletes the rest. Count rather than age is deliberate:
-# it bounds storage regardless of how busy a day gets. N must comfortably exceed
-# the number pushed while a CI run is in flight, or a run could lose the image
-# it is running from -- roughly 6/hour today, so 50 is about eight hours.
+# Keeps the newest N and deletes the rest, oldest first.
+#
+# What actually protects an in-flight run is the oldest-first ordering plus the
+# action's own limit of 100 deletions per run, not min-versions-to-keep. Note
+# that N counts untagged versions too, so tagged retention is lower than it says.
+#
+# That 100/run limit is why this is sized for today's volume, where only the
+# producer's own test workflow pushes. Once a gate workflow consumes these
+# images the push rate goes far above 100/day and the schedule, the limit, or
+# the number of images built per run all have to be revisited together.
 #
 # This deletes irreversibly. It is scoped to the one package the
 # build-prebuilt-tests-image producer creates, and never touches a base image.
