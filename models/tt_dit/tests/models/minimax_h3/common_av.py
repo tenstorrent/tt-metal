@@ -3,7 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Reference-free A/V sanity checks plus the scaffolding shared by the MiniMax-H3 e2e gates.
-A/V sync is checked structurally (duration/ordering); envelope-vs-motion correlation is diagnostic only."""
+A/V sync is checked structurally (duration/ordering); envelope-vs-motion correlation is diagnostic only.
+
+Quality/sanity logs (OK lines, seams, CLIP, artifacts, reminders) are silent unless `H3_LOG_QUALITY=1`.
+Pipeline stage durations (`BenchmarkProfiler`) always log, host rank only.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +23,31 @@ from loguru import logger
 
 import ttnn
 
+from ....pipelines.events import profiler_event_callback
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
+
+# Off by default: sanity, seam, CLIP, artifact, and reminder chatter. Set H3_LOG_QUALITY=1 to see it.
+# Asserts still run either way. Stage durations always log on the host rank.
+_QUALITY_LOG_ON = ("1", "true", "yes", "on")
+
+
+def is_host() -> bool:
+    """Rank 0, matching WAN's `distributed_context_get_rank() == 0` export/CLIP gate."""
+    return not ttnn.using_distributed_env() or int(ttnn.distributed_context_get_rank()) == 0
+
+
+def quality_logs_enabled() -> bool:
+    return os.environ.get("H3_LOG_QUALITY", "").strip().lower() in _QUALITY_LOG_ON
+
+
+def log_quality(message: str) -> None:
+    if quality_logs_enabled() and is_host():
+        logger.info(message)
+
+
+def log_quality_warning(message: str) -> None:
+    if quality_logs_enabled() and is_host():
+        logger.warning(message)
 
 
 def check_audio_sanity(audio, *, sampling_rate, expected_seconds, tolerance_seconds=0.05):
@@ -53,7 +81,7 @@ def check_audio_sanity(audio, *, sampling_rate, expected_seconds, tolerance_seco
     clipped = float((np.abs(audio) >= 0.999).mean())
     assert clipped < 0.01, f"{clipped:.1%} of samples are at full scale; suspect a scaling error"
 
-    logger.info(
+    log_quality(
         f"Audio sanity OK: {channels}ch {seconds:.3f} s @ {sampling_rate} Hz, "
         f"peak={peak:.3f}, rms={rms:.4f}, clipped={clipped:.3%}"
     )
@@ -99,12 +127,12 @@ def check_av_sync(frames, audio, *, sampling_rate, fps, tolerance_seconds=0.05):
         e = (envelope - envelope.mean()) / envelope.std()
         correlation = np.correlate(m, e, mode="full") / len(m)
         lag_frames = int(np.argmax(correlation)) - (len(m) - 1)
-        logger.info(
+        log_quality(
             f"A/V envelope-motion best lag: {lag_frames:+d} frames ({lag_frames / fps:+.3f} s), "
             f"peak r={correlation.max():.3f} (diagnostic, not asserted)"
         )
 
-    logger.info(
+    log_quality(
         f"A/V sync OK: video {video_seconds:.3f} s / {num_frames} frames @ {fps} fps, "
         f"audio {audio_seconds:.3f} s @ {sampling_rate} Hz, delta {audio_seconds - video_seconds:+.4f} s"
     )
@@ -136,7 +164,7 @@ def check_spatial_seams(frames, *, vertical_boundaries, horizontal_boundaries, m
     vertical = ratio(column_gradient, vertical_boundaries)
     horizontal = ratio(row_gradient, horizontal_boundaries)
 
-    logger.info(
+    log_quality(
         f"Spatial seam ratios (1.0 = no seam): vertical {vertical:.3f} at x={list(vertical_boundaries)}, "
         f"horizontal {horizontal:.3f} at y={list(horizontal_boundaries)}"
     )
@@ -168,7 +196,7 @@ def log_spectral_flatness(audio, *, sampling_rate, num_bands=64):
     flatness = float(np.exp(np.log(power + 1e-20).mean()) / (power.mean() + 1e-20))
     band_edges = np.linspace(0, len(power), num_bands + 1).astype(int)
     bands = np.array([power[a:b].mean() for a, b in zip(band_edges[:-1], band_edges[1:]) if b > a])
-    logger.info(
+    log_quality(
         f"Audio log-spectrum: flatness={flatness:.4f}, "
         f"band dB range=[{10 * np.log10(bands.min() + 1e-20):.1f}, {10 * np.log10(bands.max() + 1e-20):.1f}]"
     )
@@ -199,11 +227,11 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
         handle.setframerate(sampling_rate)
         handle.writeframes((pcm * 32767.0).astype("<i2").tobytes())
     paths["wav"] = wav_path
-    logger.info(f"wrote {wav_path}")
+    log_quality(f"wrote {wav_path}")
 
     exe = _ffmpeg()
     if exe is None:
-        logger.warning("no ffmpeg available; skipping mp4 and the file-level checks")
+        log_quality_warning("no ffmpeg available; skipping mp4 and the file-level checks")
         return paths
 
     silent = directory / f"{stem}_silent.mp4"
@@ -268,7 +296,7 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
         capture_output=True,
     )
     paths["mp4"] = muxed
-    logger.info(f"wrote {muxed} and {silent}")
+    log_quality(f"wrote {muxed} and {silent}")
     return paths
 
 
@@ -435,29 +463,38 @@ def artifact_dir(name: str) -> Path:
     return directory
 
 
-def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
-    """Warmup then the timed generation with identical kwargs; asserts padded-length agreement (programs are keyed on it)."""
-    pipeline.warmup(prompt=prompt, **gen_kwargs)
+def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
+    """Warmup then the timed generation with identical kwargs; asserts padded-length agreement (programs are keyed on it).
+
+    On the resident-AdaLN path, warmup runs a short 3-step schedule regardless of the measured step
+    count: every program, conv3d blocking and persistent buffer is keyed on the *padded sequence
+    length*, not the number of steps, so 3 steps compile and allocate exactly what the full run needs
+    at a fraction of the cost, and the denoise trace stays warm across step counts (its signature is
+    shape-only) so the measured full-step call still replays it. The precomputed-AdaLN path instead
+    keys warmth on the step count -- a short warmup there would force the measured call to rebuild its
+    modulation table and recapture the trace -- so it warms at the full measured step count.
+
+    `profiler`, when given, is a `BenchmarkProfiler`: only the measured call is wrapped in `"run"` and
+    receives `on_event`. Warmup and the quiet compile pass are unprofiled.
+    """
+    warmup_kwargs = gen_kwargs if pipeline.precomputed_adaln else {**gen_kwargs, "num_inference_steps": 3}
+    pipeline.warmup(prompt=prompt, **warmup_kwargs)
     warm_padded_len = pipeline.last_padded_len
 
-    # The warmup is a full generation too, so its stage timings are the *cold* numbers -- program
-    # compilation, per-shape conv3d blocking and buffer allocation all land in them. Log them
-    # before the measured call overwrites `last_timings`. Not gated: cold cost depends on what the
-    # weight/JIT caches already held, so it is a diagnostic, not a bar.
-    cold_rows = list(pipeline.last_timings)
-    if cold_rows:
-        cold_total = sum(seconds for _, seconds in cold_rows)
-        logger.info("WARMUP (cold: program compile + buffer alloc included, not a perf target)")
-        for row_label, seconds in cold_rows:
-            share = 100 * seconds / cold_total if cold_total else 0.0
-            logger.info(f"  {row_label:<18} {seconds:8.1f} s  ({share:4.1f} %)")
-        logger.info(f"  {'Total (warmup)':<18} {cold_total:8.1f} s")
+    with pipeline.quiet():
+        pipeline(prompt, seed=seed, **warmup_kwargs)
 
     ttnn.synchronize_device(pipeline.mesh_device)
     if ttnn.using_distributed_env():
         ttnn.distributed_context_barrier()
 
-    output = pipeline(prompt, seed=seed, **gen_kwargs)
+    on_event = profiler_event_callback(profiler, profiler_iteration) if profiler is not None else None
+    if profiler is not None:
+        with profiler("run", iteration=profiler_iteration):
+            output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
+            ttnn.synchronize_device(pipeline.mesh_device)
+    else:
+        output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
 
     assert pipeline.last_padded_len == warm_padded_len, (
         f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
@@ -466,32 +503,74 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
     return output
 
 
-def log_timing_table(pipeline, label: str, num_forwards: int, video_seconds: float, expected_total_s=None, extra=""):
-    """The MEASUREMENT block; `expected_total_s`, when given, asserts the total. Returns the total."""
-    rows = pipeline.last_timings
-    total = sum(seconds for _, seconds in rows)
-    shape = tuple(pipeline.mesh_device.shape)
-    logger.info(
-        f"MEASUREMENT {label} fully warm | mesh {shape[0]}x{shape[1]} Blackhole, "
-        f"TP={pipeline.tp_factor} axis {pipeline.tp_axis} / SP={pipeline.sp_factor} axis {pipeline.sp_axis}, "
-        f"{pipeline.ccl_manager.topology}, {pipeline.ccl_manager.num_links} links{extra} "
-        f"| warm window: one full warmup generation at this shape, prepares and export excluded"
+def log_pipeline_perf(
+    profiler,
+    *,
+    label: str,
+    pipeline,
+    num_forwards: int,
+    width: int | None = None,
+    height: int | None = None,
+    num_frames: int | None = None,
+    fps: float | None = None,
+    aspect_ratio: tuple[int, int] | None = None,
+    num_inference_steps: int | None = None,
+    extra_lines: tuple[str, ...] = (),
+    iteration: int = 0,
+) -> None:
+    """Stage durations from `BenchmarkProfiler`, with a config header. Host rank only."""
+    sections = (
+        ("Text Encoding", "encoder"),
+        ("VAE Encode", "vae_encode"),
+        ("Denoising (total)", "denoising"),
+        ("VAE Decoding", "vae"),
+        ("Audio Decoding", "audio"),
+        ("Total Pipeline", "run"),
     )
-    for row_label, seconds in rows:
-        logger.info(f"  {row_label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
-    logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
-    denoise = dict(rows).get("Denoise")
-    if denoise:
-        logger.info(
-            f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
-            f"({num_forwards} forwards over {denoise:.1f} s)"
-        )
-    logger.info(f"  realtime factor    {total / video_seconds:8.1f} x  (compute / video seconds)")
-    if expected_total_s is not None:
-        assert (
-            total < expected_total_s
-        ), f"fully-warm total {total:.1f} s exceeds the {expected_total_s:.0f} s floor bar"
-    return total
+    if not is_host():
+        return
+    shape = tuple(pipeline.mesh_device.shape)
+    topology = getattr(pipeline.ccl_manager.topology, "name", pipeline.ccl_manager.topology)
+    lines = [
+        "=" * 80,
+        "MINIMAX-H3 PERFORMANCE RESULTS",
+        "=" * 80,
+        f"Task: {label}",
+    ]
+    if width is not None and height is not None:
+        size = f"{width}x{height}"
+        if aspect_ratio is not None:
+            size += f" ({aspect_ratio[0]}:{aspect_ratio[1]})"
+        lines.append(f"Image Size: {size}")
+    if num_frames is not None:
+        frame_line = f"Num Frames: {num_frames}"
+        if fps:
+            frame_line += f" @ {fps:g} fps ({num_frames / fps:.2f} s)"
+        lines.append(frame_line)
+    if num_inference_steps is not None:
+        step_line = f"Inference Steps: {num_inference_steps}"
+        if num_forwards and num_forwards != num_inference_steps:
+            step_line += f" ({num_forwards} denoise steps)"
+        lines.append(step_line)
+    if pipeline.last_padded_len is not None:
+        lines.append(f"Padded Length: {pipeline.last_padded_len}")
+    lines.append(
+        f"DiT Configuration: sp={pipeline.sp_factor} axis {pipeline.sp_axis}, "
+        f"tp={pipeline.tp_factor} axis {pipeline.tp_axis}"
+    )
+    lines.append(f"Mesh Shape: {shape}")
+    lines.append(f"Topology: {topology}, {pipeline.ccl_manager.num_links} links")
+    lines.extend(extra_lines)
+    lines.append("-" * 80)
+    for name, step in sections:
+        if not profiler.contains_step(step, iteration):
+            continue
+        duration = profiler.get_duration(step, iteration)
+        lines.append(f"{name:25} | {duration:8.4f}s")
+        if step == "denoising" and num_forwards:
+            lines.append(f"{'Denoising (per step)':25} | {duration / num_forwards:8.4f}s")
+    lines.append("=" * 80)
+    logger.info("\n" + "\n".join(lines))
 
 
 def to_uint8_frames(output) -> np.ndarray:
@@ -508,14 +587,14 @@ def check_written_file(paths: dict, expected_frames: int, seam_period: int = 17,
         return
     streams = probe_streams(paths["mp4"])
     if streams:
-        logger.info(f"container streams: { {k: v.get('duration') for k, v in streams.items()} }")
+        log_quality(f"container streams: { {k: v.get('duration') for k, v in streams.items()} }")
         assert "video" in streams and "audio" in streams, f"muxed file is missing a stream: {list(streams)}"
         durations = {k: float(v["duration"]) for k, v in streams.items() if v.get("duration")}
         if {"video", "audio"} <= set(durations):
             skew = durations["audio"] - durations["video"]
             # AAC pads to a frame boundary, so allow a little more than the tensor-level check.
             assert abs(skew) < 0.15, f"muxed A/V skew {skew:+.3f} s"
-            logger.info(f"muxed A/V skew: {skew:+.4f} s")
+            log_quality(f"muxed A/V skew: {skew:+.4f} s")
 
     decoded = decoded_frames(paths["mp4"], count=1, height=height, width=width)
     if decoded.size:
@@ -524,7 +603,7 @@ def check_written_file(paths: dict, expected_frames: int, seam_period: int = 17,
         ), f"the written mp4 decodes to {decoded.shape[0]} frames, expected ~{expected_frames}"
         # The VAE's temporal chunk covers clip_length (17) pixel frames.
         seam = temporal_seam_score(decoded, period=seam_period)
-        logger.info(f"temporal seam score at the {seam_period}-frame chunk period: {seam:.3f} (1.0 = no seam)")
+        log_quality(f"temporal seam score at the {seam_period}-frame chunk period: {seam:.3f} (1.0 = no seam)")
         if np.isfinite(seam):
             assert seam < 3.0, (
                 f"inter-frame delta at chunk boundaries is {seam:.2f}x the delta elsewhere; "
@@ -536,7 +615,7 @@ def gate_clip(frames: np.ndarray, prompt: str, threshold: float, label: str):
     """CLIP prompt-alignment gate; skips only if `open_clip` is missing."""
     pytest.importorskip("open_clip", reason="the CLIP gate needs open_clip, which is not installed")
     alignment = clip_prompt_alignment(frames, prompt)
-    logger.info(
+    log_quality(
         f"{label} CLIP prompt alignment: mean={alignment['mean']:.2f} "
         f"min={alignment['min']:.2f} max={alignment['max']:.2f} (bar {threshold})"
     )
@@ -557,7 +636,7 @@ def gate_vbench(paths: dict, prompt: str, thresholds: dict, label: str, skip_wit
     scores = run_vbench(paths["mp4"], prompt, tuple(thresholds))
     for dimension, bar in thresholds.items():
         assert dimension in scores, f"VBench returned no score for {dimension}"
-        logger.info(f"{label} VBench {dimension} = {scores[dimension]:.4f} (bar {bar})")
+        log_quality(f"{label} VBench {dimension} = {scores[dimension]:.4f} (bar {bar})")
     failures = [f"{d} = {scores[d]:.4f} < {bar:.4f}" for d, bar in thresholds.items() if scores[d] < bar]
     assert not failures, "VBench below threshold: " + "; ".join(failures)
     return scores

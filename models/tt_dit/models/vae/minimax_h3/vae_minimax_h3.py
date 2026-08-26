@@ -276,6 +276,8 @@ class MiniMaxH3Vae(Module):
         # bigger matmuls and fewer waves; 1 is the original one-tile-per-device schedule.
         assert waves_per_device >= 1, f"waves_per_device must be >= 1, got {waves_per_device}"
         self.waves_per_device = waves_per_device
+        # Pipeline warmup turns this off so the compile-pass decode does not dump a profile.
+        self.log_profile = True
         self._encoder_state: dict[str, torch.Tensor] | None = None
         self._decoders: dict[tuple[int, int, int], object] = {}
         self._decoder_state: dict[str, torch.Tensor] | None = None
@@ -343,6 +345,11 @@ class MiniMaxH3Vae(Module):
                 "compute",
             )
         )
+        p["residual"] = max(0.0, total - accounted)
+        p["total"] = total
+        self.last_decode_profile = p
+        if not self.log_profile or (ttnn.using_distributed_env() and int(ttnn.distributed_context_get_rank()) != 0):
+            return
         each = p.get("readback_each") or []
         if each:
             logger.info(
@@ -357,9 +364,6 @@ class MiniMaxH3Vae(Module):
                 f"{sorted(each_d)[len(each_d) // 2] * 1000:.0f} / max {max(each_d) * 1000:.0f} ms  "
                 f"[{' '.join(f'{v * 1000:.0f}' for v in each_d)}]"
             )
-        p["residual"] = max(0.0, total - accounted)
-        p["total"] = total
-        self.last_decode_profile = p
         waves, units = int(p["waves"]), int(p["units"])
         logger.info(
             f"VAE decode profile: {total:.2f} s over {waves} waves / {units} units "
