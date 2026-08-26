@@ -24,6 +24,9 @@ Tensor unary_impl(
         op_chain.back().type() == unary::UnaryOpType::BITCAST) {
         output_dtype = static_cast<DataType>(*op_chain.back().get_param_if<float>(1));
     }
+    if (optional_output_tensor.has_value()) {
+        output_dtype = optional_output_tensor->dtype();
+    }
     bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
     bool fp32_dest_acc_en = preserve_fp32_precision || output_dtype == DataType::UINT32 ||
                             output_dtype == DataType::INT32 || output_dtype == DataType::FLOAT32 ||
@@ -426,6 +429,30 @@ Tensor where_tss(
     return operations::unary::detail::unary_impl(input, {param}, memory_config, optional_output_tensor, sub_core_grids);
 }
 
+Tensor mac_tss(
+    const Tensor& input_tensor_a,
+    float value1,
+    float value2,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    using namespace operations::unary;
+    // Both scalars are packed as raw floats and the kernel computes in the FP32 SFPU
+    // registers, so integer inputs cannot be served here. ttnn::mac routes them to the
+    // composite path instead; fail loudly if anything else reaches this.
+    TT_FATAL(
+        input_tensor_a.dtype() != DataType::INT32 && input_tensor_a.dtype() != DataType::UINT32,
+        "ttnn::mac_tss does not support integer input dtypes. Got {}. Use ttnn::mac, which falls back to the "
+        "composite path for integer inputs.",
+        input_tensor_a.dtype());
+    return operations::unary::detail::unary_impl(
+        input_tensor_a,
+        {EltwiseUnaryWithParam{UnaryOpType::MAC_TSS, std::vector<float>{value1, value2}}},
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
+}
+
 Tensor bitcast(
     const Tensor& input_tensor,
     const DataType& output_dtype,
@@ -712,7 +739,8 @@ Tensor div_sfpu(
     using namespace operations::unary;
     return operations::unary::detail::unary_impl(
         input_tensor,
-        {EltwiseUnaryWithParam{UnaryOpType::RDIV, param}},
+        // RDIV codegen reads params[1] as the rounding mode; 0 is RoundingMode::None
+        {EltwiseUnaryWithParam{UnaryOpType::RDIV, param, 0.0f}},
         memory_config,
         optional_output_tensor,
         sub_core_grids);

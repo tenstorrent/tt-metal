@@ -8,7 +8,7 @@
 #include "api/numeric/bfloat16.h"
 #include "../metadata/metadata.hpp"
 #ifdef TRISC_MATH
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sampling.h"
+#include "experimental/llk_sfpu/ckernel_sfpu_sampling.h"
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
@@ -130,15 +130,23 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #include "api/compute/experimental/rmsnorm.h"
 
 #if defined(TRISC_UNPACK)
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_top32_rm_api.h"
+#include "experimental/llk_unpack_A_top32_rm_api.h"
 #endif
 #if defined(TRISC_MATH)
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_top32_rm_api.h"
-#include "../kernel_includes/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_deepseek_top32_rm.h"
+#include "experimental/llk_math_top32_rm_api.h"
+#include "sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h"
 template <bool legacy_compat = true>
 ALWI void sampling_recip_tile_scalar(uint32_t idst) {
+    // Programs the Newton-Raphson constant the legacy_compat=false path reads from
+    // vConstFloatPrgm0; compile-time no-op on the legacy path used here.
+    ckernel::sfpu::sampling_recip_init<legacy_compat>();
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_recip_scalar, (legacy_compat), idst, VectorMode::None);
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sampling_recip_scalar,
+        (legacy_compat, DST_ACCUM_MODE),
+        idst,
+        VectorMode::None);
 }
 
 ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {
@@ -188,8 +196,15 @@ ALWI void sampling_mul_unary_tile_first_column(uint32_t idst, uint32_t param) {
 }
 
 ALWI void sampling_add_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_add_binary_first_column, idst0, idst1, odst, VectorMode::C);
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sampling_binary_first_column,
+        (ckernel::sfpu::SamplingBinaryOp::add),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::C);
 }
 #endif
 

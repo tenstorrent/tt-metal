@@ -110,7 +110,7 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
 
 inline void swiglu_init() {
     // SwiGLU uses sigmoid internally, which needs reciprocal table init.
-    recip_init<false, false>();
+    recip_init<false, false, false>();
 }
 
 }  // namespace ckernel::sfpu

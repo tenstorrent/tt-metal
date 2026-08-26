@@ -6,6 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "internal/debug/noc_zero_guard.h"
+#include "noc_address_backend.h"
 template <typename DSpecT>
 class TensorAccessor;
 
@@ -151,11 +152,7 @@ public:
         return virtual_x == my_x[noc_id_] && virtual_y == my_y[noc_id_];
     }
 
-    bool is_local_addr(const uint64_t noc_addr) const {
-        uint32_t x = NOC_UNICAST_ADDR_X(noc_addr);
-        uint32_t y = NOC_UNICAST_ADDR_Y(noc_addr);
-        return is_local_bank(x, y);
-    }
+    bool is_local_addr(const uint64_t noc_addr) const { return noc_address_backend::is_local(noc_addr, noc_id_); }
 
     /**
      * @brief Initiates an asynchronous read from a specified source.

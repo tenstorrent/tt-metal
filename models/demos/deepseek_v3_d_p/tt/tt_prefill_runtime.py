@@ -239,6 +239,24 @@ class TtPrefillRuntime:
             "(a dir with config.json + model.safetensors)"
         )
         dcfg = DFlashDrafterConfig.from_pretrained(path)
+        # The adapter gates which MODEL may run DFlash (ADAPTER.supports_dflash, checked in the runner); this
+        # gates which DRAFTER checkpoint may attach to it. Sibling drafters exist for other parents, and a
+        # mismatched one is dimensionally plausible enough to build and produce meaningless KV, so check the
+        # drafter's own declaration of its target against the verifier actually loaded here.
+        assert dcfg.num_target_layers, (
+            f"drafter checkpoint at {path} declares no `num_target_layers` in its config.json, so which "
+            "verifier it was trained against cannot be verified (the Kimi and DeepSeek-V3 families are "
+            "dimensionally identical, 61 x 7168, so hidden_size alone proves nothing). Add the key, or "
+            "point DFLASH_HF_MODEL at a checkpoint that declares it."
+        )
+        assert (dcfg.num_target_layers, dcfg.hidden_size) == (
+            self.hf_config.num_hidden_layers,
+            self.hf_config.hidden_size,
+        ), (
+            f"drafter checkpoint at {path} targets {dcfg.num_target_layers} layers x hidden "
+            f"{dcfg.hidden_size}, but this verifier is {self.hf_config.num_hidden_layers} x "
+            f"{self.hf_config.hidden_size}. Wrong DFLASH_HF_MODEL for this model."
+        )
 
         first = self.config.first_layer_idx
         last_excl = first + self.config.num_layers
@@ -258,12 +276,10 @@ class TtPrefillRuntime:
             f"checkpoint={path}"
         )
         state_dict = load_drafter_state_dict(path, build_kv_tail=self.config.is_last_rank)
-        # SINGLE-TURN SCOPE (issue #50725): the drafter context-KV cache is sized to ONE chunk and every
-        # forward() writes it at context offset 0 for a single request slot — it does NOT yet key
-        # on slot_id/num_users or a non-zero start position. So with num_users > 1 or more than one chunk, a
-        # later write overwrites the earlier one; only slot 0 / a single chunk is correct today. The deep
-        # per-user cache + block-cyclic offset writes are the multi-turn follow-up, not this PR.
-        dflash_seq = self.config.chunk_size
+        # The drafter's context cache and rope table span the FULL per-user sequence, like the verifier's
+        # kvpe cache: chunked prefill writes chunk c at global offset actual_start, and multi-turn resumes a
+        # slot mid-sequence, so neither can be expressed by a chunk_size-deep cache (issue #50725).
+        dflash_seq = self.config.max_seq_len
         self.drafter = TtDFlashDrafter(
             self.mesh_device,
             dcfg,
@@ -271,6 +287,7 @@ class TtPrefillRuntime:
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
             max_seq_len=dflash_seq,
+            chunk_size=self.config.chunk_size,
             num_links=self.config.num_links,
             topology=self.config.topology,
             owned_target_layer_ids=owned,
@@ -291,9 +308,10 @@ class TtPrefillRuntime:
             self._dflash_k_cache, self._dflash_v_cache = allocate_dflash_kv_cache(
                 self.mesh_device,
                 dcfg,
-                dflash_seq,  # chunk_size — MUST match the drafter's cache_seq/rope (see note above)
+                dflash_seq,  # max_seq_len — MUST match the drafter's cache_seq/rope (see note above)
                 sp_axis=self.config.sp_axis,
                 tp_axis=self.config.tp_axis,
+                num_users=self.config.num_users,  # user-major slots, like the verifier's kvpe cache
             )
 
     def _pack_activation(self, hidden: ttnn.Tensor, partial: ttnn.Tensor) -> ttnn.Tensor:
@@ -636,8 +654,15 @@ class TtPrefillRuntime:
 
         if self.config.dflash_enabled:
             if self.config.is_last_rank:
-                # Finalize the drafter context-KV into the runtime-owned caches (read back for PCC / migration).
-                self.drafter.forward(self._dflash_k_cache, self._dflash_v_cache)
+                # Finalize the drafter context-KV into the runtime-owned caches (read back for PCC /
+                # migration). Same (offset, slot) the verifier's kvpe write uses, so the drafter cache stays
+                # positionally aligned with it across chunks and users.
+                self.drafter.forward(
+                    self._dflash_k_cache,
+                    self._dflash_v_cache,
+                    actual_start,
+                    slot_idx=slot_id,
+                )
                 return None
             # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.
             return self._pack_activation(out, self.drafter.export_partial())
@@ -707,11 +732,42 @@ class TtPrefillRuntime:
             self._controller.set_layer_ack_callback(on_layer_complete)
 
     def kv_migration_base_address(self, kv_caches: MlaKvCaches) -> int:
-        """This stage's KV base DRAM address — the engine's per-rank anchor for the migration
-        all-gather (it holds the cache but must not introspect its layout). The pipeline-parallel
-        path migrates the primary KVPE cache, so that is the base; `.kvpe` is an MlaKvCache wrapper
-        rather than a bare tensor, hence `.storage`."""
+        """This stage's primary KV base DRAM address — the engine's single-cache hook for the
+        migration all-gather (it holds the cache but must not introspect its layout). `.kvpe` is an
+        MlaKvCache wrapper rather than a bare tensor, hence `.storage`. A sparse/DSA model migrates a
+        second cache too: see `kv_migration_stages`, which the engine prefers."""
         return int(kv_caches.kvpe.storage.buffer_address())
+
+    def kv_migration_stages(self, kv_caches: MlaKvCaches, first_layer_idx=None, num_my_layers=None):
+        """One `KvCacheStage` per merged-table config: KVPE first, then the sparse/DSA index-key cache
+        when present. The engine all-gathers one layout per entry (on ALL ranks) and hands them to
+        `build_kv_chunk_table`.
+
+        The two caches do NOT share a layer-index space, which is why a stage is per-cache: KVPE holds
+        this stage's layers under the model's global numbering, while the index cache is numbered in
+        COMPACTED full-indexer space (`full_indexer_rank`) because only `full` layers own an indexer and
+        write a slot. Both hold THIS stage only, so each stage's layers sit at its own slot 0.
+        """
+        from models.demos.common.prefill.runners.migration import KvCacheStage
+        from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
+
+        first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
+        num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
+        stages = [KvCacheStage(self.kv_migration_base_address(kv_caches), first_layer_idx, num_my_layers)]
+
+        index_cache = kv_caches.index
+        if index_cache is not None:
+            first_full = full_indexer_rank(self.hf_config, first_layer_idx)
+            count_full = full_indexer_rank(self.hf_config, first_layer_idx + num_my_layers) - first_full
+            slots_per_user = index_cache.shape[0] // self.config.num_users
+            if slots_per_user != count_full:
+                raise RuntimeError(
+                    f"index cache holds {slots_per_user} layers per slot but this stage owns "
+                    f"{count_full} full-indexer layers; the table cannot place its layers unless the "
+                    "cache is sized to the stage (see the GLM-5.2 adapter's allocate_kv_cache)."
+                )
+            stages.append(KvCacheStage(int(index_cache.buffer_address()), first_full, count_full))
+        return stages
 
     def build_kv_chunk_table(
         self,
@@ -720,7 +776,7 @@ class TtPrefillRuntime:
         *,
         first_layer_idx: int = 0,
         num_my_layers: Optional[int] = None,
-        stage_layout=None,
+        stage_layouts=None,
     ) -> str:
         """Build + serialize the KV-chunk address table for the engine-owned `MlaKvCaches` to
         `path` and return it.
@@ -731,32 +787,53 @@ class TtPrefillRuntime:
         cache layout; it issues no migration comms.
 
         Multi-rank (pipeline-parallel): this rank owns layers [first_layer_idx, first_layer_idx +
-        num_my_layers). The runner runs the all-ranks all-gather and passes the merged `stage_layout`
-        so ONLY rank 0 builds the table spanning every stage; the single-rank default (stage_layout
-        None) covers config.num_layers == the full model.
+        num_my_layers). The runner runs the all-ranks all-gathers and passes `stage_layouts` — one
+        layout per cache, in config order, from `kv_migration_stages` — so ONLY rank 0 builds
+        the table spanning every stage. The single-rank default (None) gathers inline.
 
         For a sparse/DSA model (``.index`` present) the result is a single MERGED table describing BOTH
         caches — config 0 = the KVPE cache, config 1 = the index-key cache. A dense model (``.index`` None)
-        → the usual single-config table over the KVPE cache alone. The index-cache merge is single-rank
-        only; the pipeline-parallel path (stage_layout given) migrates the KVPE cache alone."""
+        → the usual single-config table over the KVPE cache alone.
+
+        Under DFlash, this rank's drafter context caches join the same merged table as
+        ``2 * num_kv_heads`` further named configs (see the gate below)."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
-        # The CROSS-STAGE merge migrates the primary (KVPE) cache only; the sparse/DSA index cache
-        # isn't wired through it yet (port it into _build_and_serialize_merged_kv_chunk_table to add
-        # it) — fail loudly rather than silently drop it.
+        # DFlash: register the drafter's context K/V as further configs of the same merged table, so a
+        # device-less consumer (prefill_producer) can read them back per (layer, head) and PCC them
+        # against the golden trace exactly like the verifier's caches. Only when this rank actually owns
+        # them (allocated under dflash_enabled AND is_last_rank), and only on the single-stage path:
         #
-        # A SINGLE-stage layout is not that case: the runner all-gathers one unconditionally whenever
-        # migration is enabled (prefill_runner._serve_request), so a single-galaxy sparse run arrived
-        # here with a 1-element stage_layout and tripped the assert before it could ever reach the
-        # endpoint. The merged builder does not consume stage_layout — it gathers its OWN layout per
-        # cache, since each config needs that cache's DRAM base — so dropping it here is lossless and
-        # keeps the dual-cache table reachable single-rank.
-        if stage_layout is not None and kv_caches.index is not None:
-            assert len(stage_layout) == 1, (
-                "build_kv_chunk_table: index-cache (sparse/DSA) migration is not supported on the "
-                f"pipeline-parallel path yet (got {len(stage_layout)} stages)."
-            )
-            stage_layout = None
+        #   * the cross-stage (pipeline-parallel) merge does not cover the drafter, and
+        #   * real migration must not COPY drafter KV yet. All num_layers layer-acks fire inside
+        #     model.forward, while the drafter write happens after forward returns (see prefill_chunk
+        #     above), so a worker acting on the last ack would migrate drafter chunks the current chunk
+        #     has not written yet. Registering it for the mock path (which only reads) is safe; wiring it
+        #     into live migration needs that ordering fixed first.
+        dflash_caches = None
+        if self._dflash_k_cache is not None:
+            # The runner all-gathers whenever migration is enabled, so a layout carrying one stage still
+            # means single-rank; only a genuine cross-stage merge has to drop the drafter.
+            if stage_layouts is None or all(len(layout) == 1 for layout in stage_layouts):
+                dflash_caches = (self._dflash_k_cache, self._dflash_v_cache)
+            else:
+                logger.warning(
+                    "[migration] DFlash drafter caches are NOT in the KV chunk table: the cross-stage "
+                    "(pipeline-parallel) merge does not describe them, and the drafter write trails the "
+                    "layer-acks within a chunk. Drafter KV will not be migrated or PCC-checked."
+                )
+
+        # Dense row -> global layer map, so config 1 is published on the layer axis (see the builder).
+        index_layer_ids = None
+        if kv_caches.index is not None and getattr(self.hf_config, "indexer_types", None):
+            from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused
+            from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import merged_num_layers
+
+            # The merged table spans EVERY stage, so the map covers the model's layers, not this rank's slice.
+            total_layers = merged_num_layers(stage_layouts[0]) if stage_layouts else self.config.num_layers
+            index_layer_ids = [
+                layer for layer in range(total_layers) if not indexer_layer_is_reused(self.hf_config, layer)
+            ]
 
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
@@ -765,13 +842,16 @@ class TtPrefillRuntime:
             num_layers=self.config.num_layers,
             mesh_shape=self.config.mesh_shape,
             sp_axis=self.config.sp_axis,
+            tp_axis=self.config.tp_axis,
             num_users=self.config.num_users,
             chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
             path=path,
             index_kv_cache=kv_caches.index,
+            dflash_caches=dflash_caches,
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
-            stage_layout=stage_layout,
+            stage_layouts=stage_layouts,
+            index_layer_ids=index_layer_ids,
         )
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):
@@ -812,7 +892,7 @@ class TtPrefillRuntime:
             # having checked only the KVPE half.
             #
             # Two ways it differs from `.kvpe`: its per-slot stride is its OWN layer count, NOT
-            # config.num_layers (GLM-5.2 sizes it to the `full` indexer layers only, so 21 vs 78);
+            # config.num_layers (GLM-5.2 sizes it to this stage's `full` indexer layers only);
             # and it is a plain ttnn.Tensor, so there is no `.storage` / `unpack_host` (bfp8_b TILE
             # dequantizes on to_torch).
             index = kv_caches.index
@@ -849,6 +929,40 @@ class TtPrefillRuntime:
             first_layer_idx=first_layer_idx,
             real_len=real_len,
             pt_path_override=pt_path_override,
+        )
+
+    def dflash_kv_cache_pcc_check(self, kv_caches: MlaKvCaches, *, slot_id: int, out_len: int, golden_dir=None):
+        """Optional bring-up hook (never called in production serving): PCC the DFlash drafter's context
+        K/V for `slot_id` against the golden trace over the first `out_len` positions. Separate from
+        `kv_cache_pcc_check`, which covers only the verifier's `kvpe` — with DFlash on, the drafter cache
+        is a second populated cache and the only one whose contents depend on the D2D-transported FC
+        partial. Thin forwarder into the drafter's validation module.
+
+        Only the last rank builds the drafter KV tail and owns the caches, so every other rank has
+        nothing to check and returns 1.0 unmeasured."""
+        if self._dflash_k_cache is None:
+            logger.info(
+                f"[dflash-pcc] rank owns no drafter KV cache (is_last_rank={self.config.is_last_rank}); "
+                "nothing to check"
+            )
+            return 1.0
+        from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_kv_validation import dflash_kv_cache_pcc_check
+
+        dcfg = self.drafter.config
+        return dflash_kv_cache_pcc_check(
+            self.mesh_device,
+            self._dflash_k_cache,
+            self._dflash_v_cache,
+            sp=self.config.sp_factor,
+            chunk_size_global=self.config.chunk_size,
+            num_layers=dcfg.num_hidden_layers,
+            num_kv_heads=dcfg.num_key_value_heads,
+            head_dim=dcfg.head_dim,
+            slot_id=slot_id,
+            out_len=out_len,
+            golden_dir=golden_dir,
+            record_only=os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0") == "1",
+            rope_convention=dcfg.rope_convention,
         )
 
     def set_layer_completion_sink(self, sink) -> None:

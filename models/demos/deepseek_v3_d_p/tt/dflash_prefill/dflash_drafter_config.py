@@ -22,7 +22,11 @@ class DFlashDrafterConfig:
     num_attention_heads: int = 64
     num_key_value_heads: int = 8  # GQA
     num_hidden_layers: int = 6  # draft layers
-    num_target_layers: int = 61  # verifier layers
+    # Verifier layers this drafter attaches to. None = the checkpoint config did not declare it: this field
+    # exists ONLY to be cross-checked against the loaded verifier, so it must never default to a value that
+    # would satisfy that check (61 is Kimi-K2.x's own depth, i.e. exactly the answer being verified). None is
+    # falsy, so the build guard (`assert num_target_layers`) rejects a checkpoint that omits the key.
+    num_target_layers: int | None = None
     rms_norm_eps: float = 1e-5
     initializer_range: float = 0.02  # std for random-weight tests (config.json initializer_range)
     block_size: int = 8  # speculative block (decode-time)
@@ -40,6 +44,7 @@ class DFlashDrafterConfig:
     rope_orig_max_pos: int = 4096
     rope_mscale: float = 1.0
     rope_mscale_all_dim: float = 1.0
+    rope_convention: str = "interleaved"
 
     @property
     def kv_dim(self) -> int:
@@ -61,6 +66,10 @@ class DFlashDrafterConfig:
             num_attention_heads=c.num_attention_heads,
             num_key_value_heads=c.num_key_value_heads,
             num_hidden_layers=c.num_hidden_layers,
+            # Top-level key in the drafter's config.json (61 for Kimi-K2.x), NOT under dflash_config. It is
+            # the drafter's own declaration of which verifier it attaches to, so the runtime cross-checks it
+            # against the verifier's num_hidden_layers before building. Absent -> None (the fail-closed default).
+            num_target_layers=(int(v) if (v := getattr(c, "num_target_layers", None)) is not None else None),
             rms_norm_eps=c.rms_norm_eps,
             target_layer_ids=tuple(dfc.get("target_layer_ids", d.target_layer_ids)),
             rope_theta=float(rs.get("rope_theta") or getattr(c, "rope_theta", None) or d.rope_theta),
