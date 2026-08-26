@@ -343,7 +343,7 @@ models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_str
 
 models/demos/vision/classification/resnet50/quasar/tests/test_resnet50_e2e.py:
   - filter: pretrained-device_params0
-  - runner: pytest
+    runner: pytest
     config: 2x3
     env:
       TT_METAL_ENV: dev
