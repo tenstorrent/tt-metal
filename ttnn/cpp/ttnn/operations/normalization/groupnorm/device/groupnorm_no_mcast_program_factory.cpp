@@ -68,7 +68,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         TT_FATAL(beta.value().layout() == Layout::ROW_MAJOR, "Beta tensor must have ROW_MAJOR layout");
     }
 
-    uint32_t groupnorm_mode = static_cast<uint32_t>(use_welford ? GroupNormMode::TWO_PASS : GroupNormMode::LEGACY);
+    uint32_t groupnorm_mode =
+        static_cast<uint32_t>(use_welford ? GroupNormMode::TWO_PASS : GroupNormMode::TILE_REDUCTION);
 
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());

@@ -186,7 +186,8 @@ void kernel_main() {
             transpose_init(dfb_in0_id);
         }
         tile_regs_acquire();
-        two_pass_stats_init();
+        two_pass_stats_init_shifted();
+        two_pass_stats_clear();
 
         std::uint32_t active_group = 0;
         // Group 0 starts directly from the cleared LREG state. Only the
@@ -228,7 +229,13 @@ void kernel_main() {
                     std::uint32_t cols_available = tile_width - group_offset;
                     std::uint32_t cols_consumed = std::min(cols_available, channels_left);
 
-                    two_pass_stats_update_rows<false>(input_dst, group_offset, cols_consumed);
+                    if (i == 0 && channels_left == num_channels_per_group) {
+                        two_pass_stats_update_shifted_rows<false, true, num_groups == 1>(
+                            input_dst, group_offset, cols_consumed);
+                    } else {
+                        two_pass_stats_update_shifted_rows<false, false, num_groups == 1>(
+                            input_dst, group_offset, cols_consumed);
+                    }
 
                     channels_left -= cols_consumed;
                     group_offset += cols_consumed;
@@ -261,20 +268,20 @@ void kernel_main() {
             }
         }
 
-        // Convert sums to means, ending with group 0 resident in LREGs so
+        // Convert shifted sums to means, ending with group 0 resident in LREGs so
         // the second pass can begin without another save/restore pair.
-        two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
+        two_pass_stats_finish_shifted_mean<num_groups == 1>(sfpu_two_pass_reciprocal);
         if constexpr (num_groups > 1) {
             welford_save_state(mean_dst, active_group);
         }
         for (std::uint32_t g = 1; g + 1 < num_groups; ++g) {
             welford_restore_state(mean_dst, g);
-            two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
+            two_pass_stats_finish_shifted_mean<num_groups == 1>(sfpu_two_pass_reciprocal);
             welford_save_state(mean_dst, g);
         }
         if constexpr (num_groups > 1) {
             welford_restore_state(mean_dst, 0);
-            two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
+            two_pass_stats_finish_shifted_mean<num_groups == 1>(sfpu_two_pass_reciprocal);
         }
 
         // Second pass: accumulate centered squared residuals in FP32 SFPU.

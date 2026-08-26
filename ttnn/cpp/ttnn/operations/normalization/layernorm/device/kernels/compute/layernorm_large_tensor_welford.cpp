@@ -308,17 +308,25 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
         reconfig_data_format_srca(dfb_interm_pre_add);
         transpose_init(dfb_interm_pre_add);
-        two_pass_stats_init();
+        two_pass_stats_init_shifted();
 
         uint32_t block_n = 0;
-        for (auto i : block.local()) {
+        {
+            constexpr uint32_t i = 0;
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
             transpose_tile(dfb_interm_pre_add, i, input_dst);
-            two_pass_stats_update_rows<false>(input_dst, 0, rows);
+            two_pass_stats_update_shifted_rows<false, true>(input_dst, 0, rows);
             block_n += rows;
         }
-        two_pass_stats_finish_mean(reciprocal_lut[block_n - 1]);
+        for (uint32_t i = 1; i < block.size(); ++i) {
+            const uint32_t global_tile = block.to_global(i);
+            const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
+            transpose_tile(dfb_interm_pre_add, i, input_dst);
+            two_pass_stats_update_shifted_rows<false>(input_dst, 0, rows);
+            block_n += rows;
+        }
+        two_pass_stats_finish_shifted_mean(reciprocal_lut[block_n - 1]);
 
         for (auto i : block.local()) {
             const uint32_t global_tile = block.to_global(i);
@@ -525,7 +533,7 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     reconfig_data_format_srca(dfb_x_welford);
     transpose_init(dfb_x_welford);
     tile_regs_acquire();
-    two_pass_stats_init();
+    two_pass_stats_init_shifted();
 
     uint32_t accumulated_n = 0;
     for (auto block : generic::blocks(Wt, blk)) {
@@ -535,16 +543,23 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             dfb_in_obj.wait_front(block.full_block_size());
         }
 
-        two_pass_stats_clear();
         uint32_t block_n = 0;
-        for (auto i : block.local()) {
+        {
+            constexpr uint32_t i = 0;
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
             transpose_tile(dfb_x_welford, i, input_dst);
-            two_pass_stats_update_rows<false>(input_dst, 0, rows);
+            two_pass_stats_update_shifted_rows<false, true>(input_dst, 0, rows);
             block_n += rows;
         }
-        two_pass_stats_finish_mean(reciprocal_lut[block_n - 1]);
+        for (uint32_t i = 1; i < block.size(); ++i) {
+            const uint32_t global_tile = block.to_global(i);
+            const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
+            transpose_tile(dfb_x_welford, i, input_dst);
+            two_pass_stats_update_shifted_rows<false>(input_dst, 0, rows);
+            block_n += rows;
+        }
+        two_pass_stats_finish_shifted_mean(reciprocal_lut[block_n - 1]);
 
         // The block remains at the CB front, so the second SFPU traversal is
         // an L1 reread rather than another DRAM traversal.

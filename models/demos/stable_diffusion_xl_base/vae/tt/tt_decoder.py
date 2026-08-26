@@ -146,7 +146,7 @@ class TtDecoder(LightweightModule):
             )
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        # NOTE: On Blackhole, using welford causes PCC drop in unit tests
+        # Request two-pass statistics for the interleaved DRAM path.
         use_welford_decoder = True
         hidden_states = ttnn.group_norm(
             hidden_states,

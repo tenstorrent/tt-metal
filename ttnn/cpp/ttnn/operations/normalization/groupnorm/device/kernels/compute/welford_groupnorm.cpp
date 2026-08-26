@@ -248,14 +248,15 @@ void kernel_main() {
 #endif
         dfb_ex_partial.reserve_back(2);
         tile_regs_acquire();
-        two_pass_stats_init();
+        two_pass_stats_init_shifted();
+        two_pass_stats_clear();
         uint32_t active_group = 0;
 
         for (uint32_t g = 1; g < num_groups; ++g) {
             welford_save_state(mean_dst, g);
         }
 
-        // First statistics traversal: accumulate raw sums for each group.
+        // First statistics traversal: accumulate sums relative to each group's first value.
         for (uint32_t mt = 0; mt < block_h; ++mt) {
             if (mt > 0) {
                 welford_save_state(mean_dst, active_group);
@@ -285,7 +286,13 @@ void kernel_main() {
                     const uint32_t cols_available = tile_width - group_offset;
                     const uint32_t cols_consumed = std::min(cols_available, channels_left);
 
-                    two_pass_stats_update_rows<false>(input_dst, group_offset, cols_consumed);
+                    if (mt == 0 && channels_left == num_channels_per_group) {
+                        two_pass_stats_update_shifted_rows<false, true, num_groups == 1>(
+                            input_dst, group_offset, cols_consumed);
+                    } else {
+                        two_pass_stats_update_shifted_rows<false, false, num_groups == 1>(
+                            input_dst, group_offset, cols_consumed);
+                    }
 
                     channels_left -= cols_consumed;
                     group_offset += cols_consumed;
@@ -313,20 +320,20 @@ void kernel_main() {
             }
         }
 
-        // Convert each group's raw sum into its mean, leaving group zero
+        // Convert each group's shifted sum into its mean, leaving group zero
         // resident for the centered-M2 traversal.
-        two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
+        two_pass_stats_finish_shifted_mean<num_groups == 1>(sfpu_two_pass_reciprocal);
         if constexpr (num_groups > 1) {
             welford_save_state(mean_dst, active_group);
         }
         for (uint32_t g = 1; g + 1 < num_groups; ++g) {
             welford_restore_state(mean_dst, g);
-            two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
+            two_pass_stats_finish_shifted_mean<num_groups == 1>(sfpu_two_pass_reciprocal);
             welford_save_state(mean_dst, g);
         }
         if constexpr (num_groups > 1) {
             welford_restore_state(mean_dst, 0);
-            two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
+            two_pass_stats_finish_shifted_mean<num_groups == 1>(sfpu_two_pass_reciprocal);
         }
 
         // The reader streams the same local input tiles a second time.

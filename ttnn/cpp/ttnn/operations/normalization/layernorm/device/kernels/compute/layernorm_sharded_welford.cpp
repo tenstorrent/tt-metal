@@ -399,11 +399,10 @@ void kernel_main() {
     // Reconfigure the transpose op for the welford intake buffer. When the alias is active,
     // it has UnpackToDest mode so transpose_tile preserves fp32 precision.
     transpose_init(dfb_x_welford_id);
-    two_pass_stats_init();
+    two_pass_stats_init_shifted();
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_ht; i++) {
         tile_regs_acquire();
-        welford_clear();
         // Do the full statistics tiles
         for (uint32_t w = 0; w < num_full_welford_tiles; w++) {
             if constexpr (welford_fp32_alias && !sfpu_two_pass) {
@@ -439,9 +438,13 @@ void kernel_main() {
                     ? (num_full_welford_tiles == 0 ? retained_welford_input_dst : num_full_welford_tiles)
                     : welford_input_dst;
             transpose_tile(dfb_x_welford_id, index_h_offset + num_full_welford_tiles, stats_input_dst);
-            two_pass_stats_update_rows<false>(stats_input_dst, 0, partial_welford_tile_w);
+            if (num_full_welford_tiles == 0) {
+                two_pass_stats_update_shifted_rows<false, true>(stats_input_dst, 0, partial_welford_tile_w);
+            } else {
+                two_pass_stats_update_shifted_rows<false>(stats_input_dst, 0, partial_welford_tile_w);
+            }
         }
-        two_pass_stats_finish_mean((*p_reciprocals)[partial_reduce_W - 1]);
+        two_pass_stats_finish_shifted_mean((*p_reciprocals)[partial_reduce_W - 1]);
 
         for (uint32_t w = 0; w < num_full_welford_tiles; ++w) {
             const uint32_t stats_input_dst = w < 3 ? (w == 0 ? retained_welford_input_dst : w) : welford_input_dst;

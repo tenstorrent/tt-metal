@@ -119,7 +119,7 @@ class TtResnetBlock2D(LightweightModule):
             )
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        # NOTE: On Blackhole, using welford causes PCC drop in unit tests
+        # Request two-pass statistics for interleaved DRAM; sharded inputs retain tile reductions.
         use_welford = self.groupnorm_memory_config_1 == ttnn.DRAM_MEMORY_CONFIG
         hidden_states = ttnn.group_norm(
             hidden_states,
@@ -177,7 +177,7 @@ class TtResnetBlock2D(LightweightModule):
             )
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        # NOTE: On Blackhole, using welford causes PCC drop in unit tests
+        # Request two-pass statistics for interleaved DRAM; sharded inputs retain tile reductions.
         use_welford = self.groupnorm_memory_config_2 == ttnn.DRAM_MEMORY_CONFIG
         hidden_states = ttnn.group_norm(
             hidden_states,

@@ -69,7 +69,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     }
 
     std::uint32_t groupnorm_mode =
-        static_cast<std::uint32_t>(use_welford ? GroupNormMode::TWO_PASS : GroupNormMode::LEGACY);
+        static_cast<std::uint32_t>(use_welford ? GroupNormMode::TWO_PASS : GroupNormMode::TILE_REDUCTION);
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());

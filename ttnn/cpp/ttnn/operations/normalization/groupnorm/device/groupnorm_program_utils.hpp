@@ -16,7 +16,7 @@
 
 namespace ttnn::prim {
 
-enum class GroupNormMode : uint32_t { LEGACY = 0, TWO_PASS = 1 };
+enum class GroupNormMode : uint32_t { TILE_REDUCTION = 0, TWO_PASS = 1 };
 
 // Non-tile-aligned H*W: the reduce scaler must divide by the real element count (`scaler_bits`),
 // and the padding rows must be excluded from both accumulation passes. The interleaved kernels do

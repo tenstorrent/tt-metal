@@ -144,9 +144,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     const std::uint32_t reduce_batch_size = operation_attributes.reduce_batch_size;
     const bool use_sfpu_leaf_combine = reduce_hw && device->arch() == tt::ARCH::BLACKHOLE && fp32_dest_acc_en &&
                                        W % tile_width == 0 && static_cast<std::uint64_t>(W) * reduce_batch_size >= 128;
-    const bool use_full_partial_stats_tiles = reduce_hw && !use_sfpu_leaf_combine &&
-                                              device->arch() == tt::ARCH::BLACKHOLE &&
-                                              Wt * reduce_batch_size == tt::constants::TILE_WIDTH;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_work_units = reduce_w ? (NC * Ht) : (reduce_hw ? (NC / reduce_batch_size) : (NC * Wt));
     uint32_t num_cores;
@@ -394,9 +391,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "writer_welford_hw.cpp";
         writer_desc.compile_time_args = writer_compile_time_args;
-        if (use_full_partial_stats_tiles) {
-            writer_desc.defines.emplace_back("WELFORD_FULL_PARTIAL_TILES", "1");
-        }
         if (use_sfpu_leaf_combine) {
             writer_desc.defines.emplace_back("WELFORD_SFPU_LEAF_COMBINE", "1");
         }

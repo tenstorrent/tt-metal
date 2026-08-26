@@ -74,14 +74,10 @@ ALWI void welford_clear() { MATH((llk_math_welfords_sfpu_clear_previous_mean_and
 /**
  * @brief Initializes the SFPU state used by the two-pass statistics helpers.
  *
- * Configures the Welford address mode used by their SFPU loads and clears the
- * sum/M2 accumulators, without programming Welford's unused replay buffer.
+ * Configures the Welford address mode used by their SFPU loads without
+ * programming Welford's unused replay buffer. The first shifted update with
+ * `initialize_anchor=true` initializes the accumulators.
  */
-ALWI void two_pass_stats_init() {
-    MATH((llk_math_two_pass_sfpu_init()));
-    MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2()));
-}
-
 ALWI void two_pass_stats_init_shifted() { MATH((llk_math_two_pass_sfpu_init())); }
 
 template <bool accumulate_m2, bool dual_m2 = true>
@@ -90,23 +86,17 @@ ALWI void two_pass_stats_update_rows(std::uint32_t input_dst_idx, std::uint32_t 
     MATH((llk_math_two_pass_sfpu_update_rows<accumulate_m2, dual_m2>(input_dst_idx, start_row, num_rows)));
 }
 
-template <bool accumulate_m2, bool initialize_anchor = false, bool dual_m2 = true>
+template <bool accumulate_m2, bool initialize_anchor = false, bool dual_accumulator = true>
 ALWI void two_pass_stats_update_shifted_rows(
     std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
     ASSERT(start_row + num_rows <= TILE_WIDTH);
-    if constexpr (initialize_anchor) {
-        ASSERT(start_row == 0);
-    }
-    MATH((llk_math_two_pass_sfpu_update_shifted_rows<accumulate_m2, initialize_anchor, dual_m2>(
+    MATH((llk_math_two_pass_sfpu_update_shifted_rows<accumulate_m2, initialize_anchor, dual_accumulator>(
         input_dst_idx, start_row, num_rows)));
 }
 
-ALWI void two_pass_stats_finish_mean(std::uint32_t reciprocal_bits) {
-    MATH((llk_math_two_pass_sfpu_finish_mean(reciprocal_bits)));
-}
-
+template <bool dual_sum = true>
 ALWI void two_pass_stats_finish_shifted_mean(std::uint32_t reciprocal_bits) {
-    MATH((llk_math_two_pass_sfpu_finish_shifted_mean(reciprocal_bits)));
+    MATH((llk_math_two_pass_sfpu_finish_shifted_mean<dual_sum>(reciprocal_bits)));
 }
 
 ALWI void two_pass_stats_clear() { MATH((llk_math_two_pass_sfpu_clear_stats())); }
