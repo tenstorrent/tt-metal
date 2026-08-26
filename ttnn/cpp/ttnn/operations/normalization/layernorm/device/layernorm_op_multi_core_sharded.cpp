@@ -399,10 +399,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .storage_core_noc_y = std::move(storage_core_noc_y),
         .num_storage_cores = (uint32_t)all_storage_cores.num_cores()};
 
-    // The run args come first: the write-back segment block's length is measured per node there, and
-    // the kernel specs declare it.
-    auto run_args = build_run_args(cores, rt_ctx, config, device, a, b, gamma, beta, stats, recip_tensor, output);
-    add_kernel_and_work_unit_specs(spec, core_ranges, workers, grid, config);
+    // The write-back segment block's length is measured per node while the run args are built, and
+    // the kernel specs declare it, so the run args come first.
+    auto [run_args, writer_num_varargs] =
+        build_run_args(cores, rt_ctx, config, device, a, b, gamma, beta, stats, recip_tensor, output);
+    add_kernel_and_work_unit_specs(spec, core_ranges, workers, grid, config, writer_num_varargs);
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),

@@ -313,10 +313,6 @@ struct SpecConfig {
     tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
     m2::ComputeHardwareConfig compute_hw;
 
-    // Length of the writer's write-back segment block. It varies per node, and a vararg count is a
-    // per-kernel property, so every node declares the longest block; `build_run_args` measures it.
-    uint32_t writer_num_varargs = 0;
-
     // Fused-activation preprocessor definitions for the compute kernel
     m2::KernelSpec::CompilerOptions::Defines activation_defines;
 };
@@ -344,13 +340,16 @@ void add_tensor_parameter_specs(
     const Tensor& output);
 
 // Declares the kernels, their argument schemas, their resource bindings, and the work units that
-// place them.
+// place them. `writer_num_varargs` comes from `build_run_args`, which is the only thing that can
+// measure it, so that call has to happen first; taking it as a parameter is what makes the compiler
+// say so.
 void add_kernel_and_work_unit_specs(
     m2::ProgramSpec& spec,
     const CoreRanges& core_ranges,
     const WorkerDistribution& workers,
     const GridParams& grid,
-    const SpecConfig& config);
+    const SpecConfig& config,
+    uint32_t writer_num_varargs);
 
 //////////////////////////////////////////////////////////////////////////////
 // Runtime argument building
@@ -415,13 +414,24 @@ struct CoreIndices {
     bool is_all_to_all(const RuntimeArgsContext& ctx) const;
 };
 
-// Builds the per-node runtime argument values and vararg blocks for every kernel in the spec.
-// Writes the measured write-back vararg length back into `config`, which the kernel specs then
-// declare, so this runs before add_kernel_and_work_unit_specs.
-m2::ProgramRunArgs build_run_args(
+// What `build_run_args` produces: the runtime arguments themselves, plus the one measurement the
+// kernel specs need from the same pass.
+struct RunArgsAndWriterVarargs {
+    m2::ProgramRunArgs run_args;
+
+    // Length of the writer's write-back segment block. It varies per node, and a vararg count is a
+    // per-kernel property, so every node declares the longest block.
+    uint32_t writer_num_varargs = 0;
+};
+
+// Builds the per-node runtime argument values and vararg blocks for every kernel in the spec, and
+// measures the write-back segment block while walking the cores. The kernel specs declare that
+// length, so this returns it alongside the run args rather than leaving it somewhere for
+// add_kernel_and_work_unit_specs to pick up.
+RunArgsAndWriterVarargs build_run_args(
     const std::vector<CoreCoord>& cores,
     const RuntimeArgsContext& ctx,
-    SpecConfig& config,
+    const SpecConfig& config,
     IDevice* device,
     const Tensor& input,
     const std::optional<Tensor>& residual,

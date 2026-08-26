@@ -940,7 +940,8 @@ void add_reader_defines(m2::KernelSpec& kernel, const SpecConfig& c) {
 // Writer
 //--------------------------------------------------------------------------
 
-m2::KernelSpec::CompileTimeArgs writer_compile_time_args(const SpecConfig& c, bool is_all_to_all_worker) {
+m2::KernelSpec::CompileTimeArgs writer_compile_time_args(
+    const SpecConfig& c, bool is_all_to_all_worker, uint32_t writer_num_varargs) {
     m2::KernelSpec::CompileTimeArgs args{
         {"is_all_to_all_worker", static_cast<uint32_t>(is_all_to_all_worker)},
         {"block_w", c.block_wt},
@@ -957,8 +958,14 @@ m2::KernelSpec::CompileTimeArgs writer_compile_time_args(const SpecConfig& c, bo
         args.emplace("storage_core_stride_w_bytes", c.block_wt_resharded * c.out_single_tile_size);
         args.emplace("block_ht", c.block_ht);
         // The segment block's length varies per node, and the kernel copies it into a local array, so
-        // it needs a compile-time bound: the longest block any node was given.
-        args.emplace("max_write_back_segments", c.writer_num_varargs / 3);
+        // it needs a compile-time bound: the longest block any node was given. A zero bound would
+        // give the kernel a zero-length array to copy into, so a caller that has not measured the
+        // block yet is a construction error rather than a degenerate configuration.
+        TT_FATAL(
+            writer_num_varargs > 0,
+            "Writer write-back segment block length is 0, but this configuration writes back. The "
+            "length is measured by build_run_args, which must run before the kernel specs are built.");
+        args.emplace("max_write_back_segments", writer_num_varargs / 3);
     }
     return args;
 }
@@ -1221,7 +1228,8 @@ void add_kernel_and_work_unit_specs(
     const CoreRanges& core_ranges,
     const WorkerDistribution& workers,
     const GridParams& grid,
-    const SpecConfig& c) {
+    const SpecConfig& c,
+    uint32_t writer_num_varargs) {
     const bool has_reader_receiver_all_to_all = grid.use_mcast && !core_ranges.all_to_all_workers_except_sender.empty();
     const bool has_not_all_to_all_workers = workers.num_none_all_to_all_workers > 0;
     const bool has_inactive_cores = !core_ranges.inactive_cores.empty();
@@ -1319,7 +1327,7 @@ void add_kernel_and_work_unit_specs(
         m2::KernelSpec kernel{
             .unique_id = name,
             .source = c.writer_path,
-            .compile_time_args = writer_compile_time_args(c, is_all_to_all_worker),
+            .compile_time_args = writer_compile_time_args(c, is_all_to_all_worker, writer_num_varargs),
             .runtime_arg_schema = writer_schema,
             .hw_config = writer_hw,
         };
@@ -1329,9 +1337,9 @@ void add_kernel_and_work_unit_specs(
         return kernel;
     };
 
-    spec.kernels.push_back(make_writer(WRITER_SENDER, /*is_all_to_all_worker=*/true, c.writer_num_varargs));
+    spec.kernels.push_back(make_writer(WRITER_SENDER, /*is_all_to_all_worker=*/true, writer_num_varargs));
     if (has_not_all_to_all_workers) {
-        spec.kernels.push_back(make_writer(WRITER_RECEIVER, /*is_all_to_all_worker=*/false, c.writer_num_varargs));
+        spec.kernels.push_back(make_writer(WRITER_RECEIVER, /*is_all_to_all_worker=*/false, writer_num_varargs));
     }
 
     //----------------------------------------------------------------------
@@ -1405,7 +1413,7 @@ void add_kernel_and_work_unit_specs(
         m2::KernelSpec idle_writer{
             .unique_id = IDLE_WRITER,
             .source = c.writer_path,
-            .compile_time_args = writer_compile_time_args(c, /*is_all_to_all_worker=*/false),
+            .compile_time_args = writer_compile_time_args(c, /*is_all_to_all_worker=*/false, writer_num_varargs),
             .hw_config = writer_hw,
         };
         add_writer_defines(idle_writer, c);
@@ -1655,10 +1663,10 @@ m2::KernelRunArgs* find_run_args(m2::ProgramRunArgs& run_args, const m2::KernelS
 
 }  // namespace
 
-m2::ProgramRunArgs build_run_args(
+RunArgsAndWriterVarargs build_run_args(
     const std::vector<CoreCoord>& cores,
     const RuntimeArgsContext& ctx,
-    SpecConfig& config,
+    const SpecConfig& config,
     IDevice* device,
     const Tensor& input,
     const std::optional<Tensor>& residual,
@@ -1843,6 +1851,7 @@ m2::ProgramRunArgs build_run_args(
     // depends on where the shared storage cursor happened to be. The vararg count is a per-kernel
     // property, so every node declares the longest block and the shorter ones are zero-padded. The
     // kernel reads exactly num_segments_to_write_back segments, so the padding is never looked at.
+    uint32_t writer_num_varargs = 0;
     if (ctx.writes_back) {
         size_t longest = 0;
         for (auto* writer : {&writer_sender, writer_receiver}) {
@@ -1861,7 +1870,7 @@ m2::ProgramRunArgs build_run_args(
                 varargs.resize(longest, 0);
             }
         }
-        config.writer_num_varargs = static_cast<uint32_t>(longest);
+        writer_num_varargs = static_cast<uint32_t>(longest);
     }
 
     //----------------------------------------------------------------------
@@ -1885,7 +1894,7 @@ m2::ProgramRunArgs build_run_args(
         run_args.tensor_args.emplace(RECIP, recip.value().mesh_tensor());
     }
 
-    return run_args;
+    return RunArgsAndWriterVarargs{.run_args = std::move(run_args), .writer_num_varargs = writer_num_varargs};
 }
 
 }  // namespace ttnn::prim::sharded_layernorm_helpers
