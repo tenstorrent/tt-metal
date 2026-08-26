@@ -368,6 +368,132 @@ uint32_t ship_min_pct() {
 // "is the CV round-trip the filler-knee wall" from "does the hysteresis react fast enough", and it is
 // only meaningful against a FIFO sized for the ~2x raw wire (see FIFO_MB below); in the 64 MiB pipeline
 // configuration it reproduces the decode-ack overload the hysteresis exists to prevent.
+// TT_METAL_PERF_DEBUG_FILLER_SLICE_MAP: comma-separated permutation, entry d = which core BAND filler d
+// takes. Unset = identity, which is what the code has always done -- and the bands are row-major slices of
+// the worker grid assigned with no reference to where the filler's own DRAM core sits, so the pairing is
+// arbitrary. Measured per-filler service intervals spread 20.1-36.6 us at delay 30 with the DRISCs scattered
+// over y=12..23 while workers occupy y=2..11; this knob exists to test whether that spread is DRISC
+// placement (follows the filler) or a property of the rows (follows the band).
+const std::vector<uint32_t>& filler_slice_map() {
+    static const std::vector<uint32_t> v = [] {
+        std::vector<uint32_t> out;
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FILLER_SLICE_MAP");
+        if (s != nullptr && *s != '\0') {
+            for (const char* p = s; *p != '\0';) {
+                out.push_back(static_cast<uint32_t>(std::strtoul(p, nullptr, 10)));
+                while (*p != '\0' && *p != ',') {
+                    p++;
+                }
+                if (*p == ',') {
+                    p++;
+                }
+            }
+        }
+        return out;
+    }();
+    return v;
+}
+
+// Per-filler CORE-COUNT WEIGHTS, indexed by filler slot (not bank id). An even split makes every filler
+// own the same ~22 cores, which makes the SLOWEST filler set the knee -- and they are not equally fast.
+// Measured at delay 8, 130 cores, even split: per-filler service interval 19.7 / 21.1 / 22.3 / 22.8 / 26.6
+// / 28.5 us, a 45% spread that follows the FILLER and not the core band (permuting bands leaves d5 slowest
+// while it owns bands 5, 5, then 0). Mo's v6 roster spreads 3% over the same grid and takes 11 stalls where
+// an even split takes 428 k, because a lane fills in 22.5 us -- so a 28.5 us filler stalls every ring and a
+// 19.7 us one never does. Weighting core count by 1/interval equalises the intervals instead of the counts.
+//
+// Weights are a CALIBRATION, and the default is board-specific: they came off this part's default bank
+// roster (5,6,4,1,0,3). Override with TT_METAL_PERF_DEBUG_FILLER_WEIGHTS, or pass all-equal values to get
+// the old even split back.
+const std::vector<uint32_t>& filler_weights() {
+    static const std::vector<uint32_t> v = [] {
+        std::vector<uint32_t> out;
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FILLER_WEIGHTS");
+        if (s != nullptr && *s != '\0') {
+            for (const char* p = s; *p != '\0';) {
+                out.push_back(static_cast<uint32_t>(std::strtoul(p, nullptr, 10)));
+                while (*p != '\0' && *p != ',') {
+                    p++;
+                }
+                if (*p == ',') {
+                    p++;
+                }
+            }
+            return out;
+        }
+        // Default EVEN. Weighting core counts compensates for bad filler placement rather than fixing it;
+        // the placement itself is the lever (which DRAM subchannel each filler sits on). Kept as a knob so
+        // the compensation can still be measured against a placement fix.
+        return out;  // empty = even split; the use site treats it that way
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_FILLER_SUBCH: comma-separated DRAM SUBCHANNEL index per filler. Each DRAM view has
+// three subchannels at quite different NoC positions (bank 5: NOC0 (9,2)/(9,10)/(9,3); bank 3: (0,5)/(0,7)/
+// (0,6)), and pick_unused_dram_logical_core() returns whichever is simply FIRST unreserved -- nothing picks
+// for locality. Unset keeps that behaviour.
+//
+// Placement is worth choosing because the per-filler service interval spreads 45% (19.7-28.5 us at delay 8)
+// and the knee is set by the WORST filler, while a lane fills in 22.5 us. But it is chosen by MEASUREMENT,
+// not by a distance model: the observed spread does not track NoC distance to the owned band (the closest
+// filler, bank 3 at (0,6) owning rows 8-9, is the slowest at 36.5 us), nor column, nor staging depth
+// (identical 7 slots), nor core count (equal).
+const std::vector<uint32_t>& filler_subchannels() {
+    static const std::vector<uint32_t> v = [] {
+        std::vector<uint32_t> out;
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FILLER_SUBCH");
+        if (s != nullptr && *s != '\0') {
+            for (const char* p = s; *p != '\0';) {
+                out.push_back(static_cast<uint32_t>(std::strtoul(p, nullptr, 10)));
+                while (*p != '\0' && *p != ',') {
+                    p++;
+                }
+                if (*p == ',') {
+                    p++;
+                }
+            }
+        }
+        return out;
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_FILLER_ASSIGN=xsplit: assign worker cores to fillers by NoC REACHABILITY instead of
+// row-major index order.
+//
+// Round-trip LATENCY is position-independent on these NoCs -- both are unidirectional tori, so a request
+// costs dx+dy hops and its response (17-dx)+(12-dy), always 29 total. LINK OCCUPANCY is not. Reads ride
+// NoC 1 (-x/-y), and DRAM sits in NOC0 columns x=0 (views D0-D3) and x=9 (views D4-D7), so a filler in the
+// x=0 column reaching a worker at x=1 wraps 0->16->15->...->1 and holds ~15 links for that one read, while
+// reaching x=16 holds one. Row-major bands span BOTH halves, so nearly every one of a sweep's ~93 reads
+// wraps a row. Grouping instead puts each filler on the half its own column reaches cheaply:
+//   x=9 column fillers (bank >= 4) -> the LEFT half  (NOC0 x < 9)
+//   x=0 column fillers (bank <  4) -> the RIGHT half (NOC0 x > 9)
+bool filler_assign_xsplit() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FILLER_ASSIGN");
+        return s != nullptr && std::string_view(s) == "xsplit";
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_PCIE_SPLIT=1: point odd-numbered fillers at the SECOND PCIe tile.
+//
+// Blackhole has two PCIe tiles (NOC0 (2,0) and (11,0)), and D2HSocket always takes pcie_cores.front(), so
+// all six fillers' egress arcs converge on one tile and share links. Per-filler service interval spreads
+// 45% with no assignment scheme able to move it (band permutation, subchannel, bank roster and NoC-half
+// splits are all null), and arc contention on the shared egress path is the remaining explanation.
+//
+// DIAGNOSTIC, and it may simply not work: on the PinnedMemory/IOMMU path the tile comes from UMD's mapping
+// of the host buffer, so the second tile is not necessarily wired to the same buffer. The existing comment
+// on pcie_enc_override records the failure mode -- pages still flow but decode yields ZERO markers -- so
+// treat a zero-marker capture as "the second tile does not reach this buffer", not as a perf result.
+bool pcie_split() {
+    static const bool v = perf_debug::env_flag("TT_METAL_PERF_DEBUG_PCIE_SPLIT");
+    return v;
+}
+
 bool raw_only() {
     static const bool v = perf_debug::env_flag("TT_METAL_PERF_DEBUG_RAW_ONLY");
     return v;
@@ -1049,9 +1175,38 @@ bool PerfDebugProfiler::boot_device(
     // Identity travels in the payload instead, written by the producing core into SPSC_CORE_XY.
     std::vector<uint32_t> coords(num_cores, 0);
     std::vector<uint8_t> zero_ctrl(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, 0);
-    for (uint32_t ly = 0; ly < gy; ly++) {
-        for (uint32_t lx = 0; lx < gx; lx++) {
-            const uint32_t idx = ly * gx + lx;
+    // Enumeration ORDER decides what a contiguous filler slice means. Default is row-major; xsplit orders
+    // by (NoC half, row, column) so the first n_left entries are exactly the cores the x=9 DRAM column
+    // reaches without wrapping a row.
+    std::vector<std::pair<uint32_t, uint32_t>> order;  // (lx, ly) in assignment order
+    order.reserve(num_cores);
+    uint32_t n_left = 0;
+    {
+        std::vector<std::pair<uint32_t, std::pair<uint32_t, uint32_t>>> keyed;
+        keyed.reserve(num_cores);
+        for (uint32_t ly = 0; ly < gy; ly++) {
+            for (uint32_t lx = 0; lx < gx; lx++) {
+                const CoreCoord n0 = cluster.get_physical_coordinate_from_logical_coordinates(
+                    device_id, CoreCoord{lx, ly}, CoreType::WORKER, /*no_warn=*/true);
+                const uint32_t half = static_cast<uint32_t>(n0.x) < 9u ? 0u : 1u;
+                keyed.push_back({half, {lx, ly}});
+                n_left += (half == 0u) ? 1u : 0u;
+            }
+        }
+        if (filler_assign_xsplit()) {
+            std::stable_sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) {
+                return a.first < b.first;  // stable: row-major order preserved inside each half
+            });
+        } else {
+            n_left = 0;  // signals "no grouping" to the assignment loop
+        }
+        for (const auto& k : keyed) {
+            order.push_back(k.second);
+        }
+    }
+    for (uint32_t idx = 0; idx < num_cores; idx++) {
+        {
+            const uint32_t lx = order[idx].first, ly = order[idx].second;
             CoreCoord v =
                 cluster.get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord{lx, ly}, CoreType::WORKER);
             const uint32_t vx = static_cast<uint32_t>(v.x), vy = static_cast<uint32_t>(v.y);
@@ -1172,9 +1327,47 @@ bool PerfDebugProfiler::boot_device(
         }
         set_drisc_niu_mode(ctx.device, flip_cores, 1);
 
+    const std::vector<uint32_t>& slice_map = filler_slice_map();
+    TT_FATAL(
+        slice_map.empty() || slice_map.size() >= ctx.n_drisc,
+        "TT_METAL_PERF_DEBUG_FILLER_SLICE_MAP needs {} entries, got {}",
+        ctx.n_drisc,
+        slice_map.size());
+    // Weighted prefix split: filler slot sl owns cores [cum[sl], cum[sl+1]) scaled to num_cores, so a
+    // slower filler owns proportionally fewer. Integer math on the running sum keeps the partition exact
+    // (every core assigned once, no rounding gap) whatever the weights are.
+    const std::vector<uint32_t>& weights_env = filler_weights();
+    TT_FATAL(
+        weights_env.empty() || weights_env.size() >= kNFillers,
+        "TT_METAL_PERF_DEBUG_FILLER_WEIGHTS needs {} entries",
+        kNFillers);
+    std::vector<uint64_t> wcum(kNFillers + 1, 0);
+    for (uint32_t i = 0; i < kNFillers; i++) {
+        const uint32_t w = weights_env.empty() ? 1u : weights_env[i];
+        TT_FATAL(w != 0, "filler weight {} must be non-zero", i);
+        wcum[i + 1] = wcum[i] + w;
+    }
+    // xsplit: a filler serves only the half its own DRAM column reaches without wrapping a row, and the
+    // fillers of each column split that half between them.
+    std::vector<uint32_t> xs_grp(ctx.n_drisc, 0), xs_rank(ctx.n_drisc, 0);
+    uint32_t xs_n[2] = {0, 0};
+    for (uint32_t d = 0; d < ctx.n_drisc && d < banks.size(); d++) {
+        const uint32_t g = banks[d] >= 4u ? 0u : 1u;  // views D4-D7 sit in NOC0 column x=9, D0-D3 in x=0
+        xs_grp[d] = g;
+        xs_rank[d] = xs_n[g]++;
+    }
     for (uint32_t d = 0; d < ctx.n_drisc; d++) {
-        const uint32_t lo = static_cast<uint32_t>((num_cores * d) / kNFillers);
-        const uint32_t hi = static_cast<uint32_t>((num_cores * (d + 1)) / kNFillers);
+        const uint32_t sl = slice_map.empty() ? d : slice_map[d];
+        TT_FATAL(sl < kNFillers, "slice {} out of range for {} fillers", sl, kNFillers);
+        uint32_t lo = static_cast<uint32_t>((num_cores * wcum[sl]) / wcum[kNFillers]);
+        uint32_t hi = static_cast<uint32_t>((num_cores * wcum[sl + 1]) / wcum[kNFillers]);
+        if (n_left != 0 && xs_n[xs_grp[d]] != 0) {
+            const uint32_t g = xs_grp[d];
+            const uint32_t base = g == 0u ? 0u : n_left;
+            const uint32_t span = g == 0u ? n_left : static_cast<uint32_t>(num_cores) - n_left;
+            lo = base + static_cast<uint32_t>((static_cast<uint64_t>(span) * xs_rank[d]) / xs_n[g]);
+            hi = base + static_cast<uint32_t>((static_cast<uint64_t>(span) * (xs_rank[d] + 1)) / xs_n[g]);
+        }
         const uint32_t my_cores = hi - lo;
         if (my_cores == 0) {
             continue;
@@ -1188,6 +1381,50 @@ bool PerfDebugProfiler::boot_device(
             // window (configured below) and the socket takes the static path through it, so watch the hang
             // rate rather than assume the old figure transfers.
             ctx.drisc_logical[d] = mesh_device->impl().pick_unused_dram_logical_core(banks[d]);
+            if (const auto& sub_sel = filler_subchannels(); d < sub_sel.size()) {
+                // Forced placement. Validated against the same reserved set the picker honours, so a
+                // requested subchannel that is a worker/eth endpoint is refused rather than silently
+                // double-booking a core.
+                const uint32_t nsub = soc.get_grid_size(tt::CoreType::DRAM).y;
+                TT_FATAL(sub_sel[d] < nsub, "filler {} subchannel {} >= {}", d, sub_sel[d], nsub);
+                const size_t chan = soc.get_channel_for_dram_view(static_cast<int>(banks[d]));
+                const tt::umd::CoreCoord tc = soc.get_dram_core_for_channel(
+                    static_cast<int>(chan), static_cast<int>(sub_sel[d]), tt::CoordSystem::TRANSLATED);
+                bool reserved = false;
+                for (const auto& c : soc.dram_view_worker_cores.at(banks[d])) {
+                    reserved = reserved || (c.x == tc.x && c.y == tc.y);
+                }
+                for (const auto& c : soc.dram_view_eth_cores.at(banks[d])) {
+                    reserved = reserved || (c.x == tc.x && c.y == tc.y);
+                }
+                TT_FATAL(!reserved, "filler {} subchannel {} is a reserved worker/eth endpoint", d, sub_sel[d]);
+                ctx.drisc_logical[d] =
+                    soc.get_logical_dram_core_for_subchannel(static_cast<int>(banks[d]), static_cast<int>(sub_sel[d]));
+            }
+            {
+                // What placement freedom exists: pick_unused_dram_logical_core returns the FIRST unreserved
+                // subchannel of the view, and a view has several at different NoC coords. Log them all --
+                // choosing among these is the locality lever, and nothing currently chooses.
+                const uint32_t nsub = soc.get_grid_size(tt::CoreType::DRAM).y;
+                const size_t chan = soc.get_channel_for_dram_view(static_cast<int>(banks[d]));
+                std::string cand;
+                for (uint32_t sub = 0; sub < nsub; sub++) {
+                    const tt::umd::CoreCoord tc =
+                        soc.get_dram_core_for_channel(static_cast<int>(chan), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
+                    const tt::umd::CoreCoord nc = soc.translate_coord_to(tc, tt::CoordSystem::NOC0);
+                    cand += fmt::format(" sub{}=NOC0({},{})", sub, nc.x, nc.y);
+                }
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] filler {} bank {} chan {}: {} subchannels ->{} | chose logical ({},{})",
+                    d,
+                    banks[d],
+                    chan,
+                    nsub,
+                    cand,
+                    ctx.drisc_logical[d].x,
+                    ctx.drisc_logical[d].y);
+            }
             const CoreCoord translated =
                 soc.dram_bank_endpoint_coords.at(ctx.drisc_logical[d].x).at(ctx.drisc_logical[d].y);
             const tt::umd::CoreCoord phys = soc.translate_coord_to(
@@ -1195,6 +1432,16 @@ bool PerfDebugProfiler::boot_device(
                 CoordSystem::NOC0);
             drisc_phys = CoreCoord{phys.x, phys.y};
             ctx.drisc_virtual[d] = ctx.device->virtual_core_from_logical_core(ctx.drisc_logical[d], CoreType::DRAM);
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] filler {} at virtual ({},{}) owns band {} = cores [{}, {}) of {}",
+                d,
+                ctx.drisc_virtual[d].x,
+                ctx.drisc_virtual[d].y,
+                sl,
+                lo,
+                hi,
+                num_cores);
             // This drainer's own core, as a Tracy row: virtual coords are what its self frame carries in
             // SPSC_CORE_XY, NOC0 is what a Tracy context is keyed on. Registered for BOTH maps here, where both
             // are in hand -- a DRAM core is absent from metal_soc_descriptor's profiler flat-id map (TENSIX and
@@ -1504,7 +1751,31 @@ bool PerfDebugProfiler::boot_device(
             // MEASURED WRONG: pages still flow (socket credits are a separate path) but decode yields ZERO
             // markers, because the encoding is in TRANSLATED space (PCIE_NOC_X=19, PCIE_NOC_Y=24, outside
             // the 17x12 NOC0 grid) while NOC_0_X_PHYS_COORD mirrors WORKER coordinates.
-            const uint32_t pcie_enc_override = 0;
+            uint32_t pcie_enc_override = 0;
+            if (pcie_split()) {
+                const auto& pcie_cores = soc.get_cores(tt::CoreType::PCIE, tt::CoordSystem::NOC0);
+                std::string all;
+                for (const auto& c : pcie_cores) {
+                    all += fmt::format(" ({},{})", c.x, c.y);
+                }
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] filler {}: {} PCIe tile(s) ->{}",
+                    d,
+                    pcie_cores.size(),
+                    all);
+                if ((d & 1u) != 0 && pcie_cores.size() > 1) {
+                    pcie_enc_override = MetalContext::instance().hal().noc_xy_pcie64_encoding(
+                        pcie_cores[1].x, pcie_cores[1].y);
+                    log_info(
+                        tt::LogMetal,
+                        "[perf-debug profiler] filler {} egress -> SECOND PCIe tile ({},{}) enc 0x{:x}",
+                        d,
+                        pcie_cores[1].x,
+                        pcie_cores[1].y,
+                        pcie_enc_override);
+                }
+            }
 
             ctx.drain_program[d] = std::make_unique<Program>(CreateProgram());
             const std::vector<uint32_t> cargs = {

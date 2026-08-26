@@ -99,6 +99,16 @@ void kernel_main() {
     // is a statement about the TRIGGER, not about the producers, so backing off on it alone puts the filler
     // to sleep exactly while lanes fill toward it -- and a head only reaches a producer on a ship, so a
     // late ship is a late head. Both derive from one constant so the two cannot drift apart.
+    // STATE-REUSE READS. Every lane read of a core targets the SAME worker, so the coordinate registers
+    // (NOC_TARG_ADDR_MID, NOC_TARG_ADDR_COORDINATE) are identical across all of them. set_async_read_state
+    // programs those once per core and async_read_with_state then issues with four register writes instead
+    // of six. max_page_size must stay above NOC_MAX_BURST_SIZE: below it the length is programmed in
+    // set_state and every read would have to be the same size, which per-lane runs are not.
+    //
+    // Not obviously a win -- it trades ~2 register writes per read for one extra cmd-buf-ready poll per
+    // core -- so it is a switch, not a rewrite. Gather issue is ~9.6 us of a ~13 us sweep at 103 ns/read.
+    constexpr bool kReadState = true;
+    constexpr uint32_t kStateMaxPage = NOC_MAX_BURST_SIZE + 1u;
     constexpr uint32_t kLaneTrigger = kRingWords / 2u;
     constexpr uint32_t kCvBusyPeak = kLaneTrigger / 2u;
     // ---- HIGH-PRODUCTION MODE: raw span sweeps, entered and left with hysteresis ----
@@ -952,6 +962,8 @@ void kernel_main() {
                     volatile tt_l1_ptr uint32_t* cv =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
                     uint32_t off = kPrefix + kCtrlWords;
+                    ncrisc_noc_read_set_state<DM_DEDICATED_NOC, false, false>(
+                        kReadNoc, read_cmd_buf, get_noc_addr(xy & 0xFFFFu, xy >> 16, cv_src));
                     // The per-lane walk stays a LOOP, unlike the scans: its body is NoC-issue machinery
                     // (unrolling it 5x once overflowed the DRISC code region by 324 B), and per shipping
                     // core its L1 accesses are noise against the read issues.
@@ -972,23 +984,13 @@ void kernel_main() {
                         const uint32_t hm = (tail - run) & (kRingWords - 1u);
                         const uint32_t ring_src = cv_src + (kCtrlWords + r * kRingWords) * 4u;
                         const uint32_t chunk = run <= kRingWords - hm ? run : kRingWords - hm;
-                        CoreLocalMem<uint32_t> dst0(slot + off * 4u);
                         n_gather_rd++;
-                        noc.async_read<NocOptions::DEFAULT, kRingWords * 4u>(
-                            src,
-                            dst0,
-                            chunk * 4u,
-                            {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = ring_src + hm * 4u},
-                            {});
+                        ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, false>(
+                            kReadNoc, read_cmd_buf, ring_src + hm * 4u, slot + off * 4u, chunk * 4u);
                         if (chunk < run) {
-                            CoreLocalMem<uint32_t> dst1(slot + (off + chunk) * 4u);
                             n_gather_rd++;
-                            noc.async_read<NocOptions::DEFAULT, kRingWords * 4u>(
-                                src,
-                                dst1,
-                                (run - chunk) * 4u,
-                                {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = ring_src},
-                                {});
+                            ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, false>(
+                                kReadNoc, read_cmd_buf, ring_src, slot + (off + chunk) * 4u, (run - chunk) * 4u);
                         }
                         off += run;
                     }
