@@ -241,6 +241,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/noc/noc_overlay_parameters.h
     inc/internal/tt-2xx/quasar/noc/noc_parameters.h
     inc/internal/tt-2xx/quasar/noc_address_backend.h
+    inc/internal/tt-2xx/quasar/noc_cmd_buf_common.h
     inc/internal/tt-2xx/quasar/noc_nonblocking_api.h
     inc/internal/tt-2xx/quasar/stream_interface.h
     inc/internal/tt-2xx/quasar/stream_io_map.h
