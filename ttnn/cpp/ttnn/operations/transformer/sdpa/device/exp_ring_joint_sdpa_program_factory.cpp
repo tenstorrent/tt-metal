@@ -784,36 +784,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
-    // Single-buffer K/V when double-buffering would overflow L1. The kernels consume K/V one chunk
-    // (Sk_chunk_t * DHt tiles) at a time, so this factor is pure CB depth: dropping it to 1 only
-    // removes prefetch overlap, never changes results. The sum below mirrors the CB list pushed
-    // below; if it drifts it only under-counts, falling back to the allocator's overflow error.
-    const auto cb_l1_bytes = [&](uint32_t kv_factor) {
-        const uint32_t kv_tiles = Sk_chunk_t * DHt * kv_factor;
-        uint32_t total = q_tiles * q_tile_size + kv_tiles * k_tile_size + kv_tiles * v_tile_size +
-                         total_lightweight_mask_tiles * mask_tile_size + 3 * scale_tiles * scalar_tile_size +
-                         statistics_tiles * im_tile_size + out_im_tiles * out_tile_size + qk_tiles * im_tile_size +
-                         2 * out_im_tiles * im_tile_size + 5 * statistics_tiles * stats_tile_size +
-                         out0_t * out_tile_size + statistics_tiles * im_tile_size;
-        if (use_streaming_compute) {
-            total += im_tile_size + 2 * statistics_tiles * stats_tile_size;
-        }
-        return total;
-    };
-    const auto l1_cb_budget =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    uint32_t kv_buffer_factor = 2;
-    if (cb_l1_bytes(kv_buffer_factor) > l1_cb_budget) {
-        kv_buffer_factor = 1;
-        k_tiles = Sk_chunk_t * DHt * kv_buffer_factor;
-        v_tiles = Sk_chunk_t * DHt * kv_buffer_factor;
-        log_debug(
-            tt::LogOp,
-            "K/V single-buffered: double-buffered CBs ({} B) exceed L1 budget ({} B)",
-            cb_l1_bytes(2),
-            l1_cb_budget);
-    }
-
     const auto sdpa_grid_set = CoreRangeSet(sdpa_grid_range);
 
     // Q input
