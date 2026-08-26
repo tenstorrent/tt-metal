@@ -964,6 +964,25 @@ KNOBS = {
     # Booking lever for smoothstep-fresh; the licensed tanhderivlut
     # cell and every noel leg are byte-identical under the knob.
     "madpair-vocabulary": "-mtt-tensix-optimize-madpair-vocabulary",
+    # HN park-ordering: EL-vs-residency ORDERING fix — a CC-restore
+    # loop's invariant SFPU immediate hoists DEFER from the early
+    # conservative 114t invariant pass to the late 295t const-residency
+    # walk whenever that walk's residency classes and pressure-park
+    # tier are both enabled (both are in the reviewed ON-34 set).  The
+    # early first-come hoist pins LREGs the late exact-model arbiter
+    # allocates strictly better (PRGM tiers first, priced LREG parks),
+    # and hoisting a predicated in-region materialization forges a
+    # per-iteration all-lanes SFPMOV merge (the sfpassign_lv liveness
+    # break no longer fires against a preheader-defined carrier).
+    # Deferral only — candidate coverage, admission, audits, pricing
+    # are the reviewed walks unchanged; loops without CC machinery and
+    # compilations without both late flags keep the early hoists
+    # byte-identically.  Fire witness (laneHN-evidence-20260826, pin-31
+    # binary + fix 7146df325dc7): softplus-fresh ON-34+knob kernel
+    # .text == noel .text EXACTLY (29 -> 26 loop words, the hand-parity
+    # form: one early hoist had cost two parks + one forged SFPMOV).
+    # Booking lever for softplus-fresh.
+    "park-ordering": "-mtt-tensix-optimize-park-ordering",
 }
 
 
@@ -1095,6 +1114,13 @@ KNOB_MODES = {
     # (ON + flag) vs plain ON.  on-plus while a booking knob; promotion
     # requires an R9 witness and the ON-vs-ON attribution ceremony.
     "madpair-vocabulary": "on-plus",
+    # HN park-ordering: default-off Init(0) booking knob; the deferral
+    # acts on the reviewed-ON pipeline's EL hoists (there is nothing to
+    # defer without invariant-loadi and no walk to yield to without
+    # const-residency + pressure-park), so the booking A/B is
+    # (ON + flag) vs plain ON.  on-plus while a booking knob; promotion
+    # requires an R9 witness and the ON-vs-ON attribution ceremony.
+    "park-ordering": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
