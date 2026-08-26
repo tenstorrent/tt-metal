@@ -54,16 +54,14 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     const size_t per_core_size_bytes = test_config.num_pages * test_config.page_size_bytes;
     const size_t total_buffer_size_bytes = num_cores * per_core_size_bytes;
 
-    InterleavedBufferConfig interleaved_buffer_config{
-        .device = device,
-        .size = total_buffer_size_bytes,
-        .page_size = test_config.page_size_bytes,
-        .buffer_type = BufferType::DRAM};
-    std::shared_ptr<Buffer> input_buffer;
-    input_buffer = CreateBuffer(interleaved_buffer_config);
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::ReplicatedBufferConfig global_config{.size = total_buffer_size_bytes};
+    distributed::DeviceLocalBufferConfig local_config{
+        .page_size = test_config.page_size_bytes, .buffer_type = BufferType::DRAM};
+    auto input_buffer = distributed::MeshBuffer::create(global_config, local_config, mesh_device.get());
     uint32_t input_buffer_address = input_buffer->address();
 
-    auto output_buffer = CreateBuffer(interleaved_buffer_config);
+    auto output_buffer = distributed::MeshBuffer::create(global_config, local_config, mesh_device.get());
     uint32_t output_buffer_address = output_buffer->address();
 
     TT_FATAL(input_buffer_address != output_buffer_address, "Input and output buffer addresses must be different");
@@ -214,7 +212,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     // Launch program and record outputs
 
     if (test_config.read_kernel) {
-        detail::WriteToBuffer(input_buffer, packed_input);
+        distributed::EnqueueWriteMeshBuffer(cq, input_buffer, packed_input, /*blocking=*/true);
         MetalContext::instance().get_cluster().dram_barrier(device->id());
     } else {
         // If not reading, write each core's slice to L1 directly
@@ -233,7 +231,6 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
@@ -241,7 +238,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     bool is_equal = false;
 
     if (test_config.write_kernel) {
-        detail::ReadFromBuffer(output_buffer, packed_output);
+        distributed::EnqueueReadMeshBuffer(cq, packed_output, output_buffer, /*blocking=*/true);
         is_equal = (packed_output == packed_golden);
         if (!is_equal) {
             log_error(tt::LogTest, "Equality Check failed");

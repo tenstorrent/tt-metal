@@ -134,7 +134,7 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE>
 void polygamma_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();

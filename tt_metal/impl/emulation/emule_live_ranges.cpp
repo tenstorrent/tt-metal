@@ -13,51 +13,66 @@ namespace tt::tt_metal::emule {
 
 namespace {
 
-struct RangeRegistry {
-    std::mutex mu;
-    std::unordered_map<int, std::vector<uint64_t>> per_device;
-};
-
 uint64_t pack(uint32_t start, uint32_t end) {
     return (static_cast<uint64_t>(start) << 32) | static_cast<uint64_t>(end);
 }
 
-uint32_t unpack_start(uint64_t r) { return static_cast<uint32_t>(r >> 32); }
+// Each entry keeps the registering buffer's unique_id so removal erases exactly
+// that registration — never an address match (see the header comment).
+struct OwnedRange {
+    uint64_t packed;
+    uint64_t owner;
+};
+
+struct OwnedRangeRegistry {
+    std::mutex mu;
+    std::unordered_map<int, std::vector<OwnedRange>> per_device;
+};
 
 // add never de-dups and remove is a linear find/erase, so each op is O(n).
 // Intentional: a device's live-range set stays small (a handful of buffers) and
 // this is a debug-only build, so the simplicity beats an index.
-void add_to(RangeRegistry& reg, int device_id, uint32_t start, uint32_t end) {
+void add_to(OwnedRangeRegistry& reg, int device_id, uint32_t start, uint32_t end, uint64_t owner) {
     std::lock_guard<std::mutex> g(reg.mu);
-    reg.per_device[device_id].push_back(pack(start, end));
+    reg.per_device[device_id].push_back(OwnedRange{pack(start, end), owner});
 }
 
-void remove_from(RangeRegistry& reg, int device_id, uint32_t start) {
+void remove_from(OwnedRangeRegistry& reg, int device_id, uint64_t owner) {
     std::lock_guard<std::mutex> g(reg.mu);
     auto it = reg.per_device.find(device_id);
     if (it == reg.per_device.end()) {
         return;
     }
     auto& v = it->second;
-    auto match = std::find_if(
-        v.begin(), v.end(), [start](uint64_t r) { return unpack_start(r) == start; });
+    auto match = std::find_if(v.begin(), v.end(), [owner](const OwnedRange& r) { return r.owner == owner; });
     if (match != v.end()) {
         v.erase(match);
     }
 }
 
-std::vector<uint64_t> snapshot_of(RangeRegistry& reg, int device_id) {
+std::vector<uint64_t> snapshot_of(OwnedRangeRegistry& reg, int device_id) {
     std::lock_guard<std::mutex> g(reg.mu);
     auto it = reg.per_device.find(device_id);
     if (it == reg.per_device.end()) {
         return {};
     }
-    return it->second;
+    std::vector<uint64_t> out;
+    out.reserve(it->second.size());
+    for (const auto& r : it->second) {
+        out.push_back(r.packed);
+    }
+    return out;
 }
 
-// Host-poke add path: dedup, since the same scratch address is re-poked every
-// iteration of a benchmark loop and these ranges are never removed.
-void add_dedup_to(RangeRegistry& reg, int device_id, uint32_t start, uint32_t end) {
+// Host-poke ranges have no owning Buffer: add-only with dedup, since the same
+// scratch address is re-poked every iteration of a benchmark loop and these
+// ranges are never removed.
+struct PlainRangeRegistry {
+    std::mutex mu;
+    std::unordered_map<int, std::vector<uint64_t>> per_device;
+};
+
+void add_dedup_to(PlainRangeRegistry& reg, int device_id, uint32_t start, uint32_t end) {
     std::lock_guard<std::mutex> g(reg.mu);
     auto& v = reg.per_device[device_id];
     uint64_t packed = pack(start, end);
@@ -66,42 +81,47 @@ void add_dedup_to(RangeRegistry& reg, int device_id, uint32_t start, uint32_t en
     }
 }
 
-RangeRegistry& l1_registry() {
-    static RangeRegistry r;
+std::vector<uint64_t> snapshot_of(PlainRangeRegistry& reg, int device_id) {
+    std::lock_guard<std::mutex> g(reg.mu);
+    auto it = reg.per_device.find(device_id);
+    if (it == reg.per_device.end()) {
+        return {};
+    }
+    return it->second;
+}
+
+OwnedRangeRegistry& l1_registry() {
+    static OwnedRangeRegistry r;
     return r;
 }
 
-RangeRegistry& dram_registry() {
-    static RangeRegistry r;
+OwnedRangeRegistry& dram_registry() {
+    static OwnedRangeRegistry r;
     return r;
 }
 
-RangeRegistry& l1_host_poke_registry() {
-    static RangeRegistry r;
+PlainRangeRegistry& l1_host_poke_registry() {
+    static PlainRangeRegistry r;
     return r;
 }
 
 }  // namespace
 
-void LiveL1Ranges::add(int device_id, uint32_t start, uint32_t end) {
-    add_to(l1_registry(), device_id, start, end);
+void LiveL1Ranges::add(int device_id, uint32_t start, uint32_t end, uint64_t owner) {
+    add_to(l1_registry(), device_id, start, end, owner);
 }
 
-void LiveL1Ranges::remove(int device_id, uint32_t start) {
-    remove_from(l1_registry(), device_id, start);
-}
+void LiveL1Ranges::remove(int device_id, uint64_t owner) { remove_from(l1_registry(), device_id, owner); }
 
 std::vector<uint64_t> LiveL1Ranges::snapshot(int device_id) {
     return snapshot_of(l1_registry(), device_id);
 }
 
-void LiveDramRanges::add(int device_id, uint32_t start, uint32_t end) {
-    add_to(dram_registry(), device_id, start, end);
+void LiveDramRanges::add(int device_id, uint32_t start, uint32_t end, uint64_t owner) {
+    add_to(dram_registry(), device_id, start, end, owner);
 }
 
-void LiveDramRanges::remove(int device_id, uint32_t start) {
-    remove_from(dram_registry(), device_id, start);
-}
+void LiveDramRanges::remove(int device_id, uint64_t owner) { remove_from(dram_registry(), device_id, owner); }
 
 std::vector<uint64_t> LiveDramRanges::snapshot(int device_id) {
     return snapshot_of(dram_registry(), device_id);

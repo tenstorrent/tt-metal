@@ -124,13 +124,30 @@ jobs:
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
       summary-scope: ${{ inputs.platform }}
 
+  runtime-sanity-tests:
+    needs: [build-artifact]
+    if: ${{ inputs.tag-version != '' }}
+    permissions:
+      contents: read
+      packages: read
+    secrets: inherit
+    uses: ./.github/workflows/runtime-sanity-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: wh_n150,bh_p150
+
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
   # expected-jobs is the union of single-host and exabox multihost legs so a
   # missing ai_job_summary artifact is reconciled as INFRA_FAILURE.
   ai-run-summary:
     name: "AI Run Summary"
     needs: [release-demo-tests]
-    if: always() && needs.release-demo-tests.result != 'skipped'
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() && needs.release-demo-tests.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -192,7 +209,9 @@ jobs:
     # platform-independent, so without it both platforms file duplicate tickets
     # (search-then-create is not atomic).
     needs: [build-artifact, determine-test-skus]
-    if: ${{ github.ref == 'refs/heads/stable' && inputs.platform == inputs.main-platform }}
+    if: >-
+      ${{ (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v'))
+          && inputs.platform == inputs.main-platform }}
     runs-on: ubuntu-slim
     continue-on-error: true
     outputs:
@@ -201,7 +220,7 @@ jobs:
       detail: ${{ steps.rtl-sim.outputs.detail }}
       url: ${{ steps.rtl-sim.outputs.url }}
     steps:
-      # create_jira_issue.py needs .github/actions.
+      # jira_client.py needs .github/actions.
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -290,7 +309,7 @@ jobs:
             echo "::notice::JIRA_RELEASE_* secrets not configured; skipping Jira filing."
             exit 0
           fi
-          python3 .github/actions/scripts/file_rtl_sim_jira.py
+          python3 .github/actions/scripts/create_jira.py
 
       - name: Re-assert sim failure
         if: ${{ always() && steps.rtl-sim.outputs.sim-failed == 'true' }}
@@ -304,7 +323,13 @@ jobs:
   # release-demo-tests without holding up the sim poll.
   release-test-evidence:
     needs: [check-rtl-sim-status, release-demo-tests]
-    if: ${{ always() && needs.check-rtl-sim-status.outputs.sha != '' }}
+    # The RELEASE board carries stable-release evidence only. Gate on the ref
+    # explicitly: the sha check alone makes this stable-only by accident, since
+    # always() defeats skip-propagation and the empty output is the only brake.
+    if: >-
+      ${{ always() && (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v'))
+          && inputs.platform == inputs.main-platform
+          && needs.check-rtl-sim-status.outputs.sha != '' }}
     runs-on: ubuntu-slim
     # Reporting only: it must not fail or stall the release. Steps are
     # individually non-fatal so a broken report does not redden the run.
