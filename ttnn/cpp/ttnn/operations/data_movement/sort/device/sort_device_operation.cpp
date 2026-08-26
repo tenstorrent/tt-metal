@@ -82,6 +82,16 @@ void SortDeviceOperation::validate_on_program_cache_miss(
         "Operation requires input to be on Device. Input storage type: {}",
         static_cast<int>(input.storage_type()));
 
+    // The index-aware comparator network only exists in the WH/BH LLKs (the Quasar LLK
+    // static_asserts it off), and the CrossCore factory compiles it for BOTH stabilities.
+    // Reject other architectures here so the caller gets an actionable error instead of a
+    // kernel JIT failure.
+    const auto arch = input.device()->arch();
+    TT_FATAL(
+        arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE,
+        "Sort is not supported on {}: the sort LLK network is only implemented on Wormhole and Blackhole",
+        arch);
+
     TT_FATAL(input_pshape.rank() == 4, "Input shape must be 4D, got {}", input_pshape.rank());
 
     const int8_t rank = static_cast<int8_t>(input_pshape.rank());
