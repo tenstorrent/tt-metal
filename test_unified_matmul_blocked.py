@@ -127,7 +127,14 @@ def run(
         make_cb(CB_A, core_ranges, dtype=adtype, num_pages=depth * mt * kt),
         make_cb(CB_B, core_ranges, dtype=wdtype, num_pages=depth * kt * nt),
         make_cb(CB_OUT, core_ranges, dtype=odtype, num_pages=mt * nt),
-    ] + ([make_cb(CB_ACC, core_ranges, num_pages=mt * nt)] if kt != ktot else [])
+        # ALWAYS, even at kb == 1 where the kernel never accumulates. matmul_blocked
+        # declares Storage<Out> acc_storage(kCbAcc) unconditionally, and a Storage must not
+        # name a buffer the host did not create -- an unallocated CB reports zero pages, so
+        # the capacity assert in Storage's constructor fires and the kernel hangs. Skipping
+        # it here saved mt*nt pages and broke that contract; hazard 20 in
+        # unified_api_hazards.md, found by the assert added for hazard 1.
+        make_cb(CB_ACC, core_ranges, num_pages=mt * nt),
+    ]
 
     program = unified_program(
         kernel_source=KERNEL,

@@ -99,6 +99,13 @@ without a marker are mechanisms the headers document as the caller's responsibil
     with no error.
 
 20. **CB index collisions**, or a Storage naming a CB the host never declared.
+    **VERIFIED LIVE, in our own kernel, and fixed.** `matmul_blocked.cpp` declares
+    `Storage<Out> acc_storage(kCbAcc)` unconditionally while both its harnesses allocated
+    that buffer only when `kb > 1` -- an L1 saving that quietly broke the contract. At
+    `kb == 1` the kernel named a buffer that did not exist, which reports zero pages, so the
+    capacity assert from hazard 1 fired. Found BY that assert, which is the argument for
+    adding it: one check for hazard 1 caught an instance of hazard 20 that had been latent
+    for the whole project. The harnesses now allocate it unconditionally.
 
 21. **A user semaphore id colliding with the reserved multicast base.**
 
@@ -360,12 +367,9 @@ sets its own environment per case and ignores both.
 
 ### Verification status, stated exactly
 
-The library changes were verified on a healthy device, after they landed, in batches:
-ten suites, then six, then the layer, then the negative suite -- all eighteen passing. The
-`run_unified_tests.sh` wrapper itself has NOT been observed to complete end to end, because
-the machine ran out of hugepages partway through the attempts (see below) and has not been
-recovered since. The wrapper is a convenience over what was verified suite by suite, and
-that distinction is worth keeping rather than rounding up to "the runner is green".
+RESOLVED. `run_unified_tests.sh` now completes end to end: **18 passed, 0 failed**, on a
+rebase onto `origin/main` 876 commits newer, with asserts enabled. It had never done so
+before, and the reason was hazard 20 rather than anything about the runner.
 
 Both negative cases were confirmed to fail before the fixes and pass after:
 
@@ -385,12 +389,25 @@ The negative suite has two cases against a catalogue of twenty-nine. It is the h
 matters more than the count: the subprocess runner, the watcher, and the rule that a
 refusal must come from the named check.
 
-## The trap that cost the most, and the wrong theory it produced
+## The trap that cost the most, and the three wrong theories it produced
 
-Long runs began stalling. The first theory was that the watcher could not sustain many
-device cycles; when it stalled in lightweight mode too, the theory became "about twelve
-device open/close cycles in one shell". Both were wrong, and both were built from real
-observations -- the stall really did happen around the twelfth suite, twice.
+Long runs began stalling, and it took FOUR theories to get it right. The watcher cannot
+sustain many device cycles; no -- about twelve device open/close cycles in one shell; no --
+hugepage exhaustion; no.
+
+**The answer was this document's own subject.** With asserts enabled, `matmul_blocked` named
+an unallocated circular buffer (hazard 20 above), the capacity assert fired, and a tripped
+assert STOPS THE DEVICE. Every suite after it then failed on a stopped device. The stall
+"moved" when suites were reordered or removed because what moved was the position of the
+first suite to trip it -- remove `matmul_blocked` and `attention_proj`, which shares the same
+harness bug, trips it instead. That is why it looked positional.
+
+So the mystery was a real bug being correctly reported by a new check, wearing the disguise
+of an infrastructure problem. Fixing the buffer allocation made the full run pass 18/18 end
+to end, which it had never done.
+
+The three wrong theories were each built from real observations, which is what made them
+convincing -- the stall really did happen around the twelfth suite, twice.
 
 The third theory was **hugepage exhaustion**, on the evidence that `HugePages_Free` was 0.
 That was also wrong, and it is worth recording as wrong because it was the most plausible

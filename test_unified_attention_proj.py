@@ -86,7 +86,10 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
         # dm * dm of it; now it is kt * nt.
         make_cb(CB_WO, core_ranges, num_pages=kt * nt),
         make_cb(CB_OUT, core_ranges, num_pages=sq * nt),
-    ] + ([make_cb(CB_ACC, core_ranges, num_pages=sq * nt)] if kt != dm else [])
+        # ALWAYS -- see the note in test_unified_matmul_blocked.py. The kernel names
+        # kCbAcc whether or not it accumulates, so the buffer has to exist.
+        make_cb(CB_ACC, core_ranges, num_pages=sq * nt),
+    ]
 
     program = unified_program(
         kernel_source=KERNEL,
