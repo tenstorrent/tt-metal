@@ -1054,8 +1054,9 @@ def _tie_heavy_tensor(shape, levels, seed, dtype=torch.bfloat16):
         ([32, 64], -1, True, True),
     ],
 )
-def test_sort_stable_issue33492_repro(shape, dim, descending, device, stable):
-    """Literal reproduction from issue #33492."""
+def test_sort_stable_index_parity(shape, dim, descending, device, stable):
+    """Exact torch.sort(stable=True) value and index parity on the basic shape
+    (the literal reproduction from issue #33492)."""
     torch.manual_seed(0)
 
     torch_dtype = torch.bfloat16

@@ -31,7 +31,7 @@
     tests/ttnn/unit_tests/operations/data_movement/test_tosa_scatter.py::test_tosa_scatter_normal
     tests/ttnn/unit_tests/operations/data_movement/test_clone.py::test_clone_callback
     tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_indices
-    tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_stable_issue33492_repro
+    tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_stable_index_parity
     tests/ttnn/unit_tests/operations/data_movement/test_interleaved_to_sharded.py::test_interleaved_to_sharded_nd_with_equivalent_2d
     tests/ttnn/unit_tests/operations/data_movement/test_sharded_to_interleaved_oob.py::test_s2i_dram_height_sharded
     tests/ttnn/unit_tests/operations/data_movement/test_convert_to_hwc.py::test_convert_to_hwc_dram_uneven_sharding
