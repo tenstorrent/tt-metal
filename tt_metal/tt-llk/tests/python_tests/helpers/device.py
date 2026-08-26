@@ -45,6 +45,15 @@ class LLKAssertException(Exception):
     pass
 
 
+class BriscCommandTimeout(TimeoutError):
+    """BRISC did not acknowledge a command within the timeout.
+
+    Raised instead of a bare TimeoutError so callers can tell "this core is not
+    responding" apart from every other timeout and drop their cached bring-up state,
+    which is what lets the next test attempt a recovery. See commit_brisc_command.
+    """
+
+
 KERNEL_COMPLETE = 0xFF
 
 # Must match BRISC_BOOT_READY_SENTINEL in tests/helpers/src/brisc.cpp.
@@ -257,6 +266,22 @@ def commit_tensix_soft_reset(
 common_counter = 0
 
 
+def reset_brisc_command_counter():
+    """Put the host half of the BRISC command handshake back to 0.
+
+    BRISC's counter is a local in its firmware's main(), so it restarts at 0 every time
+    the core comes out of reset -- and the host writes each command into the double
+    buffer slot picked by (common_counter & 1). A BRISC bring-up that does not also
+    reset this global therefore leaves the two halves disagreeing about both the
+    expected counter value *and* which mailbox slot is live: BRISC polls the slot the
+    host is not writing, so it never sees another command and every subsequent call
+    times out for the rest of the process. Must be called by any path that re-enters
+    the firmware.
+    """
+    global common_counter
+    common_counter = 0
+
+
 def commit_brisc_command(
     location="0,0", command: BriscCmd = BriscCmd.IDLE_STATE, timeout=1
 ):
@@ -276,9 +301,21 @@ def commit_brisc_command(
 
     logger.error(f"{command.name} -> {hex(Mailboxes.BriscCommand0.value)}")
 
-    raise TimeoutError(
+    # Resync to what BRISC actually acknowledged before unwinding. common_counter was
+    # already incremented above, so leaving it ahead would make every later command
+    # compare against a value BRISC can never reach -- and pick the wrong double buffer
+    # slot as well. That is what turns one unresponsive core into a whole worker's worth
+    # of timeouts against kernels that were never run. Recovery still needs a bring-up
+    # (BriscCommandTimeout is the signal for that); this just stops the desync
+    # outliving the failure.
+    common_counter = temp_value
+
+    raise BriscCommandTimeout(
         (
-            f"Polling brisc command timed out | Python counter: {common_counter} | Brisc Counter: {temp_value} | "
+            f"BRISC did not acknowledge {command.name} within {timeout}s -- the core is "
+            f"unresponsive, and any further failures in this worker before a successful "
+            f"bring-up are collateral rather than independent results. "
+            f"| Brisc Counter: {temp_value} | "
             f"Start counter: 0x{read_from_device(location, Mailboxes.BriscBread0.value, 0)} | "
             f"Reset counter: 0x{read_from_device(location, Mailboxes.BriscBread1.value, 0)} | "
             f"Reset register: 0x{get_register_store(location, 0).read_register('RISCV_DEBUG_REG_SOFT_RESET_0')}"

@@ -773,6 +773,11 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
 
+    # A test that got through means the core is answering, so the consecutive-timeout
+    # count that TestConfig.brisc_command latches the wedge decision on starts over.
+    if report.when == "call" and report.passed:
+        TestConfig.BRISC_TIMEOUTS = 0
+
     if report.when == "call" and not report.skipped and _RECORD_TEST_ORDER:
         worker_id = getattr(item.config, "workerinput", {}).get("workerid", "master")
 
@@ -883,6 +888,13 @@ def pytest_runtest_teardown(item, nextitem):
 def pytest_runtest_setup(item):
     """Start the server on the first test, or restart between tests if requested."""
     global _exalens_server, _reset_simulator_pending
+
+    # A wedged Tensix cannot run anything, and letting the attempts proceed buries the
+    # one real failure under a run's worth of identical timeouts attributed to whatever
+    # kernels happened to be queued behind it. Skip instead: the reason is reported once
+    # per test and the genuine failure stays visible.
+    if TestConfig.CORE_WEDGED:
+        pytest.skip(TestConfig.CORE_WEDGED)
 
     if _exalens_server is None:
         return

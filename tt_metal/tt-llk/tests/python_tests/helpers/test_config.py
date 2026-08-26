@@ -37,11 +37,13 @@ from .device import (
     KERNEL_COMPLETE,
     TRISC_CORES,
     BootMode,
+    BriscCommandTimeout,
     RiscCore,
     commit_brisc_command,
     commit_tensix_soft_reset,
     exalens_device_setup,
     handle_if_assert_hit,
+    reset_brisc_command_counter,
     reset_mailboxes,
     set_tensix_soft_reset,
     wait_brisc_boot_ready,
@@ -851,6 +853,46 @@ class TestConfig:
             and not collect_only
         ):
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
+
+    @staticmethod
+    def brisc_command(command, timeout):
+        """Issue a BRISC command, giving up the cached bring-up state if it goes unanswered.
+
+        Without this, an unresponsive core is unrecoverable for the rest of the worker:
+        BRISC_ELF_LOADED stays latched from the last successful boot, so every following
+        test skips bring-up entirely and goes straight to another command that cannot be
+        acknowledged. One wedge then reports as dozens of failures spread across whatever
+        else happened to be queued behind it -- which reads as a pile of independent
+        kernel bugs rather than one dead core. Clearing the flags here means the next test
+        re-runs the soft-reset kick that can actually recover the core, and re-loads the
+        TRISC ELFs, which a recovered core is not guaranteed to still hold.
+        """
+        try:
+            commit_brisc_command(TestConfig.TENSIX_LOCATION, command, timeout=timeout)
+        except BriscCommandTimeout:
+            TestConfig.BRISC_ELF_LOADED = False
+            TestConfig.LAST_LOADED_ELFS = Path()
+            TestConfig.BRISC_TIMEOUTS += 1
+            if TestConfig.BRISC_TIMEOUTS > 1:
+                # Counted per test, not per command, and reset by the plugin whenever a
+                # test passes -- so reaching 2 means a whole test ran between the two
+                # timeouts, including the full bring-up the first one forced, and the core
+                # still will not take a command. (Counting per command never gets here:
+                # RESET_TRISCS keeps being acknowledged and only START_TRISCS hangs, so a
+                # per-command counter resets every test.) A RISC soft reset
+                # does not clear Tensix-level state (a hung kernel can leave the math
+                # pipeline in a condition BRISC's own start sequence then blocks on), so
+                # nothing this process can do will recover the core -- only a board
+                # reset will. Stop here rather than letting every remaining test run
+                # against a dead core and report a failure that says nothing about the
+                # kernel it names.
+                TestConfig.CORE_WEDGED = (
+                    f"Tensix {TestConfig.TENSIX_LOCATION} is wedged: BRISC stopped "
+                    f"acknowledging commands and a full bring-up did not recover it. "
+                    f"The first failure in this worker is the real one; everything after "
+                    f"it would be collateral. Reset the board (tt-smi -r) and re-run."
+                )
+            raise
 
     @staticmethod
     def resolve_worker_tensix_location():
@@ -1746,6 +1788,11 @@ class TestConfig:
             fd.write(coverage_stream)
 
     BRISC_ELF_LOADED: ClassVar[bool] = False
+    # Consecutive unacknowledged BRISC commands, and the reason the core was declared
+    # unrecoverable once a bring-up in between them failed to help. Per worker process,
+    # which is also per Tensix, since a worker owns exactly one core.
+    BRISC_TIMEOUTS: ClassVar[int] = 0
+    CORE_WEDGED: ClassVar[str] = None
     LAST_LOADED_ELFS: ClassVar[Path] = Path()
     # Max BRISC bring-up attempts after a reset. A board-wide `tt-smi -r 0`
     # can leave a core slow-to-boot or wedged; each attempt re-issues the
@@ -1807,6 +1854,12 @@ class TestConfig:
                         device_module.Mailboxes.BriscCounter.value,
                         [0],
                     )
+                    # The host half of the handshake has to go back to 0 with it: the
+                    # kick below re-enters BRISC's main(), which restarts its own
+                    # counter at 0. Leaving the host counter where it was desyncs both
+                    # the expected value and the live double buffer slot, so BRISC would
+                    # sit polling the slot we are not writing.
+                    reset_brisc_command_counter()
                     commit_tensix_soft_reset(
                         0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
                     )
@@ -1826,11 +1879,7 @@ class TestConfig:
                     ) from last_err
 
             # Reset only TRISCs, BRISC stays alive in its polling loop
-            commit_brisc_command(
-                TestConfig.TENSIX_LOCATION,
-                BriscCmd.RESET_TRISCS,
-                timeout=brisc_cmd_timeout,
-            )
+            TestConfig.brisc_command(BriscCmd.RESET_TRISCS, brisc_cmd_timeout)
         else:
             commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
@@ -1877,20 +1926,14 @@ class TestConfig:
                 boot_mode == BootMode.BRISC
                 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
             ):
-                commit_brisc_command(
-                    TestConfig.TENSIX_LOCATION,
-                    BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
-                    timeout=brisc_cmd_timeout,
+                TestConfig.brisc_command(
+                    BriscCmd.UPDATE_START_ADDR_CACHE_AND_START, brisc_cmd_timeout
                 )
                 return
 
         match boot_mode:
             case BootMode.BRISC:
-                commit_brisc_command(
-                    TestConfig.TENSIX_LOCATION,
-                    BriscCmd.START_TRISCS,
-                    timeout=brisc_cmd_timeout,
-                )
+                TestConfig.brisc_command(BriscCmd.START_TRISCS, brisc_cmd_timeout)
             case BootMode.TRISC:
                 reset_mailboxes(TestConfig.TENSIX_LOCATION)
                 set_tensix_soft_reset(0, [RiscCore.TRISC0], TestConfig.TENSIX_LOCATION)
