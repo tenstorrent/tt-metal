@@ -15,6 +15,7 @@
 #include "core_descriptor.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -87,23 +88,13 @@ tt::tt_metal::CommandQueueDispatchLayout generate_cq_dispatch_layout(
     if (arch != tt::ARCH::QUASAR) {
         return {.fd_kernels_on_same_core = false, .num_cqs_per_core = 1};
     }
+    const std::vector<tt::tt_metal::CoreCoord> cq_dispatch_cores =
+        tt::tt_metal::detail::get_quasar_dispatch_core_per_cq(arch, dispatch_core_pool, num_hw_cqs);
 
-    constexpr uint32_t num_fd_kernels_per_cq = 2;
-    // Pool is [cq0 prefetch, cq0 dispatch, cq1 prefetch, cq1 dispatch, ...]; a wrong length
-    // would make the pair indexing below miss a CQ or read past the end.
-    TT_ASSERT(dispatch_core_pool.size() == num_fd_kernels_per_cq * num_hw_cqs);
-
-    std::vector<tt::tt_metal::CoreCoord> cq_dispatch_cores;
-    cq_dispatch_cores.reserve(num_hw_cqs);
-    for (uint8_t cq = 0; cq < num_hw_cqs; cq++) {
-        const tt::tt_metal::CoreCoord& prefetch_core = dispatch_core_pool[num_fd_kernels_per_cq * cq];
-        const tt::tt_metal::CoreCoord& dispatch_core = dispatch_core_pool[num_fd_kernels_per_cq * cq + 1];
-        TT_FATAL(
-            prefetch_core == dispatch_core,
-            "Expected prefetch and dispatch cores to be the same, got prefetch core {} and dispatch core {}",
-            prefetch_core,
-            dispatch_core);
-        cq_dispatch_cores.push_back(dispatch_core);
+    // No dispatch cores means no CQ placement, however DispatchMemMap is still built so return the default
+    // Quasar layout.
+    if (cq_dispatch_cores.empty()) {
+        return {.fd_kernels_on_same_core = true, .num_cqs_per_core = num_hw_cqs};
     }
 
     const bool all_cqs_on_one_core =
