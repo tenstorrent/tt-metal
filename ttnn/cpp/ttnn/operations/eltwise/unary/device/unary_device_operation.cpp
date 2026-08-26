@@ -168,11 +168,6 @@ Tensor UnaryDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-// The output dtype is hashed from the output spec, not from attributes.output_dtype:
-// with a preallocated output the spec comes from the caller's tensor (compute_output_specs
-// above), while attributes.output_dtype still carries the input's dtype. Without it, two
-// calls that differ only in the output tensor's dtype collide and the second is served the
-// first one's packer.
 ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
