@@ -32,6 +32,11 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
         Note: peak_total_aggregate (theoretical) is typically much larger than
         peak_l1_memory_device (actual) for operations with sequential execution.
     """
+    metrics = None
+    # Set once a NO_DISPATCH capture has actually begun: only from that point can the device
+    # program cache hold entries for programs that were never dispatched. Failures before this
+    # (no device, ttnn import, grid query) leave the cache untouched, so there is nothing to purge.
+    capture_may_have_poisoned_cache = False
     try:
         import ttnn
 
@@ -40,6 +45,7 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
 
         mode = ttnn.graph.RunMode.NO_DISPATCH if use_no_dispatch else ttnn.graph.RunMode.NORMAL
         ttnn.graph.begin_graph_capture(mode)
+        capture_may_have_poisoned_cache = use_no_dispatch
 
         # Execute test (results not used, just capturing memory profile)
         try:
@@ -55,7 +61,7 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
         # Also get device-level peak memory for comparison
         peak_l1_memory_device = ttnn.graph.extract_peak_L1_memory_usage(captured_graph)
 
-        return {
+        metrics = {
             "peak_total_per_core": per_core_usage.peak_total,
             "peak_cb_per_core": per_core_usage.peak_cb,
             "peak_l1_per_core": per_core_usage.peak_l1,
@@ -68,9 +74,9 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
     except Exception as e:
         # If memory capture fails, return None but don't fail the test
         logger.warning(f"Failed to capture peak memory: {e}")
-        return None
+        metrics = None
 
-    finally:
+    if capture_may_have_poisoned_cache:
         # A NO_DISPATCH capture still walks the whole ttnn op path, so it can leave entries in the
         # device program cache for programs that were never actually dispatched. A LATER vector's
         # real run that hits one of those entries reads back garbage -- the op appears to compute a
@@ -83,8 +89,17 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
         # passed 8 of 8. The failing vector is never the captured one.
         #
         # Clearing the cache costs a recompile on the next vector, which is the same cost the runner
-        # already accepts at every module boundary (clear_job_device_program_cache).
+        # already accepts at every module boundary (clear_job_device_program_cache). NORMAL captures
+        # dispatch for real, so their cache entries are valid and are deliberately left in place.
         try:
             device.clear_program_cache()
-        except Exception as exc:  # noqa: BLE001 - never let cleanup fail the test
-            logger.debug(f"Could not clear program cache after memory capture: {exc}")
+        except Exception as exc:
+            # Deliberately not swallowed. Returning normally here would hand a still-poisoned cache
+            # to the next vector, which is the silent wrong answer this function exists to prevent;
+            # failing now pins the problem on the capture that caused it.
+            raise RuntimeError(
+                "Could not clear the device program cache after a NO_DISPATCH memory capture; it may "
+                "still hold entries for undispatched programs that would corrupt later vectors"
+            ) from exc
+
+    return metrics
