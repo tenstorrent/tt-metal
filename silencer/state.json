@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-24",
+  "last_scan_date": "2026-08-26",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -26,7 +26,10 @@
     "32053638633",
     32101971921,
     32613186861,
-    "32749061648"
+    "32749061648",
+    32926104552,
+    32936855493,
+    32926101915
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -50,7 +53,9 @@
     "t3000-perf-tests.yaml",
     "single-card-ttnn-models-frequent-tests",
     "models-t1-e2e-tests.yaml",
-    "t3000-integration-tests.yaml"
+    "t3000-integration-tests.yaml",
+    "runtime-sanity-tests.yaml",
+    "galaxy-integration-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -191,7 +196,20 @@
       "workflow": "t3000-integration-tests.yaml",
       "status": "pr-just-opened-dispatch-requested",
       "note": "New PR opened this run in tt_metal/impl/context/metal_env.cpp: MetalEnvImpl::set_fabric_config() now only logs the 'changed' message at info when the fabric config value actually differs; otherwise logs at debug. Reinit call itself left unconditional/unchanged (pure logging fix). Dispatched t3000-integration-tests (model=tteager) on branch for validation."
+    },
+    {
+      "branch": "silencer/demote-d2h-hugepage-fallback-log",
+      "title": "Demote D2HSocket hugepage-fallback log from info to debug",
+      "source_run_id": 32936855493,
+      "source_job_id": 98081916275,
+      "source_workflow": "t3000-unit-tests.yaml",
+      "pattern": "D2HSocket: Using hugepage fallback for device {} (data_dev_addr=..., pcie_xy_enc=...)",
+      "sample_count": 172,
+      "sample_scope": "last 5000 lines of job 98081916275",
+      "category": "6-demote-verbose-info-to-debug",
+      "validation_workflow_dispatched": "t3000-unit-tests.yaml",
+      "status": "pr-just-opened-dispatch-requested"
     }
   ],
-  "backlog_cursor": "t3000-integration-tests.yaml scanned (run 32749061648); next: continue rotation to next untracked workflow"
+  "backlog_cursor": "t3000-unit-tests.yaml scanned (run 32936855493); galaxy-integration-tests.yaml run 32926101915 also scanned (device-hang related noise, not fixed - real bug symptom, not pure spam); next: continue rotation to next untracked workflow"
 }
