@@ -189,6 +189,22 @@ post-steps:
       set -euo pipefail
       OUT=/tmp/gh-aw/agent_output.json
       REF_FILE=/tmp/gh-aw/agent/pr-head-ref.txt
+      FORK_FILE=/tmp/gh-aw/agent/pr-is-fork.txt
+
+      # FAIL CLOSED. The agent artifact upload after this step runs
+      # `if: always()`, and the safe_outputs job runs whenever the agent job
+      # was not skipped — a failed agent job still gets its collected items
+      # dispatched. A plain `exit 1` here would therefore ship the
+      # un-rewritten items downstream and reopen the exact hole this step
+      # exists to close. Instead, any exit that is not an explicit success —
+      # including unexpected command failures under `set -euo pipefail` —
+      # first empties the item list: no dispatches, no comment, and a red
+      # step pointing at what broke.
+      neutralize() {
+        echo '{"items":[]}' > "$OUT" || true
+      }
+      finish_ok=0
+      trap '[ "$finish_ok" = 1 ] || { echo "::error::Ref enforcement did not complete; discarding all safe-output items." >&2; neutralize; }' EXIT
 
       # gh-aw's placeholder step (which writes '{"items":[]}' when the agent
       # produced nothing) runs before post-steps, so this file normally exists
@@ -196,12 +212,31 @@ post-steps:
       # nothing to enforce and nothing the safe_outputs job could dispatch.
       if [ ! -s "$OUT" ]; then
         echo "No agent output collected; nothing to enforce."
+        finish_ok=1
+        exit 0
+      fi
+
+      # Deterministic fork stop. `workflow_dispatch` only accepts refs that
+      # exist in this repository, and a fork's head branch name can *also*
+      # exist here by coincidence — forcing it would then green-light a run
+      # of the wrong code. The prompt already tells the agent to dispatch
+      # nothing for forks, but that rule is executed by a model; enforce it
+      # here by stripping every dispatch item while keeping the agent's
+      # explanatory comment. Anything other than a literal "false"
+      # (including a missing file) is treated as a fork.
+      IS_FORK="$(cat "$FORK_FILE" 2>/dev/null || echo unknown)"
+      if [ "$IS_FORK" != "false" ]; then
+        echo "PR is from a fork (pr-is-fork.txt: '$IS_FORK'); stripping all dispatch_workflow items."
+        jq '.items = [ .items[]? | select(.type != "dispatch_workflow") ]' "$OUT" > "$OUT.tmp"
+        mv "$OUT.tmp" "$OUT"
+        finish_ok=1
         exit 0
       fi
 
       # The pre-agent step hard-fails the run before the agent ever starts if the
       # head ref cannot be resolved, so an empty file here means something upstream
-      # changed shape — fail loudly rather than let a dispatch fall back to main.
+      # changed shape — discard the items (via the EXIT trap) and fail loudly
+      # rather than let a dispatch fall back to main.
       if [ ! -s "$REF_FILE" ]; then
         echo "::error::pr-head-ref.txt is missing or empty; cannot enforce dispatch refs." >&2
         exit 1
@@ -221,6 +256,7 @@ post-steps:
       mv "$OUT.tmp" "$OUT"
       echo "dispatch_workflow refs as emitted by the agent: $BEFORE"
       echo "All dispatch_workflow items now target: $HEAD_REF"
+      finish_ok=1
 
 safe-outputs:
   mentions: false
@@ -362,6 +398,10 @@ is not a branch, and dispatch rejects it. Dispatching anyway would either error 
 
 Post your comment explaining this, and point them at the Actions tab to run a pipeline by
 hand against a local copy of the branch if they need one. Then stop.
+
+A deterministic post-step strips any dispatch you emit for a fork PR (your comment still
+posts), so a mistake here cannot reach the dispatcher — but the comment you write must
+match that reality: never describe a pipeline as dispatched on a fork PR.
 
 ## Selection procedure
 
