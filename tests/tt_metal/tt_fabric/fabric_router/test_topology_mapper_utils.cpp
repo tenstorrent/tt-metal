@@ -3522,6 +3522,73 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FourNodesFourHosts_Partia
     }
 }
 
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysicalN_EveryEnumeratedSolutionRespectsHostCap) {
+    // The multi-solution enumeration must honor the minimal host-group cap on EVERY solution, not just the single
+    // solve. 4 single-chip logical meshes (no inter-mesh edges, so they may be placed independently) are enumerated
+    // onto 8 single-chip physical meshes grouped 2-per-host across 4 hosts. The cap is
+    // k_min = ceil(4 logical chips / 2 chips-per-host) = 2 hosts, so all 4 meshes must land on exactly 2 hosts.
+    // Without the multi-solution cap enforcement in map_multi_mesh_to_physical_n, the enumeration would also return
+    // placements spread across 3-4 hosts. Cap the enumeration at 10 solutions and check how many hosts each uses.
+    using namespace ::tt::tt_fabric;
+
+    constexpr uint32_t kLogicalMeshes = 4;
+    constexpr uint32_t kPhysicalMeshes = 8;
+    constexpr uint32_t kMeshesPerHost = 2;
+    constexpr size_t kExpectedHosts = 2;  // ceil(4 / 2)
+
+    // Logical: single-node meshes with an empty mesh-level graph (independent placements).
+    LogicalMultiMeshGraph logical;
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level;
+    for (uint32_t m = 0; m < kLogicalMeshes; ++m) {
+        const MeshId mesh{m};
+        LogicalAdjacencyMap adj;
+        adj[FabricNodeId(mesh, 0)] = {};
+        logical.mesh_adjacency_graphs_[mesh] = AdjacencyGraph<FabricNodeId>(adj);
+        logical.mesh_exit_node_graphs_[mesh] = AdjacencyGraph<LogicalExitNode>();
+        logical_mesh_level[mesh] = {};
+    }
+    logical.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level);
+
+    // Physical: single-node meshes; every kMeshesPerHost of them share a host.
+    PhysicalMultiMeshGraph physical;
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level;
+    TopologyMappingConfig config;
+    const std::vector<tt::tt_metal::AsicID> asics = make_asics(kPhysicalMeshes, 1000);
+    for (uint32_t m = 0; m < kPhysicalMeshes; ++m) {
+        const MeshId mesh{m};
+        PhysicalAdjacencyMap adj;
+        adj[asics[m]] = {};
+        physical.mesh_adjacency_graphs_[mesh] = AdjacencyGraph<tt::tt_metal::AsicID>(adj);
+        physical.mesh_exit_node_graphs_[mesh] = AdjacencyGraph<PhysicalExitNode>();
+        physical_mesh_level[mesh] = {};
+        config.hostname_to_asics["host" + std::to_string(m / kMeshesPerHost)].insert(asics[m]);
+    }
+    physical.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level);
+
+    set_strict_intra_and_inter_mesh(config, {MeshId{0}, MeshId{1}, MeshId{2}, MeshId{3}});
+    config.disable_rank_bindings = true;  // any host-rank assignment is valid
+
+    // Enumerate up to 10 solutions and verify how many hosts each lands on.
+    const auto solutions = map_multi_mesh_to_physical_n(logical, physical, config, /*max_solutions=*/10);
+    ASSERT_FALSE(solutions.empty()) << "expected at least one enumerated solution";
+
+    for (const auto& sol : solutions) {
+        ASSERT_TRUE(sol.success) << sol.error_message;
+        std::set<std::string> hosts;
+        for (const auto& [fabric_node, asic] : sol.fabric_node_to_asic) {
+            for (const auto& [host, host_asics] : config.hostname_to_asics) {
+                if (host_asics.contains(asic)) {
+                    hosts.insert(host);
+                    break;
+                }
+            }
+        }
+        EXPECT_EQ(hosts.size(), kExpectedHosts)
+            << "every enumerated solution must land on the minimal " << kExpectedHosts
+            << " hosts (k_min); this one landed on " << hosts.size();
+    }
+}
+
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FourNodesFourHosts_NoHostRankAssigned) {
     // 8 nodes in a 2x4 torus (2 rows, 4 columns) with wrap-around connections in x and y directions.
     // 4 hosts with 2 ASICs each. All ASIC ranks are UNSET (no host rank assigned).

@@ -236,7 +236,7 @@ done
 
 CURRENT_GROUP="$GROUP"
 
-VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-misc bh-sweep-cap"
+VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-misc"
 if ! echo "$VALID_GROUPS" | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "Invalid --group value '$GROUP'. Valid groups: $VALID_GROUPS" >&2; exit 1
 fi
@@ -782,23 +782,5 @@ run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-desc
 run_test env TT_METAL_OPERATION_TIMEOUT_SECONDS=600 TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mesh-graph-descriptor "${MGD_CUSTOM}/disaggregated_prefill_2x4_pipeline_decode_32x4_combined.textproto" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestControlPlaneInitNoMGD
 
 fi # bh-misc
-
-######################################
-# BH Galaxy: multi-solution host-cap sweep
-# Enumerate topology-mapping solutions for the 16-stage 2x4 pipeline on the full 36-host SC36 subtorus mock via
-# generate_rank_bindings --all-solutions, and assert EVERY enumerated solution stays within the minimal
-# host-group cap: k_min = ceil(128 chips / 8 chips-per-host-rank) = 16 host-ranks. This guards the multi-solution
-# cap enforcement in topology_mapper_utils (map_multi_mesh_to_physical_n / MultiMeshSolutionEnumerator) -- the
-# enumeration solver does not honor set_max_same_rank_groups_used itself, so without that enforcement most
-# enumerated solutions occupy more than k_min host-ranks. Bounded to 4 solutions to keep the enumeration short.
-######################################
-if run_group "bh-sweep-cap"; then
-
-run_test python3 "${TT_METAL_HOME}/tests/tt_metal/tt_fabric/utils/verify_sweep_host_cap.py" \
-  --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_single_pod_mesh_graph_descriptor.textproto" \
-  --mock-cluster-rank-binding "${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" \
-  --max-solutions 4 --max-ranks 16
-
-fi # bh-sweep-cap
 
 print_failure_summary
