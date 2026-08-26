@@ -476,6 +476,27 @@ KNOBS = {
     # sigmoidlut-fresh + tanhlut-fresh (TABLE2 mod0 7).
     "lut-select-fp16": "-mtt-tensix-optimize-lut-select "
     "-mtt-tensix-optimize-lut-select-fp16",
+    # HC (lut-prefix-hoist, 2026-08-25): crosscall CONFIG-PREFIX +
+    # placement RESIDENCY — the geluappx-fresh +6.25 residual's named
+    # "per-tile table-prefix/crosscall-residency" class.  The licensed
+    # gelu body's vConstFloatPrgm0=0.5 pair (sfploadi + sfpwriteconfig_v
+    # dest 12) killed the whole 6-value fp16-LUT crosscall contract
+    # (crosscall-callee-vector-outside-loop); under the flag the pair
+    # JOINS the contract (hoisted ahead of the table loads, deleted from
+    # the callee) and the committed placement lifts across enclosing
+    # caller loops under the same caller-epoch scan — tile loop -> batch
+    # loop -> kernel entry, the hand once-per-kernel init discipline.
+    # The callee becomes the bare 5-word row loop (one word SHORTER than
+    # hand's 6).  sigmoidlut/tanhlut contracts (already firing) gain the
+    # residency lift.  Composed with the fp16 surface (the target rows'
+    # shape only exists under it); the config-prefix-only attribution
+    # A/B is laneHC-evidence-20260825 (ON-28+fp16 vs +config-prefix).
+    # atan2-fresh = named no-fire control (fully inlined, no call
+    # boundary; its 27-word residual is the 295t peel-placement class,
+    # crossloop-cc-unproven at the face loop — a different member).
+    "crosscall-config-prefix": "-mtt-tensix-optimize-lut-select "
+    "-mtt-tensix-optimize-lut-select-fp16 "
+    "-mtt-tensix-optimize-crosscall-config-prefix",
     # CN (representation-propagation): bit-involution pair cancellation
     # on audited choose-webs; corpus 0-changed at the CN gate (fire
     # evidence lives in the dg twins) — the knob leg surfaces any pin-14
@@ -802,6 +823,7 @@ KNOB_MODES = {
     "int-abs": "on-plus",
     "lut-select-leaf-ext": "on-plus",
     "lut-select-fp16": "on-plus",
+    "crosscall-config-prefix": "on-plus",
     "repr-prop": "on-plus",
     # pin-15 crown-jewel booking flags (lane DZ): shapes only materialize
     # on the reviewed-ON baseline (the allocator/scheduler act on the
