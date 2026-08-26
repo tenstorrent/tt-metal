@@ -61,6 +61,7 @@ def run_single_routed_expert(
     activation=None,
     weight_scale: float = 0.02,
     weights_dtype=ttnn.bfloat4_b,
+    weights_dram_sharded: bool = False,
     pcc_threshold: float = 0.97,
     min_cap_frac: tuple[float, float] | None = None,
 ):
@@ -199,6 +200,7 @@ def run_single_routed_expert(
         torch_weights=[weights],  # List with single expert weights
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=weights_dtype,
+        weights_dram_sharded=weights_dram_sharded,
         activation=activation,
     )
 
