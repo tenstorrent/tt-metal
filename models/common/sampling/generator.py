@@ -10,9 +10,9 @@ from typing import List, Optional
 
 import torch
 from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
-from ttnn.tools import trace_allocation_tracker
 
 from ._utils import clamp, is_default_value, split_list
 from .tt_penalties import TTPenalties

@@ -7,9 +7,9 @@ from collections import defaultdict
 
 import torch
 from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
-from ttnn.tools import trace_allocation_tracker
 from models.common.llama_models import (
     CompletionMessage,
     StopReason,
