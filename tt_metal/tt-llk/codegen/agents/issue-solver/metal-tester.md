@@ -1,15 +1,19 @@
 ---
 name: metal-tester
-description: Verify Layer-2/3/4 LLK changes with the metal `unit_tests_llk` gtest suite on ttsim or silicon.
+description: Verify CKernels, Compute-API, and Metal-runtime LLK changes with the `unit_tests_llk` gtest suite on ttsim or silicon.
 tools: Bash, Read, Write, Glob, Grep
 ---
 
 # Metal Test-Suite Tester
 
-Run `unit_tests_llk` for changes that the tt-llk Python suite cannot reach:
-CKernels API, Compute API, TTNN compute kernels, and metal LLK tests. The gtest
+Run `unit_tests_llk` for lower-layer changes that need a Metal regression:
+CKernels API, Compute API, Metal runtime, and Metal LLK tests. The gtest
 honors `TT_METAL_SIMULATOR`. Compute-API headers are JIT-compiled from
 `TT_METAL_HOME`, so every run requires a fresh `TT_METAL_CACHE`.
+
+This suite does not compile TTNN host/Python code. A TTNN-layer route uses
+`ttnn-tester.md`, optionally in addition to this suite when the lower boundary
+needs its own regression.
 
 ## Core Rules
 
@@ -51,8 +55,9 @@ Optional environment:
 - `METAL_VERIFY_BUILD_DIR`: warm build directory. Fall back to
   `CODEGEN_METAL_VERIFY_BUILD_DIR`, then `<METAL_VERIFY_HOME>/build`.
 - `HW_TEST_DISPATCH_CMD`: submit silicon execution to the shared hardware-test
-  queue after the local build passes. Applies to Blackhole/Wormhole only;
-  Quasar executes on the compute runner through Aether.
+  queue after the optimized local compile gate passes. The queue rebuilds in its
+  isolated warm workspace before card execution. Applies to Blackhole/Wormhole
+  only; Quasar executes on the compute runner through Aether.
 - `HW_TEST_SESSION`: dispatch session name.
 - `QSR_SIM_BACKEND`: Quasar Aether backend, `emu` (default) or `vcs`.
 - `QSR_EMU_SIM_PATH` / `QSR_VCS_SIM_PATH`: runner-local UMD build directories.
@@ -122,10 +127,41 @@ fi
 
 ## Step A — Build `unit_tests_llk` locally
 
-This is a gate for every backend, including queued silicon. Do not submit a
-hardware job when the build fails.
+This is the early compile gate for every backend, including queued silicon. Do
+not submit a hardware job when it fails. The queue intentionally rebuilds in an
+isolated workspace; both paths must use the narrow target and warm caches below.
 
 Pick the strategy that matches what the environment provides.
+
+Install one cleanup trap before either local strategy. It preserves the warm
+tree rollback and removes only a cache directory created by this invocation:
+
+```bash
+FRESH_CACHE=
+FRESH_CACHE_ARCH=
+cleanup_fresh_cache() {
+  local cache="${FRESH_CACHE:-}" root="${TTCACHE_ROOT:-}" cache_arch="${FRESH_CACHE_ARCH:-}"
+  [ -z "$cache" ] && return 0
+  case "$root" in
+    /*) ;;
+    *) echo "ENV_ERROR: TTCACHE_ROOT must be absolute"; return 1 ;;
+  esac
+  local expected_prefix="${root%/}/ttcache_${cache_arch}."
+  case "$cache" in
+    "$expected_prefix"*) rm -rf -- "$cache" ;;
+    *) echo "ENV_ERROR: refusing to remove unexpected cache path: $cache"; return 1 ;;
+  esac
+  FRESH_CACHE=
+  FRESH_CACHE_ARCH=
+}
+cleanup_metal_tester() {
+  cleanup_fresh_cache || true
+  if [ "${VERIFY_STRATEGY:-}" = warm ] && [ -n "${FIX_PATCH:-}" ]; then
+    git -C "$METAL_VERIFY_HOME" apply -R "$FIX_PATCH" 2>/dev/null || true
+  fi
+}
+trap cleanup_metal_tester EXIT
+```
 
 ### Strategy 1: warm tree
 
@@ -158,10 +194,16 @@ git -C "$METAL_VERIFY_HOME" apply --check "$FIX_PATCH" ||
   { echo "ENV_ERROR: fix does not apply to the verification tree base"; exit 3; }
 git -C "$METAL_VERIFY_HOME" apply "$FIX_PATCH"
 
-trap 'git -C "$METAL_VERIFY_HOME" apply -R "$FIX_PATCH" 2>/dev/null || true' EXIT
-
 # Incremental build. Fast/no-op for a pure Compute-API (JIT-side) header change; a real
 # rebuild only when host-compiled metal code changed. Build failure => COMPILE_FAILED.
+if [ ! -f "$BUILD_DIR/CMakeCache.txt" ] ||
+   ! rg -q '^ENABLE_CCACHE:BOOL=(1|ON|TRUE|YES)$' "$BUILD_DIR/CMakeCache.txt" ||
+   ! rg -q '^TT_METAL_BUILD_TESTS:BOOL=(1|ON|TRUE|YES)$' "$BUILD_DIR/CMakeCache.txt"; then
+  ./build_metal.sh --enable-ccache --build-metal-tests \
+    --build-dir "$BUILD_DIR" --configure-only 2>&1 \
+    | tee -a "$LOG_DIR/metal_build.log" \
+    || { echo "COMPILE_FAILED"; exit 2; }
+fi
 if ! cmake --build "$BUILD_DIR" --target unit_tests_llk 2>&1 | tee -a "$LOG_DIR/metal_build.log"; then
   echo "COMPILE_FAILED"; exit 2
 fi
@@ -172,16 +214,38 @@ fi
 Use when no suitable warm tree exists or the fix adds files:
 
 ```bash
+set -euo pipefail
 cd "$WORKTREE_DIR"
-export CCACHE_DIR="${CCACHE_DIR:-$HOME/.codegen/ccache}"
-./build_metal.sh --enable-ccache --build-metal-tests 2>&1 | tee -a "$LOG_DIR/metal_build.log" \
-  || { echo "COMPILE_FAILED"; exit 2; }
+CACHE_USER="${USER:-$(id -un)}"
+export CCACHE_DIR="${CCACHE_DIR:-/localdev/$CACHE_USER/ccache}"
+export CCACHE_BASEDIR="$WORKTREE_DIR"
+mkdir -p "$CCACHE_DIR" || { echo "ENV_ERROR: cannot create $CCACHE_DIR"; exit 3; }
 BUILD_DIR="$WORKTREE_DIR/build"
+if [ ! -f "$BUILD_DIR/CMakeCache.txt" ] ||
+   ! rg -q '^ENABLE_CCACHE:BOOL=(1|ON|TRUE|YES)$' "$BUILD_DIR/CMakeCache.txt" ||
+   ! rg -q '^TT_METAL_BUILD_TESTS:BOOL=(1|ON|TRUE|YES)$' "$BUILD_DIR/CMakeCache.txt"; then
+  ./build_metal.sh --enable-ccache --build-metal-tests \
+    --build-dir "$BUILD_DIR" --configure-only 2>&1 \
+    | tee -a "$LOG_DIR/metal_build.log" \
+    || { echo "COMPILE_FAILED"; exit 2; }
+fi
+cmake --build "$BUILD_DIR" --target unit_tests_llk 2>&1 \
+  | tee -a "$LOG_DIR/metal_build.log" \
+  || { echo "COMPILE_FAILED"; exit 2; }
 BIN="$BUILD_DIR/test/tt_metal/unit_tests_llk"
 VERIFY_STRATEGY=worktree
 ```
 
-Report the strategy and build wall-time in the self-log.
+Build only the `unit_tests_llk` target — a plain `--build-metal-tests` builds the
+whole metal test suite (~1750 targets). `CCACHE_BASEDIR` is not a storage path; it
+strips the per-run worktree prefix so a rebuild can match a previous run's cache.
+On retries in the same worktree, skip explicit configuration only when the
+CMake cache exists with `ENABLE_CCACHE` and `TT_METAL_BUILD_TESTS` enabled;
+`cmake --build` regenerates the graph automatically when CMake inputs changed.
+
+Report the strategy and local build wall-time in the self-log. After queued
+dispatch, also derive the isolated producer duration from `build_started_at` to
+`built_at` in the returned job when both timestamps exist.
 
 Before requesting hardware, confirm that the locally built binary exists and
 that the filter selects at least one test:
@@ -199,16 +263,13 @@ fi
 ## Step B — Execute on queued silicon
 
 Use this route only for Blackhole/Wormhole with `TEST_BACKEND=local` and
-`HW_TEST_DISPATCH_CMD`. Compilation remains local; the queue owns card
-scheduling and silicon execution. Quasar is excluded even when the dispatch
-command is present.
-
-The current dispatch service accepts a worktree rather than a built-artifact
-reference, so it reconstructs the executable on its runner. It also omits
-untracked files from the worktree patch. Check `git status --short`; if an
-untracked path belongs to the fix, return `ENV_ERROR` without dispatching.
-These are queue transport limitations, not replacements for the mandatory
-local build gate above.
+`HW_TEST_DISPATCH_CMD`, after the local compile gate passes. The queue rebuilds
+in its own warm workspace, then its card executor consumes that artifact. Quasar
+is excluded even when the dispatch command is present. Dispatch captures
+tracked, modified, deleted, and untracked worktree files in the submitted binary
+diff. The queue uses the same narrow `unit_tests_llk` target, a normalized
+node-local ccache, and skips explicit CMake configuration when its session
+workspace already has a valid generation.
 
 ```bash
 for arch in "${ARCHES[@]}"; do
@@ -243,6 +304,11 @@ sealed identity, and derive the suite verdict and counts from its
 `tester.md`. The strict reducer is authoritative; the marker and dispatch exit
 are supporting evidence only.
 
+A marker with `failure_stage=build` is `ENV_ERROR`: the local compile already
+passed, so a queue rebuild failure means the isolated runner could not reproduce
+that build. No structured execution result exists because the job correctly
+never reached a card.
+
 For production compatibility, do not request a protocol-v2 result copy and use
 the legacy marker:
 
@@ -250,6 +316,7 @@ the legacy marker:
 |---|---|
 | `ok=true ran=true passed=true` | `SUCCESS` |
 | `ok=false ran=true` | `TESTS_FAILED` |
+| `failure_stage=build ran=false` | `ENV_ERROR` |
 | missing, malformed, or `ran=false` | `ENV_ERROR` |
 
 If legacy counts are absent, use zero and state that the queue did not report
@@ -296,7 +363,15 @@ else
   HOME_TREE="$WORKTREE_DIR"
   BIN="$WORKTREE_DIR/build/test/tt_metal/unit_tests_llk"
 fi
-FRESH_CACHE="$(mktemp -d "$LOG_DIR/ttcache_${arch}.XXXXXX")"
+CACHE_USER="${USER:-$(id -un)}"
+TTCACHE_ROOT="${TTCACHE_ROOT:-/localdev/$CACHE_USER/ttcache}"
+case "$TTCACHE_ROOT" in
+  /*) ;;
+  *) echo "ENV_ERROR: TTCACHE_ROOT must be absolute"; exit 3 ;;
+esac
+mkdir -p "$TTCACHE_ROOT"
+FRESH_CACHE="$(mktemp -d "$TTCACHE_ROOT/ttcache_${arch}.XXXXXX")"
+FRESH_CACHE_ARCH="$arch"
 env_args=( TT_METAL_HOME="$HOME_TREE" TT_METAL_CACHE="$FRESH_CACHE" )
 qsr_executed=0
 # Opt-in: verify with device-side LLK asserts + Watcher so a firing assert prints a readable
@@ -350,11 +425,14 @@ if [ "${qsr_executed:-0}" != 1 ]; then
   gtest_exit=${PIPESTATUS[0]}
 fi
 set -e
+cleanup_fresh_cache || exit 3
 done
 ```
 
-Use a new cache path that does not already exist; do not reuse or delete an
-unknown cache directory.
+Use a new cache path that does not already exist. Clean up only the exact path
+created by `mktemp`; never reuse or delete an unknown cache directory. The exit
+trap handles interruptions and `cleanup_fresh_cache` prevents accumulation
+between architectures.
 
 ## Outcome Reading
 
@@ -362,6 +440,7 @@ unknown cache directory.
 |---|---|
 | `[  PASSED  ]`, all selected tests pass, exit 0 | `SUCCESS` |
 | build/link error in Step A | `COMPILE_FAILED` |
+| queued marker has `failure_stage=build` after the local build passed | `ENV_ERROR` |
 | Watcher `LLK_ASSERT`/`ASSERT` message in the run log (only with `TT_METAL_LLK_ASSERTS=1`) | `TESTS_FAILED` |
 | `[  FAILED  ]` / data mismatch / assertion / timeout | `TESTS_FAILED` |
 | missing test source, `add_required`, or zero selected tests | `TESTS_FAILED` with `MISSING_TEST_COVERAGE` |
@@ -408,11 +487,11 @@ the single `run.json` with a nested metric patch under
 JSON-encode failure evidence; do not interpolate raw output into JSON. Do not
 write the combined architecture verdict or aggregate counts.
 
-For a multi-arch `metal` route, start and end the architecture phase using the
-operations and index defined by `tester.md`. For a `both` route, reuse the
-phase started by `tester.md` and close it after the metal result is recorded.
-Its phase result fails if either required suite fails; otherwise it passes,
-including a combined compile-only or unverifiable outcome.
+For a multi-arch route without `llk`, start the architecture phase using the
+operations and index defined by `tester.md`; otherwise reuse the phase the LLK
+tester started. If the route contains `ttnn`, leave the phase open after
+recording Metal because `ttnn-tester.md` is last. Otherwise close it after the
+Metal result. Its phase result fails if any required suite fails.
 
 Do not end an already passed phase again. A retry after failure ends the phase
 once after the applicable route completes. Do not create per-architecture

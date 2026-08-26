@@ -60,7 +60,7 @@ On retry, also read `CHANGED_FILES` and the failure evidence named in the
 prompt:
 
 - test failure: `${LOG_DIR}/agent_tester.md` or
-  `${LOG_DIR}/agent_metal_tester.md`
+  `${LOG_DIR}/agent_metal_tester.md` or `${LOG_DIR}/agent_ttnn_tester.md`
 - performance failure: `${LOG_DIR}/agent_perf_tester.md`,
   `perf_result.json`, and its baseline/current CSVs
 - review failure: `${LOG_DIR}/review_result.json`
@@ -102,10 +102,12 @@ Treat the analysis artifact as the starting contract:
 - Re-run `coverage_search` for a sweep and account for every result.
 - Use `fix_layer` to plan API propagation. Use `verification_required`,
   `verifiable_in_llk_suite`, `llk_coverage`, and `metal_verification` to
-  confirm which suites, targets, and tests must exist.
+  confirm which suites, targets, and tests must exist. Treat
+  `ttnn_verification` as an equally executable contract; a TTNN-layer fix may
+  not be routed through Metal alone.
 - Validate `Test Candidates` against the code. Put only tt-llk suite tests in
-  the plan's reproduction and regression lists; `metal-tester.md` consumes
-  `metal_verification` from the analysis.
+  the plan's reproduction and regression lists; `metal-tester.md` and
+  `ttnn-tester.md` consume their verification blocks from the analysis.
 - Use architecture research as evidence. If a required hardware fact remains
   unknown, return `BLOCKED` with the precise research question instead of
   performing separate architecture research or guessing.
@@ -116,8 +118,8 @@ editing.
 
 If implementation evidence changes `arch_scope`, `fix_layer`,
 `verification_required`, `verifiable_in_llk_suite`, `llk_coverage`, or
-`metal_verification`, update the analysis artifact with that evidence before
-returning.
+`metal_verification`, or `ttnn_verification`, update the analysis artifact with
+that evidence before returning.
 
 ## Required Test Coverage
 
@@ -136,8 +138,17 @@ or with a test the selected pipeline cannot run.
   gtest source in `tests/tt_metal/tt_metal/llk/sources.cmake`. The test should
   launch the changed production compute/dataflow kernel or the narrowest
   production path that exposes the behavior.
-- For a TTNN change, a higher-level TTNN pytest is useful but does not replace
-  required metal coverage while this pipeline cannot execute that pytest.
+- TTNN coverage belongs in the narrowest existing pytest tree for the public
+  path: `tests/ttnn/**`, `tests/sweep_framework/**`, a model test directory, or
+  TTNN's own test tree. Add or extend a focused test that invokes the changed
+  operation/kernel and record its exact path/node ID (or tight `-k` selector)
+  in `ttnn_verification.test`. The TTNN tester builds the `ttnn` target, stages
+  the fresh build-tree extension directly, and runs this selector with a fresh
+  JIT cache.
+
+Do not use one suite as a label for another. `unit_tests_llk` does not compile
+TTNN host/Python code, while TTNN end-to-end coverage does not replace an LLK
+or Metal regression when that lower boundary can fail independently.
 
 After adding coverage, change the applicable analysis state from
 `add_required` to `added`, replace proposed paths and filters with the exact
@@ -231,7 +242,7 @@ actions:
 - ...
 
 ## Test Strategy
-# tt-llk suite only; metal verification remains in the analysis artifact
+# tt-llk suite only; Metal and TTNN verification remain in the analysis artifact
 compile_checks:
 - command or "none"
 compile_check_reason: ...  # required when compile_checks is none
