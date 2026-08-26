@@ -409,6 +409,18 @@ def main() -> None:
         help="Tokenizer repo/path. Defaults to the first --models entry so the "
         "chat template comes from the family's canonical checkpoint.",
     )
+    ap.add_argument(
+        "--show",
+        type=int,
+        default=0,
+        help="Print this many sample completions per model for debugging.",
+    )
+    ap.add_argument(
+        "--show-chars",
+        type=int,
+        default=1200,
+        help="Truncate each printed completion to this many characters.",
+    )
     args = ap.parse_args()
 
     if args.n_samples > 1 and args.temperature == 0.0:
@@ -441,6 +453,14 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, trust_remote_code=True)
     prompt_texts = build_prompt_texts(questions, reasoning_open, reasoning_close)
     prompts_token_ids = [tokenizer(t, add_special_tokens=False)["input_ids"] for t in prompt_texts]
+
+    # Print the first assembled prompt once so a prompt-layout mismatch (wrong
+    # system prompt, missing "Question:" / "Answer:" markers, stray control
+    # tokens) is visible without digging into the model outputs.
+    if prompt_texts:
+        print("\n--- First assembled prompt (verbatim, tokens NOT decoded) ---")
+        print(prompt_texts[0])
+        print(f"--- ({len(prompts_token_ids[0])} tokens) ---")
 
     # -- preflight: boot every worker once with empty prompts so a bad model
     #    (missing LOCAL_HF_PARAMS entry, unreachable repo, incompatible config)
@@ -490,6 +510,26 @@ def main() -> None:
             ]
             for c_idx, (_, criterion) in enumerate(CRITERIA):
                 criterion_hits[c_idx].append([bool(criterion(s)) for s in per_sample_scores])
+
+        # Optional sample printout: first args.show questions, first sample only,
+        # so a tokenizer / chat-template / decoding mismatch is easy to spot.
+        if args.show > 0:
+            print(
+                f"\n--- Sample completions from {display} (first {min(args.show, len(completions_text))} questions, sample 0) ---"
+            )
+            for q_idx in range(min(args.show, len(completions_text))):
+                gold = golds[q_idx]
+                text = completions_text[q_idx][0]
+                clipped = text[: args.show_chars]
+                tag_ans = extract_tag_answer(text)
+                fb_ans = extract_last_number(text, reasoning_open, reasoning_close)
+                verdict = "CORRECT" if (tag_ans == gold or fb_ans == gold) else "WRONG"
+                print("-" * 72)
+                print(f" [{q_idx}] gold={gold} tag_answer={tag_ans} fallback_answer={fb_ans} -> {verdict}")
+                print(f" Q: {questions[q_idx]}")
+                print(f" A:\n{clipped.strip()}")
+                if len(text) > args.show_chars:
+                    print(f" ... [truncated {len(text) - args.show_chars} more chars]")
 
         per_model_rows.append((display, criterion_hits))
 
