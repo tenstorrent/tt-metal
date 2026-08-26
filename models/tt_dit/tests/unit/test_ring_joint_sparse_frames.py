@@ -837,6 +837,6 @@ class TestSparseFramesRing:
             add_last_frame=True,
             all_gather_topology=all_gather_topology,
             q_chunk_size_tokens=640,
-            k_chunk_size_tokens=320,
+            k_chunk_size_tokens=128,
             use_exp=True,
         )
