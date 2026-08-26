@@ -163,8 +163,14 @@ void kernel_main() {
     constexpr uint32_t rscalar_face_r_dim = get_compile_time_arg_val(40);
     constexpr uint32_t rscalar_num_face_rows = get_compile_time_arg_val(41);
     constexpr uint32_t rscalar_tile_bytes = get_compile_time_arg_val(42);
+    constexpr uint32_t cores_per_expert = get_compile_time_arg_val(43);
+    constexpr uint32_t shards_per_core = get_compile_time_arg_val(44);
+    constexpr uint32_t i_shards_per_core = get_compile_time_arg_val(45);
+    constexpr uint32_t num_expert_groups = get_compile_time_arg_val(46);
+    constexpr uint32_t sem_reduce_id = get_compile_time_arg_val(47);
+    constexpr uint32_t cb_reduce_id = get_compile_time_arg_val(48);
 
-    constexpr auto routing_args = TensorAccessorArgs<43>();
+    constexpr auto routing_args = TensorAccessorArgs<49>();
     constexpr auto score_args = TensorAccessorArgs<routing_args.next_compile_time_args_offset()>();
     constexpr auto gate_up_args = TensorAccessorArgs<score_args.next_compile_time_args_offset()>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
@@ -181,6 +187,11 @@ void kernel_main() {
     const uint32_t num_dests = get_arg_val<uint32_t>(5);
     const uint32_t core_index = get_arg_val<uint32_t>(6);
     const uint32_t score_addr = get_arg_val<uint32_t>(7);
+    const uint32_t group_mcast_start_x = get_arg_val<uint32_t>(8);
+    const uint32_t group_mcast_start_y = get_arg_val<uint32_t>(9);
+    const uint32_t group_mcast_end_x = get_arg_val<uint32_t>(10);
+    const uint32_t group_mcast_end_y = get_arg_val<uint32_t>(11);
+    const uint32_t group_num_dests = get_arg_val<uint32_t>(12);
 
     // Pin the expert-id sender to NoC 0; the input broadcaster on {1,0} uses NoC 1.
     Noc noc(0);
@@ -364,7 +375,7 @@ void kernel_main() {
     publish_input(cb_input_id, k_tiles);
 
     // ---- 5. Blocked reader loop (leader role): per block, gate_up, gather+broadcast, down. ----
-    run_reader_loop<true>(
+    run_reader_loop(
         noc,
         num_active,
         core_index,
@@ -381,11 +392,11 @@ void kernel_main() {
         cb_act_id,
         sem_gather_id,
         sem_bcast_id,
-        mcast_start_x,
-        mcast_start_y,
-        mcast_end_x,
-        mcast_end_y,
-        num_dests,
+        group_mcast_start_x,
+        group_mcast_start_y,
+        group_mcast_end_x,
+        group_mcast_end_y,
+        group_num_dests,
         gate_up_args,
         kGateUpAddrBase,
         down_args,
@@ -403,5 +414,12 @@ void kernel_main() {
         rscalar_tile_h,
         rscalar_face_r_dim,
         rscalar_num_face_rows,
-        rscalar_tile_bytes);
+        rscalar_tile_bytes,
+        cores_per_expert,
+        shards_per_core,
+        i_shards_per_core,
+        num_expert_groups,
+        /*is_group_leader=*/true,
+        sem_reduce_id,
+        cb_reduce_id);
 }

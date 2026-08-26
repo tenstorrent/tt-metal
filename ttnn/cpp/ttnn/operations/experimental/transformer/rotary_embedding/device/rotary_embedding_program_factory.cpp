@@ -106,7 +106,6 @@ ProgramDescriptor create_single_tile_descriptor(
 
     const auto input_tile = input.tensor_spec().tile();
     const auto input_tile_height = input_tile.get_height();
-    const auto input_tile_hw = input_tile.get_tile_hw();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = input_tile.get_tile_size(input_cb_data_format);
@@ -126,7 +125,7 @@ ProgramDescriptor create_single_tile_descriptor(
     uint32_t output_single_tile_size = input_tile.get_tile_size(output_cb_data_format);
 
     constexpr uint32_t Wt = 1;
-    uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t Ht = input.padded_shape()[-2] / input_tile_height;
     uint32_t HtWt = Ht * Wt;
     uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
 
@@ -450,8 +449,8 @@ ProgramDescriptor create_single_tile_descriptor(
     uint32_t cos_sin_offset = 0;
     uint32_t cos_sin_start_id = 0;
     if (token_idx.has_value()) {
-        cos_sin_offset = token_idx.value() % TILE_HEIGHT * Wbytes;
-        cos_sin_start_id = token_idx.value() / TILE_HEIGHT * Wt;
+        cos_sin_offset = token_idx.value() % input_tile_height * Wbytes;
+        cos_sin_start_id = token_idx.value() / input_tile_height * Wt;
     }
 
     uint32_t g1_numcores = core_group_1.num_cores();
@@ -511,7 +510,6 @@ ProgramDescriptor create_multi_tile_descriptor(
     const auto input_tile = input.tensor_spec().tile();
     const auto input_tile_width = input_tile.get_width();
     const auto input_tile_height = input_tile.get_height();
-    const auto input_tile_hw = input_tile.get_tile_hw();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = input_tile.get_tile_size(input_cb_data_format);
@@ -877,8 +875,8 @@ ProgramDescriptor create_multi_tile_descriptor(
     uint32_t cos_sin_offset = 0;
     uint32_t cos_sin_start_id = 0;
     if (token_idx.has_value()) {
-        cos_sin_offset = token_idx.value() % TILE_HEIGHT * Wbytes;
-        cos_sin_start_id = token_idx.value() / TILE_HEIGHT * Wt;
+        cos_sin_offset = token_idx.value() % input_tile_height * Wbytes;
+        cos_sin_start_id = token_idx.value() / input_tile_height * Wt;
     }
 
     uint32_t g1_numcores = core_group_1.num_cores();
@@ -965,6 +963,8 @@ void RotaryEmbeddingProgramFactory::override_runtime_arguments(
     constexpr uint32_t kWriterCosSinOffsetArgIdx = 3;
 
     const auto& input = tensor_args.input;
+    const auto input_tile = input.tensor_spec().tile();
+    const auto input_tile_height = input_tile.get_height();
     // Wt == 1 on the single-tile path (X == TILE_WIDTH); this expression yields 1 there too.  Both
     // descriptor variants share the reader/writer runtime-arg layouts below.
     const uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
@@ -993,8 +993,8 @@ void RotaryEmbeddingProgramFactory::override_runtime_arguments(
     uint32_t cos_sin_start_id = 0;
     if (token_idx.has_value()) {
         const uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
-        cos_sin_offset = token_idx.value() % TILE_HEIGHT * Wbytes;
-        cos_sin_start_id = token_idx.value() / TILE_HEIGHT * Wt;
+        cos_sin_offset = token_idx.value() % input_tile_height * Wbytes;
+        cos_sin_start_id = token_idx.value() / input_tile_height * Wt;
     }
 
     for (const auto& core : cores) {
