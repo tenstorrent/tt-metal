@@ -1,0 +1,51 @@
+{
+  "_comment": "Mistral-Medium-3.5-128B TEXT backbone, flattened from HF text_config (mistralai/Mistral-Medium-3.5-128B). Dense (no MoE), full causal attention on every layer, full rotary with YaRN. The pixtral vision_config / multi_modal_projector are omitted (out of scope). quantization_config is retained so the loader knows the checkpoint ships per-tensor fp8; lm_head and the vision tower are NOT quantized.",
+  "architectures": [
+    "Ministral3ForCausalLM"
+  ],
+  "model_type": "ministral3",
+  "torch_dtype": "bfloat16",
+  "quantization_config": {
+    "activation_scheme": "static",
+    "dequantize": false,
+    "modules_to_not_convert": [
+      "model.vision_tower",
+      "model.multi_modal_projector",
+      "lm_head"
+    ],
+    "quant_method": "fp8",
+    "weight_block_size": null
+  },
+  "hidden_size": 12288,
+  "intermediate_size": 28672,
+  "num_hidden_layers": 88,
+  "num_attention_heads": 96,
+  "num_key_value_heads": 8,
+  "head_dim": 128,
+  "hidden_act": "silu",
+  "rms_norm_eps": 1e-05,
+  "vocab_size": 131072,
+  "max_position_embeddings": 262144,
+  "sliding_window": null,
+  "tie_word_embeddings": false,
+  "attention_dropout": 0.0,
+  "rope_parameters": {
+    "beta_fast": 4.0,
+    "beta_slow": 1.0,
+    "factor": 64.0,
+    "llama_4_scaling_beta": 0,
+    "mscale": 1.0,
+    "mscale_all_dim": 0.0,
+    "original_max_position_embeddings": 4096,
+    "rope_theta": 1000000.0,
+    "rope_type": "yarn",
+    "type": "yarn"
+  },
+  "bos_token_id": 1,
+  "eos_token_id": 2,
+  "pad_token_id": 11,
+  "initializer_range": 0.02,
+  "use_cache": true,
+  "rotary_dim": 128,
+  "attention_bias": false
+}
