@@ -137,7 +137,13 @@ def test_the_fidelity_ladder_is_its_own_section(fid, facts):
     Rendered inside each stage's compute roof it sat in the three-column grid, where its two values
     -- a peak, and what that stage's FLOPs cost at that peak -- landed under THEORETICAL and
     ACHIEVABLE 60-80%, so the second read as a sustained band it is not. It also duplicated per
-    stage, though the peaks are identical for every stage; the stages are columns now."""
+    stage; the stages are columns now.
+
+    BEHAVIOUR CHANGE: this asserted a SINGLE "in use" marker for the whole table, on the assumption
+    that the peaks are identical for every stage. They need not be -- a fidelity lever converts one
+    stack at a time -- and the single marker was chosen by whole-profile FLOP share, so the stack
+    with the most FLOPs named the rung for all of them. Each stage now marks its own column.
+    """
     out = _render(stage_ms={"prefill": 30.0, "decode": 33.9})
     assert "Fidelity ladder" in out, out
     roof = out[out.index("Roofline") : out.index("Fidelity ladder")]
@@ -145,9 +151,39 @@ def test_the_fidelity_ladder_is_its_own_section(fid, facts):
     lad = out[out.index("Fidelity ladder") : out.index("Overheads")]
     for rung in ("LoFi", "HiFi2", "HiFi4"):  # the fixture carries three rungs
         assert rung in lad, (rung, lad)
-    assert lad.count("← in use") == 1, lad
     # the stages are columns, so each rung states both on one row
     assert "prefill ms" in lad and "decode ms" in lad, lad
+    # ONE MARKER PER STAGE COLUMN. Both stages share a rung here, so both land on the same row --
+    # what matters is that neither is left unmarked and neither is marked twice.
+    assert lad.count("← in use") == 2, lad
+    _marked = [ln for ln in lad.splitlines() if "← in use" in ln]
+    assert len(_marked) == 1 and _marked[0].count("← in use") == 2, _marked
+
+
+def test_each_stage_marks_its_own_rung_when_they_differ(fid, facts, monkeypatch):
+    """THE CASE THE SINGLE MARKER COULD NOT STATE. A fidelity lever converts one stack at a time, so
+    the stacks sit on different rungs while it runs. One arrow, chosen by whole-profile FLOP share,
+    named the loudest stack's rung and spoke for the others: the table read as though every stack
+    had moved, and the headroom still left on the unconverted ones looked already spent."""
+    # The stack that got the lever, and the one that did not. Stated per stage rather than derived
+    # here, because the point under test is the RENDERER: given two stages on two rungs, does each
+    # column mark its own?
+    _rung = {"prefill": (702.0e12, "lofi"), "decode": (176.0e12, "hifi4")}
+    monkeypatch.setattr(
+        S,
+        "_peak_for_stage",
+        lambda stage, prof, model="", task="": _rung.get(str(stage), (0.0, "")),
+    )
+    out = _render(stage_ms={"prefill": 30.0, "decode": 33.9})
+    lad = out[out.index("Fidelity ladder") : out.index("Overheads")]
+    rows = {ln.split("\u2502")[0].strip(): ln for ln in lad.splitlines() if ln.strip().startswith(("LoFi", "HiFi"))}
+    # prefill on LoFi, decode on HiFi4 -- two rungs, each marked once, on DIFFERENT rows. The single
+    # arrow could only ever have named one of them.
+    assert "← in use" in rows["LoFi"], rows["LoFi"]
+    assert "← in use" in rows["HiFi4"], rows["HiFi4"]
+    assert "← in use" not in rows.get("HiFi2", ""), rows.get("HiFi2")
+    assert rows["LoFi"].count("← in use") == 1, rows["LoFi"]
+    assert rows["HiFi4"].count("← in use") == 1, rows["HiFi4"]
 
 
 def test_the_bar_is_proportional():

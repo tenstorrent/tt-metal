@@ -1743,6 +1743,14 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             "bytes_source": _b_src,
             "tokens": toks,
             "peak_flops": _pk_use or None,
+            # THE RUNG THIS STAGE RESOLVED FOR ITSELF, empty when it fell back to the whole-profile
+            # figure. `fidelity` below cannot answer that -- it is `_stage_dom or _dom`, so it is
+            # populated either way. This key was READ by the shared-peak caveat and written nowhere,
+            # so `any(...)` was always False and the report claimed "one peak shared by every stack"
+            # even when every stage had resolved its own from its own ops. Measured on voxtral run
+            # 38: encode, prefill and decode each resolved hifi4 independently and the caveat still
+            # printed.
+            "peak_stage": _stage_dom or "",
             # This build's observed read set beside the pinned one, so a dtype win shows as the
             # bytes genuinely falling rather than as the ceiling quietly following them down.
             "bytes_now": _b_now or None,
@@ -2048,36 +2056,69 @@ def _roofline_tables(
                 "  not shown: the profile carries no matmul with "
                 "parsed MxKxN dims, so no per-precision floor can be computed",
             ]
-        _o = ["", "Fidelity ladder", "\u2500" * W]
+        _o = ["", "Fidelity ladder"]  # the rules are appended once the table's own width is known
         # Ruled and spaced like the tables above it, so the section does not read as loose text
         # dropped between two grids.
-        _fr = " %-14s\u2502 %-18s" + "\u2502 %-18s" * len(_cols) + "\u2502 %s"
+        # EACH STAGE'S OWN RUNG, MARKED IN ITS OWN COLUMN. One trailing arrow can only ever name a
+        # single precision, and it was chosen by whole-profile FLOP share -- so the stack with the
+        # most FLOPs spoke for all of them. On voxtral prefill carries ~190 of ~365 GFLOP, so the
+        # first fidelity lever landing on prefill alone would have moved the arrow to prefill's rung
+        # and the table would have read as though encode and decode moved with it. They had not, and
+        # the remaining headroom on two of three stacks would have looked already spent.
+        #
+        # A stage that could not resolve its own rung shows the whole-profile one, which is what it
+        # is actually priced at; the caveat below then says so once rather than per column.
+        _own = {}
+        for _st_o, _rf_o in _cols:
+            _own[_st_o] = str((_rf_o or {}).get("peak_stage") or "").strip().lower() or _in_use
+
+        def _cell(_st_c, _rf_c, _rung, _peak):
+            """This stage's cost at this rung, marked when it is the rung the stage runs at."""
+            _v = _n((_rf_c["flops"] / (_peak * 1e12)) * 1000.0)
+            return ("%s \u2190 in use" % _v) if _own.get(_st_c) == str(_rung) else _v
+
+        # Widened from 18 so a marked cell does not overflow its column; the rule under the header is
+        # derived from the header itself, so it follows automatically.
+        _fr = " %-14s\u2502 %-18s" + "\u2502 %-20s" * len(_cols) + "\u2502 %s"
         _hdr = _fr % (("precision", "peak") + tuple("%s ms" % st for st, _ in _cols) + ("",))
-        _o.append(_hdr.rstrip())
-        _o.append("".join("\u253c" if c == "\u2502" else "\u2500" for c in _hdr.ljust(W)))
+        # THE FRAME FOLLOWS THE TABLE. All three rules were a flat W wide while the header grew with
+        # the stage count and the column width, so a wide table overflowed its own frame by however
+        # much it exceeded W -- visible the moment the columns widened to fit a marked cell. W stays
+        # the floor so a narrow table still lines up with the sections above it.
+        _hdr = _hdr.rstrip()
+        _rows = []
         for _f, _fl, _pk, _fms in _fid:
             if not _pk:
                 continue
             _nm = str(_f).replace("lofi", "LoFi").replace("hifi", "HiFi")
-            _o.append(
+            _rows.append(
                 (
                     _fr
                     % (
                         (_nm, "%s TFLOPS" % _r(_pk))
-                        + tuple(_n((rf["flops"] / (_pk * 1e12)) * 1000.0) for _, rf in _cols)
+                        + tuple(_cell(_st_c, rf, _f, _pk) for _st_c, rf in _cols)
                         + (
                             (
-                                "\u2190 in use (whole profile: one peak shared by every stack)"
-                                if _shared_peak
-                                else "\u2190 in use"
-                            )
-                            if str(_f) == _in_use
-                            else "",
+                                "(no per-stage attribution: one peak shared by every stack)"
+                                if _shared_peak and str(_f) == _in_use
+                                else ""
+                            ),
                         )
                     )
                 ).rstrip()
             )
-        _o.append("\u2500" * W)
+        # THE FRAME FOLLOWS THE TABLE, and is sized once every row exists. All three rules were a
+        # flat W while the header grew with the stage count and the column width, so a wide table
+        # overflowed its own frame -- visible as soon as the columns widened to fit a marked cell.
+        # Sizing off the header alone is not enough either: the shared-peak caveat rides in the
+        # trailing column and can be the longest line in the block. W stays the floor so a narrow
+        # table still lines up with the sections above it.
+        _w = max([W, len(_hdr)] + [len(_r) for _r in _rows])
+        _o.append("\u2500" * _w)
+        _o.append(_hdr)
+        _o.append("".join("\u253c" if c == "\u2502" else "\u2500" for c in _hdr.ljust(_w)))
+        _o.extend(_rows)
+        _o.append("\u2500" * _w)
         return _o
 
     # A stage retiring one item per unit reports the model's own unit; one retiring many reports
