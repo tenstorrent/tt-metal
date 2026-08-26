@@ -57,8 +57,11 @@ on:
       runner-label:
         required: false
         type: string
-        default: "tt-ubuntu-2204-large-stable"
-        description: "Runner for the image build"
+        default: "ubuntu-latest"
+        description: >-
+          Runner for the image build. GitHub-hosted is ~80s/run faster and keeps
+          this off the self-hosted fleet, but cannot reach Harbor, so base-image
+          must be a canonical ghcr ref. Self-hosted works with a ghcr base too.
     outputs:
       image:
         description: "Pullable ref of the built image; empty when the build was skipped"
@@ -100,8 +103,8 @@ on:
       runner-label:
         required: false
         type: string
-        default: "tt-ubuntu-2204-large-stable"
-        description: "Runner for the image build"
+        default: "ubuntu-latest"
+        description: "Runner for the image build; self-hosted cannot use a Harbor-prefixed base"
 
 jobs:
   build-test-image:
