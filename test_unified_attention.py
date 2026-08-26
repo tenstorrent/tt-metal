@@ -85,7 +85,8 @@ def run(device, sq, sk, dt, causal=True, seed=0):
     tout = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S_q, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
 
     core_ranges, cores = single_core()
-    ct_args = [sq, sk, dt]
+    ct_args = []
+    named_ct_args = [("sq", sq), ("sk", sk), ("dt", dt)]
     for t in (tq, tk, tv, tmask, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     # 1/sqrt(head dim) as a packed bfloat16 pair -- the kernel toolchain has no sqrtf, and
@@ -117,6 +118,7 @@ def run(device, sq, sk, dt, causal=True, seed=0):
         cores=cores,
         cbs=cbs,
         compile_time_args=ct_args,
+        named_compile_time_args=named_ct_args,
         runtime_args=rt_args,
     )
     out = ttnn.generic_op([tq, tk, tv, tmask, tout], program)

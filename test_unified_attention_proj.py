@@ -74,7 +74,8 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
     core_ranges, core_list = core_block(ncores)
     shares = split_evenly(nunits, ncores)
 
-    ct_args = [sq, dm, dm, kt, nt]  # mt, ktot, ntot, kt, nt -- square, K = N = d_model
+    ct_args = []
+    named_ct_args = [("mt", sq), ("ktot", dm), ("ntot", dm), ("kt", kt), ("nt", nt)]
     for t in (tattn, two, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     addrs = [t.buffer_address() for t in (tattn, two, tout)]
@@ -97,6 +98,7 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
         cores=core_list,
         cbs=cbs,
         compile_time_args=ct_args,
+        named_compile_time_args=named_ct_args,
         runtime_args=rt_args,
         defines=[("MMB_ACC_DST", "1")] if acc == "dst" else None,
         **(fidelity or {}),

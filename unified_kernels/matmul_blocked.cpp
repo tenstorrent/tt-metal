@@ -84,18 +84,18 @@ constexpr uint32_t kCbOut = 16;
 constexpr uint32_t kCbAcc = 24;  // running total; a separate CB from kCbOut
 
 void kernel_main() {
-    constexpr uint32_t mt = get_compile_time_arg_val(0);
-    constexpr uint32_t ktot = get_compile_time_arg_val(1);
-    constexpr uint32_t ntot = get_compile_time_arg_val(2);
-    constexpr uint32_t kt = get_compile_time_arg_val(3);
-    constexpr uint32_t nt = get_compile_time_arg_val(4);
+    constexpr uint32_t mt = get_named_compile_time_arg_val("mt");
+    constexpr uint32_t ktot = get_named_compile_time_arg_val("ktot");
+    constexpr uint32_t ntot = get_named_compile_time_arg_val("ntot");
+    constexpr uint32_t kt = get_named_compile_time_arg_val("kt");
+    constexpr uint32_t nt = get_named_compile_time_arg_val("nt");
 
     static_assert(kt > 0 && ktot % kt == 0, "the k-block width must divide K");
     static_assert(nt > 0 && ntot % nt == 0, "the output-column block width must divide N");
     constexpr uint32_t kb = ktot / kt;
     constexpr uint32_t nb = ntot / nt;
 
-    constexpr auto attn_args = TensorAccessorArgs<5>();
+    constexpr auto attn_args = TensorAccessorArgs<0>();
     constexpr auto wo_args = TensorAccessorArgs<attn_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<wo_args.next_compile_time_args_offset()>();
 
@@ -115,6 +115,7 @@ void kernel_main() {
     // stop being alternatives.
     const uint32_t block_begin = get_arg_val<uint32_t>(3);
     const uint32_t block_count = get_arg_val<uint32_t>(4);
+    u::check_runtime_args<5>();
 
     using A = u::Shape<mt, kt>;    // one (m, k) tile of A
     using W = u::Shape<kt, nt>;    // one (k, n) tile of B

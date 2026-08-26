@@ -29,6 +29,7 @@ void kernel_main() {
     const auto b = TensorAccessor(b_args, get_arg_val<uint32_t>(1));
     const auto bias = TensorAccessor(bias_args, get_arg_val<uint32_t>(2));
     const auto out = TensorAccessor(out_args, get_arg_val<uint32_t>(3));
+    u::check_runtime_args<4>();
 
     u::matmul_init<A, B>(kCbA, kCbB, kCbOut);
 

@@ -93,6 +93,40 @@ finally:
     ttnn.close_device(d)
 """
 
+# A launcher that passes one runtime argument too few -- the mistake that hung this device
+# three times. The kernel then reads a loop bound from a slot nobody filled and spins. The
+# harness appends a sentinel after the last argument and the kernel names the count it
+# expects, so a short list puts the sentinel somewhere else and the check fires.
+SHORT_RUNTIME_ARGS = """
+import sys; sys.path.insert(0, ".")
+import torch, ttnn
+from unified_harness import core_block, make_cb, unified_program
+import test_unified_binary as bn
+d = ttnn.open_device(device_id=0)
+try:
+    shape = [1, 4, 32, 32]
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    mk = lambda: ttnn.from_torch(torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16,
+                                 layout=ttnn.TILE_LAYOUT, device=d, memory_config=dram)
+    ta, tb, tout = mk(), mk(), mk()
+    cr, cores = core_block(1)
+    cta = []
+    for t in (ta, tb, tout):
+        cta.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    prog = unified_program(
+        kernel_source=bn.KERNEL, core_ranges=cr, cores=cores,
+        cbs=[make_cb(bn.CB_IN0, cr, num_pages=8), make_cb(bn.CB_IN1, cr, num_pages=8),
+             make_cb(bn.CB_OUT, cr, num_pages=8)],
+        compile_time_args=cta,
+        named_compile_time_args=[("num_blocks", 2), ("tiles_per_block", 2)],
+        runtime_args=[ta.buffer_address(), tb.buffer_address(), tout.buffer_address(), 0])
+    ttnn.generic_op([ta, tb, tout], prog)
+    print("ACCEPTED")
+finally:
+    ttnn.close_device(d)
+"""
+
+
 # (name, source, needs_watcher, what the refusal must say)
 #
 # needs_watcher marks a RUNTIME check. Device asserts are compiled out unless the watcher
@@ -102,6 +136,10 @@ finally:
 CASES = [
     ("circular buffer smaller than the block", UNDERSIZED_CB, True, "tripped an assert"),
     ("no-region barrier on a non-rectangular grid", NON_RECTANGULAR_BARRIER, False, "static assertion failed"),
+    # "tripped assert" rather than "tripped an assert": the watcher's per-core detail line
+    # ("NCRISC tripped an assert on line N") goes to the watcher log, and what reaches the
+    # host here is its summary. Matching what it actually prints, not what it might.
+    ("one runtime argument too few", SHORT_RUNTIME_ARGS, True, "tripped assert"),
 ]
 
 TIMEOUT_S = 240

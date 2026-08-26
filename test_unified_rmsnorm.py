@@ -76,7 +76,8 @@ def run(device, ht, wt, unit_weight=False, seed=0, chunk=None, cores=1):
     ncores = min(cores, nchunks)
     core_ranges, cores = core_block(ncores)
     shares = split_evenly(nchunks, ncores)
-    ct_args = [hc, wt]
+    ct_args = []
+    named_ct_args = [("ht", hc), ("wt", wt)]
     for t in (tx, tw, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     addrs = [tx.buffer_address(), tw.buffer_address(), tout.buffer_address(), bf16_pair(EPS)]
@@ -100,6 +101,7 @@ def run(device, ht, wt, unit_weight=False, seed=0, chunk=None, cores=1):
         cores=cores,
         cbs=cbs,
         compile_time_args=ct_args,
+        named_compile_time_args=named_ct_args,
         runtime_args=rt_args,
     )
     out = ttnn.generic_op([tx, tw, tout], program)

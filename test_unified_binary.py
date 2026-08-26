@@ -88,7 +88,8 @@ def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, force_sfpu=False, c
     core_ranges, core_list = core_block(ncores)
     shares = split_evenly(num_blocks, ncores)
 
-    ct_args = [num_blocks, tiles_per_block]
+    ct_args = []
+    named_ct_args = [("num_blocks", num_blocks), ("tiles_per_block", tiles_per_block)]
     for t in (ta, tb, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
@@ -108,6 +109,7 @@ def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, force_sfpu=False, c
         cores=core_list,
         cbs=cbs,
         compile_time_args=ct_args,
+        named_compile_time_args=named_ct_args,
         runtime_args=rt_args,
         defines=([(define, "1")] if define else []) + ([("TT_UNIFIED_NO_FPU_ELTWISE", "1")] if force_sfpu else []),
     )

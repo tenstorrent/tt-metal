@@ -50,10 +50,10 @@ constexpr uint32_t kCbRot = 4;
 constexpr uint32_t kCbOut = 16;
 
 void kernel_main() {
-    constexpr uint32_t chunk = get_compile_time_arg_val(0);
-    [[maybe_unused]] constexpr uint32_t num_chunks = get_compile_time_arg_val(1);
+    constexpr uint32_t chunk = get_named_compile_time_arg_val("chunk");
+    [[maybe_unused]] constexpr uint32_t num_chunks = get_named_compile_time_arg_val("num_chunks");
 
-    constexpr auto x_args = TensorAccessorArgs<2>();
+    constexpr auto x_args = TensorAccessorArgs<0>();
     constexpr auto cos_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
     constexpr auto m_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
@@ -66,6 +66,7 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(4);
     const uint32_t chunk_begin = get_arg_val<uint32_t>(5);
     const uint32_t chunk_count = get_arg_val<uint32_t>(6);
+    u::check_runtime_args<7>();
 
     using Blk = u::Shape<chunk, 1>;  // N tiles, shape irrelevant to a per-tile op
     using M = u::Shape<1, 1>;

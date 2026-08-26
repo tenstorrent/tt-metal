@@ -98,10 +98,10 @@ static_assert(PASSES == 1, "a reduction is not shape-preserving, so it cannot be
 #endif
 
 void kernel_main() {
-    constexpr uint32_t rows = get_compile_time_arg_val(0);
-    constexpr uint32_t cols = get_compile_time_arg_val(1);
+    constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
+    constexpr uint32_t cols = get_named_compile_time_arg_val("cols");
 
-    constexpr auto in_args = TensorAccessorArgs<2>();
+    constexpr auto in_args = TensorAccessorArgs<0>();
 #if defined(PC_BCAST) || defined(PC_MATMUL) || defined(PC_ALT) || defined(PC_BIN)
     constexpr auto vec_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<vec_args.next_compile_time_args_offset()>();
@@ -115,6 +115,7 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
 #else
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
+    u::check_runtime_args<3>();
 #endif
 
 #if defined(PC_MATMUL)

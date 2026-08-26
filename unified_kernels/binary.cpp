@@ -11,10 +11,18 @@
 // non-commutative ops. It costs two DST slots however long it gets -- each
 // intermediate is consumed immediately -- so it also checks the allocator.
 //
-// Compile-time args:
-//   0            num_blocks
-//   1            tiles_per_block
-//   2..          TensorAccessorArgs for in0, then in1, then out
+// Compile-time args, BY NAME:
+//   num_blocks, tiles_per_block
+//
+// Named rather than positional because a position is a contract with nothing behind it.
+// A name that does not exist fails the BUILD -- get_named_compile_time_arg_val walks a
+// generated map and falls off the end into __builtin_unreachable(), which in a constexpr
+// context is a compile error naming the line and the bad name. (The header's note that
+// this "fails with a segfault" is stale for our toolchain: both clang-20 and the riscv
+// g++ that builds kernels give a proper diagnostic.)
+//
+// The accessors stay POSITIONAL and now start at 0, which is the larger half of the win:
+// they were at 2, and every scalar added ahead of them used to shift all three.
 //
 // Runtime args (identical on all three kernels):
 //   0            in0 base address
@@ -22,6 +30,7 @@
 //   2            out base address
 //   3            block_begin    first block this core owns
 //   4            block_count    how many it owns
+//   5            the sentinel the harness appends -- see check_runtime_args below
 //
 // Blocks are the unit of partitioning and need no coordination to split: block b reads
 // pages [b*tiles_per_block, +tiles_per_block) of each input and writes the same range of
@@ -58,10 +67,10 @@ constexpr uint32_t kCbOut = 16;
 #endif
 
 void kernel_main() {
-    [[maybe_unused]] constexpr uint32_t num_blocks = get_compile_time_arg_val(0);
-    constexpr uint32_t tiles_per_block = get_compile_time_arg_val(1);
+    [[maybe_unused]] constexpr uint32_t num_blocks = get_named_compile_time_arg_val("num_blocks");
+    constexpr uint32_t tiles_per_block = get_named_compile_time_arg_val("tiles_per_block");
 
-    constexpr auto in0_args = TensorAccessorArgs<2>();
+    constexpr auto in0_args = TensorAccessorArgs<0>();
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
 
@@ -70,6 +79,7 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
     const uint32_t block_begin = get_arg_val<uint32_t>(3);
     const uint32_t block_count = get_arg_val<uint32_t>(4);
+    u::check_runtime_args<5>();
 
     u::compute_init(kCbIn0, kCbOut);
 

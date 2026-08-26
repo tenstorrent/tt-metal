@@ -45,7 +45,8 @@ def run(device, num_blocks=1, tiles_per_block=1, custom_load=False, seed=0):
     core_ranges, cores = single_core()
 
     # CT args: [num_blocks, tiles_per_block] then TensorAccessorArgs for in0, in1, out
-    ct_args = [num_blocks, tiles_per_block]
+    ct_args = []
+    named_ct_args = [("num_blocks", num_blocks), ("tiles_per_block", tiles_per_block)]
     for t in (ta, tb, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
@@ -65,6 +66,7 @@ def run(device, num_blocks=1, tiles_per_block=1, custom_load=False, seed=0):
         cores=cores,
         cbs=cbs,
         compile_time_args=ct_args,
+        named_compile_time_args=named_ct_args,
         runtime_args=rt_args,
         defines=[("EA_CUSTOM_LOAD", "1")] if custom_load else None,
     )

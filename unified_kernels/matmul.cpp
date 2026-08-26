@@ -75,6 +75,10 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
 #if defined(MM_BIAS)
     const uint32_t bias_addr = get_arg_val<uint32_t>(3);
+    u::check_runtime_args<4>();
+#else
+    // The count differs by build, so the check does too -- a bias adds an address.
+    u::check_runtime_args<3>();
 #endif
 
     using In0 = u::Shape<MM_RT_DIM, MM_KT_DIM>;

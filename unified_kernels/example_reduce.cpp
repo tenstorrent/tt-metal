@@ -23,6 +23,7 @@ void kernel_main() {
 
     const auto in = TensorAccessor(in_args, get_arg_val<uint32_t>(0));
     const auto out = TensorAccessor(out_args, get_arg_val<uint32_t>(1));
+    u::check_runtime_args<2>();
 
     u::compute_init(kCbIn, kCbOut);
 

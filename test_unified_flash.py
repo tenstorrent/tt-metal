@@ -104,7 +104,17 @@ def _launch(
     core_ranges, core_list = core_block(ncores)
     shares = split_evenly(n_heads, ncores)
 
-    ct_args = [sq, sk, dt, num_q, k_offset, sk_total, n_heads, n_kv_heads]
+    ct_args = []
+    named_ct_args = [
+        ("sq", sq),
+        ("sk", sk),
+        ("dt", dt),
+        ("num_q_chunks", num_q),
+        ("k_offset", k_offset),
+        ("k_tiles", sk_total),
+        ("n_heads", n_heads),
+        ("n_kv_heads", n_kv_heads),
+    ]
     for t in (tq, tk, tv, tmask, tcolones, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     addrs = [t.buffer_address() for t in (tq, tk, tv, tmask, tcolones, tout)]
@@ -146,6 +156,7 @@ def _launch(
         cores=core_list,
         cbs=cbs,
         compile_time_args=ct_args,
+        named_compile_time_args=named_ct_args,
         runtime_args=rt_args,
         defines=None if causal else [("FLASH_NONCAUSAL", "1")],
         **(fidelity or {}),

@@ -46,6 +46,7 @@ void kernel_main() {
     const auto v_acc = TensorAccessor(v_args, get_arg_val<uint32_t>(2));
     const auto ones_acc = TensorAccessor(ones_args, get_arg_val<uint32_t>(3));
     const auto out = TensorAccessor(out_args, get_arg_val<uint32_t>(4));
+    u::check_runtime_args<5>();
 
     u::matmul_init<Queries, KeysTransposed>(kCbQ, kCbK, kCbOut);
 

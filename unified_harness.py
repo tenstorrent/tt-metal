@@ -49,8 +49,14 @@ DTYPE_TILE_BYTES = {
 MCAST_SEMAPHORES = 6
 
 
+# Appended after the last runtime argument on every core. A kernel that names the count it
+# expects then catches a launcher passing the wrong number -- the failure that has hung this
+# device three times. Must match u::kRuntimeArgSentinel in tt/unified/api.h.
+RUNTIME_ARG_SENTINEL = 0x5EA15EA1
+
+
 def make_runtime_args(cores, values):
-    """A RuntimeArgs over `cores`.
+    """A RuntimeArgs over `cores`, with the sentinel appended.
 
     `values` is either one flat sequence, used on every core, or a dict keyed by
     CoreCoord for per-core args (a multicast sender needs to know it is the
@@ -59,10 +65,10 @@ def make_runtime_args(cores, values):
     args = ttnn.RuntimeArgs()
     if isinstance(values, dict):
         for core in cores:
-            args[core.x][core.y] = list(values[core])
+            args[core.x][core.y] = list(values[core]) + [RUNTIME_ARG_SENTINEL]
     else:
         for core in cores:
-            args[core.x][core.y] = list(values)
+            args[core.x][core.y] = list(values) + [RUNTIME_ARG_SENTINEL]
     return args
 
 
@@ -105,6 +111,7 @@ def unified_program(
     cbs,
     compile_time_args,
     runtime_args,
+    named_compile_time_args=None,
     reader_processor=ttnn.DataMovementProcessor.RISCV_1,
     writer_processor=ttnn.DataMovementProcessor.RISCV_0,
     semaphores=None,
@@ -119,7 +126,13 @@ def unified_program(
         core_ranges: ttnn.CoreRangeSet the program runs on.
         cores: the individual CoreCoords, for per-core runtime args.
         cbs: list of ttnn.CBDescriptor.
-        compile_time_args: list of ints, shared by all three descriptors.
+        compile_time_args: list of ints, shared by all three descriptors. Positional, and
+            what TensorAccessorArgs consumes -- a contiguous block whose length depends on
+            each tensor's layout, which a name cannot express.
+        named_compile_time_args: list of (name, value), also shared. Every SCALAR belongs
+            here: a name that does not exist is a build failure, and keeping scalars out of
+            the positional list is what stops the accessor offsets drifting. See
+            unified_named_args_spec.md.
         runtime_args: list of ints, shared by all three descriptors.
         reader_processor / writer_processor: which RISC-V runs which DM role.
             Metal's convention is RISCV_1 for readers, RISCV_0 for writers.
@@ -168,6 +181,7 @@ def unified_program(
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_ranges,
         compile_time_args=list(compile_time_args),
+        named_compile_time_args=list(named_compile_time_args or []),
         defines=defines,
         compiler_include_paths=UNIFIED_INCLUDE_PATHS,
     )
