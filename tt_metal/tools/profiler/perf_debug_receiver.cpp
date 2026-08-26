@@ -257,7 +257,10 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         // a FULL ring. STALL_ONLY mode only -- on a normal run this per-marker probe is redundant
         // (the control plane reads the workers' own L1 stall counters at teardown) and measures ~10%
         // of the decode wall, so the hot path does not pay for a diagnostic the device already keeps.
-        stall_zones += (count_stalls && type == PP_ZONE_START && is_stall(zone_id)) ? 1 : 0;
+        // ONE count per stall ZONE: the stall zone now ships as a single ZONE_ATOMIC packet, so that
+        // is the case that fires. PP_ZONE_START is still accepted (never PP_ZONE_END, which would
+        // double-count) so a legacy pair -- only mark_zone_long emits those now -- still counts once.
+        stall_zones += (count_stalls && (type == PP_ZONE_ATOMIC || type == PP_ZONE_START) && is_stall(zone_id)) ? 1 : 0;
         if (ts < last_ts[lane]) {
             order_regressions++;
         } else {

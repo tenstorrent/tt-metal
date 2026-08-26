@@ -16,9 +16,10 @@
 // TWO record types, deliberately: the RING carries the raw 24 B record the decode hot path emits
 // (the AVX2 packer and the all-NT-store discipline depend on this layout, do not widen it), while
 // consumers receive the PUBLIC 32 B PerfDebugRec. Worker zones arrive from the device WHOLE
-// (ZoneAtomic: end + duration) and convert 1:1; only the legacy start/end pairs -- the stall zone
-// and the >3.2s long-zone fallback -- still go through the per-(dev, lane)
-// pairing stack on each consumer's delivery thread (no shared state, no locks, never on decode).
+// (ZoneAtomic: end + duration) and convert 1:1 -- the PRODUCER-STALL zone included, since it ships
+// atomically too. Only the >3.2s long-zone fallback still emits legacy start/end pairs, which go
+// through the per-(dev, lane) pairing stack on each consumer's delivery thread (no shared state, no
+// locks, never on decode).
 #pragma once
 
 #include <atomic>
@@ -56,7 +57,7 @@ namespace perf_debug {
 // Receiver-internal only: every consumer, the built-in Tracy sink included, receives the public
 // paired record.
 enum class PerfDebugRawRecType : uint32_t {
-    ZoneStart = 1,  // legacy pair halves: stall zone, >3.2s fallback
+    ZoneStart = 1,  // legacy pair halves: >3.2s fallback only
     ZoneEnd = 2,
     // 3 recycled: it was ZoneTotal (SUM zones, removed). Safe to reuse HERE because this enum is
     // in-process only -- the never-reuse rule binds wire values (PP_*), which a stale JIT ELF can emit.

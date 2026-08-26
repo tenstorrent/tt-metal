@@ -97,7 +97,7 @@ TT_ZONE_DEFINE_ID(PROFILER_STALL_ZONE_ID, "PRODUCER-STALL");
 // Wire encode; MUST stay in sync with tt_metal/tools/profiler/spsc_packet.h (inlined because the JIT
 // build lacks that include path). word0 = type(5) | low27. A zone ships WHOLE as one 3-word
 // ZONE_ATOMIC packet (id | end timer_low | duration) at scope close; the legacy 2-word START/END
-// markers survive only for the stall zone and the >3.2s fallback. Lane identity and time's high half
+// markers survive only for the >3.2s fallback. Lane identity and time's high half
 // are host-reconstructed from stickies: STICKY_PROG (runtime host-id, 1 word; 2-word PROG_EXT past
 // 2^27), STICKY_TIMER (timer_hi, on high-half tick), STICKY_SRC (injected by the drainer reader).
 struct ppfmt {
@@ -106,8 +106,8 @@ struct ppfmt {
     static constexpr uint32_t LOW27_MASK = 0x7FFFFFFu;
     // This wire's OWN type space -- never pass a hostdevcommon PacketTypes value through (that aliased
     // unrelated types on this wire before). Retired values (11 = ZONE_TOTAL) are never reused.
-    static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START (stall zone + long-zone fallback only)
-    static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END   (stall zone + long-zone fallback only)
+    static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START (long-zone fallback only)
+    static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END   (long-zone fallback only)
     static constexpr uint32_t T_ZONE_ATOMIC = 2u;       // PP_ZONE_ATOMIC (3 words: id | end_lo | duration)
     static constexpr uint32_t T_STICKY_PROG = 8u;       // PP_STICKY_PROG
     static constexpr uint32_t T_STICKY_PROG_EXT = 14u;  // PP_STICKY_PROG_EXT
@@ -183,62 +183,26 @@ inline __attribute__((always_inline)) void publish_tail_batched(uint32_t words_w
     }
 }
 
-// The stall reserve: a naive stall scope would emit ZONE_START into the very ring whose fullness
-// caused the stall -> deadlock. Ordinary markers may only fill to RING_USABLE; the reserve belongs to
-// the stall zone alone. Each half = 2-word marker + the 1-word STICKY_TIMER a ~3.2 s stall can straddle.
-constexpr uint32_t STALL_ZONE_HALF_WORDS = SPSC_MARKER_WORDS + 1;
-constexpr uint32_t STALL_RESERVE_WORDS = 2 * STALL_ZONE_HALF_WORDS;
+// ZONE_ATOMIC packet size: word0 (type|id) + end timer_low + 32-bit duration.
+static constexpr uint32_t SPSC_ATOMIC_ZONE_WORDS = 3;
+
+// The stall reserve: the stall zone writes into a ring that is BY DEFINITION full, so its own words
+// can never come from the ordinary budget -- ordinary markers may only fill to RING_USABLE and the
+// reserve belongs to the stall zone alone.
+//
+// RE-DERIVED for atomic zones: the stall OPEN now writes NOTHING (its start timestamp rides in the
+// scope object, like every other zone), so the reserve only has to cover the CLOSE -- one 3-word
+// ZONE_ATOMIC packet plus the 1-word STICKY_TIMER a stall straddling a timer_hi tick needs. That is
+// 4 words, down from the 6 the START/END pair required (2 halves x (2-word marker + sticky)).
+//
+// MEASURED (bh-26, 6F+1M, RING_MB=448, 10k iters, 2 reps): those 2 recovered words ARE the knee.
+// Pinning the reserve back at 6 while keeping the atomic packet reproduces the old numbers exactly
+// (d7 2-4 stalls, d6 ~15k); at 4 the same build is CLEAN at d7 and ~10.5k at d6. So the atomic
+// conversion is knee-NEUTRAL on its own -- the gain is the smaller reserve it makes correct.
+constexpr uint32_t STALL_CLOSE_WORDS = SPSC_ATOMIC_ZONE_WORDS + 1;
+constexpr uint32_t STALL_RESERVE_WORDS = STALL_CLOSE_WORDS;
 constexpr uint32_t RING_USABLE = RING_CAPACITY - STALL_RESERVE_WORDS;
 static_assert(RING_USABLE > STALL_RESERVE_WORDS, "the ring is too small to carry a stall reserve");
-
-// One stall-zone half, straight into the reserve with NO room check (checking would recurse).
-inline __attribute__((always_inline)) void stall_mark(ZoneKind kind) {
-    uint32_t hi, lo;
-    read_wall_clock(hi, lo);
-    if (hi != g_prev_timer_hi) {
-        profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ppfmt::w0(ppfmt::T_STICKY_TIMER, hi);
-        g_prev_timer_hi = hi;
-    }
-    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ppfmt::zone_w0(PROFILER_STALL_ZONE_ID, kind);
-    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = lo;
-}
-
-// RAII stall zone; distinct from profileScope only because it writes into the reserve.
-struct profileScopeStall {
-    inline __attribute__((always_inline)) profileScopeStall() { stall_mark(ZoneKind::Start); }
-    inline __attribute__((always_inline)) ~profileScopeStall() { stall_mark(ZoneKind::End); }
-};
-
-// Full-ring path, out-of-line on purpose (one copy, not one per zone site). Bumps the L1 stall
-// counter (the host's decode-free knee ground truth), opens the stall zone, then waits for the
-// caller's words AND the zone's own closing half so the reserve is whole again for the next stall.
-__attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
-    if constexpr (myRiscID < SPSC_STALL_COUNT_MAX) {
-        profiler_control_buffer[SPSC_STALL_COUNT_0 + myRiscID]++;
-    }
-    profileScopeStall stall;
-    // Publish everything written so far (the stall START included): with the batched publish the
-    // drainer can only free words up to the published tail -- waiting unpublished would deadlock.
-    publish_tail();
-    while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_USABLE - nwords - STALL_ZONE_HALF_WORDS)) {
-        invalidate_l1_cache();  // re-read the drainer-updated head (and the terminate flag)
-        if (profiler_control_buffer[PROFILER_TERMINATE]) {
-            return;  // teardown: stop waiting on a dead ring; the destructor still closes the zone
-        }
-    }
-    g_head_cache = profiler_control_buffer[HEAD_INDEX];
-}
-
-// Fast path: one LOCAL compare against the cached head, bound RING_USABLE (never RING_CAPACITY --
-// the difference is the reserve). L1 is touched only to refresh the cache when it runs dry.
-inline __attribute__((always_inline)) void ring_ensure_room(uint32_t nwords) {
-    if (__builtin_expect((wIndex - g_head_cache) > (RING_USABLE - nwords), 0)) {
-        g_head_cache = profiler_control_buffer[HEAD_INDEX];
-        if ((wIndex - g_head_cache) > (RING_USABLE - nwords)) {
-            ring_ensure_room_slow(nwords);
-        }
-    }
-}
 
 inline __attribute__((always_inline)) void ring_write_word(uint32_t v) {
     profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = v;
@@ -258,8 +222,70 @@ inline __attribute__((always_inline)) void ring_write_sticky_timer(uint32_t hi) 
     }
 }
 
-// ZONE_ATOMIC packet size: word0 (type|id) + end timer_low + 32-bit duration.
-static constexpr uint32_t SPSC_ATOMIC_ZONE_WORDS = 3;
+// Stall-zone close: ONE ZONE_ATOMIC packet, written STRAIGHT into the reserve with NO room check.
+// The missing check is the whole point -- ring_ensure_room() from here would re-enter the full-ring
+// path and recurse through another stall scope, which is exactly what the reserve exists to prevent.
+//
+// A stall >= 2^32 cycles (~3.2 s) SATURATES the duration instead of taking mark_zone_long's
+// START/END fallback: that path reserves room, and reserving from inside the stall path is the same
+// recursion. A 3.2 s wait on back-pressure is a wedged drainer, not a measurement, so a saturated
+// duration loses nothing real and keeps the reserve at 4 words. Branchless (mask, not select).
+inline __attribute__((always_inline)) void stall_zone_close(uint32_t start_hi, uint32_t start_lo) {
+    uint32_t hi, lo;
+    read_wall_clock(hi, lo);
+    const uint32_t lo_d = lo - start_lo;
+    const uint32_t hi_d = hi - start_hi - (lo < start_lo);
+    const uint32_t dur = lo_d | (0u - static_cast<uint32_t>(hi_d != 0));
+    ring_write_sticky_timer(hi);
+    ring_write_word(ppfmt::zone_atomic_w0(PROFILER_STALL_ZONE_ID));
+    ring_write_word(lo);
+    ring_write_word(dur);
+    // Publish unconditionally rather than batched: this zone is the back-pressure signal and the
+    // path already paid a full stall, so the fence is free by comparison.
+    publish_tail();
+}
+
+// RAII stall zone. Same "option C" shape as profileScope -- the constructor touches only the wall
+// clock, the whole zone ships as one packet at close -- but it closes through stall_zone_close(),
+// which writes into the reserve instead of reserving room for itself.
+struct profileScopeStall {
+    uint32_t start_hi, start_lo;
+    inline __attribute__((always_inline)) profileScopeStall() { read_wall_clock(start_hi, start_lo); }
+    inline __attribute__((always_inline)) ~profileScopeStall() { stall_zone_close(start_hi, start_lo); }
+};
+
+// Full-ring path, out-of-line on purpose (one copy, not one per zone site). Bumps the L1 stall
+// counter (the host's decode-free knee ground truth), opens the stall zone, then waits for the
+// caller's words AND the stall zone's own closing packet, which is emitted (in the destructor here)
+// BEFORE the caller writes its words.
+__attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
+    if constexpr (myRiscID < SPSC_STALL_COUNT_MAX) {
+        profiler_control_buffer[SPSC_STALL_COUNT_0 + myRiscID]++;
+    }
+    profileScopeStall stall;
+    // Publish everything written so far: with the batched publish the drainer can only free words up
+    // to the published tail -- waiting unpublished would deadlock. (The stall zone itself has written
+    // nothing yet; under atomic zones there is no START half to make visible.)
+    publish_tail();
+    while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_USABLE - nwords - STALL_CLOSE_WORDS)) {
+        invalidate_l1_cache();  // re-read the drainer-updated head (and the terminate flag)
+        if (profiler_control_buffer[PROFILER_TERMINATE]) {
+            return;  // teardown: stop waiting on a dead ring; the destructor still closes the zone
+        }
+    }
+    g_head_cache = profiler_control_buffer[HEAD_INDEX];
+}
+
+// Fast path: one LOCAL compare against the cached head, bound RING_USABLE (never RING_CAPACITY --
+// the difference is the reserve). L1 is touched only to refresh the cache when it runs dry.
+inline __attribute__((always_inline)) void ring_ensure_room(uint32_t nwords) {
+    if (__builtin_expect((wIndex - g_head_cache) > (RING_USABLE - nwords), 0)) {
+        g_head_cache = profiler_control_buffer[HEAD_INDEX];
+        if ((wIndex - g_head_cache) > (RING_USABLE - nwords)) {
+            ring_ensure_room_slow(nwords);
+        }
+    }
+}
 
 // Long-zone fallback (duration >= 2^32 cycles, ~3.2 s): the 32-bit duration word cannot carry it, so
 // ship the zone as an exact legacy START/END pair, refreshing the sticky before each half (the two
