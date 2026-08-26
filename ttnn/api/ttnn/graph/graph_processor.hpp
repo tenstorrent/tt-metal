@@ -176,6 +176,7 @@ public:
 
     static nlohmann::json end_graph_capture_to_file(const std::filesystem::path& report_path);
 
+    static bool has_active_instance();
     static void set_pending_program_factory(std::string type, std::size_t index, bool cache_hit);
 
     // Detailed buffer tracing control

@@ -439,7 +439,7 @@ void launch_operation_with_adapter(
     }
 
     // Stash factory identity after adapter work so nested function_end events cannot consume it.
-    if (tt::tt_metal::GraphTracker::instance().is_enabled()) {
+    if (ttnn::graph::GraphProcessor::has_active_instance()) {
         // Prefer the cached index; select only when the miss was not inserted (NO_DISPATCH).
         const std::size_t program_factory_index =
             (is_program_cache_enabled && program_cache.contains(program_key))

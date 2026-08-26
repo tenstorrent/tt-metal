@@ -173,7 +173,20 @@ void GraphProcessor::disable_detailed_buffer_tracing() { capture_detailed_buffer
 
 bool GraphProcessor::is_detailed_buffer_tracing_enabled() { return capture_detailed_buffer_tracing_; }
 
+bool GraphProcessor::has_active_instance() {
+    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
+    for (const auto& processor : processors) {
+        if (dynamic_cast<GraphProcessor*>(processor.get()) != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void GraphProcessor::set_pending_program_factory(std::string type, std::size_t index, bool cache_hit) {
+    if (!has_active_instance()) {
+        return;
+    }
     pending_program_factory_ = PendingProgramFactory{std::move(type), index, cache_hit};
 }
 
@@ -780,6 +793,7 @@ void GraphProcessor::end_function_process(const std::vector<T>& tensor_vec) {
 
 void GraphProcessor::begin_capture(RunMode mode) {
     const std::lock_guard<std::mutex> lock(mutex);
+    pending_program_factory_.reset();
     graph.clear();
     buffer_id_to_counter.clear();
     captured_device_info.clear();

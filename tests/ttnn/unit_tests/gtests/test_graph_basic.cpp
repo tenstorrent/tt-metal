@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -985,6 +986,24 @@ bool looks_like_hex(const std::string& value) {
     return true;
 }
 
+class CustomCaptureProcessor : public tt::tt_metal::IGraphProcessor {};
+
+struct ScopedCustomCaptureProcessor {
+    explicit ScopedCustomCaptureProcessor(std::shared_ptr<tt::tt_metal::IGraphProcessor> processor) :
+        processor_(std::move(processor)) {
+        tt::tt_metal::GraphTracker::instance().push_processor(processor_);
+    }
+    ~ScopedCustomCaptureProcessor() { tt::tt_metal::GraphTracker::instance().pop_processor(); }
+
+    ScopedCustomCaptureProcessor(const ScopedCustomCaptureProcessor&) = delete;
+    ScopedCustomCaptureProcessor& operator=(const ScopedCustomCaptureProcessor&) = delete;
+    ScopedCustomCaptureProcessor(ScopedCustomCaptureProcessor&&) = delete;
+    ScopedCustomCaptureProcessor& operator=(ScopedCustomCaptureProcessor&&) = delete;
+
+private:
+    std::shared_ptr<tt::tt_metal::IGraphProcessor> processor_;
+};
+
 }  // namespace
 
 TEST_F(TestScopedGraphCapture, ProgramFactoryTypeOnDeviceOp) {
@@ -1166,6 +1185,48 @@ TEST_F(TestScopedGraphCapture, NestedCapturesShareProgramFactoryIdentity) {
         leak_trace = capture.end_graph_capture();
     }
     EXPECT_TRUE(function_starts_with_factory(leak_trace).empty());
+}
+
+TEST_F(TestScopedGraphCapture, CustomCaptureProcessorDoesNotLeakProgramFactory) {
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
+
+    {
+        ScopedCustomCaptureProcessor custom(std::make_shared<CustomCaptureProcessor>());
+        [[maybe_unused]] const auto output_tensor = ttnn::softmax(input_tensor, -1);
+    }
+
+    nlohmann::json leak_trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        [[maybe_unused]] const auto unused = ttnn::create_device_tensor(tensor_spec, device_);
+        leak_trace = capture.end_graph_capture();
+    }
+    EXPECT_TRUE(function_starts_with_factory(leak_trace).empty());
+}
+
+TEST_F(TestScopedGraphCapture, CustomCaptureProcessorWithGraphProcessorStillRecordsFactory) {
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
+
+    ScopedCustomCaptureProcessor custom(std::make_shared<CustomCaptureProcessor>());
+    nlohmann::json trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        [[maybe_unused]] const auto output_tensor = ttnn::softmax(input_tensor, -1);
+        trace = capture.end_graph_capture();
+    }
+    EXPECT_FALSE(function_starts_with_factory(trace).empty());
 }
 
 TEST_F(TestScopedGraphCapture, ReportMetadataContainsCaptureTimeGitIdentity) {
