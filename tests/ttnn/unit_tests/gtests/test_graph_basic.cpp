@@ -1194,8 +1194,12 @@ TEST_F(TestScopedGraphCapture, ReportMetadataContainsCaptureTimeGitIdentity) {
     ASSERT_TRUE(metadata.contains(ttnn::graph::kReportGitVersion));
     ASSERT_TRUE(metadata.contains(ttnn::graph::kReportBuildType));
     ASSERT_TRUE(metadata.contains(ttnn::graph::kReportGitDirty));
-    EXPECT_TRUE(looks_like_hex(metadata.at(ttnn::graph::kReportGitSha).get<std::string>()));
-    EXPECT_TRUE(looks_like_hex(metadata.at(ttnn::graph::kReportGitShaShort).get<std::string>()));
+    const auto git_sha = metadata.at(ttnn::graph::kReportGitSha).get<std::string>();
+    const auto git_sha_short = metadata.at(ttnn::graph::kReportGitShaShort).get<std::string>();
+    EXPECT_TRUE(looks_like_hex(git_sha));
+    EXPECT_TRUE(looks_like_hex(git_sha_short));
+    EXPECT_GT(git_sha.size(), git_sha_short.size());
+    EXPECT_GE(git_sha.size(), 40u);
     EXPECT_FALSE(metadata.at(ttnn::graph::kReportGitVersion).get<std::string>().empty());
     EXPECT_FALSE(metadata.at(ttnn::graph::kReportBuildType).get<std::string>().empty());
     EXPECT_NE(metadata.at(ttnn::graph::kReportBuildType).get<std::string>(), "Unknown");

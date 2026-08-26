@@ -217,7 +217,7 @@ The report file contains:
 - `version`: Report format version
 - `graph`: Full graph trace (list of nodes)
 - `devices`: Device information (architecture, grid size, memory)
-- `metadata`: Capture timestamp, distributed rank, capture-time git identity (`git_sha`, `git_sha_short`, `version`, `dirty`), and the capturing binary's CMake configuration (`build_type`, from `$<CONFIG>`)
+- `metadata`: Capture timestamp, distributed rank, capture-time git identity (`git_sha` is the full commit SHA, including `git archive` builds; `git_sha_short`; `version`; `dirty` is true only when the capturing worktree had local modifications), and the capturing binary's CMake configuration (`build_type`, from `$<CONFIG>`)
 - `python_io`: Python-level I/O records (arguments, input/output tensor IDs per operation); present only when Python I/O recording is enabled
 - `per_operation_buffers`: Real buffer snapshots per operation (from `get_buffers()`); present only when `enable_detailed_buffer_tracing()` is active
 - `buffer_pages_by_address`: Compact per-address page data; present only when `enable_detailed_buffer_tracing()` is active

@@ -10,6 +10,7 @@ function(ParseGitDescribe)
     # is left as an exercise to whoever is wanting to do that.
     set(fallbackVersion "$Format:%(describe)$")
     set(fallbackHash "$Format:%h$")
+    set(fallbackSha "$Format:%H$")
 
     find_package(Git)
     if(Git_FOUND)
@@ -38,8 +39,18 @@ function(ParseGitDescribe)
             ERROR_QUIET
         )
     endif()
+    if(NOT VERSION_SHA)
+        set(VERSION_SHA "${fallbackSha}")
+    endif()
     if(NOT VERSION_HASH)
-        set(VERSION_HASH ${fallbackHash})
+        set(VERSION_HASH "${fallbackHash}")
+    endif()
+    # An unsubstituted $Format token is not a real hash.
+    if(VERSION_SHA MATCHES "Format")
+        set(VERSION_SHA "")
+    endif()
+    if(VERSION_HASH MATCHES "Format")
+        set(VERSION_HASH "")
     endif()
     if(NOT version)
         set(version ${fallbackVersion})
@@ -49,12 +60,26 @@ function(ParseGitDescribe)
         endif()
     endif()
 
-    # Local modifications (dirty), or not
+    # Package +m follows describe -dirty; report dirty follows the worktree.
     set(dirtyFlagRegex "\\-dirty")
-    set(VERSION_DIRTY FALSE)
+    set(VERSION_DESCRIBE_DIRTY FALSE)
     if("${version}" MATCHES "${dirtyFlagRegex}$")
-        set(VERSION_DIRTY TRUE)
+        set(VERSION_DESCRIBE_DIRTY TRUE)
         string(REGEX REPLACE "^(.*)${dirtyFlagRegex}$" "\\1" version "${version}")
+    endif()
+    set(VERSION_DIRTY FALSE)
+    if(Git_FOUND)
+        execute_process(
+            COMMAND
+                ${GIT_EXECUTABLE} diff-index --quiet HEAD --
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            RESULT_VARIABLE _git_worktree_dirty
+            ERROR_QUIET
+        )
+        # diff-index returns 1 only when the worktree has local modifications.
+        if(_git_worktree_dirty EQUAL 1)
+            set(VERSION_DIRTY TRUE)
+        endif()
     endif()
 
     # On a Tagged commit, or not
@@ -97,7 +122,7 @@ function(ParseGitDescribe)
         string(APPEND VERSION_FULL "+${VERSION_COMMIT_COUNT}.${VERSION_HASH}")
         string(APPEND VERSION_DEB "+${VERSION_COMMIT_COUNT}.${VERSION_HASH}")
     endif()
-    if(VERSION_DIRTY)
+    if(VERSION_DESCRIBE_DIRTY)
         string(APPEND VERSION_FULL "+m")
         string(APPEND VERSION_DEB "+m")
     endif()
@@ -125,9 +150,6 @@ function(ParseGitDescribe)
 endfunction()
 
 function(GenerateVersionHeader)
-    if(NOT VERSION_SHA)
-        set(VERSION_SHA "${VERSION_HASH}")
-    endif()
     if(VERSION_DIRTY)
         set(VERSION_DIRTY_CPP "true")
     else()

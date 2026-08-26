@@ -2519,7 +2519,7 @@ class TestGraphReportImport:
             report_json = json.load(f)
         assert "metadata" in report_json
         assert report_json["metadata"].get("git_sha")
-        assert len(report_json["metadata"]["git_sha"]) >= 7
+        assert len(report_json["metadata"]["git_sha"]) >= 40
         assert report_json["metadata"].get("git_sha_short")
         assert report_json["metadata"].get("version")
         assert report_json["metadata"].get("build_type")
@@ -2538,7 +2538,7 @@ class TestGraphReportImport:
         assert rows["git_sha"] == report_json["metadata"]["git_sha"]
         assert rows["git_url"] == git_meta["git_url"]
         if git_meta["git_sha"]:
-            assert len(rows["git_sha"]) >= 7
+            assert len(rows["git_sha"]) >= 40
 
 
 class TestSanitizeGitRemoteUrl:
