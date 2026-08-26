@@ -664,7 +664,7 @@ class TtLlamaAttention(LightweightModule):
         # Reshape and rotary embeddings
         ###
         if not fused_ccl:
-            if self.use_unfused_ccl:
+            if self.use_prefetcher and self.use_unfused_ccl:
                 # Prefetcher resident: the ring QKV matmul already emitted a width-sharded L1 tensor on
                 # the worker cores (SHARDED_QKV_OUT_RING_MEMCFG: padded N = 12288//8 over RING_SIZE
                 # cores, [32, head_dim/2] per shard). Feed it straight into the common column all-reduce
@@ -723,7 +723,7 @@ class TtLlamaAttention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 use_optimal_ccl_for_llama=True,
             )
-            if self.use_unfused_ccl:
+            if self.use_prefetcher and self.use_unfused_ccl:
                 # The ring QKV output + column all-reduce leave the fused tensor width-sharded on the
                 # ring cores == the prefetcher's global-CB receiver cores (cols 1-3, rows 0-7). Running
                 # nlp_create_qkv_heads_decode there while the resident dram_prefetcher is still streaming
@@ -814,7 +814,9 @@ class TtLlamaAttention(LightweightModule):
                 # (0,0), spilling into the uncovered senders-column tail (cores (0,8)/(0,9)) and hitting
                 # the "kernel group cores do not match sub device cores" fatal under the split
                 # senders/worker sub-device manager. None on the WH / no-prefetcher path (no split mgr).
-                rot_slice_sub_core_grids = self._worker_sub_core_grids if self.use_unfused_ccl else None
+                rot_slice_sub_core_grids = (
+                    self._worker_sub_core_grids if (self.use_prefetcher and self.use_unfused_ccl) else None
+                )
                 q_rot_cos = ttnn.slice(
                     rot_mats[0],
                     [0, 0, 0, 0],
@@ -983,7 +985,7 @@ class TtLlamaAttention(LightweightModule):
         use_replicated_full_wo = (
             self.is_qwen and not self.use_prefetcher and attn_output_cat.shape[-1] == self.n_heads * self.head_dim
         )
-        if self.use_unfused_ccl:
+        if self.use_prefetcher and self.use_unfused_ccl:
             # The ring WO matmul (below) expects its input in the ring layout, but the unfused concat
             # produced the no-prefetcher layout; reshard into the ring WO input config first.
             attn_output_cat = ttnn.to_memory_config(

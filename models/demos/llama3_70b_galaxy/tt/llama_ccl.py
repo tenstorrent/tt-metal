@@ -877,6 +877,15 @@ class TT_CCL:
                 persistent_buffer = self.tt_lm_head_buffer_l1
             else:
                 persistent_buffer = self.persistent_buffers[cluster_axis]
+            # all_reduce_async requires WIDTH_SHARDED L1 output. Callers may pass DRAM/INTERLEAVED
+            # (e.g. the no-prefetch QKV linear); coerce to the persistent buffer layout rather than
+            # forwarding an unsupported memory_config. Do not replace a valid WIDTH_SHARDED spec.
+            if (
+                memory_config is None
+                or memory_config.buffer_type == ttnn.BufferType.DRAM
+                or memory_config.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            ):
+                memory_config = persistent_buffer.memory_config()
             if not self.use_prefetcher and input_tensor_mesh.memory_config().buffer_type == ttnn.BufferType.DRAM:
                 # Blackhole all_reduce_async cannot read a DRAM input (the kernel has no accessor for
                 # the fabric NoC address). Bring the input into an L1 layout first: prefer the
