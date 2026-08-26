@@ -154,7 +154,12 @@ def test_t5_layers_individually(
         tt_start_time = time.time()
         layer = i
 
-        tt_encoder_layer = T5EncoderLayer(config, encoder_submesh, ccl_manager, parallel_config)
+        # Block 0 is the only one carrying relative_attention_bias in the HF checkpoint, so it
+        # must be built with the bias parameter or the strict state-dict load rejects the key.
+        # This mirrors T5Stack, which passes config.use_relative_position_bias[i].
+        tt_encoder_layer = T5EncoderLayer(
+            config, encoder_submesh, ccl_manager, parallel_config, config.use_relative_position_bias[i]
+        )
         tt_encoder_layer.load_torch_state_dict(substate(hf_model.state_dict(), f"encoder.block.{layer}"))
 
         tt_layer_output = tt_encoder_layer(tt_embeddings_output, tt_position_bias)

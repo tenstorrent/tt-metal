@@ -119,7 +119,7 @@ def test_clip_encoder_layer(
             embeddings_state_dict[new_key] = value
     tt_embedding.load_state_dict(embeddings_state_dict)
 
-    hidden_states = tt_embedding(tt_prompt, encoder_submesh)
+    hidden_states = tt_embedding(tt_prompt)
 
     causal_attention_mask = create_4d_causal_attention_mask(
         tt_prompt.shape, encoder_submesh, dtype=hidden_states.get_dtype()
