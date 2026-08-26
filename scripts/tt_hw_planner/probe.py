@@ -1008,12 +1008,16 @@ def probe_model(model_id: str) -> ModelProbe:
     )
 
     cfg = _maybe_fetch_config(model_id)
+    # Composite detection reads the HF *file listing* and tolerates a missing root
+    # config -- "no root model_type" is itself half the composite signal. It must
+    # therefore run BEFORE the config-failure early return, or diffusers-style
+    # repos (model_index.json + per-subfolder configs) are never detected.
+    probe.is_composite, probe.submodels = _detect_composite(info.siblings, cfg)
     if cfg is None:
         probe.config_status = "failed"
         return probe
 
     probe.raw_config = cfg
-    probe.is_composite, probe.submodels = _detect_composite(info.siblings, cfg)
     if probe.is_composite:
         _sm = ", ".join(probe.submodels) or "model_index.json (no root model_type)"
         probe.flags.append(

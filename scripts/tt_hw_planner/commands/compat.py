@@ -9,6 +9,15 @@ def cmd_compat(args) -> int:
     from ..cli import check_compatibility, evaluate_kernels, probe_model, render_compat_json, render_compat_table
 
     probe = probe_model(args.model_id)
+    if not probe.raw_config and getattr(probe, "is_composite", False):
+        _subs = ", ".join(probe.submodels) or "model_index.json"
+        print(
+            f"note: {args.model_id} is a composite / multi-submodel repo [{_subs}]; "
+            "it has no root config.json to analyze. Skipping root-config "
+            "compatibility analysis -- bring-up routes per component.",
+            file=sys.stderr,
+        )
+        return 0
     if not probe.raw_config:
         print(
             f"ERROR: could not load config.json for {args.model_id}. "

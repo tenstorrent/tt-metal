@@ -537,6 +537,17 @@ def prepare_bringup(
 
     probe = probe_model(model_id)
 
+    if probe.is_composite and probe.memory_model is None:
+        # Composite repo (diffusers pipeline / multi-submodel): there is no root
+        # model to load, so the root-config guard below would reject it. The
+        # non-text family path resolves a backend from category/pipeline_tag and
+        # tolerates an empty raw_config.
+        return _prepare_non_text_family(
+            probe=probe,
+            model_id=model_id,
+            box_override=box_override,
+            mesh_override=mesh_override,
+        )
     if not probe.raw_config:
         raise BringupError(
             f"could not load config.json for {model_id}. "
