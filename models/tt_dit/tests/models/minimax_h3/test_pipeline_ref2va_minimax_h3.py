@@ -15,6 +15,8 @@ import pytest
 import torch
 from PIL import Image
 
+from models.perf.benchmarking_utils import BenchmarkProfiler
+
 from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference, reference_from_video_file
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from .common import GALAXY_MESHES, create_fractal_image
@@ -25,8 +27,8 @@ from .common_av import (
     check_spatial_seams,
     gate_clip,
     gate_vbench,
+    log_pipeline_perf,
     log_quality,
-    log_timing_table,
     run_warm_generation,
     to_uint8_frames,
     weights_dir,
@@ -168,6 +170,7 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
     pipeline = _pipeline(mesh_device)
 
     # Warmup must use the SAME references: `padded_len` depends on them, and the helper asserts agreement.
+    benchmark_profiler = BenchmarkProfiler()
     output = run_warm_generation(
         pipeline,
         PROMPT,
@@ -177,6 +180,7 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
         width=WIDTH,
         num_inference_steps=STEPS,
         seed=SEED,
+        profiler=benchmark_profiler,
     )
 
     assert output.video.shape == (1, 3, NUM_FRAMES, HEIGHT, WIDTH), tuple(output.video.shape)
@@ -191,15 +195,17 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
     paths = _write(output, f"ref2va_{case}")
 
     num_forwards = STEPS - 1
-    log_timing_table(
-        pipeline,
-        f"ref2va[{case}]",
+    log_pipeline_perf(
+        benchmark_profiler,
+        label=f"ref2va[{case}]",
+        pipeline=pipeline,
         num_forwards=num_forwards,
-        video_seconds=NUM_FRAMES / FPS,
-        extra=(
-            f", l1_small_size {_L1_SMALL} | {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames @ {FPS} fps "
-            f"({NUM_FRAMES / FPS:.2f} s), {num_forwards} forwards, padded_len {pipeline.last_padded_len}"
-        ),
+        width=WIDTH,
+        height=HEIGHT,
+        num_frames=NUM_FRAMES,
+        fps=FPS,
+        num_inference_steps=STEPS,
+        extra_lines=(f"L1 Small Size: {_L1_SMALL}",),
     )
 
     check_audio_sanity(

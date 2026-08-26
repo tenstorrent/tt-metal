@@ -2,15 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end `t2va` perf + quality gate, swept over the published working points.
+"""End-to-end `t2va` quality gate, swept over the published working points.
 
 Six aspect ratios (21:9 .. 9:16) x three durations (5 / 10 / 15 s), 50 steps. The canvas comes from
 `resolve_canvas_size` -- short edge 768 from 16:9 through 9:16, ~1 MPix for wider -- and the frame
 count from `align_num_frames`, so neither is tabulated here. Each case writes its own artifact stem,
 so a sweep does not overwrite itself.
 
-The MEASUREMENT table logs on the host rank only, and only for the warm generation. Sanity, seam,
-CLIP, artifact, and reminder logs are silent unless `H3_LOG_QUALITY=1`.
+Pipeline wall-clock lives in `test_performance_minimax_h3.py`. Sanity, seam, CLIP, artifact, and
+reminder logs are silent unless `H3_LOG_QUALITY=1`.
 """
 
 from __future__ import annotations
@@ -39,7 +39,6 @@ from .common_av import (
     log_quality,
     log_quality_warning,
     log_spectral_flatness,
-    log_timing_table,
     quality_logs_enabled,
     run_warm_generation,
     to_uint8_frames,
@@ -56,12 +55,6 @@ SEED = 0
 # 21:9 lands on 672x1536, which is the documented example.
 ASPECT_RATIOS = [(21, 9), (16, 9), (4, 3), (1, 1), (3, 4), (9, 16)]
 DURATIONS_S = [5, 10, 15]
-
-# Loose did-something-collapse bar, per second of video rather than absolute: the 400 s figure was
-# set for one 5.17 s clip, and 10 s / 15 s at 1 MPix cost proportionally more. 77 s of compute per
-# video second is the same allowance (400 / 5.167), i.e. still ~5x looser than the 13.4x realtime
-# factor measured at 16:9 / 5 s.
-EXPECTED_S_PER_VIDEO_SECOND = 77.0
 
 
 # calibrated 2026-08-04, fox prompt, seed 0 (single sample; margins are generous)
@@ -106,8 +99,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
 
     if is_host() and not os.environ.get("TT_DIT_CACHE_DIR"):
         logger.warning(
-            "TT_DIT_CACHE_DIR is unset, so every weight load reads safetensors. Prepares are excluded "
-            "from the total either way, but the run will take far longer than the reported compute."
+            "TT_DIT_CACHE_DIR is unset, so every weight load reads safetensors and the run will take far longer."
         )
 
     pipeline = MiniMaxH3Pipeline.create_pipeline(
@@ -128,21 +120,6 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     log_quality(
         f"generated {output.num_frames} frames ({output.video_seconds:.3f} s) and "
         f"{output.audio_seconds:.3f} s of audio at {output.sampling_rate} Hz"
-    )
-
-    num_forwards = NUM_INFERENCE_STEPS - 1
-    video_seconds = expected_frames / MINIMAX_H3_FPS
-    log_timing_table(
-        pipeline,
-        "t2va",
-        num_forwards=num_forwards,
-        video_seconds=video_seconds,
-        expected_total_s=EXPECTED_S_PER_VIDEO_SECOND * video_seconds,
-        extra=(
-            f" | {aspect_ratio[0]}:{aspect_ratio[1]} {WIDTH}x{HEIGHT}, {expected_frames} frames "
-            f"@ {MINIMAX_H3_FPS} fps ({video_seconds:.2f} s), {num_forwards} forwards, "
-            f"padded_len {pipeline.last_padded_len}"
-        ),
     )
 
     frames = to_uint8_frames(output)
@@ -190,8 +167,8 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
             gate_clip(frames, prompt, CLIP_THRESHOLD, stem)
             # RUN_VBENCH=0 drops the VBench gate. It needs its own interpreter (~/vbench_env, pinned to
             # numpy<2 / transformers 4.33), and without one `run_vbench` skips -- which marks the whole
-            # test SKIPPED *after* the full generation, hiding the perf and A/V results behind a
-            # non-result. Off means "not measured": everything above still gates.
+            # test SKIPPED *after* the full generation, hiding the A/V results behind a non-result.
+            # Off means "not measured": everything above still gates.
             if os.environ.get("RUN_VBENCH", "1") not in ("0", "false", "False"):
                 gate_vbench(paths, prompt, VBENCH_THRESHOLDS, stem)
             else:

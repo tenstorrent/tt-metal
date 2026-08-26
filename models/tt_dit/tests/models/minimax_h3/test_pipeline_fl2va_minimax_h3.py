@@ -15,6 +15,8 @@ import pytest
 import torch
 from PIL import Image
 
+from models.perf.benchmarking_utils import BenchmarkProfiler
+
 from ....pipelines.minimax_h3.packing import align_num_frames, prepare_keyframe_image
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ..wan2_2.common import check_output_sanity
@@ -28,9 +30,9 @@ from .common_av import (
     check_written_file,
     gate_clip,
     is_host,
+    log_pipeline_perf,
     log_quality,
     log_spectral_flatness,
-    log_timing_table,
     quality_logs_enabled,
     run_warm_generation,
     to_uint8_frames,
@@ -51,8 +53,6 @@ MESHES = GALAXY_MESHES
 ANCHOR_PCC_FLOOR = 0.95  # measured 0.9943-0.9971 across the three anchor cases
 
 CLIP_THRESHOLD = 33.0  # t2va's bar; measured to transfer (36.63-37.30 vs t2va's 37.37)
-
-EXPECTED_TOTAL_S = 400.0  # loose did-something-collapse bar, not a perf target
 
 
 def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pcc_floor=0.3):
@@ -151,6 +151,7 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir())
 
     # Warmup must be fl2va-shaped (keyframes included): programs are keyed on padded length; the helper asserts it.
+    benchmark_profiler = BenchmarkProfiler()
     output = run_warm_generation(
         pipeline,
         PROMPT,
@@ -161,6 +162,7 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
         width=WIDTH,
         num_inference_steps=NUM_INFERENCE_STEPS,
         seed=SEED,
+        profiler=benchmark_profiler,
     )
 
     expected_frames = align_num_frames(NUM_FRAMES)
@@ -170,18 +172,17 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
     )
 
     num_forwards = NUM_INFERENCE_STEPS - 1
-    video_seconds = expected_frames / output.fps
-    log_timing_table(
-        pipeline,
-        "fl2va",
+    log_pipeline_perf(
+        benchmark_profiler,
+        label="fl2va",
+        pipeline=pipeline,
         num_forwards=num_forwards,
-        video_seconds=video_seconds,
-        expected_total_s=EXPECTED_TOTAL_S,
-        extra=(
-            f" | {WIDTH}x{HEIGHT}, {expected_frames} frames @ {output.fps} fps "
-            f"({video_seconds:.2f} s), {num_forwards} forwards, first+last anchors, "
-            f"padded_len {pipeline.last_padded_len}"
-        ),
+        width=WIDTH,
+        height=HEIGHT,
+        num_frames=expected_frames,
+        fps=output.fps,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        extra_lines=("Conditioning: first+last anchors",),
     )
     assert output.video.shape[2] == expected_frames, f"{output.video.shape[2]} frames, expected {expected_frames}"
 

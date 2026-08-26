@@ -6,7 +6,7 @@
 A/V sync is checked structurally (duration/ordering); envelope-vs-motion correlation is diagnostic only.
 
 Quality/sanity logs (OK lines, seams, CLIP, artifacts, reminders) are silent unless `H3_LOG_QUALITY=1`.
-The MEASUREMENT table always logs, host rank only.
+Pipeline stage durations (`BenchmarkProfiler`) always log, host rank only.
 """
 
 from __future__ import annotations
@@ -23,10 +23,11 @@ from loguru import logger
 
 import ttnn
 
+from ....pipelines.events import profiler_event_callback
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
 
 # Off by default: sanity, seam, CLIP, artifact, and reminder chatter. Set H3_LOG_QUALITY=1 to see it.
-# Asserts still run either way. The MEASUREMENT table is separate and always logs on the host rank.
+# Asserts still run either way. Stage durations always log on the host rank.
 _QUALITY_LOG_ON = ("1", "true", "yes", "on")
 
 
@@ -462,7 +463,7 @@ def artifact_dir(name: str) -> Path:
     return directory
 
 
-def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
+def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
     """Warmup then the timed generation with identical kwargs; asserts padded-length agreement (programs are keyed on it).
 
     On the resident-AdaLN path, warmup runs a short 3-step schedule regardless of the measured step
@@ -472,19 +473,28 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
     shape-only) so the measured full-step call still replays it. The precomputed-AdaLN path instead
     keys warmth on the step count -- a short warmup there would force the measured call to rebuild its
     modulation table and recapture the trace -- so it warms at the full measured step count.
+
+    `profiler`, when given, is a `BenchmarkProfiler`: only the measured call is wrapped in `"run"` and
+    receives `on_event`. Warmup and the quiet compile pass are unprofiled.
     """
     warmup_kwargs = gen_kwargs if pipeline.precomputed_adaln else {**gen_kwargs, "num_inference_steps": 3}
     pipeline.warmup(prompt=prompt, **warmup_kwargs)
     warm_padded_len = pipeline.last_padded_len
 
     with pipeline.quiet():
-        output = pipeline(prompt, seed=seed, **warmup_kwargs)
+        pipeline(prompt, seed=seed, **warmup_kwargs)
 
     ttnn.synchronize_device(pipeline.mesh_device)
     if ttnn.using_distributed_env():
         ttnn.distributed_context_barrier()
 
-    output = pipeline(prompt, seed=seed, **gen_kwargs)
+    on_event = profiler_event_callback(profiler, profiler_iteration) if profiler is not None else None
+    if profiler is not None:
+        with profiler("run", iteration=profiler_iteration):
+            output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
+            ttnn.synchronize_device(pipeline.mesh_device)
+    else:
+        output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
 
     assert pipeline.last_padded_len == warm_padded_len, (
         f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
@@ -493,37 +503,74 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
     return output
 
 
-def log_timing_table(pipeline, label: str, num_forwards: int, video_seconds: float, expected_total_s=None, extra=""):
-    """The MEASUREMENT block; `expected_total_s`, when given, asserts the total. Returns the total.
-
-    Logged only on the host rank -- every rank still computes and asserts, so a slow rank cannot
-    silently pass while rank 0's table looks fine.
-    """
-    rows = pipeline.last_timings
-    total = sum(seconds for _, seconds in rows)
+def log_pipeline_perf(
+    profiler,
+    *,
+    label: str,
+    pipeline,
+    num_forwards: int,
+    width: int | None = None,
+    height: int | None = None,
+    num_frames: int | None = None,
+    fps: float | None = None,
+    aspect_ratio: tuple[int, int] | None = None,
+    num_inference_steps: int | None = None,
+    extra_lines: tuple[str, ...] = (),
+    iteration: int = 0,
+) -> None:
+    """Stage durations from `BenchmarkProfiler`, with a config header. Host rank only."""
+    sections = (
+        ("Text Encoding", "encoder"),
+        ("VAE Encode", "vae_encode"),
+        ("Denoising (total)", "denoising"),
+        ("VAE Decoding", "vae"),
+        ("Audio Decoding", "audio"),
+        ("Total Pipeline", "run"),
+    )
+    if not is_host():
+        return
     shape = tuple(pipeline.mesh_device.shape)
-    if is_host():
-        logger.info(
-            f"MEASUREMENT {label} fully warm | mesh {shape[0]}x{shape[1]} Blackhole, "
-            f"TP={pipeline.tp_factor} axis {pipeline.tp_axis} / SP={pipeline.sp_factor} axis {pipeline.sp_axis}, "
-            f"{pipeline.ccl_manager.topology}, {pipeline.ccl_manager.num_links} links{extra} "
-            f"| warm window: one full warmup generation at this shape, prepares and export excluded"
-        )
-        for row_label, seconds in rows:
-            logger.info(f"  {row_label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
-        logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
-        denoise = dict(rows).get("Denoise")
-        if denoise:
-            logger.info(
-                f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
-                f"({num_forwards} forwards over {denoise:.1f} s)"
-            )
-        logger.info(f"  realtime factor    {total / video_seconds:8.1f} x  (compute / video seconds)")
-    if expected_total_s is not None:
-        assert (
-            total < expected_total_s
-        ), f"fully-warm total {total:.1f} s exceeds the {expected_total_s:.0f} s floor bar"
-    return total
+    topology = getattr(pipeline.ccl_manager.topology, "name", pipeline.ccl_manager.topology)
+    lines = [
+        "=" * 80,
+        "MINIMAX-H3 PERFORMANCE RESULTS",
+        "=" * 80,
+        f"Task: {label}",
+    ]
+    if width is not None and height is not None:
+        size = f"{width}x{height}"
+        if aspect_ratio is not None:
+            size += f" ({aspect_ratio[0]}:{aspect_ratio[1]})"
+        lines.append(f"Image Size: {size}")
+    if num_frames is not None:
+        frame_line = f"Num Frames: {num_frames}"
+        if fps:
+            frame_line += f" @ {fps:g} fps ({num_frames / fps:.2f} s)"
+        lines.append(frame_line)
+    if num_inference_steps is not None:
+        step_line = f"Inference Steps: {num_inference_steps}"
+        if num_forwards and num_forwards != num_inference_steps:
+            step_line += f" ({num_forwards} denoise steps)"
+        lines.append(step_line)
+    if pipeline.last_padded_len is not None:
+        lines.append(f"Padded Length: {pipeline.last_padded_len}")
+    lines.append(
+        f"DiT Configuration: sp={pipeline.sp_factor} axis {pipeline.sp_axis}, "
+        f"tp={pipeline.tp_factor} axis {pipeline.tp_axis}"
+    )
+    lines.append(f"Mesh Shape: {shape}")
+    lines.append(f"Topology: {topology}, {pipeline.ccl_manager.num_links} links")
+    lines.extend(extra_lines)
+    lines.append("-" * 80)
+    for name, step in sections:
+        if not profiler.contains_step(step, iteration):
+            continue
+        duration = profiler.get_duration(step, iteration)
+        lines.append(f"{name:25} | {duration:8.4f}s")
+        if step == "denoising" and num_forwards:
+            lines.append(f"{'Denoising (per step)':25} | {duration / num_forwards:8.4f}s")
+    lines.append("=" * 80)
+    logger.info("\n" + "\n".join(lines))
 
 
 def to_uint8_frames(output) -> np.ndarray:
