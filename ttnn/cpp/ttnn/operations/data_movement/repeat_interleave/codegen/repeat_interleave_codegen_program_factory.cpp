@@ -7,7 +7,6 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -42,12 +41,6 @@ constexpr const char* kWriterSrc =
 constexpr const char* kRmReaderSrc =
     "ttnn/cpp/ttnn/operations/data_movement/repeat_interleave/codegen/kernels/"
     "reader_repeat_interleave_rm.cpp";
-
-uint32_t align_up(uint32_t value, uint32_t alignment) { return ((value + alignment - 1) / alignment) * alignment; }
-
-uint32_t page_alignment(const MemoryConfig& memory_config) {
-    return memory_config.buffer_type() == BufferType::L1 ? hal::get_l1_alignment() : hal::get_dram_alignment();
-}
 
 struct CoreWork {
     CoreCoord core;
@@ -90,9 +83,6 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
     Buffer* in_buffer = input.buffer();
     Buffer* out_buffer = output.buffer();
 
-    const uint32_t ndim = input.logical_shape().rank();
-    const uint32_t rep_dim = recover_rep_dim(operation_attributes.rep_dim, ndim);
-
     auto grid = input.device()->compute_with_storage_grid_size();
     const auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, operation_attributes.total_out_pages);
@@ -129,7 +119,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
             {"seq_id", kSeqRepeatInterleave}, {"cb_id", cb_id}, {"batch", kRiReadBatch}, {"src_page_pitch", 0}};
         reader_desc.config = ReaderConfigDescriptor{};
 
-        const uint32_t out_page_size = align_up(cb_page_size, page_alignment(output.memory_config()));
+        const uint32_t out_page_size = static_cast<uint32_t>(out_buffer->aligned_page_size());
         KernelDescriptor writer_desc;
         writer_desc.kernel_source = kWriterSrc;
         writer_desc.core_ranges = all_cores;
@@ -155,27 +145,15 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
         return desc;
     }
 
-    // ROW_MAJOR whole-stick (outer/H) path. supported_by_codegen() unconditionally rejects the
-    // within-stick (last-dim) case -- validate_on_program_cache_miss TT_FATALs before this
-    // factory ever runs -- so no within-stick reader is wired here; it would be unreachable.
-    TT_FATAL(
-        rep_dim != ndim - 1,
-        "repeat_interleave codegen: RM within-stick (last-dim) replication is not wired in this "
-        "program factory; supported_by_codegen() must reject it before create_descriptor runs");
-
+    // ROW_MAJOR whole-stick (outer/H) path. The within-stick (last-dim) case has no reader wired
+    // here; validate_on_program_cache_miss rejects it before this factory runs.
+    //
     // An RM slot is a whole stick, so kRiReadBatch/kRiWriteBatch worth of them is not guaranteed to
-    // fit: shrink the batch (and with it the CB depth) to what per-core L1 admits. The gate
+    // fit: shrink the batch (and with it the CB depth) to what per-core L1 admits. Validation
     // rejects anything below kRmCbMinSlots, so the loop always terminates with batch >= 1.
     const auto cb_budget =
         ttnn::operations::data_movement::repeat_interleave_codegen::rm_cb_budget(input, output.memory_config());
     const uint32_t slot_stride = cb_budget.slot_stride;
-    TT_FATAL(
-        cb_budget.max_slots >= ttnn::operations::data_movement::repeat_interleave_codegen::kRmCbMinSlots,
-        "repeat_interleave codegen: a {} B row-major stick needs {} CB slots' worth of per-core L1 "
-        "but only {} fit; supported_by_codegen() must reject this config",
-        operation_attributes.stick_size,
-        ttnn::operations::data_movement::repeat_interleave_codegen::kRmCbMinSlots,
-        cb_budget.max_slots);
     uint32_t batch = kRiReadBatch;
     while (2 * batch > cb_budget.max_slots) {
         batch /= 2;
