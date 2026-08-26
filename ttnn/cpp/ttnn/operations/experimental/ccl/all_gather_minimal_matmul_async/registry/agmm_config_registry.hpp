@@ -124,6 +124,7 @@ enum class CompatibilityStatus : std::uint8_t {
     Unavailable,
     SchemaMismatch,
     MalformedTable,
+    DeviceMismatch,
     DigestMismatch,
 };
 

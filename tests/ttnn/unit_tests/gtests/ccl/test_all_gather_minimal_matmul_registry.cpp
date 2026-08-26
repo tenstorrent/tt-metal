@@ -45,13 +45,13 @@ compact::TensorDescriptor tensor_descriptor(
 compact::KeyDescriptor valid_key() {
     auto key = compact::KeyDescriptor{};
     key.device = compact::DeviceDescriptor{
-        .architecture = 1,
+        .architecture = compact::kBlackholeArchitecture,
         .board_capability_class = 1,
-        .device_count = 8,
-        .mesh_rows = 2,
-        .mesh_cols = 4,
-        .compute_grid_x = 8,
-        .compute_grid_y = 8,
+        .device_count = compact::kBh32DeviceCount,
+        .mesh_rows = compact::kBh32MeshRows,
+        .mesh_cols = compact::kBh32MeshCols,
+        .compute_grid_x = 13,
+        .compute_grid_y = 10,
         .ordered_mesh_sha256 = digest(4),
         .topology_sha256 = digest(5),
         .runtime_capability_sha256 = digest(3)};
@@ -115,9 +115,10 @@ compact::TableLock valid_lock(const std::size_t entry_count = 1) {
             .key_schema_version = compact::kKeySchemaVersion,
             .replay_schema_version = compact::kReplaySchemaVersion,
             .content_sha256 = digest(12),
-            .semantic_source_sha256 = digest(1),
-            .build_identity_sha256 = digest(2),
-            .runtime_capability_sha256 = digest(3)},
+                .semantic_source_sha256 = digest(1),
+                .build_identity_sha256 = digest(2),
+                .runtime_capability_sha256 = digest(3)},
+        .certified_device = valid_key().device,
         .evidence_manifest_sha256 = digest(13),
         .predictor_sha256 = digest(14),
         .exporter_sha256 = digest(15)};
@@ -328,7 +329,7 @@ TEST_F(AgmmRegistryTest, SyntheticGeneratedLockRequiresTypedProvenanceAndStrictK
     wrong_capability.back().key.device.runtime_capability_sha256 = digest(16);
     EXPECT_EQ(
         compact::validate_table_lock(lock, wrong_capability),
-        compact::TableValidationStatus::RuntimeCapabilityMismatch);
+        compact::TableValidationStatus::CertifiedDeviceMismatch);
 
     const std::array reversed_entries{second, first};
     EXPECT_EQ(
@@ -338,6 +339,86 @@ TEST_F(AgmmRegistryTest, SyntheticGeneratedLockRequiresTypedProvenanceAndStrictK
     EXPECT_EQ(
         compact::validate_table_lock(lock, duplicate_entries),
         compact::TableValidationStatus::EntriesNotStrictlySorted);
+}
+
+TEST_F(AgmmRegistryTest, SyntheticGeneratedLockIsRestrictedToExactBh32EightByFourDomain) {
+    const auto entry = valid_entry();
+    const std::array entries{entry};
+    auto lock = valid_lock();
+
+    auto wrong_architecture = lock;
+    wrong_architecture.certified_device.architecture = 2;
+    EXPECT_EQ(
+        compact::validate_table_lock(wrong_architecture, entries),
+        compact::TableValidationStatus::UnsupportedDeviceDomain);
+
+    auto eight_device_lock = lock;
+    eight_device_lock.certified_device.device_count = 8;
+    eight_device_lock.certified_device.mesh_rows = 2;
+    EXPECT_EQ(
+        compact::validate_table_lock(eight_device_lock, entries),
+        compact::TableValidationStatus::UnsupportedDeviceDomain);
+
+    auto transposed_mesh = lock;
+    transposed_mesh.certified_device.mesh_rows = 4;
+    transposed_mesh.certified_device.mesh_cols = 8;
+    EXPECT_EQ(
+        compact::validate_table_lock(transposed_mesh, entries),
+        compact::TableValidationStatus::UnsupportedDeviceDomain);
+
+    auto missing_grid = lock;
+    missing_grid.certified_device.compute_grid_x = 0;
+    EXPECT_EQ(
+        compact::validate_table_lock(missing_grid, entries),
+        compact::TableValidationStatus::UnsupportedDeviceDomain);
+
+    auto mismatched_grid = entries;
+    mismatched_grid.front().key.device.compute_grid_x -= 1;
+    EXPECT_EQ(
+        compact::validate_table_lock(lock, mismatched_grid),
+        compact::TableValidationStatus::CertifiedDeviceMismatch);
+
+    auto mismatched_topology = entries;
+    mismatched_topology.front().key.device.topology_sha256 = digest(17);
+    EXPECT_EQ(
+        compact::validate_table_lock(lock, mismatched_topology),
+        compact::TableValidationStatus::CertifiedDeviceMismatch);
+
+    auto mismatched_capability = lock;
+    mismatched_capability.metadata.runtime_capability_sha256 = digest(18);
+    EXPECT_EQ(
+        compact::validate_table_lock(mismatched_capability, entries),
+        compact::TableValidationStatus::CertifiedDeviceMismatch);
+}
+
+TEST_F(AgmmRegistryTest, ExactBh32LockRejectsARequestFromAnotherDeviceDomain) {
+    const auto entry = valid_entry();
+    const std::array entries{entry};
+    auto request = registry::RegistryRequest{.key = entry.key};
+    request.key.device.compute_grid_x -= 1;
+    auto result = registry::resolve_with_table_for_testing(
+        Mode::On,
+        request,
+        registry::AttestationStatus::Success,
+        {},
+        valid_lock(),
+        entries,
+        valid_compatibility());
+    EXPECT_EQ(result.reason, registry::ResolutionReason::CompatibilityMismatch);
+    EXPECT_EQ(result.descriptor, nullptr);
+
+    request = registry::RegistryRequest{.key = entry.key};
+    request.key.device.topology_sha256 = digest(19);
+    result = registry::resolve_with_table_for_testing(
+        Mode::On,
+        request,
+        registry::AttestationStatus::Success,
+        {},
+        valid_lock(),
+        entries,
+        valid_compatibility());
+    EXPECT_EQ(result.reason, registry::ResolutionReason::CompatibilityMismatch);
+    EXPECT_EQ(result.descriptor, nullptr);
 }
 
 TEST_F(AgmmRegistryTest, MalformedSyntheticLockCannotSelectARecipe) {
@@ -400,7 +481,13 @@ TEST_F(AgmmRegistryTest, PureRequestBuilderRejectsMissingAndInconsistentFacts) {
     facts = valid_request_facts();
     facts.attestation.device.device_count += 1;
     built = registry::build_registry_request(facts);
-    EXPECT_EQ(built.status, registry::RequestBuildStatus::InconsistentDescriptor);
+    EXPECT_EQ(built.status, registry::RequestBuildStatus::IncompleteDescriptor);
+
+    facts = valid_request_facts();
+    facts.attestation.device.device_count = 8;
+    facts.attestation.device.mesh_rows = 2;
+    built = registry::build_registry_request(facts);
+    EXPECT_EQ(built.status, registry::RequestBuildStatus::IncompleteDescriptor);
 
     facts = valid_request_facts();
     facts.workload.logical_k += 32;
@@ -455,6 +542,10 @@ TEST_F(AgmmRegistryTest, MaterializerRejectsShapeTileGridAndBlockTampering) {
     auto entry = valid_entry();
     EXPECT_EQ(registry::materialize_recipe(entry).status, registry::MaterializationStatus::Success);
 
+    entry.key.device.device_count = 8;
+    entry.key.device.mesh_rows = 2;
+    EXPECT_EQ(registry::materialize_recipe(entry).status, registry::MaterializationStatus::InvalidProgramConfig);
+    entry = valid_entry();
     entry.key.input.tile_width = 16;
     EXPECT_EQ(registry::materialize_recipe(entry).status, registry::MaterializationStatus::InvalidProgramConfig);
     entry = valid_entry();
@@ -499,6 +590,31 @@ TEST_F(AgmmRegistryTest, MaterializerUsesFullDestinationRegisterCapacity) {
     EXPECT_EQ(registry::materialize_recipe(entry).status, registry::MaterializationStatus::Success);
     entry.replay.compute_kernel_config.dst_full_sync_en = false;
     EXPECT_EQ(registry::materialize_recipe(entry).status, registry::MaterializationStatus::InvalidProgramConfig);
+}
+
+TEST_F(AgmmRegistryTest, ReplayBindsEverySupportedThrottleLevelExactly) {
+    using ThrottleLevel = ttnn::operations::compute_throttle_utils::ThrottleLevel;
+    constexpr std::array levels{
+        ThrottleLevel::NO_THROTTLE,
+        ThrottleLevel::LEVEL_1,
+        ThrottleLevel::LEVEL_2,
+        ThrottleLevel::LEVEL_3,
+        ThrottleLevel::LEVEL_4,
+        ThrottleLevel::LEVEL_5};
+    for (const auto level : levels) {
+        auto entry = valid_entry();
+        entry.replay.compute_kernel_config.throttle_level = static_cast<std::uint32_t>(level);
+        const auto materialized = registry::materialize_recipe(entry);
+        ASSERT_EQ(materialized.status, registry::MaterializationStatus::Success);
+        ASSERT_TRUE(materialized.recipe.has_value());
+        EXPECT_EQ(materialized.recipe->compute_kernel_config.throttle_level, level);
+    }
+
+    auto entry = valid_entry();
+    entry.replay.compute_kernel_config.throttle_level = 0xFFFFFFFFU;
+    EXPECT_EQ(
+        registry::materialize_recipe(entry).status,
+        registry::MaterializationStatus::InvalidComputeKernelConfig);
 }
 
 TEST_F(AgmmRegistryTest, TelemetrySeparatesSelectedFromLaunchCompletedAndUsesNamedReasons) {

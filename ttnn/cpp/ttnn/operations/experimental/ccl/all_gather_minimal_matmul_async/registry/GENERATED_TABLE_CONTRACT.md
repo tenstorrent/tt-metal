@@ -30,11 +30,19 @@ The checked-in empty fixture uses `N == 0`. A production export must have
 `agmm_registry_descriptor.hpp`, and explicitly initialize every field. It must
 not depend on aggregate defaults for a populated lock or entry.
 
+Each populated lock certifies exactly one Blackhole 32-chip 8x4 device domain.
+`certified_device` must use architecture value `kBlackholeArchitecture`,
+`device_count == 32`, `mesh_rows == 8`, and `mesh_cols == 4`. Its board
+capability class, compute grid, ordered-mesh digest, fabric-topology digest, and
+runtime-capability digest must be the exact nonzero values independently
+attested for the confirmation devices. Harvesting or fabric differences
+therefore require a distinct lock; they are not wildcarded.
+
 All entries must:
 
 - have a nonzero `entry_id`;
 - use the lock's key, replay, and codegen ABI versions;
-- have the exact lock `runtime_capability_sha256` in their device key;
+- have a device descriptor exactly equal to the lock's `certified_device`;
 - be strictly increasing by `KeyDescriptor::operator<=>`; and
 - therefore contain no duplicate exact key.
 
@@ -78,6 +86,12 @@ digests independently before proposing it to TT-metal. Native code does not
 claim to recompute SHA-256 at dispatch time; it binds the reviewed values and
 compares semantic, build, and runtime capability identities to independently
 obtained runtime/build attestations.
+
+`ReplayDescriptor::compute_kernel_config.throttle_level` is an explicit ABI
+field, not a default. The exporter must emit one of the reviewed integer values
+`0..5`, corresponding exactly to `NO_THROTTLE` and `LEVEL_1` through `LEVEL_5`.
+Native materialization maps all six values one-for-one into
+`DeviceComputeKernelConfig`; every other value rejects the replay before launch.
 
 ## Promotion gates
 

@@ -12,6 +12,9 @@ lock and exact recipes are typed C++ constants compiled into TT-metal; there is
 no runtime predictor, wrapper, sidecar, or filesystem lookup. A constexpr
 validator rejects ABI drift, missing provenance, capability mismatch, wrong
 entry counts, and non-strict key ordering before a populated header can build.
+Each populated lock is restricted to one exact Blackhole 32-chip 8x4 device
+descriptor; board capability, compute grid, ordered mesh, fabric topology, and
+runtime capability cannot vary within it.
 
 The production table is empty and the mode defaults to `Off`. `Off` bypasses
 lookup, request construction, attestation, telemetry, and the selected-call
@@ -39,7 +42,9 @@ The key is an immutable, bounded POD. It distinguishes:
   digest, fabric topology digest, and runtime-capability digest.
 
 The replay descriptor contains only `MinimalMatmulConfig` and the complete
-`DeviceComputeKernelConfig`. Materialization validates schema/ABI, default tile
+`DeviceComputeKernelConfig`, including an explicit `throttle_level` whose six
+supported values are bound one-for-one during materialization. Materialization
+validates schema/ABI, the exact BH32 8x4 domain, default tile
 geometry, exact workload consistency, grid bounds, block divisibility, and
 destination-register constraints before the public operation is dispatched.
 Any validation or materialization failure falls back and opens the per-registry

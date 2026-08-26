@@ -18,6 +18,10 @@ inline constexpr std::uint16_t kKeySchemaVersion = 1;
 inline constexpr std::uint16_t kReplaySchemaVersion = 1;
 inline constexpr std::uint16_t kCodegenRecipeAbi = 1;
 inline constexpr std::uint16_t kTableLockSchemaVersion = 1;
+inline constexpr std::uint32_t kBlackholeArchitecture = 3;
+inline constexpr std::uint16_t kBh32DeviceCount = 32;
+inline constexpr std::uint16_t kBh32MeshRows = 8;
+inline constexpr std::uint16_t kBh32MeshCols = 4;
 inline constexpr std::size_t kMaxTensorRank = 8;
 inline constexpr std::size_t kMaxChunkSizes = 64;
 inline constexpr std::size_t kMaxActivationParameters = 8;
@@ -199,6 +203,7 @@ struct TableLock {
     std::uint16_t codegen_recipe_abi{kCodegenRecipeAbi};
     std::uint64_t entry_count{};
     TableMetadata metadata{};
+    DeviceDescriptor certified_device{};
     Sha256 evidence_manifest_sha256{};
     Sha256 predictor_sha256{};
     Sha256 exporter_sha256{};
@@ -214,7 +219,8 @@ enum class TableValidationStatus : std::uint8_t {
     MissingLockDigest,
     EntrySchemaMismatch,
     MissingEntryId,
-    RuntimeCapabilityMismatch,
+    UnsupportedDeviceDomain,
+    CertifiedDeviceMismatch,
     EntriesNotStrictlySorted,
 };
 
@@ -245,11 +251,23 @@ inline constexpr TableValidationStatus validate_table_lock(
     if (entries.empty()) {
         return TableValidationStatus::Empty;
     }
+    const auto& certified_device = lock.certified_device;
+    if (certified_device.architecture != kBlackholeArchitecture ||
+        certified_device.board_capability_class == 0 || certified_device.device_count != kBh32DeviceCount ||
+        certified_device.mesh_rows != kBh32MeshRows || certified_device.mesh_cols != kBh32MeshCols ||
+        certified_device.compute_grid_x == 0 || certified_device.compute_grid_y == 0 ||
+        sha256_is_zero(certified_device.ordered_mesh_sha256) || sha256_is_zero(certified_device.topology_sha256) ||
+        sha256_is_zero(certified_device.runtime_capability_sha256)) {
+        return TableValidationStatus::UnsupportedDeviceDomain;
+    }
     if (sha256_is_zero(lock.metadata.content_sha256) || sha256_is_zero(lock.metadata.semantic_source_sha256) ||
         sha256_is_zero(lock.metadata.build_identity_sha256) ||
         sha256_is_zero(lock.metadata.runtime_capability_sha256) || sha256_is_zero(lock.evidence_manifest_sha256) ||
         sha256_is_zero(lock.predictor_sha256) || sha256_is_zero(lock.exporter_sha256)) {
         return TableValidationStatus::MissingLockDigest;
+    }
+    if (lock.metadata.runtime_capability_sha256 != certified_device.runtime_capability_sha256) {
+        return TableValidationStatus::CertifiedDeviceMismatch;
     }
     for (std::size_t index = 0; index < entries.size(); ++index) {
         const auto& entry = entries[index];
@@ -260,8 +278,8 @@ inline constexpr TableValidationStatus validate_table_lock(
         if (sha256_is_zero(entry.entry_id)) {
             return TableValidationStatus::MissingEntryId;
         }
-        if (entry.key.device.runtime_capability_sha256 != lock.metadata.runtime_capability_sha256) {
-            return TableValidationStatus::RuntimeCapabilityMismatch;
+        if (entry.key.device != certified_device) {
+            return TableValidationStatus::CertifiedDeviceMismatch;
         }
         if (index != 0 && !(entries[index - 1].key < entry.key)) {
             return TableValidationStatus::EntriesNotStrictlySorted;

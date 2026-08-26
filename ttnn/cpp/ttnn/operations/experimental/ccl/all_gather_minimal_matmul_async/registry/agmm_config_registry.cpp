@@ -76,9 +76,10 @@ bool operation_contract_is_complete(const compact::KeyDescriptor& key) noexcept;
 bool shape_matches_workload(const compact::KeyDescriptor& key) noexcept;
 
 bool device_contract_has_required_facts(const compact::DeviceDescriptor& device) noexcept {
-    return device.architecture != 0 && device.board_capability_class != 0 && device.device_count != 0 &&
-           device.mesh_rows != 0 && device.mesh_cols != 0 && device.compute_grid_x != 0 &&
-           device.compute_grid_y != 0 && !is_zero(device.ordered_mesh_sha256) && !is_zero(device.topology_sha256) &&
+    return device.architecture == compact::kBlackholeArchitecture && device.board_capability_class != 0 &&
+           device.device_count == compact::kBh32DeviceCount && device.mesh_rows == compact::kBh32MeshRows &&
+           device.mesh_cols == compact::kBh32MeshCols && device.compute_grid_x != 0 && device.compute_grid_y != 0 &&
+           !is_zero(device.ordered_mesh_sha256) && !is_zero(device.topology_sha256) &&
            !is_zero(device.runtime_capability_sha256);
 }
 
@@ -222,6 +223,7 @@ ResolutionReason compatibility_reason(const CompatibilityStatus status) noexcept
         case CompatibilityStatus::Unavailable: return ResolutionReason::CompatibilityUnavailable;
         case CompatibilityStatus::SchemaMismatch:
         case CompatibilityStatus::MalformedTable:
+        case CompatibilityStatus::DeviceMismatch:
         case CompatibilityStatus::DigestMismatch: return ResolutionReason::CompatibilityMismatch;
     }
     return ResolutionReason::CompatibilityUnavailable;
@@ -351,7 +353,8 @@ CompatibilityStatus validate_compatibility(
         case compact::TableValidationStatus::MissingLockDigest:
         case compact::TableValidationStatus::EntrySchemaMismatch:
         case compact::TableValidationStatus::MissingEntryId:
-        case compact::TableValidationStatus::RuntimeCapabilityMismatch:
+        case compact::TableValidationStatus::UnsupportedDeviceDomain:
+        case compact::TableValidationStatus::CertifiedDeviceMismatch:
         case compact::TableValidationStatus::EntriesNotStrictlySorted:
             return CompatibilityStatus::MalformedTable;
     }
@@ -360,6 +363,9 @@ CompatibilityStatus validate_compatibility(
         return CompatibilityStatus::Unavailable;
     }
     const auto& metadata = lock.metadata;
+    if (device != lock.certified_device) {
+        return CompatibilityStatus::DeviceMismatch;
+    }
     if (metadata.semantic_source_sha256 != actual.semantic_source_sha256 ||
         metadata.build_identity_sha256 != actual.build_identity_sha256 ||
         metadata.runtime_capability_sha256 != actual.runtime_capability_sha256 ||
@@ -376,8 +382,7 @@ MaterializationResult materialize_recipe(const compact::EntryDescriptor& descrip
         return {.status = MaterializationStatus::UnsupportedSchema};
     }
 
-    if (is_zero(descriptor.key.device.ordered_mesh_sha256) || is_zero(descriptor.key.device.topology_sha256) ||
-        is_zero(descriptor.key.device.runtime_capability_sha256) ||
+    if (!device_contract_has_required_facts(descriptor.key.device) ||
         !tensor_contract_is_complete(descriptor.key.input) || !tensor_contract_is_complete(descriptor.key.weight) ||
         !is_default_tile(descriptor.key.input) || !is_default_tile(descriptor.key.weight) ||
         !optional_tensor_contract_is_complete(descriptor.key.bias) ||
