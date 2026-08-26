@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Kimi K3 KDA cache adapter experiment: tensor contracts, import/export latency, row-major copy prototype, bandwidth, and correctness.">
+  <title>KDA cache adapter experiment</title>
+  <style>
+    :root {
+      --ink: #17212b;
+      --muted: #627080;
+      --paper: #f5f3ed;
+      --panel: #fffef9;
+      --line: #d8d5cb;
+      --navy: #173f5f;
+      --blue: #2f80ed;
+      --cyan: #43b9c6;
+      --green: #2f9e69;
+      --gold: #d99625;
+      --red: #d8584f;
+      --violet: #7857b2;
+      --before: #c3cad3;
+      --after: #2f80ed;
+      --shadow: 0 15px 40px rgba(31, 42, 55, .08);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 6% 0%, rgba(67, 185, 198, .14), transparent 28rem),
+        radial-gradient(circle at 95% 7%, rgba(217, 150, 37, .13), transparent 26rem),
+        var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    a { color: var(--navy); text-underline-offset: 3px; }
+    code { font-family: "SFMono-Regular", Consolas, monospace; font-size: .9em; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { max-width: 1000px; margin-bottom: 16px; font-size: clamp(42px, 6vw, 78px); line-height: .96; letter-spacing: -.055em; }
+    h2 { margin-bottom: 6px; font-size: clamp(27px, 3vw, 42px); letter-spacing: -.035em; }
+    h3 { margin-bottom: 6px; font-size: 18px; letter-spacing: -.015em; }
+
+    .page { width: min(1420px, calc(100% - 40px)); margin: 0 auto; padding: 44px 0 70px; }
+    .eyebrow { color: var(--blue); font-size: 12px; font-weight: 850; letter-spacing: .15em; text-transform: uppercase; }
+    .lede { max-width: 900px; color: var(--muted); font-size: 18px; }
+    .section { margin-top: 58px; scroll-margin-top: 20px; }
+    .section-head { display: flex; justify-content: space-between; align-items: end; gap: 30px; margin-bottom: 20px; }
+    .section-head p { max-width: 680px; margin-bottom: 0; color: var(--muted); }
+    .panel { padding: 21px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: var(--shadow); }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .nowrap { white-space: nowrap; }
+
+    .hero-note { max-width: 1080px; margin-top: 24px; padding: 15px 18px; border-left: 4px solid var(--gold); background: rgba(255, 254, 249, .82); }
+    .facts { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-top: 28px; }
+    .fact { min-height: 98px; padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255, 254, 249, .9); box-shadow: var(--shadow); }
+    .fact b { display: block; font-size: 24px; letter-spacing: -.035em; }
+    .fact span { color: var(--muted); font-size: 12px; }
+
+    .nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+    .nav a { padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255, 254, 249, .78); font-size: 12px; font-weight: 750; text-decoration: none; }
+
+    .tag { display: inline-flex; padding: 5px 9px; border-radius: 999px; font-size: 10px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+    .tag.before { color: #4e5864; background: #e7eaee; }
+    .tag.after { color: #145b3d; background: #dff4e9; }
+    .tag.contract { color: #62420d; background: #f8e9c8; }
+
+    .flow { display: grid; grid-template-columns: 1fr 78px 1fr; gap: 12px; align-items: stretch; }
+    .flow-card { padding: 20px; border: 1px solid var(--line); border-radius: 17px; background: white; }
+    .flow-arrow { display: grid; place-items: center; color: var(--blue); font-size: 35px; font-weight: 800; }
+    .direction { margin-top: 12px; color: var(--muted); font-size: 12px; text-align: center; }
+    .tensor-title { display: flex; justify-content: space-between; gap: 10px; margin: 15px 0 7px; font-size: 12px; }
+    .tensor-title span:last-child { color: var(--muted); }
+    .tensor-strip { display: grid; grid-template-columns: repeat(3, 1fr); height: 38px; overflow: hidden; border: 1px solid #3d4650; border-radius: 8px; }
+    .tensor-strip span { display: grid; place-items: center; font-size: 11px; font-weight: 850; }
+    .tensor-strip span:nth-child(1) { background: #f4aaaa; }
+    .tensor-strip span:nth-child(2) { background: #f5dc8d; }
+    .tensor-strip span:nth-child(3) { background: #9ed9b6; }
+    .spec-list { display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; margin: 14px 0 0; font-size: 12px; }
+    .spec-list dt { color: var(--muted); }
+    .spec-list dd { margin: 0; font-weight: 700; }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 15px; background: var(--panel); box-shadow: var(--shadow); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+    th { color: var(--muted); background: #f8f7f2; font-size: 10px; letter-spacing: .055em; text-transform: uppercase; }
+    th:first-child, td:first-child { text-align: left; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: #faf9f5; }
+    .group-start td { border-top: 2px solid #c7c3b8; }
+    .good { color: #17734b; font-weight: 800; }
+    .peak { color: var(--blue); font-weight: 850; }
+
+    .comparison { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .compare-card { padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); box-shadow: var(--shadow); }
+    .compare-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+    .compare-head b { font-size: 18px; }
+    .compare-head span { color: var(--green); font-size: 12px; font-weight: 850; }
+    .bar-row { margin-top: 15px; }
+    .bar-label { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 5px; color: var(--muted); font-size: 11px; }
+    .track { height: 12px; overflow: hidden; border-radius: 999px; background: #ece9e1; }
+    .bar { width: var(--w); height: 100%; border-radius: inherit; background: var(--before); }
+    .bar.after { background: linear-gradient(90deg, var(--blue), var(--cyan)); }
+
+    .core-diagram { display: grid; grid-template-columns: 1fr 70px 1fr; gap: 14px; align-items: center; }
+    .cores { display: grid; grid-template-columns: repeat(22, 1fr); gap: 3px; margin-top: 14px; }
+    .core { aspect-ratio: 1; border-radius: 3px; background: #dfe3e8; }
+    .core.hot { background: var(--red); }
+    .core.fast { background: var(--green); }
+    .core-arrow { color: var(--blue); font-size: 34px; text-align: center; }
+    .kernel-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 14px; }
+    .kernel-metric { padding: 10px; border-radius: 10px; background: #f4f3ee; }
+    .kernel-metric b { display: block; font-size: 17px; }
+    .kernel-metric span { color: var(--muted); font-size: 10px; }
+
+    .bandwidth-note { margin-top: 14px; padding: 13px 15px; border-left: 4px solid var(--blue); background: #edf5ff; font-size: 12px; }
+    .formula { padding: 14px; border-radius: 12px; background: #17212b; color: #edf3f8; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; white-space: pre-wrap; }
+
+    .validation { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .check { padding: 15px; border: 1px solid #b9ddcb; border-radius: 13px; background: #effaf4; }
+    .check b { display: block; color: #16613f; font-size: 18px; }
+    .check span { color: var(--muted); font-size: 11px; }
+
+    .footnotes { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    .footnotes ul { margin-bottom: 0; padding-left: 20px; }
+    .footnotes li + li { margin-top: 5px; }
+
+    @media (max-width: 1050px) {
+      .facts { grid-template-columns: repeat(3, 1fr); }
+      .grid-3, .comparison { grid-template-columns: 1fr; }
+      .validation { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 760px) {
+      .page { width: min(100% - 22px, 1420px); padding-top: 28px; }
+      .facts, .grid-2 { grid-template-columns: 1fr; }
+      .flow, .core-diagram { grid-template-columns: 1fr; }
+      .flow-arrow, .core-arrow { transform: rotate(90deg); }
+      .section-head { align-items: start; flex-direction: column; }
+    }
+    @media print {
+      body { background: white; }
+      .page { width: 100%; padding: 8mm; }
+      .nav { display: none; }
+      .panel, .compare-card, .table-wrap, .fact { box-shadow: none; }
+      .section, .panel, .compare-card { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <div class="eyebrow">Kimi K3 · Blackhole · 2026-08-25</div>
+    <h1>KDA cache adapter experiment</h1>
+    <p class="lede">An end-to-end report on converting prefill-native recurrent <b>S</b> and convolution history to and from the K3 migration contract. It covers tensor geometry, the original three-core bottleneck, the 110-core row-major copy prototype, latency, layer-relative impact, effective DRAM bandwidth, and correctness.</p>
+    <div class="hero-note"><b>Verdict.</b> The contract layout is viable. The optimized adapter keeps every measured one-way handoff below <b>29 µs per KDA layer</b> and below <b>0.283% of layer latency</b>. At SP4xTP2, convolution export improves <b>7.88×</b> and import <b>11.80×</b> without changing the contract.</div>
+    <div class="facts">
+      <div class="fact"><b>3 layouts</b><span>SP1xTP8 · SP2xTP4 · SP4xTP2</span></div>
+      <div class="fact"><b>8 devices</b><span>Blackhole, FABRIC_1D</span></div>
+      <div class="fact"><b>T = 5120</b><span>real Kimi-K3 layer 1</span></div>
+      <div class="fact"><b>20 × 100</b><span>samples × trace replays</span></div>
+      <div class="fact"><b>110 cores</b><span>optimized convolution copy</span></div>
+      <div class="fact"><b>0.999799+</b><span>minimum output/state PCC</span></div>
+    </div>
+    <nav class="nav" aria-label="Report sections">
+      <a href="#contract">Tensor contract</a>
+      <a href="#geometry">Topology geometry</a>
+      <a href="#before">Baseline</a>
+      <a href="#prototype">Prototype</a>
+      <a href="#results">Before / after</a>
+      <a href="#bandwidth">Bandwidth</a>
+      <a href="#validation">Validation</a>
+    </nav>
+  </header>
+
+  <section class="section" id="contract">
+    <div class="section-head">
+      <div><span class="tag contract">From / to</span><h2>One logical state, two physical layouts</h2></div>
+      <p>The adapters preserve shape, dtype, element order, and values. Only DRAM placement changes. Export is prefill native → contract; import is the exact reverse.</p>
+    </div>
+    <div class="flow">
+      <article class="flow-card">
+        <span class="tag before">Prefill native</span>
+        <h3 style="margin-top:12px">Interleaved DRAM</h3>
+        <div class="tensor-title"><b>Recurrent S</b><span>FP32 · TILE</span></div>
+        <code>[1, Hlocal, 128, 128]</code>
+        <div class="tensor-title"><b>Convolution history</b><span>BF16 · ROW_MAJOR</span></div>
+        <code>[1, 3, 3 × Hlocal × 128]</code>
+        <div class="tensor-strip" aria-label="Packed convolution width"><span>Q heads</span><span>K heads</span><span>V heads</span></div>
+        <dl class="spec-list">
+          <dt>Owner</dt><dd>prefill compute/runtime</dd>
+          <dt>Consumer</dt><dd>current PR7 KDA kernels</dd>
+          <dt>Allocation</dt><dd><code>ttnn.DRAM_MEMORY_CONFIG</code></dd>
+        </dl>
+      </article>
+      <div>
+        <div class="flow-arrow" aria-hidden="true">⇄</div>
+        <div class="direction"><b>export →</b><br><b>← import</b><br><br><code>to_memory_config</code><br>preallocated output</div>
+      </div>
+      <article class="flow-card">
+        <span class="tag after">Migration contract</span>
+        <h3 style="margin-top:12px">ND-sharded DRAM · ROUND_ROBIN_1D</h3>
+        <div class="tensor-title"><b>Recurrent S shard</b><span>FP32 · TILE</span></div>
+        <code>[1, 1, 128, 32]</code>
+        <dl class="spec-list">
+          <dt>Page</dt><dd>4,096 B</dd>
+          <dt>Segment</dt><dd>4 pages · 16,384 B</dd>
+        </dl>
+        <div class="tensor-title"><b>Convolution shard</b><span>BF16 · ROW_MAJOR</span></div>
+        <code>[1, 3, 64]</code>
+        <dl class="spec-list">
+          <dt>Page</dt><dd>128 B</dd>
+          <dt>Segment</dt><dd>3 pages · 384 B</dd>
+          <dt>Purpose</dt><dd>bank-local migration fragments</dd>
+        </dl>
+      </article>
+    </div>
+  </section>
+
+  <section class="section" id="geometry">
+    <div class="section-head">
+      <div><h2>Tensor geometry by layout</h2></div>
+      <p>TP partitions heads. Reducing TP doubles local heads and per-device cache bytes at each step. SP replicas are real physical traffic but not additional semantic state.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Layout</th><th>Heads / device</th><th>Native S shape</th><th>S / device</th><th>S segments / device</th><th>Native conv shape</th><th>Conv / device</th><th>Conv segments / device</th></tr></thead>
+        <tbody>
+          <tr><td><b>SP1xTP8</b></td><td>12</td><td><code>[1,12,128,128]</code></td><td>0.75 MiB</td><td>48</td><td><code>[1,3,4608]</code></td><td>27 KiB</td><td>72</td></tr>
+          <tr><td><b>SP2xTP4</b></td><td>24</td><td><code>[1,24,128,128]</code></td><td>1.50 MiB</td><td>96</td><td><code>[1,3,9216]</code></td><td>54 KiB</td><td>144</td></tr>
+          <tr><td><b>SP4xTP2</b></td><td>48</td><td><code>[1,48,128,128]</code></td><td>3.00 MiB</td><td>192</td><td><code>[1,3,18432]</code></td><td>108 KiB</td><td>288</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="grid-3" style="margin-top:14px">
+      <div class="panel"><h3>Semantic state</h3><p class="muted small">Across TP ranks, the unique cache is constant: <b>6.00 MiB S</b> plus <b>216 KiB convolution</b> per KDA layer.</p></div>
+      <div class="panel"><h3>Physical mesh state</h3><p class="muted small">Across eight devices, SP replication grows physical state from 6.21 MiB at SP1 to 24.84 MiB at SP4.</p></div>
+      <div class="panel"><h3>Transfer accounting</h3><p class="muted small">One conversion reads the source and writes the destination. Estimated DRAM traffic is therefore <b>2 × local cache bytes</b>.</p></div>
+    </div>
+  </section>
+
+  <section class="section" id="before">
+    <div class="section-head">
+      <div><span class="tag before">Baseline</span><h2>Original adapter ablation</h2></div>
+      <p>S was already fast. Convolution dominated the handoff and scaled poorly as local heads grew.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Layout</th><th>Layer (ms)</th><th>Export S (µs)</th><th>Export conv (µs)</th><th>Export total (µs)</th><th>Layer impact</th><th>Import S (µs)</th><th>Import conv (µs)</th><th>Import total (µs)</th><th>Layer impact</th></tr></thead>
+        <tbody>
+          <tr><td><b>SP1xTP8</b></td><td>9.7171</td><td>12.53</td><td>27.37</td><td>35.40</td><td>0.364%</td><td>11.64</td><td>36.24</td><td>44.92</td><td>0.462%</td></tr>
+          <tr><td><b>SP2xTP4</b></td><td>9.6486</td><td>16.34</td><td>48.95</td><td>61.72</td><td>0.640%</td><td>16.23</td><td>69.75</td><td>82.58</td><td>0.856%</td></tr>
+          <tr><td><b>SP4xTP2</b></td><td>10.1103</td><td>23.65</td><td class="peak">94.33</td><td class="peak">114.82</td><td class="peak">1.136%</td><td>23.79</td><td class="peak">133.95</td><td class="peak">154.89</td><td class="peak">1.532%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="grid-2" style="margin-top:14px">
+      <article class="panel"><h3>Why S was faster</h3><p class="muted small">Tiled copy partitioned hundreds of tiles over <b>110 cores</b>. SP4 Tracy measured 16.410 µs export and 16.278 µs import device-kernel medians.</p></article>
+      <article class="panel"><h3>Why convolution was slow</h3><p class="muted small">DefaultRowMajor partitioned <code>[1,3,W]</code> by its three logical rows, so only <b>3 cores</b> redistributed as many as 288 tiny pages per row.</p></article>
+    </div>
+  </section>
+
+  <section class="section" id="prototype">
+    <div class="section-head">
+      <div><span class="tag after">Prototype</span><h2>Parallelize within logical rows</h2></div>
+      <p>The contract and KDA adapter API stay unchanged. Only the generic row-major copy work partition changes when both endpoint page boundaries share an aligned unit.</p>
+    </div>
+    <div class="core-diagram">
+      <article class="panel">
+        <h3>Before: rows are work units</h3>
+        <p class="muted small"><code>[1,3,W]</code> exposes exactly three units.</p>
+        <div class="cores" data-active="3" data-tone="hot" aria-label="Three active cores out of 110"></div>
+        <div class="kernel-metrics"><div class="kernel-metric"><b>3</b><span>active cores</span></div><div class="kernel-metric"><b>128 B</b><span>contract page</span></div></div>
+      </article>
+      <div class="core-arrow" aria-hidden="true">→</div>
+      <article class="panel">
+        <h3>After: aligned page units</h3>
+        <p class="muted small"><code>gcd(input_page, output_page) = 64 BF16 = 128 B</code></p>
+        <div class="cores" data-active="110" data-tone="fast" aria-label="All 110 cores active"></div>
+        <div class="kernel-metrics"><div class="kernel-metric"><b>110</b><span>active cores</span></div><div class="kernel-metric"><b>864</b><span>SP4 row/page units</span></div></div>
+      </article>
+    </div>
+    <div class="panel" style="margin-top:14px">
+      <h3>Guarded generic path</h3>
+      <p class="muted small">The common unit must be smaller than the row, aligned for both buffers, and no larger than the existing 256 KiB subblock limit. Unaligned and uneven cases remain on the legacy whole-row path. S remains on the existing tiled path.</p>
+    </div>
+  </section>
+
+  <section class="section" id="results">
+    <div class="section-head">
+      <div><h2>Before / after latency</h2></div>
+      <p>Synchronized trace-wall medians. Adapter times are microseconds; percentages are relative to the corresponding real KDA-layer median.</p>
+    </div>
+    <div class="comparison">
+      <article class="compare-card"><div class="compare-head"><b>SP1xTP8 export</b><span>−57.7%</span></div><div class="bar-row"><div class="bar-label"><span>baseline</span><b>35.402 µs</b></div><div class="track"><div class="bar" style="--w:100%"></div></div></div><div class="bar-row"><div class="bar-label"><span>prototype</span><b>14.961 µs · 0.154%</b></div><div class="track"><div class="bar after" style="--w:42.3%"></div></div></div></article>
+      <article class="compare-card"><div class="compare-head"><b>SP2xTP4 export</b><span>−60.8%</span></div><div class="bar-row"><div class="bar-label"><span>baseline</span><b>61.719 µs</b></div><div class="track"><div class="bar" style="--w:100%"></div></div></div><div class="bar-row"><div class="bar-label"><span>prototype</span><b>24.179 µs · 0.250%</b></div><div class="track"><div class="bar after" style="--w:39.2%"></div></div></div></article>
+      <article class="compare-card"><div class="compare-head"><b>SP4xTP2 export</b><span>−75.1%</span></div><div class="bar-row"><div class="bar-label"><span>baseline</span><b>114.825 µs</b></div><div class="track"><div class="bar" style="--w:100%"></div></div></div><div class="bar-row"><div class="bar-label"><span>prototype</span><b>28.582 µs · 0.283%</b></div><div class="track"><div class="bar after" style="--w:24.9%"></div></div></div></article>
+      <article class="compare-card"><div class="compare-head"><b>SP1xTP8 import</b><span>−67.0%</span></div><div class="bar-row"><div class="bar-label"><span>baseline</span><b>44.923 µs</b></div><div class="track"><div class="bar" style="--w:100%"></div></div></div><div class="bar-row"><div class="bar-label"><span>prototype</span><b>14.835 µs · 0.153%</b></div><div class="track"><div class="bar after" style="--w:33.0%"></div></div></div></article>
+      <article class="compare-card"><div class="compare-head"><b>SP2xTP4 import</b><span>−78.0%</span></div><div class="bar-row"><div class="bar-label"><span>baseline</span><b>82.582 µs</b></div><div class="track"><div class="bar" style="--w:100%"></div></div></div><div class="bar-row"><div class="bar-label"><span>prototype</span><b>18.192 µs · 0.188%</b></div><div class="track"><div class="bar after" style="--w:22.0%"></div></div></div></article>
+      <article class="compare-card"><div class="compare-head"><b>SP4xTP2 import</b><span>−81.9%</span></div><div class="bar-row"><div class="bar-label"><span>baseline</span><b>154.892 µs</b></div><div class="track"><div class="bar" style="--w:100%"></div></div></div><div class="bar-row"><div class="bar-label"><span>prototype</span><b>28.045 µs · 0.277%</b></div><div class="track"><div class="bar after" style="--w:18.1%"></div></div></div></article>
+    </div>
+
+    <div class="table-wrap" style="margin-top:18px">
+      <table>
+        <thead><tr><th>Layout</th><th>Direction</th><th>S before (µs)</th><th>S after (µs)</th><th>Conv before (µs)</th><th>Conv after (µs)</th><th>Conv speedup</th><th>Total before (µs)</th><th>Total after (µs)</th><th>Saved (µs)</th></tr></thead>
+        <tbody>
+          <tr><td><b>SP1xTP8</b></td><td>export</td><td>12.534</td><td>11.760</td><td>27.374</td><td>9.022</td><td class="good">3.03×</td><td>35.402</td><td>14.961</td><td class="good">20.441</td></tr>
+          <tr><td><b>SP1xTP8</b></td><td>import</td><td>11.641</td><td>11.655</td><td>36.236</td><td>8.885</td><td class="good">4.08×</td><td>44.923</td><td>14.835</td><td class="good">30.088</td></tr>
+          <tr class="group-start"><td><b>SP2xTP4</b></td><td>export</td><td>16.342</td><td>15.668</td><td>48.952</td><td>9.955</td><td class="good">4.92×</td><td>61.719</td><td>24.179</td><td class="good">37.539</td></tr>
+          <tr><td><b>SP2xTP4</b></td><td>import</td><td>16.231</td><td>15.528</td><td>69.749</td><td>9.657</td><td class="good">7.22×</td><td>82.582</td><td>18.192</td><td class="good">64.390</td></tr>
+          <tr class="group-start"><td><b>SP4xTP2</b></td><td>export</td><td>23.646</td><td>23.631</td><td>94.331</td><td>11.974</td><td class="good">7.88×</td><td>114.825</td><td>28.582</td><td class="good">86.243</td></tr>
+          <tr><td><b>SP4xTP2</b></td><td>import</td><td>23.792</td><td>23.815</td><td>133.946</td><td>11.349</td><td class="good">11.80×</td><td>154.892</td><td>28.045</td><td class="good">126.847</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted small" style="margin-top:10px">Combined trace measurements are authoritative. They are not exactly S + convolution because one combined trace amortizes execute/synchronization overhead.</p>
+  </section>
+
+  <section class="section" id="bandwidth">
+    <div class="section-head">
+      <div><h2>Effective DRAM bandwidth per device</h2></div>
+      <p>Final prototype timings. The 512 GB/s theoretical limit is per Blackhole device: 8 GDDR6 channels × 64 GB/s. Values count both the source read and destination write.</p>
+    </div>
+    <div class="grid-2">
+      <div class="formula">DRAM BW/device = 2 × local cache bytes / measured time
+
+utilization = DRAM BW/device / 512 GB/s</div>
+      <div class="panel"><h3>Interpretation</h3><p class="muted small">S reaches 26–52% of peak as larger local payloads amortize fixed costs. Convolution reaches only 1.2–3.8%; despite the speedup, its 9–12 µs wall time remains latency/dispatch-bound rather than bandwidth-bound.</p></div>
+    </div>
+    <div class="table-wrap" style="margin-top:16px">
+      <table>
+        <thead><tr><th>Layout</th><th>State</th><th>Direction</th><th>Time (µs)</th><th>Local payload</th><th>DRAM R+W / device</th><th>512 GB/s utilization</th></tr></thead>
+        <tbody>
+          <tr><td><b>SP1xTP8</b></td><td>S</td><td>export</td><td>11.760</td><td>0.75 MiB</td><td>133.7 GB/s</td><td>26.1%</td></tr>
+          <tr><td><b>SP1xTP8</b></td><td>S</td><td>import</td><td>11.655</td><td>0.75 MiB</td><td>135.0 GB/s</td><td>26.4%</td></tr>
+          <tr><td><b>SP1xTP8</b></td><td>conv</td><td>export</td><td>9.022</td><td>27 KiB</td><td>6.13 GB/s</td><td>1.20%</td></tr>
+          <tr><td><b>SP1xTP8</b></td><td>conv</td><td>import</td><td>8.885</td><td>27 KiB</td><td>6.22 GB/s</td><td>1.22%</td></tr>
+          <tr class="group-start"><td><b>SP2xTP4</b></td><td>S</td><td>export</td><td>15.668</td><td>1.50 MiB</td><td>200.8 GB/s</td><td>39.2%</td></tr>
+          <tr><td><b>SP2xTP4</b></td><td>S</td><td>import</td><td>15.528</td><td>1.50 MiB</td><td>202.6 GB/s</td><td>39.6%</td></tr>
+          <tr><td><b>SP2xTP4</b></td><td>conv</td><td>export</td><td>9.955</td><td>54 KiB</td><td>11.11 GB/s</td><td>2.17%</td></tr>
+          <tr><td><b>SP2xTP4</b></td><td>conv</td><td>import</td><td>9.657</td><td>54 KiB</td><td>11.45 GB/s</td><td>2.24%</td></tr>
+          <tr class="group-start"><td><b>SP4xTP2</b></td><td>S</td><td>export</td><td>23.631</td><td>3.00 MiB</td><td class="peak">266.2 GB/s</td><td class="peak">52.0%</td></tr>
+          <tr><td><b>SP4xTP2</b></td><td>S</td><td>import</td><td>23.815</td><td>3.00 MiB</td><td class="peak">264.2 GB/s</td><td class="peak">51.6%</td></tr>
+          <tr><td><b>SP4xTP2</b></td><td>conv</td><td>export</td><td>11.974</td><td>108 KiB</td><td>18.47 GB/s</td><td>3.61%</td></tr>
+          <tr><td><b>SP4xTP2</b></td><td>conv</td><td>import</td><td>11.349</td><td>108 KiB</td><td>19.49 GB/s</td><td>3.81%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="bandwidth-note"><b>No theoretical overshoot.</b> Mesh-wide values must be compared with 8 × 512 GB/s = 4.096 TB/s. This report deliberately shows per-device bandwidth to keep numerator and theoretical limit on the same scope. These are derived effective bandwidths, not hardware-counter measurements.</div>
+  </section>
+
+  <section class="section" id="validation">
+    <div class="section-head">
+      <div><h2>Correctness and attribution</h2></div>
+      <p>The prototype changes generic TTNN copy scheduling, so validation covered both the optimized KDA shape and the legacy fallback.</p>
+    </div>
+    <div class="validation">
+      <div class="check"><b>3 / 3 layouts</b><span>real Kimi-K3 T=5120 full matrix passed</span></div>
+      <div class="check"><b>Bit-identical</b><span>real and patterned native → contract → native</span></div>
+      <div class="check"><b>0.999799–0.999999</b><span>output and state PCC range, unchanged</span></div>
+      <div class="check"><b>All safe runs PASS</b><span>every device run ended SAFE_PYTEST_RESULT: PASS</span></div>
+    </div>
+    <div class="table-wrap" style="margin-top:16px">
+      <table>
+        <thead><tr><th>SP4xTP2 direction</th><th>Baseline cores</th><th>Prototype cores</th><th>Baseline kernel median</th><th>Prototype kernel median</th><th>Kernel speedup</th></tr></thead>
+        <tbody>
+          <tr><td>interleaved → ND convolution</td><td>3</td><td>110</td><td>90.473 µs</td><td>4.486 µs</td><td class="good">20.17×</td></tr>
+          <tr><td>ND → interleaved convolution</td><td>3</td><td>110</td><td>128.816 µs</td><td>3.787 µs</td><td class="good">34.02×</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="grid-2" style="margin-top:14px">
+      <article class="panel"><h3>Focused generic coverage</h3><p class="muted small">A representative <code>[1,3,18432]</code> BF16 row-major interleaved ↔ ND-DRAM round trip passed bit-exactly. Existing uneven 20-element shards exercised the legacy fallback, and program-cache reuse passed.</p></article>
+      <article class="panel"><h3>Direct-layout ablation</h3><p class="muted small">Current recurrent scan and convolution consumers require interleaved state. Therefore the measured explicit adapters remain the smallest supported prefill/decode boundary; direct contract consumption was not available in PR7.</p></article>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><h2>Operational placement</h2></div><p>Keep conversion explicit at the caller-owned cache boundary rather than hiding it inside KDA compute.</p></div>
+    <div class="flow">
+      <div class="flow-card"><h3>Persistent contract slot</h3><p class="muted small">Stable user/layer address, engine-owned, migration-visible.</p></div>
+      <div class="flow-arrow" aria-hidden="true">⇄</div>
+      <div class="flow-card"><h3>Native prefill state</h3><p class="muted small">Import only when needed → <code>ttKDA.forward()</code> → export final S and convolution together before signalling cache readiness.</p></div>
+    </div>
+  </section>
+
+  <footer class="footnotes">
+    <b>Evidence and reproduction</b>
+    <ul>
+      <li><a href="kda-cache-adapter-ablation-results.md">Baseline ablation report</a> and <a href="kda-cache-adapter-ablation-results.jsonl">raw baseline records</a></li>
+      <li><a href="kda-conv-copy-parallel-results.md">Parallel-copy prototype report</a> and <a href="kda-conv-copy-parallel-results.jsonl">raw prototype records</a></li>
+      <li>Local design inputs: <code>kda-cache-migration-contract.md</code> and <code>k3_disagg_contract.md</code></li>
+      <li>Prototype commit <code>361eb13ca6d</code>; presentation-unit commit <code>4f9edf85f5d</code>; PR7 base <code>479d04f6e38f</code></li>
+      <li>Timing verdict uses synchronized unprofiled trace wall. Tracy is used only for kernel attribution. Cold JIT/allocation costs and transport latency are excluded.</li>
+    </ul>
+  </footer>
+</main>
+<script>
+  for (const grid of document.querySelectorAll(".cores")) {
+    const active = Number(grid.dataset.active);
+    const tone = grid.dataset.tone;
+    for (let index = 0; index < 110; index += 1) {
+      const core = document.createElement("i");
+      core.className = `core${index < active ? ` ${tone}` : ""}`;
+      grid.append(core);
+    }
+  }
+</script>
+</body>
+</html>
