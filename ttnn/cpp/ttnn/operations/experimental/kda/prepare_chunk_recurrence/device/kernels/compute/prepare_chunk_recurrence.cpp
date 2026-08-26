@@ -458,7 +458,6 @@ TT_KERNEL void compute(uint32_t work_item_count) {
     DataflowBuffer lower_mask(dfb::lower_mask);
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
-    DataflowBuffer k_beta(dfb::k_beta);
     DataflowBuffer kd(dfb::w);
     DataflowBuffer q_decay(dfb::q_decay);
     DataflowBuffer intra(dfb::intra);
@@ -490,12 +489,9 @@ TT_KERNEL void compute(uint32_t work_item_count) {
             q, state_temporary, scratch_one, scratch_two, scratch_three, EPS_BITS, SCALE_BITS);
         normalize_l2_rows<Ct, Kt, false>(k, final_state, scratch_one, scratch_two, scratch_three, EPS_BITS, SCALE_BITS);
 
-        // v_beta and k_beta.
+        // v_beta.
         multiply_by_column(v, beta, v_beta, Ct, Vt);
         v.pop_front(chunk_value_tiles);
-        multiply_by_column(final_state, beta, k_beta, Ct, Kt);
-        k_beta.wait_front(chunk_key_tiles);
-        beta.pop_front(Ct);
 
         // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
         // exp(G-anchor) nor exp(anchor-G) spans the full chunk range. Their products are
@@ -521,22 +517,27 @@ TT_KERNEL void compute(uint32_t work_item_count) {
 
         exponential_tiles(scratch_two, state_update, chunk_key_tiles);  // exp(G_last/2)
         state_update.wait_front(chunk_key_tiles);
+        // The anchor in scratch_two is dead after state_update. Reuse the empty buffer for k_beta,
+        // then release it before the pairwise-product stages reuse scratch_two.
+        scratch_two.pop_front(chunk_key_tiles);
+        multiply_by_column(final_state, beta, scratch_two, Ct, Kt);
+        scratch_two.wait_front(chunk_key_tiles);
+        beta.pop_front(Ct);
 
         // Preserve exact scan-facing factors, and use anchored factors only for pairwise products.
         elementwise_binary<ElementwiseBinaryOp::Multiply>(state_temporary, decay_exp, q_decay, chunk_key_tiles);
         elementwise_binary<ElementwiseBinaryOp::Multiply>(state_temporary, decay, state_three, chunk_key_tiles);
         state_three.wait_front(chunk_key_tiles);  // q*exp(G-anchor)
         state_temporary.pop_front(chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(k_beta, decay_exp, kd, chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(k_beta, decay, state_two, chunk_key_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(scratch_two, decay_exp, kd, chunk_key_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(scratch_two, decay, state_two, chunk_key_tiles);
         state_two.wait_front(chunk_key_tiles);  // beta*k*exp(G-anchor)
-        k_beta.pop_front(chunk_key_tiles);
+        scratch_two.pop_front(chunk_key_tiles);
         decay.pop_front(chunk_key_tiles);
         decay_exp.pop_front(chunk_key_tiles);
         exponential_tiles(scratch_one, decay, chunk_key_tiles);  // exp(G_last), for state decay dl
         decay.wait_front(chunk_key_tiles);
         scratch_one.pop_front(chunk_key_tiles);
-        scratch_two.pop_front(chunk_key_tiles);
         elementwise_binary<ElementwiseBinaryOp::Multiply>(final_state, decay_factor, scratch_one, chunk_key_tiles);
         scratch_one.wait_front(chunk_key_tiles);  // k*exp(anchor-G)
         final_state.pop_front(chunk_key_tiles);
