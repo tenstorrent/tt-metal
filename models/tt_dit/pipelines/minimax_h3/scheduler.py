@@ -147,3 +147,18 @@ class MiniMaxH3Scheduler:
 
         self._step_index += 1
         return prev_sample.to(dtype=sample.dtype)
+
+    def step_coefficient(self, i: int) -> float:
+        """The scalar ``c`` in ``next = sample + c * model_output``, for applying the step on device.
+
+        ``step()`` computes ``ratio*sample + (1-ratio)*denoised`` with ``denoised = sample +
+        (1-t)*v`` and ``ratio = sigma_next/sigma``. That factors to ``sample + (1-ratio)*(1-t)*v``,
+        and since the schedule defines ``timesteps[i] = 1 - sigmas[i]`` (so ``1 - t == sigma``) the
+        coefficient collapses to ``sigma - sigma_next``. ``i`` is the loop index into ``timesteps``,
+        matching ``step()``'s internal ``_step_index``.
+
+        The fp nuance ``step()`` guards -- deriving the x0 sigma from ``1 - t`` rather than the grid
+        sigma -- differs from ``sigma - sigma_next`` only below sigma = 0.5 and only at the fp32 ulp
+        level, which the on-device apply (bf16) dwarfs. The host ``step()`` stays the reference.
+        """
+        return float(self.sigmas[i] - self.sigmas[i + 1])

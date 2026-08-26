@@ -13,8 +13,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from loguru import logger
 from PIL import Image
+
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.minimax_h3.packing import align_num_frames, prepare_keyframe_image
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
@@ -28,8 +29,11 @@ from .common_av import (
     check_spatial_seams,
     check_written_file,
     gate_clip,
+    is_host,
+    log_pipeline_perf,
+    log_quality,
     log_spectral_flatness,
-    log_timing_table,
+    quality_logs_enabled,
     run_warm_generation,
     to_uint8_frames,
     weights_dir,
@@ -50,8 +54,6 @@ ANCHOR_PCC_FLOOR = 0.95  # measured 0.9943-0.9971 across the three anchor cases
 
 CLIP_THRESHOLD = 33.0  # t2va's bar; measured to transfer (36.63-37.30 vs t2va's 37.37)
 
-EXPECTED_TOTAL_S = 400.0  # loose did-something-collapse bar, not a perf target
-
 
 def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pcc_floor=0.3):
     """Decoded frame `index` must correlate with its keyframe; uses the pipeline's own
@@ -67,7 +69,7 @@ def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pc
 
     pcc = float(np.corrcoef(frame.ravel(), expected.ravel())[0, 1])
     label = "first" if index == 0 else "last"
-    logger.info(f"fl2va {label}-keyframe anchor: decoded frame {index} vs keyframe PCC = {pcc:.4f}")
+    log_quality(f"fl2va {label}-keyframe anchor: decoded frame {index} vs keyframe PCC = {pcc:.4f}")
     assert pcc > pcc_floor, (
         f"decoded frame {index} barely correlates with the {label} keyframe (PCC={pcc:.3f}); "
         "the fl2va conditioning path is likely broken"
@@ -92,7 +94,7 @@ def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boun
         ratios = {int(b): ratio(profile, int(b)) for b in boundaries if 12 < int(b) < len(profile) - 12}
         results[name] = ratios
         if ratios:
-            logger.info(
+            log_quality(
                 f"{name} tile-boundary gradient ratios (1.0 = no seam): "
                 + ", ".join(f"x={b}:{r:.3f}" if name == "vertical" else f"y={b}:{r:.3f}" for b, r in ratios.items())
             )
@@ -102,7 +104,7 @@ def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boun
     control = [c for c in candidates if all(abs(int(c) - int(b)) > 16 for b in vertical_boundaries)][:12]
     control_ratios = [ratio(gx, int(c)) for c in control]
     mean_control = float(np.mean(control_ratios))
-    logger.info(f"control non-boundary columns: mean ratio {mean_control:.3f}, max {max(control_ratios):.3f}")
+    log_quality(f"control non-boundary columns: mean ratio {mean_control:.3f}, max {max(control_ratios):.3f}")
     assert mean_control < 1.15, (
         f"control columns average {mean_control:.3f}; this statistic is tracking image structure rather "
         "than tile boundaries, so its boundary numbers mean nothing"
@@ -149,6 +151,7 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir())
 
     # Warmup must be fl2va-shaped (keyframes included): programs are keyed on padded length; the helper asserts it.
+    benchmark_profiler = BenchmarkProfiler()
     output = run_warm_generation(
         pipeline,
         PROMPT,
@@ -159,33 +162,39 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
         width=WIDTH,
         num_inference_steps=NUM_INFERENCE_STEPS,
         seed=SEED,
+        profiler=benchmark_profiler,
     )
 
     expected_frames = align_num_frames(NUM_FRAMES)
-    logger.info(
+    log_quality(
         f"fl2va[{case}] padded_len={pipeline.last_padded_len} "
         f"video={tuple(output.video.shape)} audio={tuple(output.audio.shape)}"
     )
 
     num_forwards = NUM_INFERENCE_STEPS - 1
-    video_seconds = expected_frames / output.fps
-    log_timing_table(
-        pipeline,
-        "fl2va",
+    log_pipeline_perf(
+        benchmark_profiler,
+        label="fl2va",
+        pipeline=pipeline,
         num_forwards=num_forwards,
-        video_seconds=video_seconds,
-        expected_total_s=EXPECTED_TOTAL_S,
-        extra=(
-            f" | {WIDTH}x{HEIGHT}, {expected_frames} frames @ {output.fps} fps "
-            f"({video_seconds:.2f} s), {num_forwards} forwards, first+last anchors, "
-            f"padded_len {pipeline.last_padded_len}"
-        ),
+        width=WIDTH,
+        height=HEIGHT,
+        num_frames=expected_frames,
+        fps=output.fps,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        extra_lines=("Conditioning: first+last anchors",),
     )
     assert output.video.shape[2] == expected_frames, f"{output.video.shape[2]} frames, expected {expected_frames}"
 
     frames = to_uint8_frames(output)
 
-    check_output_sanity(frames, num_frames=expected_frames, height=HEIGHT, width=WIDTH)
+    check_output_sanity(
+        frames,
+        num_frames=expected_frames,
+        height=HEIGHT,
+        width=WIDTH,
+        log=quality_logs_enabled() and is_host(),
+    )
     check_audio_sanity(output.audio, sampling_rate=output.sampling_rate, expected_seconds=expected_frames / output.fps)
     check_av_sync(frames, output.audio, sampling_rate=output.sampling_rate, fps=output.fps)
     log_spectral_flatness(output.audio, sampling_rate=output.sampling_rate)
@@ -221,7 +230,7 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
 
     gate_clip(frames, PROMPT, CLIP_THRESHOLD, f"fl2va[{case}]")
 
-    logger.info(
+    log_quality(
         "REMINDER: read the artifact rubric against these frames -- seams and flicker are what every "
         "whole-tensor metric averages away, and both are parallelism bugs"
     )
@@ -283,7 +292,7 @@ def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
     to_t2va = pcc(frames[0], np.asarray(_gated_keyframe()))
     tail = pcc(frames[-1], prepared)
 
-    logger.info(
+    log_quality(
         f"fl2va keyframe-drives-generation: frame 0 vs fractal keyframe {to_keyframe:.4f}, "
         f"frame 0 vs t2va's own frame 0 {to_t2va:.4f}, frame -1 vs fractal keyframe {tail:.4f}"
     )
