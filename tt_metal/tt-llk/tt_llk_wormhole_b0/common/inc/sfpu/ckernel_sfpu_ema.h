@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 /*
@@ -69,75 +70,79 @@ sfpi_inline void _ema_store_current_input_()
  * alpha and beta parameters. It takes the previous EMA value from LREG4 for all 32 columns.
  * The output is stored in the LREG0-3 registers.
  */
-sfpi_inline void _compute_ema_math_()
+// Replay-buffer slot for the math body below, and its exact instruction count:
+//   2 SFPTRANSP + 8 SFPMAD + 8 SFPNOP + 1 SFPMOV = 19
+// The length MUST equal the number of instructions actually emitted by
+// _compute_ema_math_body_(), or the replay buffer misaligns and the kernel silently
+// executes the wrong sequence. Update both together.
+//
+// Slot 0 is used. The accurate exp path also records into slot 0, so a caller that
+// interleaves EMA with that kernel must not rely on slot 0 surviving across the call.
+constexpr std::uint32_t EMA_MATH_REPLAY_SLOT = 0;
+constexpr std::uint32_t EMA_MATH_REPLAY_LEN  = 19;
+
+sfpi_inline void _compute_ema_math_body_()
 {
     // Transpose the input data to the correct order
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    // EMA_new = alpha * EMA_old + beta * input, chained across the 4 rows.
+    // EMA equation: EMA_new = alpha * EMA_old + beta * input
+    // Registers: LREG0-3 = the 4 input rows, updated in place to become the 4 outputs;
+    //            LREG4 = EMA_old carried in (and the new carry out); LREG5 = alpha;
+    //            LREG6 = beta; LREG7 = temp holding alpha * previous row.
     //
-    // Registers: LREG0-3 hold the 4 input rows and are updated in place to become the 4
-    // outputs; LREG4 carries EMA_old in from the previous block and the new carry out;
-    // LREG5 = alpha; LREG6 = beta. LREG7 is not used -- the earlier schedule needed it as
-    // a temp, this one does not.
+    // Two SFPMADs per row: LREG7 = alpha*prev, then row = beta*input + LREG7. Both sit on
+    // the dependency chain, so each needs an SFPNOP behind it (2-cycle SFPMAD write
+    // latency). Those NOPs cannot be filled: the rows must occupy LREG0-3 to be transposed
+    // as a group, they are live for the whole span where the slots exist, and the stores
+    // need the post-transpose layout, so no independent work can be scheduled into them.
     //
-    // That earlier schedule (no longer what the code below does) spent two MADs per row:
-    // LREG7 = alpha * prev, then row = beta * input + LREG7. Both halves sat on the
-    // dependency chain, so each needed an SFPNOP behind it and the block cost 8 MADs plus
-    // 8 NOPs.
-    //
-    // Scaling every input by beta up front instead leaves one MAD per row on the chain
-    // (row_i = alpha * row_{i-1} + beta_scaled_i, a single fused multiply-add), and the
-    // four scaling multiplies are mutually independent, so they can be dealt into the
-    // chain's latency slots rather than stalling behind it. Same algebra, half the
-    // chain: 8 MADs and 2 NOPs instead of 8 MADs and 8 NOPs.
-    //
-    // It is NOT the same floating-point arithmetic, and this is not a reordering of
-    // independent instructions -- it is a reassociation. SFPMAD performs exactly one
-    // rounding per instruction (see WormholeB0 SFPMAD.md: partially fused, single
-    // rounding, and "adding zero ... equivalent to a standalone multiply"), so both forms
-    // round the same number of times but round *different quantities*: the old form gave
-    // alpha*prev its own rounding and partially fused beta*input, this one gives beta*input
-    // its own rounding and partially fuses alpha*prev.
-    //
-    // Consequences, measured on Wormhole n300 over a 1000-alpha sweep (alpha = k/1000,
-    // 2048 outputs each, run on both kernels -- test_sfpu_ema_alpha_sweep.py):
-    //
-    //   * Accuracy is unchanged. Against an fp64 reference the two forms have a mean RMS
-    //     error ratio of 1.000001 and an identical worst peak error; no alpha differs by
-    //     more than 2%. Neither form is systematically closer to the true recurrence.
-    //   * Results are NOT bit-identical in general. 923 of 1000 alphas came out identical,
-    //     but 87 of 2048000 outputs differ, 84 of them by exactly one bfloat16 ULP. Only
-    //     the alphas that are exact binary fractions are structurally safe -- there
-    //     alpha*prev cannot round, so there is nothing to reassociate.
-    //
-    // Do not be tempted by the argument that an fp32 perturbation of ~2^-24 cannot survive
-    // a bfloat16 store at 2^-9. It is false: a perturbation far below one ULP still flips
-    // the rounded result whenever the exact value sits near a rounding midpoint. It makes
-    // disagreement rare, not impossible. An earlier version of this comment claimed
-    // otherwise on exactly that reasoning, and the sweep above disproves it.
-    //
-    // Pre-scale in0/in1 by beta. Independent of everything below.
-    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, 0);
-    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG1, 0);
+    // Reassociating to remove them (pre-scaling the inputs by beta) does work and is worth
+    // a further -19%, but it changes which product gets its own rounding and is therefore
+    // not bit-neutral: measured over a 1000-alpha sweep it moves 87 of 2048000 outputs, 84
+    // of them by one bfloat16 ULP, at unchanged accuracy. It was not taken here. Replaying
+    // the body instead recovers nearly the same win with no numerical change at all -- see
+    // _compute_ema_math_() below.
 
-    // in0: LREG0 = alpha * EMA_old + beta * in0
-    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 0);
-    // Pre-scale in2, covering the write latency of the MAD above.
-    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG2, 0);
+    // Step 1(in0): Calculate α * EMA_old in LREG7
+    // LREG7 = LREG5 * LREG4 (α * EMA_old)
+    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG7, 0);
+    TTI_SFPNOP; // Next cycle cannot read from LREG7 (2-cycle operation)
 
-    // in1: LREG1 = alpha * LREG0 + beta * in1
-    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, 0);
-    // Pre-scale in3, covering the write latency of the MAD above.
-    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG3, 0);
+    // Step 2(in0): Calculate final EMA = β * in0 + α * EMA_old
+    // LREG0 = (LREG6 * LREG0) + LREG7
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPNOP; // Next cycle cannot read from LREG0 (2-cycle operation)
 
-    // in2: LREG2 = alpha * LREG1 + beta * in2
-    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG2, 0);
-    TTI_SFPNOP; // no independent work left to cover LREG2
+    // Step 1(in1): Calculate α * EMA_old in LREG7
+    // LREG7 = LREG5 * LREG0 (α * EMA_old)
+    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG7, 0);
+    TTI_SFPNOP; // Next cycle cannot read from LREG7 (2-cycle operation)
 
-    // in3: LREG3 = alpha * LREG2 + beta * in3
-    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG3, 0);
-    TTI_SFPNOP; // SFPMOV below reads LREG3
+    // Step 2(in1): Calculate final EMA = β * in1 + α * EMA_old
+    // LREG1 = (LREG6 * LREG1) + LREG7
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPNOP; // Next cycle cannot read from LREG1 (2-cycle operation)
+
+    // Step 1(in2): Calculate α * EMA_old in LREG7
+    // LREG7 = LREG5 * LREG1 (α * EMA_old)
+    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG7, 0);
+    TTI_SFPNOP; // Next cycle cannot read from LREG7 (2-cycle operation)
+
+    // Step 2(in2): Calculate final EMA = β * in2 + α * EMA_old
+    // LREG2 = (LREG6 * LREG2) + LREG7
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG2, 0);
+    TTI_SFPNOP; // Next cycle cannot read from LREG2 (2-cycle operation)
+
+    // Step 1(in3): Calculate α * EMA_old in LREG7
+    // LREG7 = LREG5 * LREG2 (α * EMA_old)
+    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG7, 0);
+    TTI_SFPNOP; // Next cycle cannot read from LREG7 (2-cycle operation)
+
+    // Step 2(in3): Calculate final EMA = β * in3 + α * EMA_old
+    // LREG3 = (LREG6 * LREG3) + LREG7
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG3, 0);
+    TTI_SFPNOP; // Next cycle cannot read from LREG3 (2-cycle operation)
 
     // Update EMA_old for next iteration
     // LREG4 = LREG3 (copy new EMA to old EMA register)
@@ -145,6 +150,43 @@ sfpi_inline void _compute_ema_math_()
 
     // Transpose the output data to the correct order
     TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
+/**
+ * @brief Record the math body on the first block of a tile, replay it on the other seven.
+ *
+ * _compute_ema_math_body_() takes no template parameters, so all 8 blocks in a tile emit
+ * byte-identical instructions -- only the surrounding loads and stores differ, through
+ * compile-time dst offsets. That makes the body a clean record-once/replay candidate, and
+ * collapses 8 x 19 inlined instructions to 19 + 7.
+ *
+ * @note This is a cycle win, not just a code-size win, and the size of it was surprising:
+ *       MATH_ISOLATE drops from 320.77 to 247.89 cycles/tile (-22.7%) on Wormhole n300,
+ *       with TEXT_SIZE 3015 -> 2515. The arithmetic is untouched, so the result is
+ *       bit-identical -- verified over a 1000-alpha sweep, 2048000 outputs, zero differing.
+ *
+ *       The reason the win exists at all is that this kernel is bound by the rate at which
+ *       the TRISC can push TTI instructions into Tensix, not by SFPU execution latency. A
+ *       REPLAY expands inside Tensix without a per-instruction push, so the 8 SFPNOPs per
+ *       block cost almost nothing once recorded -- they are expensive to *issue* even though
+ *       they are free to *execute*. Anything that reasons about this kernel as
+ *       latency-bound (including earlier revisions of these comments) is wrong: the NOPs are
+ *       not the thing to optimise away, the instruction count is.
+ */
+template <bool RECORD>
+sfpi_inline void _compute_ema_math_()
+{
+    if constexpr (RECORD)
+    {
+        // lltt::Exec so the first block both records and executes; the recorded copy is
+        // what the remaining seven replay.
+        lltt::record<lltt::Exec>(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN);
+        _compute_ema_math_body_();
+    }
+    else
+    {
+        lltt::replay(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN);
+    }
 }
 
 /**
@@ -156,11 +198,11 @@ sfpi_inline void _compute_ema_math_()
  * This is a helper function that performs all three steps for a single block:
  * load inputs, compute EMA, and store results.
  */
-template <std::uint32_t I, std::uint32_t J>
+template <std::uint32_t I, std::uint32_t J, bool RECORD = false>
 sfpi_inline void _process_ema_block_()
 {
     _ema_load_current_input_<I, J>();
-    _compute_ema_math_();
+    _compute_ema_math_<RECORD>();
     _ema_store_current_input_<I, J>();
 }
 
@@ -218,7 +260,7 @@ sfpi_inline void _calculate_ema_tile_()
     // To finish the entire tile, we need to repeat this process 8 times.
 
     // Process the first block (4 rows of 32 columns)
-    _process_ema_block_<0, 0>();
+    _process_ema_block_<0, 0, /* RECORD */ true>();
 
     // Repeat this 7 more times to process the remaining blocks
     _process_ema_block_<0, 1>();
