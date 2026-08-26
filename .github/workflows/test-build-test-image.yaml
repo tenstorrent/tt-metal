@@ -20,9 +20,10 @@ permissions:
   contents: read
   packages: write
 
-# One run per PR or branch; a new push supersedes the old build and hw leg.
+# One run per branch. head_ref and ref_name both give the bare branch name, so a
+# push and its PR share a group instead of each starting a build and a hw leg.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
