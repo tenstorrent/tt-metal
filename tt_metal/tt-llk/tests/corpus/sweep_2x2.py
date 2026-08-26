@@ -686,7 +686,14 @@ KNOBS = {
     # now faster; licensed row 6 words = hand word parity, store
     # sources creg L9 directly).  Hand arms byte-identical AND
     # cycle-identical under the knob (same-leg anchors immovable);
-    # on34 controls reproduce the HK cells cycle-exact.
+    # on34 controls reproduce the HK cells cycle-exact.  KNOB-LEG
+    # CENSUS (shim farm, ON-34 vs ON-34+knob, 3300 rows): 242 changed,
+    # fully adjudicated — 228 sfpu_binary = store-fold S1 word-neutral
+    # value-identical forwarding (the laneEK class; CRAQ 414 passed
+    # both legs), 8 generalized_moe_gate = licensed S2 sinks (12
+    # dump-witnessed fires; CRAQ 89/89 both legs), 6 eltwise_unary =
+    # exactly the two target rows' TUs; threshold-fitted and every
+    # hand arm byte-identical.
     "store-sink": "-mtt-tensix-optimize-store-fold " "-mtt-tensix-optimize-store-sink",
     # EK (int-not): single-SFPNOT selection for the
     # all-ones-minus-x value function (exhaustive 2^32 equivalence
