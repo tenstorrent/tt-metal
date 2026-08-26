@@ -5,10 +5,16 @@
 
 In-tree tests load this via ``tests/python_tests/conftest.py``. Out-of-tree
 suites (proprietary kernels that cannot live in this public repo) load the
-same plugin after putting ``tests/python_tests`` on ``sys.path``:
+same plugin from the suite rootdir ``conftest`` after putting this
+``tests/python_tests`` on ``sys.path`` once:
 
     sys.path.insert(0, str(llk_python_tests))
     pytest_plugins = ["helpers.llk_pytest_plugin"]
+
+Test modules do not mutate ``sys.path``. ``pytest_configure`` prepends
+``<rootdir>/python_tests`` when that directory exists so suite-local
+packages (for example a ``goldens/`` tree) import like in-tree
+``helpers``.
 
 Set ``LLK_HOME`` to the tt-llk root if it cannot be inferred. Register extra
 header ``-I`` dirs with ``TestConfig.add_include_dirs(...)`` and extra
@@ -130,6 +136,24 @@ def init_llk_home():
 
 # Default LLK_HOME environment variable
 init_llk_home()
+
+
+def _prepend_sys_path(path: Path) -> None:
+    if not path.is_dir():
+        return
+    resolved = str(path.resolve())
+    if resolved not in sys.path:
+        sys.path.insert(0, resolved)
+
+
+def _ensure_suite_pythonpath(config) -> None:
+    """Make ``<rootdir>/python_tests`` importable (out-of-tree goldens, …).
+
+    In-tree runs use ``python_tests`` as the rootdir, so this is a no-op.
+    Do not prepend ``rootdir`` itself: a suite-local ``helpers/`` tree
+    (C++ include/src overlay) would shadow ``helpers.golden_generators``.
+    """
+    _prepend_sys_path(Path(config.rootpath) / "python_tests")
 
 
 @pytest.fixture()
@@ -348,6 +372,8 @@ _UNIFIED_ORDER_FILE: str = "DEFAULT"
 
 
 def pytest_configure(config):
+    _ensure_suite_pythonpath(config)
+
     # Configure loguru log level from CLI option or environment variable.
     log_level = config.getoption("--logging-level", default=None)
     configure_logger(level=log_level)
@@ -363,6 +389,17 @@ def pytest_configure(config):
     # when assembling per-variant compile options.
     if config.getoption("--disable-sfploadmacro", default=False):
         os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = "1"
+
+    # Fix this run's perf report directory here, on the controller, before xdist
+    # spawns workers: they inherit the environment, so every process resolves the
+    # same perf_data/runs/<tag>. Left to first use, each worker would mint its own
+    # timestamp and scatter one run across several directories.
+    #
+    # Unconditional on purpose. It only mints a string into the environment — no
+    # directory is created until a perf report is actually written — and at
+    # configure time there is no reliable way to know whether a perf test will be
+    # selected (a node id selects one without ever naming the marker).
+    TestConfig.perf_run_tag()
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
 
@@ -416,6 +453,7 @@ def pytest_configure(config):
         config.getoption("--compile-producer", default=False),
         config.getoption("--stimuli-only"),
         config.getoption("--use-stimuli"),
+        collect_only=bool(config.option.collectonly),
     )
 
     # Create directories from all processes - lock in create_directories handles race

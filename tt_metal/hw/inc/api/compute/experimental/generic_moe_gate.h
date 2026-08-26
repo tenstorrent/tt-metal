@@ -39,13 +39,14 @@ template <
     bool zero_tail = false,
     bool full_sort = false,
     bool generate_indices = true,
-    bool do_extra_scale = false>
+    bool do_extra_scale = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale, uint32_t extra_scale = 0) {
     static_assert(num_selected_experts >= 1 && num_selected_experts <= 16);
 
     // Copy add (FPU)
     UNPACK((llk_unpack_AB(icb0, icb1, 0, 0)));
-    MATH((llk_math_deepseek_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, DST_ACCUM_MODE, MATH_FIDELITY>(
+    MATH((llk_math_deepseek_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en, MATH_FIDELITY>(
         icb0, icb1, 0, true)));
 
     // Topk SFPU

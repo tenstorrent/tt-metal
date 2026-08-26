@@ -43,7 +43,7 @@ cd python_tests
 pytest <test_file_name>
 ```
 
-Replace <test_file_name> with the specific test script you want to execute, e.g., test_sfpu_binary.py.
+Replace <test_file_name> with the specific test script you want to execute, e.g., test_eltwise_binary_sfpu.py.
 
 ### 4. Run all tests using `pytest`
 

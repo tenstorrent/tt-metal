@@ -439,6 +439,44 @@ class TestConfig:
         )
 
     @staticmethod
+    def perf_run_tag() -> str:
+        """Directory name for this run's reports. Unique per invocation.
+
+        Purely a filesystem concern: it never reaches the published table. The
+        Parquet's ``run_id`` cannot serve here because every shard of one CI
+        workflow shares it by design (it is a ROW_KEY column, and the data team's
+        notion of "one run" spans all shards) — naming directories after it would
+        make two shards collide the moment their artefacts are unzipped together.
+
+        Seeded into the environment on first use so xdist workers and the
+        controller agree; the pytest plugin sets it before workers spawn.
+
+        CI sets ``PERF_RUN_TAG`` itself, because only the workflow can see the
+        shard index: ``GITHUB_RUN_ID`` and ``CHIP_ARCH`` are shared by every shard
+        of one architecture, so a tag built from them here would collide. The
+        fallback below therefore only has to keep successive invocations apart,
+        which a UTC timestamp does on its own.
+        """
+        tag = os.environ.get("PERF_RUN_TAG", "").strip()
+        if not tag:
+            run = os.environ.get("GITHUB_RUN_ID", "").strip()
+            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            tag = f"{run}-{stamp}" if run else f"local-{stamp}"
+            os.environ["PERF_RUN_TAG"] = tag
+        return tag
+
+    @staticmethod
+    def perf_run_dir() -> Path:
+        """This run's report directory, ``perf_data/runs/<tag>``.
+
+        One directory per invocation is what makes a report trustworthy: a shared
+        mutable directory lets a narrower second run leave the first run's test
+        directories in place, so the tree reads as complete while holding a blend
+        of two runs. Nothing here is ever written by a second invocation.
+        """
+        return TestConfig.LLK_ROOT / "perf_data" / "runs" / TestConfig.perf_run_tag()
+
+    @staticmethod
     def create_build_directories():
         """Create build directories. Uses class flag to skip redundant filesystem checks."""
         if TestConfig._BUILD_DIRS_CREATED:
@@ -495,6 +533,9 @@ class TestConfig:
                 # resolves with this on the path. Listed last so the tt-llk copy still
                 # wins the basenames that exist in both trees.
                 "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
+                # Keep this list to include roots every Blackhole test needs: INCLUDES is a session-wide
+                # ClassVar, so anything added here lands in the compile command for every Blackhole test. A
+                # root only some tests need belongs in a per-test fixture instead.
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [
@@ -779,6 +820,7 @@ class TestConfig:
         compile_producer: bool,
         stimuli_only: str = None,
         use_stimuli: str = None,
+        collect_only: bool = False,
     ):
         TestConfig.WORKER_ID = worker_id
 
@@ -837,12 +879,14 @@ class TestConfig:
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
-        # Always have a fresh build when compiling. Under xdist, only the
-        # controller may remove the shared artifact tree; workers can already
-        # be compiling variants under it.
+        # Start compilation from a clean artifact directory. With xdist, only
+        # the controller can safely remove shared artifacts because workers may
+        # already be writing to them. Skip cleanup during test collection so a
+        # subsequent consumer run can reuse the existing build.
         if (
             TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]
             and worker_id == "master"
+            and not collect_only
         ):
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
 
@@ -978,10 +1022,15 @@ class TestConfig:
             self.formats_config = None
             self.pack_size, self.unpack_size_a, self.unpack_size_b = 128, 128, 128
 
-        # Inject use_srcs and dest_acc into StimuliConfig
+        # SrcS MX slice geometry follows unpack_S_dst width (same as _is_srcs_32bit_mode_), not dest_acc.
         if self.variant_stimuli:
             self.variant_stimuli.set_use_srcs(self.unpack_to_srcs)
-            self.variant_stimuli.set_dest_acc(self.dest_acc)
+            srcs_32bit_mode = (
+                self.unpack_to_srcs
+                and self.formats_config is not None
+                and self.formats_config[0].unpack_S_dst.is_32_bit()
+            )
+            self.variant_stimuli.set_srcs_32bit_mode(srcs_32bit_mode)
 
         if (len(self.runtimes) > 0 or len(self.templates) > 0) and self.variant_stimuli:
             itd_param = next(
