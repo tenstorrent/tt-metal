@@ -9,6 +9,11 @@ on:
         required: false
         default: all
         type: string
+      speed-of-light:
+        description: "Enable --speed-of-light for LLK performance tests"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   checks: write
@@ -123,6 +128,8 @@ jobs:
       - name: Run tests
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
+        env:
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
         run: |
           ${{ matrix.test-group.cmd }}
 

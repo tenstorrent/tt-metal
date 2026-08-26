@@ -128,7 +128,7 @@ void seed_precompiled_root(
     experimental::CompileKernelOffline(kernel_path, kernel_config, params);
 }
 
-TEST_F(OfflineKernelCompileMockFixture, MetadataFromProgramDerivesConfiguredCbMetadata) {
+TEST_F(OfflineKernelCompileMockFixture, CPU_MetadataFromProgramDerivesConfiguredCbMetadata) {
     Program program = CreateProgram();
     const Tile tile({16, 32});
     const auto page_size = tile.get_tile_size(DataFormat::Float16_b);
@@ -145,7 +145,7 @@ TEST_F(OfflineKernelCompileMockFixture, MetadataFromProgramDerivesConfiguredCbMe
     EXPECT_EQ(*cb_compile_configs[0].tile, tile);
 }
 
-TEST_F(OfflineKernelCompileMockFixture, CBCompileConfigsFromProgramDeduplicatesOverlappingCbIndex) {
+TEST_F(OfflineKernelCompileMockFixture, CPU_CBCompileConfigsFromProgramDeduplicatesOverlappingCbIndex) {
     Program program = CreateProgram();
     const CoreRange left_core(CoreCoord{0, 0}, CoreCoord{0, 0});
     const CoreRange right_core(CoreCoord{1, 0}, CoreCoord{1, 0});
@@ -169,7 +169,7 @@ TEST_F(OfflineKernelCompileMockFixture, CBCompileConfigsFromProgramDeduplicatesO
     EXPECT_EQ(cb_compile_configs[0].cb_index, 0);
 }
 
-TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineRejectsInvalidExplicitCbMetadata) {
+TEST_F(OfflineKernelCompileMockFixture, CPU_CompileKernelOfflineRejectsInvalidExplicitCbMetadata) {
     using Params = experimental::OfflineKernelCompileParams;
     Params params{
         .mode = Params::AllSupportedProducts{},
@@ -184,7 +184,7 @@ TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineRejectsInvalidExplic
     EXPECT_THROW(experimental::CompileKernelOffline(kReaderKernelPath, kReaderDmConfig, params), std::invalid_argument);
 }
 
-TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineRejectsEmptyOutputDir) {
+TEST_F(OfflineKernelCompileMockFixture, CPU_CompileKernelOfflineRejectsEmptyOutputDir) {
     using Params = experimental::OfflineKernelCompileParams;
     Params params{
         .mode = Params::AllSupportedProducts{},
@@ -224,7 +224,7 @@ bool contains_nonempty_elf(const fs::path& dir) {
     return false;
 }
 
-TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineEmitsExpectedSubtreeForReaderKernel) {
+TEST_F(OfflineKernelCompileMockFixture, CPU_CompileKernelOfflineEmitsExpectedSubtreeForReaderKernel) {
     if (offline_compile_unsupported_under_simulator()) {
         GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
                         "(multi-erisc disabled); skipping under TT_METAL_SIMULATOR.";
