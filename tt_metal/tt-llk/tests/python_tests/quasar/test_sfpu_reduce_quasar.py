@@ -35,17 +35,16 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-# SyncHalf with a 32-bit Dest holds 4 tiles of 32x32 (get_dest_max_tiles); a 16-bit Dest holds 8.
-# The whole block has to be resident at once because a row reduce spans its entire tile row, so the
-# narrower 32-bit ceiling of 4 tiles bounds the suite for every format.
+# A row reduce needs its whole block in Dest at once. Dest holds 4 tiles at 32-bit and 8 at
+# 16-bit, so the narrower limit bounds the suite for every format.
 MAX_TILES = 4
 
-# Quasar's PoolType enum is SUM/AVG/MAX - there is no MIN, so the suite covers the three that
-# exist. Blackhole/Wormhole additionally expose MIN.
+# Quasar's PoolType has no MIN, so the suite covers the three pools that exist.
+# Blackhole/Wormhole also expose MIN.
 REDUCE_POOLS = [ReducePool.Sum, ReducePool.Average, ReducePool.Max]
 
-# Formats the Quasar kernel implements. Float paths load with sfpmem::DEFAULT (the Dest word
-# format resolves at runtime), Int32 names sfpmem::INT32 explicitly.
+# Formats the kernel implements. Floats load with sfpmem::DEFAULT (Dest word format resolved at
+# runtime); Int32 names sfpmem::INT32 outright.
 REDUCE_INPUT_FORMATS = [
     DataFormat.Float32,
     DataFormat.Float16_b,
@@ -53,8 +52,7 @@ REDUCE_INPUT_FORMATS = [
     DataFormat.Int32,
 ]
 
-# Relative precision of the float output formats: bf16 has 7 explicit mantissa bits, fp16 has 10,
-# fp32 has 23.
+# Relative precision per float format: bf16 has 7 explicit mantissa bits, fp16 10, fp32 23.
 _FLOAT_FORMAT_EPS = {
     DataFormat.Float16_b: 2.0**-8,
     DataFormat.Float16: 2.0**-11,
@@ -68,18 +66,16 @@ DIMENSION_COMBINATIONS = [
     if (m // TILE_DIM) * (n // TILE_DIM) <= MAX_TILES
 ]
 
-# Reduction-identity sentinels for the padded rows of a sub-tile column reduce, and the extremes
-# the Int32 guard injects. Sourced from torch.iinfo so the limits are named, not hex literals.
+# Pad sentinels for the sub-tile column reduce, and the extremes the Int32 guard injects. From
+# torch.iinfo so the limits are named rather than hex literals.
 INT32_MAX = torch.iinfo(torch.int32).max  # 0x7FFFFFFF
 INT32_MIN = torch.iinfo(torch.int32).min  # -0x80000000
-# MAX-reduce identity for Int32: the two's-complement additive minimum, avoiding INT32_MIN itself
-# to match ttnn's get_pad_value. Either value is correct here - measured, the Quasar comparator
-# orders INT32_MIN as the minimum (see test_int32_reduce_max_extreme) - so this tracks ttnn rather
-# than working around a hazard.
+# MAX pad for Int32. Either this or INT32_MIN works - measured, the Quasar comparator ranks
+# INT32_MIN as the minimum (see test_int32_reduce_max_extreme) - so this just tracks ttnn's
+# get_pad_value rather than dodging a hazard.
 INT32_PAD_MIN = INT32_MIN + 1  # -0x7FFFFFFF
-# MAX-reduce identity for the float formats: finite, so PCC stays well-defined, and far below
-# every stimulus. Float16's 65504 ceiling cannot hold the 8-bit-exponent sentinel, so it gets its
-# own value that is still two orders of magnitude below its +/-100 stimuli range.
+# MAX pad for the floats: finite, so PCC stays defined, and far below every stimulus. Float16's
+# 65504 ceiling cannot hold the 8-bit-exponent value, so it gets its own.
 FLOAT_PAD_MIN = -3.0e30
 FLOAT16_PAD_MIN = -6.0e4
 
@@ -87,8 +83,8 @@ FLOAT16_PAD_MIN = -6.0e4
 def get_reduce_formats(reduce_pool: ReducePool) -> list[InputOutputFormat]:
     """Input/output format pairs for the reduce suite.
 
-    Input format is kept as the output format: the reduce accumulates in the SFPU's fp32 lanes
-    and stores back through the same Dest word, so there is no widening step to model.
+    Output always matches input: the reduce accumulates in the SFPU's fp32 lanes and stores back
+    through the same Dest word, so there is no widening step to model.
     """
     return [InputOutputFormat(fmt, fmt) for fmt in REDUCE_INPUT_FORMATS]
 
@@ -98,9 +94,8 @@ def get_supported_reduce_axes(
 ) -> list[MathOperation]:
     """Reduce axes the kernel supports for this pool/format pair.
 
-    Integer AVG is excluded on both axes: averaging an integer reduction has to round its
-    quotient, and calculate_reduce deliberately leaves that choice to the caller rather than
-    baking one in (see the static_assert in ckernel_sfpu_reduce.h).
+    Integer AVG is excluded on both axes: it would have to round the quotient, and the kernel
+    leaves that choice to the caller (see the static_assert in ckernel_sfpu_reduce.h).
     """
     if reduce_pool == ReducePool.Average and formats.input_format.is_integer():
         return []
@@ -110,26 +105,24 @@ def get_supported_reduce_axes(
 def get_format_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]:
     """Stimuli ranges per format.
 
-    Signed ranges matter most for MAX: Quasar's SFPSWAP compares its operands as two's-complement
-    int32, which orders IEEE float bits correctly unless *both* are negative. The all-negative
-    range is what exercises the kernel's correction swap for those lanes.
+    The all-negative range is the one that matters for MAX. SFPSWAP compares as two's-complement
+    int32, which orders float bits correctly except when both operands are negative, so that range
+    is what exercises the kernel's correction swap.
 
-    Float16 gets a tighter magnitude because its 65504 ceiling is a real constraint on a Sum: the
-    widest block here folds 128 terms into one output element, and at the other formats' +/-1000
-    that total would leave the representable range. Every other format has headroom to spare.
+    Float16 gets a tighter magnitude: the widest block folds 128 terms into one element, and at
+    +/-1000 that total would overflow its 65504 ceiling. The other formats have headroom.
     """
     limit = 100 if formats.input_format == DataFormat.Float16 else 1000
     return [(-limit, limit), (0, limit), (-limit, 0)]
 
 
 def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
-    """Identity fill for the padded (non-data) rows of a sub-tile column reduce.
+    """Fill value for the padded rows of a sub-tile column reduce, mirroring ttnn's get_pad_value.
 
-    Mirrors ttnn's ``get_pad_value``: the pad must never win the reduction, so the device result
-    over the full 32-row tile equals a golden reduced over only the real rows. A wrong sentinel
-    shows up as the padding leaking into the answer.
+    The pad must never win, so that reducing the full 32 rows on device matches a golden reduced
+    over only the real ones. A wrong value shows up as padding leaking into the answer.
 
-    Average is excluded from the sub-tile sweep, so only Max and Sum need an identity here.
+    Average is excluded from the sub-tile sweep, so only Max and Sum need one.
     """
     if reduce_pool == ReducePool.Max:
         if input_format == DataFormat.Int32:
@@ -146,19 +139,20 @@ def get_reduce_extents(
     formats: InputOutputFormat,
     dimension_combinations: list[int],
 ) -> list[int]:
-    """Number of real (unpadded) rows on the column-reduce axis.
+    """How many rows of the column-reduce axis hold real data.
 
-    ``TILE_DIM`` (32) is the full-tile case every variant runs. Smaller values keep only the first
-    N rows as real data and fill the rest with the reduction identity, exercising the padded
-    column reduce ttnn takes for ``dim=0``/``dim=1``. The sub-tile sweep is restricted to:
-      * ``ReduceColumn`` - only the column axis has a paddable 32-row extent,
-      * a single tile ``[32, 32]`` - padding is independent of the tile count, so sweeping every
-        dimension combination would only add redundant cases, and
-      * Sum/Max - identity padding is exact for those. Average divides by a fixed 32 (the kernel
-        multiplies by a hard-coded 1/32 reciprocal), which would not match a golden averaged over
-        only the real rows.
-    Int32 sweeps the small extents because its sentinel is the interesting one; the float formats
-    get a thin slice that keeps the padding path guarded.
+    32 is the full tile, which every variant runs. Anything less keeps only the first N rows and
+    pads the rest with the reduction identity - the path ttnn takes for ``dim=0``/``dim=1``.
+
+    Only swept where it means something:
+      * ``ReduceColumn`` - only the column axis has a paddable 32-row extent.
+      * a single tile ``[32, 32]`` - padding does not depend on the tile count, so other
+        dimensions would only add redundant cases.
+      * Sum/Max - padding is exact for those. Average always divides by 32 (the kernel uses a
+        hard-coded 1/32), which would not match a golden averaged over only the real rows.
+
+    Int32 sweeps the small extents since its sentinel is the interesting one; the floats get a
+    thin slice just to keep the path guarded.
     """
     full = [TILE_DIM]
     if (
@@ -177,12 +171,11 @@ def get_reduce_atol(
 ):
     """Absolute tolerance for the accumulating reductions (Sum/Average).
 
-    Summing N terms of magnitude up to M in a low-precision float accumulates rounding error that
-    grows like sqrt(N) * M * eps. On rows whose terms nearly cancel that error dwarfs the tiny
-    true total, so a fixed tolerance would fail a correct reduction. Sizing atol to that bound
-    (with a 2x margin) keeps cancellation rows passing while real errors still fail.
+    Summing N terms of magnitude M in a low-precision float accumulates error like
+    sqrt(N) * M * eps. Where terms nearly cancel, that error dwarfs the tiny true total and a fixed
+    tolerance would fail a correct reduction - so size atol to that bound, with a 2x margin.
 
-    Returns None for Max and for integer formats, which reduce exactly.
+    Returns None for Max and for the integer formats, which reduce exactly.
     """
     if reduce_pool not in (ReducePool.Sum, ReducePool.Average):
         return None
@@ -192,9 +185,8 @@ def get_reduce_atol(
         return None
 
     max_term = max(abs(input_bounds[0]), abs(input_bounds[1]))
-    # Terms folded into one output element: a row reduce spans the block's full width, a column
-    # reduce spans its real (unpadded) extent - the identity-filled rows add nothing and so
-    # contribute no rounding error either.
+    # Terms folded per output element. A row spans the block's full width; a column spans only its
+    # real rows, since padded ones add nothing and so round nothing either.
     num_terms = (
         input_dimensions[1] if mathop == MathOperation.ReduceRow else reduced_extent
     )
@@ -225,18 +217,16 @@ def test_sfpu_reduce_quasar(
 ):
     """SFPU reduce on Quasar: collapse a Dest block along one axis with SUM, AVG or MAX.
 
-    ReduceColumn folds each tile's 32 rows onto that tile's row 0, so tiles reduce independently.
-    ReduceRow folds a tile row's columns onto its column 0, which spans every tile in that row,
-    so the whole block must be resident in Dest at once.
+    ReduceColumn folds each tile's 32 rows onto its row 0, so tiles reduce independently.
+    ReduceRow folds a tile row's columns onto column 0, which spans every tile in that row, so the
+    whole block has to be in Dest at once.
 
-    The kernel writes only the axis it collapses onto and leaves the rest of the tile holding
-    reduction leftovers, so the assertion compares just that axis - matching what the packer's
-    consumers read after a reduce.
+    The kernel writes only the axis it collapses and leaves the rest of the tile holding leftovers,
+    so the assert compares just that axis - which is what a reduce's consumers read.
     """
-    # Quasar's unpack-to-dest path needs the L1 format's width to match the Dest word's, so the
-    # 32-bit formats take a 32-bit Dest and the 16-bit ones a 16-bit Dest. Nothing is lost by the
-    # narrow Dest: the SFPU still folds in fp32 lanes and the reduce stores once per output
-    # element, so the narrow format only rounds the result the packer was going to see anyway.
+    # Not an axis: unpack-to-dest needs the L1 format's width to match the Dest word's, so the
+    # pairing is forced. Nothing is lost by a narrow Dest - the SFPU still folds in fp32 lanes and
+    # stores once per output element, so it only rounds what the packer would have rounded anyway.
     dest_acc = (
         DestAccumulation.Yes
         if formats.input_format.is_32_bit()
@@ -256,25 +246,23 @@ def test_sfpu_reduce_quasar(
             low=min_value, high=max_value, size=stimuli_size, dtype=torch_format
         )
     else:
-        # Fractional values, not integer-valued floats, so the accumulate/round path is actually
-        # exercised (randint would only ever produce whole numbers).
+        # Fractional, not whole-numbered floats, so the accumulate/round path is really exercised.
         src_A = torch.empty(stimuli_size, dtype=torch_format).uniform_(
             min_value, max_value
         )
     src_B = torch.zeros_like(src_A)
 
-    # Sub-tile column reduce: keep only the first `reduced_extent` rows of the 32-row reduce axis
-    # as real data and fill the rest with the reduction identity, mirroring the padding ttnn
-    # injects when folding dim=0/dim=1 onto H. The real data must win, so the device result over
-    # the full tile matches a golden reduced over only the real rows.
+    # Sub-tile column reduce: keep the first `reduced_extent` rows as real data and pad the rest
+    # with the reduction identity, the way ttnn does for dim=0/dim=1. The real data has to win, so
+    # that reducing all 32 rows on device matches a golden over only the real ones.
     if mathop == MathOperation.ReduceColumn and reduced_extent < TILE_DIM:
         pad_value = get_reduce_pad_value(reduce_pool, formats.input_format)
         src_A = src_A.view(TILE_DIM, tile_cnt * TILE_DIM)
         src_A[reduced_extent:, :] = pad_value
         src_A = src_A.flatten()
 
-    # A column reduce treats every tile independently, so its golden is the block laid out as a
-    # single 32-row strip of tile_cnt tile columns. A row reduce spans the real 2-D block.
+    # Column reduces treat tiles independently, so lay the golden out as one 32-row strip of
+    # tile_cnt tiles. A row reduce needs the real 2-D block.
     dst_dim = (
         [TILE_DIM, tile_cnt * TILE_DIM]
         if mathop == MathOperation.ReduceColumn
@@ -282,10 +270,10 @@ def test_sfpu_reduce_quasar(
     )
 
     src_A = tilize_block(src_A, dst_dim, stimuli_format=formats.input_format).flatten()
-    # Golden is computed on the untilized view; torch has no concept of tilization.
+    # Golden runs on the untilized view - torch knows nothing about tilization.
     src_A_untilized = untilize_block(src_A, formats.input_format, dst_dim)
 
-    # Reduce over the real rows only; the padded rows must not reach the golden.
+    # The padded rows must not reach the golden.
     golden_input = src_A_untilized
     if mathop == MathOperation.ReduceColumn and reduced_extent < TILE_DIM:
         golden_input = src_A_untilized[:reduced_extent]
@@ -307,8 +295,8 @@ def test_sfpu_reduce_quasar(
             MATH_OP(mathop=mathop, pool_type=reduce_pool),
             generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(),
-            # The reduce is SFPU-only: operands reach DEST through the unpack-to-dest
-            # engine, with no FPU datacopy staging them via SrcA.
+            # SFPU-only op: operands reach Dest through unpack-to-dest, with no FPU
+            # datacopy staging them via SrcA.
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
         ],
@@ -328,8 +316,8 @@ def test_sfpu_reduce_quasar(
             tile_count_B=tile_cnt,
             tile_count_res=tile_cnt,
             num_faces=4,
-            # Int32 operands reach Dest as two's-complement, which is what SFPIADD adds in and
-            # what SFPSWAP's two's-complement compare orders.
+            # Int32 reaches Dest as two's-complement - what SFPIADD adds in and what
+            # SFPSWAP's compare orders.
             twos_complement=formats.input_format == DataFormat.Int32,
         ),
         dest_acc=dest_acc,
@@ -364,12 +352,11 @@ def test_sfpu_reduce_quasar(
 
 
 def _run_int32_reduce_max(mathop, injected_value, base_range):
-    """One 32x32 Int32 tile with `injected_value` at a few scattered positions, MAX-reduced on
-    device. Returns (golden_slice, device_slice).
+    """MAX-reduce one 32x32 Int32 tile with `injected_value` scattered through it.
 
-    A near-copy of the sweep body above rather than a shared helper: that one is driven by the
-    parametrize axes and this one hardcodes the format, the pool and a hand-built stimulus, so
-    threading both through one function would need a flag per difference.
+    Returns (golden_slice, device_slice). A near-copy of the sweep body rather than a shared
+    helper: that one is driven by parametrize axes and this one hardcodes the format, the pool and
+    a hand-built stimulus, so merging them would need a flag per difference.
     """
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
     dest_acc = DestAccumulation.Yes  # Int32 is 32-bit, so it needs a 32-bit Dest
@@ -387,9 +374,9 @@ def _run_int32_reduce_max(mathop, injected_value, base_range):
         dtype=torch_format,
     )
 
-    # Six scattered positions, in six distinct rows and six distinct columns, so six of the 32
-    # reduced lanes actually see the extreme value under either axis and the rest reduce ordinary
-    # data. A single injection could pass on a kernel that drops the lane entirely.
+    # Six positions in six distinct rows and six distinct columns, so six of the 32 reduced lanes
+    # see the extreme value under either axis and the rest reduce ordinary data. One injection
+    # could pass on a kernel that drops the lane entirely.
     grid = src_A.view(TILE_DIM, TILE_DIM)
     for r, c in [(0, 0), (5, 7), (13, 3), (20, 20), (31, 31), (7, 15)]:
         grid[r, c] = injected_value
@@ -470,25 +457,24 @@ def _run_int32_reduce_max(mathop, injected_value, base_range):
     ids=["mixed", "all_negative", "all_positive"],
 )
 def test_int32_reduce_max_extreme(mathop, injected_value, base_range):
-    """Guard for the Int32 range ends of a MAX reduce - the one bit pattern that pins the
-    comparator's domain.
+    """Guard for the Int32 range ends of a MAX reduce, pinning the comparator's domain.
 
-    Quasar's Int32 load mode is ``p_sfpu::sfpmem::INT32``, which aliases ``SMAG32``, the
-    sign-magnitude int32 mode. Read as sign-magnitude, INT32_MIN (0x80000000) is negative zero and
-    ranks as 0 - beating every negative operand instead of losing to them; read as two's
-    complement it is the minimum and loses to all of them. The kernel's ``reduce_combine``
-    documents the latter (SFPSWAP compares as two's complement, Dest already holds
-    two's-complement Int32) and the sweep above feeds ``twos_complement=True`` on that basis, but
-    no sweep variant contains the pattern that separates the two readings.
+    INT32_MIN (0x80000000) is the one pattern where the two readings of an Int32 word disagree. As
+    two's complement it is the minimum and loses to everything. As sign-magnitude it is negative
+    zero, ranks as 0, and beats every negative operand instead.
 
-    Measured green on Quasar: the SMAG32 load preserves the word rather than converting it, so the
-    documented two's-complement ordering holds and the padding sentinel above is free to follow
-    ttnn. This test is what keeps that true - Blackhole shipped the other behaviour
-    (tenstorrent/tt-metal#44750) until it grew a dedicated two's-complement compare-and-swap path.
+    Which matters because Quasar's Int32 load mode, ``sfpmem::INT32``, aliases ``SMAG32`` - the
+    sign-magnitude mode. The kernel's ``reduce_combine`` assumes two's complement and the sweep
+    feeds ``twos_complement=True`` on that basis, but no sweep variant contains the pattern that
+    would tell the two apart.
 
-    ``all_negative`` is the decisive range: with INT32_MIN injected every real operand is negative,
-    so a sign-magnitude comparator would return the injected value as the maximum while the golden
-    returns the largest genuine one.
+    Measured green, so the SMAG32 load preserves the word rather than converting it and the
+    two's-complement ordering holds. This test is what keeps that true: Blackhole shipped the other
+    behaviour (tenstorrent/tt-metal#44750) until it grew a dedicated compare-and-swap path.
+
+    ``all_negative`` is the decisive range - with INT32_MIN injected every real operand is negative,
+    so a sign-magnitude comparator would return the injected value while the golden returns the
+    largest genuine one.
     """
     golden_slice, res_slice = _run_int32_reduce_max(mathop, injected_value, base_range)
 
