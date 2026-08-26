@@ -10,15 +10,10 @@ on:
         type: choice
         options:
           - all
-          - tt-training-models
           #          - cnn
           #          - sentence_bert
           - wan2-2
-          - qwenimage
           - deepseek_v3
-          - tinyllama_1_1b_ddp32_shakespeare
-          - llama_8b_tp8_ddp4_shakespeare
-          # - llama_8b_tp4_ddp8_shakespeare
 
       build-type:
         required: false
@@ -64,7 +59,6 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
       build-wheel: true
-      skip-tt-train: false
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   galaxy-perf-tests:

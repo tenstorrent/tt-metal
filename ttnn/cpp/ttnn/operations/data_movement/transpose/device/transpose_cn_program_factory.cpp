@@ -64,15 +64,11 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     KernelDescriptor::Defines reader_defines;
     std::vector<uint32_t> reader_compile_time_args = {
         static_cast<uint32_t>(src0_cb_index), src0_buffer->aligned_page_size(), stick_size};
-    std::vector<uint32_t> reader_common_runtime_args;
-    TensorAccessorArgs(*src0_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(reader_compile_time_args, reader_common_runtime_args);
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelDescriptor::Defines writer_defines;
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(src0_cb_index), dst_buffer->aligned_page_size(), stick_size};
-    std::vector<uint32_t> writer_common_runtime_args;
-    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(writer_compile_time_args, writer_common_runtime_args);
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     if (row_major) {
         reader_defines.emplace_back("CN_RM", "1");
@@ -88,7 +84,6 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.defines = std::move(reader_defines);
     reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.common_runtime_args = std::move(reader_common_runtime_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -99,7 +94,6 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.defines = std::move(writer_defines);
     writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
 
     // Set runtime arguments for each core
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];

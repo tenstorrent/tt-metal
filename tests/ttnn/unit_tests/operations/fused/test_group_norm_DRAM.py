@@ -40,12 +40,9 @@ GROUP_NORM_DRAM_SHAPES = [
         4,
         4,
     ),  # test all groups on core fit in less than one tile, so need to reduce col core count
-    # All SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
+    # SDXL/sd35 test cases. Additional slower test cases in nightly test.
     # SDXL Base
     (1, 1920, 16, 16, 32, 1, 4, 4),
-    # SDXL VAE
-    (1, 256, 256, 256, 32, 4, 8, 8),
-    (1, 512, 256, 256, 32, 4, 8, 8),
     # SDXL Refiner
     (1, 1536, 8, 8, 32, 1, 2, 8),
     (1, 1152, 128, 128, 32, 2, 8, 4),
@@ -56,7 +53,6 @@ GROUP_NORM_DRAM_SHAPES = [
     (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
     (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
     (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
-    (1, 128, 1, 262144, 32, 64, 8, 4),  # SD 1.4 VAE Issue #21131
     # mochi
     # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
 ]

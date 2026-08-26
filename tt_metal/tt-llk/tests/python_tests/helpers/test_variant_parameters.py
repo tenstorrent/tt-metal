@@ -37,6 +37,7 @@ from .llk_params import (
     TopKSortDirection,
     TopKXLChunkBaseMode,
     TopKXLIndexOp,
+    TopKXLSortMode,
     Transpose,
     UnpackerEngine,
     VectorMode,
@@ -281,6 +282,22 @@ class SFPU_UNARY_SCALAR(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t SFPU_UNARY_SCALAR = {self.value_bits}u;"
+
+
+@dataclass
+class SFPU_SHIFT_AMOUNT(TemplateParameter):
+    """Shift amount for the *unary* shift ops (LeftShift / RightShift).
+
+    Emitted as a macro rather than a constexpr because sfpu_operations.h selects on
+    ``#ifdef SFPU_SHIFT_AMOUNT``: the header is shared by every unary test, and only the shift
+    sweep sets this, so the others have to keep compiling without it. The binary shift ops take
+    their amount as a second operand and need none of this.
+    """
+
+    shift_amount: int = 3
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_SHIFT_AMOUNT {self.shift_amount}u"
 
 
 @dataclass
@@ -729,6 +746,9 @@ class TOPK_XL(TemplateParameter):
     chunk_base: int = 0
     fused_e2e: bool = False
     seg_base: int = 0
+    sort_mode: TopKXLSortMode = TopKXLSortMode.Dispatch
+    lsb_row_major: bool = False
+    reinit_after_copy: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -746,6 +766,9 @@ class TOPK_XL(TemplateParameter):
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE = {self.chunk_base};",
             f"constexpr bool TOPK_XL_FUSED_E2E = {str(self.fused_e2e).lower()};",
             f"constexpr std::uint32_t TOPK_XL_SEG_BASE = {self.seg_base};",
+            f"constexpr std::uint32_t TOPK_XL_SORT_MODE = {self.sort_mode.value};",
+            f"constexpr bool TOPK_XL_LSB_ROW_MAJOR = {str(self.lsb_row_major).lower()};",
+            f"constexpr bool TOPK_XL_REINIT_AFTER_COPY = {str(self.reinit_after_copy).lower()};",
         ]
         return "\n".join(lines)
 
@@ -872,11 +895,13 @@ class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
 
     eps_bits: int = 0x00000000  # 0.0f
     scale_bits: int = 0x3F800000  # 1.0f
+    extra_scale_bits: int = 0x3F800000  # 1.0f, identity for the do_extra_scale path
 
     def convert_to_cpp(self) -> str:
         lines = [
             f"constexpr std::uint32_t MOE_GATE_EPS_BITS = {self.eps_bits}u;",
             f"constexpr std::uint32_t MOE_GATE_SCALE_BITS = {self.scale_bits}u;",
+            f"constexpr std::uint32_t MOE_GATE_EXTRA_SCALE_BITS = {self.extra_scale_bits}u;",
         ]
         return "\n".join(lines)
 

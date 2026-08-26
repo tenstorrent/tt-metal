@@ -156,10 +156,13 @@ endif()
 set(TTNN_CORE_JIT_API_HEADERS
     api/ttnn/tensor/layout/layout.hpp
     cpp/ttnn/kernel/compute/bmm_tilize_untilize.cpp
+    cpp/ttnn/kernel/compute/dest_format_helpers.hpp
     cpp/ttnn/kernel/compute/eltwise_copy.cpp
     cpp/ttnn/kernel/compute/moreh_common.hpp
     cpp/ttnn/kernel/compute/tilize.cpp
+    cpp/ttnn/kernel/compute/tilize_metal2.cpp
     cpp/ttnn/kernel/compute/transpose_wh.cpp
+    cpp/ttnn/kernel/dataflow/cb_fill_helpers.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp
     cpp/ttnn/kernel/dataflow/generate_mm_scaler.hpp
@@ -168,6 +171,7 @@ set(TTNN_CORE_JIT_API_HEADERS
     cpp/ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp
     cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp
     cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
+    cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id_metal2.cpp
     cpp/ttnn/kernel/kernel_common_utils.hpp
     cpp/ttnn/kernel/kernel_utils.hpp
 )

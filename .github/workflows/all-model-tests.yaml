@@ -51,7 +51,7 @@ on:
 
       # ── SKU selection ─────────────────────────────────────────────
       skus:
-        description: "SKUs to test (comma-separated). Options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p150b_civ2, bh_p300, bh_quietbox_2, bh_galaxy, bh_loudbox]"
+        description: "SKUs to test (comma-separated). Options: [all, wh_all, bh_all], [wh_n150, wh_n150_civ2, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p150b_civ2, bh_p300, bh_quietbox_2, bh_galaxy, bh_loudbox]"
         required: false
         type: string
         default: "all"
@@ -129,7 +129,7 @@ jobs:
       - name: Resolve SKU selection
         id: resolve-skus
         run: |
-          WH_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf"
+          WH_SKUS="wh_n150,wh_n150_civ2,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf"
           BH_SKUS="bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy,bh_loudbox"
           ALL_SKUS="$WH_SKUS,$BH_SKUS"
           # NOTE: exabox multihost SKUs (bh_sc1/bh_sc4/bh_sc16 → exabox-multihost-ci-*)
@@ -145,7 +145,7 @@ jobs:
           #      `matrix_multihost` output that the "Aggregate child matrices" step here does not
           #      union, and the multihost job emits no per-leg summary artifact; without both,
           #      dispatched multihost legs would be misreported as INFRA_FAILURE.
-          VALID_SKUS="wh_n150 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf bh_p150 bh_p150b_civ2 bh_p300 bh_quietbox_2 bh_galaxy bh_loudbox wh_all bh_all"
+          VALID_SKUS="wh_n150 wh_n150_civ2 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf bh_p150 bh_p150b_civ2 bh_p300 bh_quietbox_2 bh_galaxy bh_loudbox wh_all bh_all"
           SKU_INPUT="${{ inputs.skus || 'all' }}"
 
           # Trim leading/trailing whitespace from the entire input
@@ -162,7 +162,7 @@ jobs:
               # Skip empty tokens (e.g. from trailing commas)
               [[ -z "$item" ]] && continue
               if [[ ! " $VALID_SKUS " =~ " $item " ]]; then
-                echo "::error::Invalid SKU '$item'. Valid options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p150b_civ2, bh_p300, bh_quietbox_2, bh_galaxy, bh_loudbox]"
+                echo "::error::Invalid SKU '$item'. Valid options: [all, wh_all, bh_all], [wh_n150, wh_n150_civ2, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p150b_civ2, bh_p300, bh_quietbox_2, bh_galaxy, bh_loudbox]"
                 exit 1
               fi
               if [[ "$item" == "wh_all" ]]; then
@@ -509,7 +509,10 @@ jobs:
       - t3-unit-tests
       - t3-e2e-tests
       - vllm-tests
-    if: always()
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

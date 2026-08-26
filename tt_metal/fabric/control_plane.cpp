@@ -479,7 +479,9 @@ void ControlPlane::init_control_plane(
         // Append MGD many-to-many pinning groups directly (no flattening).
         if (this->mesh_graph_->get_mesh_graph_descriptor_path().has_value()) {
             const auto& mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
-            pinning_groups.insert(pinning_groups.end(), mgd_pinnings.begin(), mgd_pinnings.end());
+            for (const auto& [_, groups] : mgd_pinnings) {
+                pinning_groups.insert(pinning_groups.end(), groups.begin(), groups.end());
+            }
         }
 
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(

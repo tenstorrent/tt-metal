@@ -16,21 +16,32 @@ the optional-None and dynamic-param cases static reading can't. Needs the LLK en
 (pandas, ttexalens importable) but no hardware.
 """
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
 from helpers.perf.core import (
     PerfConfig,
     PerfReport,
     _ci_provenance,
+    _prune_runs,
+    _refresh_latest,
     combine_perf_reports,
     postprocess_tile_loop,
 )
-from helpers.perf.schema import MARKER, MEAN, STD, assert_unique_columns, stat_column
+from helpers.perf.schema import (
+    MARKER,
+    MEAN,
+    STD,
+    PerfSchemaError,
+    assert_unique_columns,
+    stat_column,
+)
 from helpers.perf.wide_schema import DB_SCHEMA, DROPPED_COLUMNS, OUTPUT_SCHEMA
-from helpers.profiler import Profiler, ProfilerData
+from helpers.profiler import Profiler, ProfilerData, _stats_l1_to_l1
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import APPROX_MODE, LOOP_FACTOR, TILE_COUNT
 
@@ -45,7 +56,8 @@ def _fake_formats():
         unpack_A_dst="Float16_b",
         unpack_B_dst="Float16_b",
         output_format="Float16_b",
-        sfpu_math="Float16_b",
+        sfpu_src="Float16_b",
+        sfpu_dst="Float16_b",
     )
     return [fmt]
 
@@ -130,6 +142,96 @@ def test_single_row_per_config():
 
 _MARKERS = (("INIT", 0), ("TILE_LOOP", 1))
 _THREADS = ("unpack", "math", "pack")
+
+
+def _parallel_events(zones) -> pd.DataFrame:
+    rows = []
+    for thread, start, end in zones:
+        for event_type, timestamp in (("ZONE_START", start), ("ZONE_END", end)):
+            rows.append(
+                {
+                    "thread": thread,
+                    "type": event_type,
+                    MARKER: "TILE_LOOP",
+                    "timestamp": timestamp,
+                    "data": 0,
+                    "marker_id": 1,
+                    "file": "perf.cpp",
+                    "line": 1,
+                    "run_index": 0,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_l1_to_l1_four_trisc_aggregates_component_and_envelope_durations():
+    data = ProfilerData(
+        _parallel_events(
+            [
+                ("unpack", 100, 105),
+                ("pack", 155, 160),
+                ("sfpu", 110, 150),
+            ]
+        )
+    )
+
+    result = _stats_l1_to_l1(data)
+    prefix = PerfRunType.L1_TO_L1.name
+    fpu = result.loc[0, stat_column(f"{prefix}[FPU]", MEAN)]
+    sfpu = result.loc[0, stat_column(f"{prefix}[SFPU]", MEAN)]
+    overall = result.loc[0, stat_column(prefix, MEAN)]
+
+    assert fpu == 60
+    assert sfpu == 40
+    assert overall == 60
+
+
+def test_l1_to_l1_three_trisc_keeps_unpack_to_pack_duration():
+    # A stub SFPU KERNEL zone must not switch L1_TO_L1 onto the 4-TRISC path.
+    data = ProfilerData(
+        pd.concat(
+            [
+                _parallel_events(
+                    [
+                        ("unpack", 100, 105),
+                        ("pack", 155, 160),
+                    ]
+                ),
+                _parallel_events(
+                    [
+                        ("unpack", 10, 15),
+                        ("pack", 50, 55),
+                        ("sfpu", 90, 200),
+                    ]
+                ).assign(**{MARKER: "KERNEL"}),
+            ],
+            ignore_index=True,
+        )
+    )
+
+    result = _stats_l1_to_l1(data)
+    prefix = PerfRunType.L1_TO_L1.name
+    tile_loop = result[result[MARKER] == "TILE_LOOP"].iloc[0]
+    assert tile_loop[stat_column(prefix, MEAN)] == 60
+    assert stat_column(f"{prefix}[FPU]", MEAN) not in result.columns
+
+
+def test_l1_to_l1_four_trisc_rejects_mismatched_zone_counts():
+    data = ProfilerData(
+        _parallel_events(
+            [
+                ("unpack", 100, 105),
+                ("unpack", 200, 205),
+                ("pack", 155, 160),
+                ("sfpu", 110, 150),
+            ]
+        )
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="must be present and paired"
+    ):
+        _stats_l1_to_l1(data)
 
 
 def _one_run_events(seed: int) -> pd.DataFrame:
@@ -245,6 +347,40 @@ def test_run_single_run_drops_empty_std(monkeypatch):
     assert stat_column("MATH_ISOLATE", STD) not in frame.columns
 
 
+def test_run_rejects_empty_stats_for_requested_run_type(monkeypatch):
+    monkeypatch.setitem(
+        Profiler.STATS_FUNCTION,
+        PerfRunType.MATH_ISOLATE,
+        lambda data: pd.DataFrame(),
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError,
+        match="no timing statistics for requested run type MATH_ISOLATE",
+    ):
+        _run_hw_free(monkeypatch, [PerfRunType.MATH_ISOLATE], run_count=1)
+
+
+def test_run_rejects_negative_mean_timing(monkeypatch):
+    mean_column = stat_column("MATH_ISOLATE", MEAN)
+    monkeypatch.setitem(
+        Profiler.STATS_FUNCTION,
+        PerfRunType.MATH_ISOLATE,
+        lambda data: pd.DataFrame(
+            {
+                MARKER: ["INIT", "TILE_LOOP"],
+                mean_column: [-1.0, -2.0],
+            }
+        ),
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError,
+        match="negative mean timing values.*MATH_ISOLATE",
+    ):
+        _run_hw_free(monkeypatch, [PerfRunType.MATH_ISOLATE], run_count=1)
+
+
 def test_postprocess_tile_loop_derives_per_tile_from_raw():
     # Public per-tile derivation used downstream on the RAW (Parquet/CSV) table.
     raw = pd.DataFrame(
@@ -315,6 +451,40 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     assert set(df["arch"]) == {"wormhole"}
     assert set(df["commit_sha"]) == {"testsha"}
     assert set(df["pipeline"]) == {"nightly"}
+
+
+def test_combine_perf_reports_raises_on_unknown_parquet_columns(tmp_path, monkeypatch):
+    # Schema drift must fail the session, not drop columns and continue. CSV is
+    # already written by the time Parquet conversion runs.
+    workers = tmp_path / "workers"
+    workers.mkdir()
+    root = tmp_path / "root"
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers)
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
+    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    monkeypatch.setenv("GITHUB_SHA", "testsha")
+    monkeypatch.setenv("GITHUB_RUN_ID", "testrun")
+    monkeypatch.setenv("PERF_RUN_TAG", "testrun-wormhole-0")
+
+    pd.DataFrame(
+        {
+            "marker": ["INIT", "TILE_LOOP"],
+            "tile_cnt": [4, 4],
+            "loop_factor": [1, 1],
+            stat_column("MATH_ISOLATE", MEAN): [10.0, 20.0],
+            "made_up_col": [1, 2],
+        }
+    ).to_csv(workers / "perf_x.gw0.csv", index=False)
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        PerfSchemaError, match="made_up_col"
+    ):
+        combine_perf_reports()
+
+    run_dir = root / "perf_data" / "runs" / "testrun-wormhole-0"
+    assert (run_dir / "perf_x" / "perf_x.csv").exists()
+    # Glob rather than a literal name: the batch is named from the run tag.
+    assert not list(run_dir.glob("*.parquet"))
 
 
 def _seed_worker_csv(workers, base, mean):
@@ -433,6 +603,89 @@ def test_ci_run_id_still_wins_for_provenance(monkeypatch):
     # All shards of one workflow must share run_id: it is a ROW_KEY column and
     # the data team's notion of a run spans shards.
     monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
 
     assert _ci_provenance()["run_id"] == "999"
+
+
+def test_rerun_of_a_workflow_publishes_under_its_own_run_id(monkeypatch):
+    # "Re-run all/failed jobs" keeps GITHUB_RUN_ID and bumps GITHUB_RUN_ATTEMPT.
+    # Attempt 2 is a second, different measurement: sharing attempt 1's ROW_KEY
+    # (test_name, commit_sha, arch, run_id) would collide with rows already
+    # published.
+    monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
+
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    assert _ci_provenance()["run_id"] == "999-2"
+
+    # Attempt 1 stays bare, so rows already archived keep the identity they were
+    # published with.
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    assert _ci_provenance()["run_id"] == "999"
+
+
+def test_prune_keeps_the_current_run_however_old_it_looks(tmp_path):
+    # The current run survives by name, not by being the newest: an mtime that is
+    # older than its neighbours (a clock step, a filesystem that lies) must not be
+    # able to delete the report this invocation just wrote.
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    current = runs / "run-current"
+    for i, d in enumerate([current, runs / "run-a", runs / "run-b"]):
+        d.mkdir()
+        os.utime(d, (0, i))  # current is the OLDEST
+
+    _prune_runs(runs, keep=1, current=current)
+
+    survivors = {d.name for d in runs.iterdir()}
+    assert survivors == {"run-current", "run-b"}
+
+
+def test_prune_survives_a_directory_it_cannot_stat(tmp_path, monkeypatch):
+    # One unreadable entry costs that entry, not the whole prune -- otherwise a
+    # single bad directory means history grows without bound forever after.
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    current = runs / "run-current"
+    bad = runs / "run-bad"
+    stale = runs / "run-stale"
+    for i, d in enumerate([stale, bad, current]):
+        d.mkdir()
+        os.utime(d, (0, i))
+
+    real_stat = Path.stat
+
+    def stat_that_fails_on_bad(self, *args, **kwargs):
+        if self == bad:
+            raise OSError("stat refused")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_that_fails_on_bad)
+    _prune_runs(runs, keep=1, current=current)
+    monkeypatch.undo()
+
+    survivors = {d.name for d in runs.iterdir()}
+    assert "run-current" in survivors  # protected
+    assert "run-bad" in survivors  # skipped, never pruned blindly
+    assert "run-stale" not in survivors  # the prune still did its job
+
+
+def test_latest_swap_leaves_no_debris_when_it_fails(tmp_path, monkeypatch):
+    # The swap goes through a temporary name. If it fails, neither the old link
+    # nor a stray .latest.tmp.<pid> may be left behind for the next run to trip on.
+    perf_data = tmp_path / "perf_data"
+    (perf_data / "runs" / "run-1").mkdir(parents=True)
+    (perf_data / "runs" / "run-2").mkdir()
+    (perf_data / "latest").symlink_to(Path("runs") / "run-1", target_is_directory=True)
+
+    def replace_that_fails(self, *args, **kwargs):
+        raise OSError("rename refused")
+
+    monkeypatch.setattr(Path, "replace", replace_that_fails)
+    _refresh_latest(perf_data / "runs" / "run-2")
+    monkeypatch.undo()
+
+    assert (perf_data / "latest").readlink() == Path("runs") / "run-1"
+    assert not list(perf_data.glob(".latest.tmp.*"))

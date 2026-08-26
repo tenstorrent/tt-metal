@@ -21,6 +21,7 @@
 #include "ttnn/graph/graph_serialization.hpp"  // serialize_tracked_arg<T> definitions, used via track_function_start
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
@@ -361,6 +362,27 @@ void create_and_cache_mesh_workload(
         });
 }
 
+// Keep tracker-only context construction out of launch_operation_with_adapter's
+// cache-hit instruction path. This wrapper is called only for a cache miss when
+// tracking was enabled at process startup.
+template <DeviceOperationConcept mesh_device_operation_t>
+[[gnu::noinline]] void create_and_cache_mesh_workload_with_allocation_context(
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
+    ttnn::MeshDevice* mesh_device,
+    tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
+    const ProgramCacheKey& program_key) {
+    auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+    std::string alloc_ctx = "program_cache: " + std::string(op_name);
+    for (const auto& [name, value] : ttsl::reflection::get_attributes(operation_attributes)) {
+        alloc_ctx += " " + std::string(name) + "=" + value.to_string();
+    }
+    tt::tt_metal::AllocationContextGuard ctx_guard(alloc_ctx);
+    create_and_cache_mesh_workload<mesh_device_operation_t>(
+        operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_key);
+}
+
 // Main function to launch operations on mesh devices with special handling for MeshDeviceOperationAdapter
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void launch_operation_with_adapter(
@@ -405,8 +427,13 @@ void launch_operation_with_adapter(
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_key);
     } else {
-        create_and_cache_mesh_workload<mesh_device_operation_t>(
-            operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_key);
+        if (tt::tt_metal::trace_allocation_tracking_enabled()) [[unlikely]] {
+            create_and_cache_mesh_workload_with_allocation_context<mesh_device_operation_t>(
+                operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_key);
+        } else {
+            create_and_cache_mesh_workload<mesh_device_operation_t>(
+                operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_key);
+        }
     }
 }
 

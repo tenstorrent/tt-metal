@@ -26,16 +26,15 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_y_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
-    create_fabric_router_config,
     extract_mesh_config,
     get_dispatch_input_mesh_mapper,
     get_ep_mesh_composer,
     get_gate_outputs,
-    get_max_payload_size,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
@@ -50,6 +49,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_roundtrip_output,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 
 def run_dispatch_combine(
@@ -410,7 +410,7 @@ def dispatch_combine_shape_params():
     dispatch_combine_shape_params(),
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     ALL_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
@@ -422,18 +422,20 @@ def dispatch_combine_shape_params():
 )
 def test_ttnn_dispatch_combine(
     mesh_device,
+    device_params,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     num_links,
-    topology,
     use_predictable_data,
     dispatched_buffer_layout,
     is_ci_env,
     is_ci_v2_env,
 ):
+    sp_axis = extract_mesh_config(mesh_device).sp_axis
+    topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     run_dispatch_combine(
         mesh_device,
         seq_len_per_chip,
@@ -453,16 +455,18 @@ def test_ttnn_dispatch_combine(
 # ------------------------------------------------------------------------------
 # How the `indices` tensor is constructed
 # ------------------------------------------------------------------------------
-# Setup for this test (linear-8-1link):
+# Setup for this test (fabric2d-torus-y-8x1-1link):
 #   dispatch_group_size                = 8  (chips along SP axis)
 #   seq_len_per_chip                   = 256
 #   num_experts_per_tok                = 2
 #   num_routed_experts                 = 16
+#   num_devices                        = 8
 #   experts_per_chip                   = 16 / 8 = 2
 #   expert -> chip mapping             = expert_id // 2
 #     => experts 14 and 15 both land on chip 7
 #   max_dispatched_tokens_per_expert   = 8 * 256 = 2048
-#   max_dispatch_buffer_token_size     = 2048 * 1 = 2048  (factor=1)
+#   raw dispatch-buffer capacity       = 2048 * 1 = 2048  (factor=1)
+#   max_dispatch_buffer_token_size     = 2048 + 32 = 2080  (one tile of alignment reserve)
 #
 # Indices tensor shape: (dispatch_group_size, seq_len_per_chip, num_experts_per_tok) = (8, 256, 2)
 # indices[chip, token, k] is the expert ID chosen as the k-th top-k pick for a
@@ -473,8 +477,8 @@ def test_ttnn_dispatch_combine(
 #   indices[..., 1] = 15
 #   Every (chip, token) picks (14, 15). Counts: expert 14 gets 2048 tokens,
 #   expert 15 gets 2048 tokens, both targeting chip 7's flat buffer.
-#   Chip 7's buffer (2048 slots) fills completely with expert 14 (slots 0..2047),
-#   so expert 15 starts at slot 2048 and is fully omitted (0 slots fit).
+#   Chip 7's buffer (2080 slots) fills slots 0..2047 with expert 14. The alignment
+#   reserve admits 32 tokens from expert 15 and drops its remaining 2016 tokens.
 #
 # Case "cut_short_last":
 #   split = int(0.6 * 256) = 153
@@ -484,33 +488,29 @@ def test_ttnn_dispatch_combine(
 #   indices[:, split:, 1] = 1        # remaining 103 tokens per chip pick 1
 #   Counts: expert 14 gets 8*153 = 1224, expert 15 gets 8*153 = 1224
 #           (both on chip 7); experts 0 and 1 get 8*103 = 824 each (on chip 0).
-#   Chip 7's buffer: expert 14 writes slots 0..1223 (1224 tokens, no overflow),
-#   expert 15 starts at slot 1224 wanting 1224 more, but only 2048-1224 = 824
-#   slots remain, so 400 of expert 15's tokens are dropped mid-expert.
-#   Chip 0's buffer: 824 + 824 = 1648 < 2048, no overflow (as expected).
+#   Chip 7's buffer: expert 14 writes 1224 tokens, then expert 15 starts at the
+#   tile-aligned offset 1248. Only 2080-1248 = 832 slots remain, so 392 of expert
+#   15's tokens are dropped mid-expert.
+#   Chip 0's aligned regions end at 832 + 824 = 1656 < 2080, so it does not overflow.
 #
-# Why 0.6: needs to be in (0.5, 1.0). > 0.5 so A+B exceeds the buffer
-# (guarantees overflow); < 1.0 so A fits fully and the overflow lands inside B.
+# Why 0.6: A fits fully, while the aligned A+B regions exceed the 2080-token buffer,
+# so the overflow lands inside B. Keeping the split below 1.0 also exercises experts 0 and 1.
 # ------------------------------------------------------------------------------
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
+            torus_y_device_params(),
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8-1link",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="fabric2d-torus-y-8x1-1link",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("overflow_mode", ["cut_short_last", "omit_last"])
-def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overflow_mode):
+def test_ttnn_dispatch_combine_overflow(mesh_device, device_params, num_links, overflow_mode):
     """Verify dispatch/combine does not hang when the flat dispatch buffer overflows.
 
     The dispatch buffer is a flat shared region sized
@@ -519,8 +519,8 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
 
     - "cut_short_last": cumulative fill crosses the buffer boundary inside the
       last expert's region on the target chip — its write is cut short mid-expert.
-    - "omit_last": buffer is already full before the last expert begins — its
-      tokens are entirely omitted.
+    - "omit_last": the last expert begins at the raw-capacity boundary, so only
+      the one-tile alignment reserve fits and the rest of its tokens are omitted.
 
     Verifies completion only (no hang); output correctness is not checked.
     """
@@ -534,6 +534,7 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
     num_devices = mesh_device.get_num_devices()
     mesh_config = extract_mesh_config(mesh_device)
     sp_axis = mesh_config.sp_axis
+    topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
@@ -659,18 +660,14 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            },
+            torus_y_device_params(),
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8-1link",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="fabric2d-torus-y-8x1-1link",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -681,12 +678,14 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
     ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
 )
 def test_ttnn_dispatch_combine_top4(
-    mesh_device, num_links, topology, dispatched_buffer_layout, is_ci_env, is_ci_v2_env
+    mesh_device, device_params, num_links, dispatched_buffer_layout, is_ci_env, is_ci_v2_env
 ):
     """Regression test for num_experts_per_tok > 2 (previously caused hangs due to undersized CB buffering)."""
     # dispatch_buffer_capacity_factor: ceil(N/2) of the most conservative integer
     # N such that dgs*seq*N >= theoretical worst-case dispatch buffer. Real traffic
     # never approaches the worst case, so half-capacity is sufficient.
+    sp_axis = extract_mesh_config(mesh_device).sp_axis
+    topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     run_dispatch_combine(
         mesh_device=mesh_device,
         seq_len_per_chip=1600,
