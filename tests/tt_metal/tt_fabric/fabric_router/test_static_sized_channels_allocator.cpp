@@ -12,7 +12,7 @@
 namespace tt::tt_fabric {
 namespace {
 
-TEST(FabricStaticSizedChannelsAllocatorTest, MeshRoundsStrandedSlotsDownToPowerOfTwo) {
+TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWorkerInjection) {
     constexpr size_t channel_buffer_size = 14432;
     constexpr size_t available_space = 360800;
     constexpr std::array<size_t, builder_config::MAX_NUM_VCS> sender_channels = {4, 3, 0};
@@ -29,13 +29,8 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshRoundsStrandedSlotsDownToPowerO
             available_space,
             memory_regions);
 
-        // The uniform table depth is 2 and 5 slots are stranded, so the raw remainder would
-        // give 7. The worker channel depth is a compile-time template parameter in the EDM
-        // kernel, so it is rounded down to the nearest power of two to keep the kernel on its
-        // mask-based pointer wraparound path.
-        const size_t worker_slots = allocator.get_sender_channel_number_of_slots(0, 0);
-        EXPECT_EQ(worker_slots, 4);
-        EXPECT_EQ(worker_slots & (worker_slots - 1), 0u);
+        // The uniform table depth is 2 and 5 slots are stranded, so worker injection gets all 7.
+        EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), 7);
 
         for (size_t channel = 1; channel < sender_channels[0]; ++channel) {
             EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, channel), 2);
@@ -55,8 +50,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshRoundsStrandedSlotsDownToPowerO
                 allocated_slots += allocator.get_receiver_channel_number_of_slots(vc, channel);
             }
         }
-        EXPECT_EQ(allocated_slots, 22u);
-        EXPECT_LE(allocated_slots, available_space / channel_buffer_size);
+        EXPECT_EQ(allocated_slots, available_space / channel_buffer_size);
     }
 }
 
@@ -78,7 +72,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshCapsLocalWorkerInjectionDepth) 
         available_space,
         memory_regions);
 
-    EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), 64);
+    EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), 127);
 }
 
 TEST(FabricStaticSizedChannelsAllocatorTest, RingKeepsUniformChannelDepth) {

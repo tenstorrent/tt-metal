@@ -57,16 +57,19 @@ public:
     FORCE_INLINE void init_impl(
         size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
         this->next_packet_buffer_index = BufferIndex{0};
+        this->channel_base_addr = channel_base_address;
+        this->max_eth_payload_size_in_bytes = max_eth_payload_size_in_bytes;
+        size_t slot_addr = channel_base_address;
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
-            this->buffer_addresses[i] = channel_base_address + i * max_eth_payload_size_in_bytes;
 // need to avoid unrolling to keep code size within limits
 #pragma GCC unroll 1
             for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+                reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
             }
+            slot_addr += max_eth_payload_size_in_bytes;
         }
         if constexpr (NUM_BUFFERS) {
-            cached_next_buffer_slot_addr = this->buffer_addresses[0];
+            cached_next_buffer_slot_addr = channel_base_address;
         }
     }
 
@@ -77,18 +80,25 @@ public:
 
     // For sender channel, only need a get_next_packet style
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl() const {
-        return this->buffer_addresses[next_packet_buffer_index.get()];
+        return this->channel_base_addr + next_packet_buffer_index.get() * this->max_eth_payload_size_in_bytes;
     }
 
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr_impl() const { return this->cached_next_buffer_slot_addr; }
 
     FORCE_INLINE void advance_to_next_cached_buffer_slot_addr_impl() {
-        next_packet_buffer_index = BufferIndex{wrap_increment<NUM_BUFFERS>(next_packet_buffer_index.get())};
-        this->cached_next_buffer_slot_addr = this->buffer_addresses[next_packet_buffer_index.get()];
+        const auto next_index = wrap_increment<NUM_BUFFERS>(next_packet_buffer_index.get());
+        next_packet_buffer_index = BufferIndex{next_index};
+        this->cached_next_buffer_slot_addr =
+            (next_index == 0) ? this->channel_base_addr
+                              : this->cached_next_buffer_slot_addr + this->max_eth_payload_size_in_bytes;
     }
 
 private:
-    std::array<size_t, NUM_BUFFERS> buffer_addresses;
+    // Slot addresses are a linear function of the slot index, so they are derived on demand rather
+    // than tabulated. A per-slot table would put 4 * NUM_BUFFERS bytes in the router's stack frame,
+    // which on Blackhole erisc0 in 2-erisc mode is bounded by -Werror=stack-usage.
+    std::size_t channel_base_addr;
+    std::size_t max_eth_payload_size_in_bytes;
     std::size_t cached_next_buffer_slot_addr;
     BufferIndex next_packet_buffer_index;
 };
@@ -164,17 +174,19 @@ public:
     FORCE_INLINE void init_impl(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
         buffer_size_in_bytes = buffer_size_bytes;
         max_eth_payload_size_in_bytes = buffer_size_in_bytes;
+        channel_base_addr = channel_base_address;
+        size_t slot_addr = channel_base_address;
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
-            this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
             // need to avoid unrolling to keep code size within limits
             #pragma GCC unroll 1
             for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+                reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
             }
+            slot_addr += this->max_eth_payload_size_in_bytes;
         }
 
         if constexpr (NUM_BUFFERS) {
-            set_cached_next_buffer_slot_addr_impl(this->buffer_addresses[0]);
+            set_cached_next_buffer_slot_addr_impl(channel_base_address);
         }
     }
 
@@ -183,12 +195,12 @@ public:
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl(const BufferIndex& buffer_index) const {
-        return this->buffer_addresses[buffer_index];
+        return this->channel_base_addr + buffer_index.get() * this->max_eth_payload_size_in_bytes;
     }
 
     template <typename T>
     [[nodiscard]] FORCE_INLINE volatile T* get_packet_header_impl(const BufferIndex& buffer_index) const {
-        return reinterpret_cast<volatile T*>(this->buffer_addresses[buffer_index]);
+        return reinterpret_cast<volatile T*>(get_buffer_address_impl(buffer_index));
     }
 
     template <typename T>
@@ -214,12 +226,12 @@ public:
         this->cached_next_buffer_slot_addr = next_buffer_slot_addr;
     }
 
-    FORCE_INLINE uint32_t channel_base_address() const {
-        return static_cast<uint32_t>(this->buffer_addresses[0]);
-    }
+    FORCE_INLINE uint32_t channel_base_address() const { return static_cast<uint32_t>(this->channel_base_addr); }
 
 private:
-    std::array<size_t, NUM_BUFFERS> buffer_addresses;
+    // See StaticSizedSenderEthChannel: slot addresses are derived rather than tabulated to keep the
+    // router's stack frame independent of NUM_BUFFERS.
+    std::size_t channel_base_addr;
     std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
     std::size_t max_eth_payload_size_in_bytes;

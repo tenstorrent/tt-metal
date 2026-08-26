@@ -710,26 +710,13 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         const size_t spare_slots = slot_capacity - allocated_slots;
         const uint32_t worker_channel = get_worker_connected_sender_channel();
 
-        // The slot count becomes a compile-time template parameter in the EDM kernel
-        // (SENDER_NUM_BUFFERS_ARRAY). Two constraints bound it:
-        //   - normalize_ptr/wrap_increment/distance_behind only use single-instruction mask
-        //     wraparound when the count is a power of two; otherwise they fall back to
-        //     compare/branch variants that raise register pressure, and erisc0 builds under
-        //     -Werror=stack-usage=1912 on Blackhole in 2-erisc mode.
-        //   - ChannelBufferPointer computes 2 * NUM_BUFFERS in a uint8_t, so 127 is the ceiling.
-        // Round the grant down to the largest admissible power of two instead of granting the
-        // raw remainder.
-        constexpr size_t max_worker_slots = 64;
-        const size_t base_slots = num_sender_buffer_slots_per_vc[0][worker_channel];
-        const size_t target_slots = std::min(base_slots + spare_slots, max_worker_slots);
-
-        size_t granted_slots = 1;
-        while (granted_slots * 2 <= target_slots) {
-            granted_slots *= 2;
-        }
-        // Some tables select a non-power-of-two baseline (e.g. 7). Rounding down must never
-        // shrink a channel below the depth the table already validated as fitting.
-        granted_slots = std::max(granted_slots, base_slots);
+        // The stranded slots all go to worker injection. The bound is representability, not L1: the
+        // depth reaches the kernel as a uint8_t NUM_BUFFERS template argument, so 255 is the ceiling
+        // for the router itself. 127 is the tightest limit any consumer of a depth imposes
+        // (ChannelBufferPointer keeps 2 * NUM_BUFFERS in a uint8_t), so cap there to stay uniform.
+        constexpr size_t max_representable_slots = 127;
+        const size_t max_grantable_slots = num_sender_buffer_slots_per_vc[0][worker_channel] + spare_slots;
+        const size_t granted_slots = std::min(max_grantable_slots, max_representable_slots);
 
         num_sender_buffer_slots_per_vc[0][worker_channel] = granted_slots;
         num_remote_sender_buffer_slots_per_vc[0][worker_channel] = granted_slots;
