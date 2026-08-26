@@ -488,15 +488,22 @@ def _compute_and_send(
         _record_chunk_timing(rank, c, t_start, compute_ms)
     if not runtime.config.is_last_rank:
         # Traced: `out` is the runtime's persistent _trace_output (the next replay overwrites it in place),
-        # so the send copies it into the socket backing but must not free it; the received metadata_msg is
-        # forwarded verbatim (no host rebuild, meta is None). Eager: `out` is fresh — free it, rebuild md.
+        # so the send copies it into the socket backing but must not free it. Forward the runtime's
+        # persistent metadata, NOT the raw received metadata_msg: that raw tensor is a fresh socket output
+        # the replay's writes can land on, so it can arrive corrupted downstream (per-shard-inconsistent),
+        # tripping the D2H ack's cross-socket identity check. The persistent buffer survives replay. Eager:
+        # `out` is fresh — free it, rebuild md from meta.
+        forward_md = None
+        if runtime.config.use_trace:
+            persistent_md = getattr(runtime, "trace_metadata_msg", None)
+            forward_md = persistent_md if persistent_md is not None else metadata_msg
         _d2d_send(
             d2d_out,
             out,
             rank,
             meta,
             deallocate=not runtime.config.use_trace,
-            metadata_msg=metadata_msg if runtime.config.use_trace else None,
+            metadata_msg=forward_md,
         )  # grant below ships it
     if d2d_out is not None:
         d2d_out.release_fabric_links()

@@ -526,6 +526,15 @@ class TtPrefillRuntime:
             ttnn.copy(word, dst)
             ttnn.deallocate(word)
 
+    @property
+    def trace_metadata_msg(self) -> Optional[ttnn.Tensor]:
+        """The persistent packed metadata the D2D pipeline must forward downstream on the traced path.
+
+        The raw per-chunk metadata_msg is a fresh socket-output tensor at an allocator-chosen address
+        the replay's writes can land on; this buffer sits at the capture-safe fixed address the recorded
+        ops read, so it holds the current chunk's words intact after replay. None off the traced path."""
+        return self._trace_metadata_msg
+
     def _forward_traced(self, kv_cache: ttnn.Tensor):
         """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
         tensor on-device (actual_start/actual_end = None host-side). Writes user slot metadata[0].
