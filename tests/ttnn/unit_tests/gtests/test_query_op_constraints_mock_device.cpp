@@ -8,6 +8,7 @@
 
 #include <any>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -26,8 +27,9 @@
 
 #include "device/mock_device_util.hpp"
 
-#include "ttnn/graph/graph_query_op_constraints.hpp"
+#include "ttnn/graph/constraint_query_context.hpp"
 #include "ttnn/graph/graph_processor.hpp"
+#include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat_force.hpp"
@@ -146,6 +148,27 @@ void expect_same_constraints(
 // ============================================================================
 // NO_DISPATCH / NORMAL graph-capture tests
 // ============================================================================
+
+TEST_F(QueryOpConstraintsMockDevice, StatelessConstraintQueryMarksOnlyItsInvocationScope) {
+    EXPECT_FALSE(ttnn::graph::is_stateless_constraint_query_active());
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+
+    const auto response = ttnn::graph::query_op_constraints(
+        [](const ttnn::Tensor& input) -> ttnn::Tensor {
+            if (ttnn::graph::is_stateless_constraint_query_active()) {
+                throw std::runtime_error("stateless_constraint_query_active");
+            }
+            return input;
+        },
+        mock_device_.get(),
+        spec);
+
+    EXPECT_EQ(response.status, ttnn::graph::ExecutionStatus::Error);
+    EXPECT_EQ(response.error_message, "stateless_constraint_query_active");
+    EXPECT_FALSE(ttnn::graph::is_stateless_constraint_query_active());
+}
 
 TEST_F(QueryOpConstraintsMockDevice, DeviceTensorCreationInGraphCapture) {
     const auto input_spec = tt::tt_metal::TensorSpec(

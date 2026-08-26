@@ -401,6 +401,14 @@ void reset_startup_compatibility_for_testing() noexcept;
 
 enum class ExecutionAction { Fallback, ObserveOnly, ApplyRecipe };
 
+// A plain constraint query has no owned composite recipe to replay. Only an
+// exact On-mode hit needs the stateful query; disabled, observation-only, and
+// fallback paths retain their legacy resource query.
+constexpr bool registry_constraint_state_required(
+    const Mode mode, const ExecutionAction action, const bool stateless_query_active) noexcept {
+    return stateless_query_active && mode == Mode::On && action == ExecutionAction::ApplyRecipe;
+}
+
 // A certified Shadow hit is observable but never mutates execution parameters.
 ExecutionAction execution_action(Mode mode, const Resolution& resolution) noexcept;
 
@@ -438,6 +446,15 @@ struct DispatchResult {
     ExecutionAction action = ExecutionAction::Fallback;
     std::optional<ttnn::prim::MatmulParams> materialized_parameters = std::nullopt;
 };
+
+// Resolve and classify exactly once without constructing native parameters.
+// Stateless constraint queries use this decision to reject an On hit before
+// any recipe allocation; every non-hit can safely continue on the legacy path.
+DispatchResult resolve_for_dispatch_decision(
+    Mode mode,
+    const std::optional<MatmulRegistryRequest>& request,
+    const Eligibility& eligibility,
+    ResolverFunction resolver = &resolve) noexcept;
 
 // The single dispatch gate. Off never calls the resolver. Shadow and On call it
 // at most once, and only On may produce a separate materialized parameter set.

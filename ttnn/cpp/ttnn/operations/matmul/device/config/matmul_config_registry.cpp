@@ -859,13 +859,11 @@ Resolution resolve(const Mode mode, const MatmulRegistryRequest& request, const 
         mode, request, eligibility, nullptr, nullptr, generated::metadata(), generated::entries(), nullptr);
 }
 
-DispatchResult resolve_for_dispatch(
+DispatchResult resolve_for_dispatch_decision(
     const Mode mode,
     const std::optional<MatmulRegistryRequest>& request,
     const Eligibility& eligibility,
-    const ttnn::prim::MatmulParams& legacy_parameters,
-    const ResolverFunction resolver,
-    const MaterializerFunction materializer) {
+    const ResolverFunction resolver) noexcept {
     auto resolution = Resolution{.reason = ResolutionReason::Disabled};
     if (mode != Mode::Off) {
         const auto preflight_reason = preflight_v1_eligibility(eligibility);
@@ -883,7 +881,19 @@ DispatchResult resolve_for_dispatch(
         circuit_break_domain(eligibility.call.domain);
         resolution.reason = ResolutionReason::MaterializationRejected;
     }
-    auto action = execution_action(mode, resolution);
+    return DispatchResult{.resolution = resolution, .action = execution_action(mode, resolution)};
+}
+
+DispatchResult resolve_for_dispatch(
+    const Mode mode,
+    const std::optional<MatmulRegistryRequest>& request,
+    const Eligibility& eligibility,
+    const ttnn::prim::MatmulParams& legacy_parameters,
+    const ResolverFunction resolver,
+    const MaterializerFunction materializer) {
+    auto decision = resolve_for_dispatch_decision(mode, request, eligibility, resolver);
+    auto& resolution = decision.resolution;
+    auto& action = decision.action;
     std::optional<ttnn::prim::MatmulParams> materialized_parameters;
     try {
         if (action == ExecutionAction::ApplyRecipe && resolution.descriptor != nullptr) {

@@ -19,8 +19,9 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 
-#include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/graph/constraint_query_context.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
@@ -499,11 +500,23 @@ static ttnn::Tensor bound_matmul(
             // separately by the fail-closed dispatch gate.
             registry_request.reset();
         }
-        auto registry_dispatch =
-            registry::resolve_for_dispatch(registry_mode, registry_request, eligibility, parameters);
-        registry_parameters = std::move(registry_dispatch.materialized_parameters);
+        const bool stateless_constraint_query_active = ttnn::graph::is_stateless_constraint_query_active();
+        auto registry_dispatch = stateless_constraint_query_active
+                                     ? registry::resolve_for_dispatch_decision(
+                                           registry_mode, registry_request, eligibility)
+                                     : registry::resolve_for_dispatch(
+                                           registry_mode, registry_request, eligibility, parameters);
         registry::record_resolution(
             registry_mode, call_semantics.domain, registry_dispatch.resolution, registry_dispatch.action);
+        if (registry::registry_constraint_state_required(
+                registry_mode,
+                registry_dispatch.action,
+                stateless_constraint_query_active)) {
+            TT_THROW(
+                "RegistryConstraintStateRequired: an exact On-mode matmul registry hit requires "
+                "query_op_constraints_with_initial_state");
+        }
+        registry_parameters = std::move(registry_dispatch.materialized_parameters);
     }
     const bool registry_selected = registry_parameters.has_value();
     if (external_registry_selected != nullptr) {

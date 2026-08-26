@@ -1169,6 +1169,24 @@ TEST(MatmulConfigRegistry, DispatchCardinalityAndCacheIdentityAreModeSafe) {
     EXPECT_EQ(ttsl::hash::hash_objects_with_default_seed(legacy_parameters), legacy_hash);
 }
 
+TEST(MatmulConfigRegistry, StatelessConstraintQueryRequiresStateOnlyForExactOnHit) {
+    EXPECT_TRUE(registry_constraint_state_required(Mode::On, ExecutionAction::ApplyRecipe, true));
+
+    EXPECT_FALSE(registry_constraint_state_required(Mode::Off, ExecutionAction::ApplyRecipe, true));
+    EXPECT_FALSE(registry_constraint_state_required(Mode::Shadow, ExecutionAction::ObserveOnly, true));
+    EXPECT_FALSE(registry_constraint_state_required(Mode::On, ExecutionAction::Fallback, true));
+    EXPECT_FALSE(registry_constraint_state_required(Mode::On, ExecutionAction::ApplyRecipe, false));
+
+    const auto request = exact_request();
+    resolver_invocations = 0;
+    const auto decision = resolve_for_dispatch_decision(
+        Mode::On, request, Eligibility{.call = request.call}, &counting_certified_resolver);
+    EXPECT_EQ(resolver_invocations, 1);
+    EXPECT_EQ(decision.resolution.reason, ResolutionReason::CertifiedMatch);
+    EXPECT_EQ(decision.action, ExecutionAction::ApplyRecipe);
+    EXPECT_FALSE(decision.materialized_parameters.has_value());
+}
+
 TEST(MatmulConfigRegistry, DispatchDoesNotResolveAnIncompleteRequest) {
     const auto eligibility = Eligibility{.call = dense_matmul_call_semantics()};
     const ttnn::prim::MatmulParams legacy_parameters;
