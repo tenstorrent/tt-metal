@@ -52,10 +52,10 @@ def run_reference_moe(
     """Forward the variant's upstream MoE reference on CPU.
 
     ``hidden_act`` overrides the config's GLU activation; ``shared_hidden_act`` overrides it for the
-    shared expert alone. The upstream block picks one activation for routed and shared alike, but a
-    device may implement the two halves differently (Kimi-K3: SiTU-GLU in the fused routed-expert
-    kernel, SiLU for the shared expert), and this reference is only a fair cross-check if it splits
-    the same way.
+    shared expert alone. The upstream block picks one activation for routed and shared alike, but the
+    device configures the two halves independently, and this reference is only a fair cross-check if
+    it splits the same way. Every variant passes the same value twice today; the parameter exists so
+    that a device-side split does not silently go unmirrored here.
     """
     if variant.reference_moe_cls is None:
         return None
