@@ -185,9 +185,14 @@ if conf_rows:
     # each added its own R9 union fire witness (one compile group apiece;
     # all 18 rows / 14 groups verified ALL GREEN on the installed pin-29
     # binary in the same ceremony).
+    # Budget refreshed 14 -> 16 at the knob-promotion-round-3 ceremony
+    # (lane HQ, 2026-08-26): +park-ordering (softplus node) and
+    # +store-source-tier (fill node) each added its own R9 union fire
+    # witness compile group; full table verified ALL GREEN on the
+    # installed pin-32 binary in the same ceremony.
     check(
-        f"checked-in table stays within the 14-compile budget ({n_groups})",
-        1 <= n_groups <= 14,
+        f"checked-in table stays within the 16-compile budget ({n_groups})",
+        1 <= n_groups <= 16,
     )
 
 if FAILS:

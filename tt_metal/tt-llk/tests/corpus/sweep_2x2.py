@@ -403,7 +403,30 @@ ON_FLAGS = (
     "-mtt-tensix-optimize-record-hoist-peel "
     "-mtt-tensix-optimize-lut-select-fp16 "
     "-mtt-tensix-optimize-native-compare "
-    "-mtt-tensix-optimize-pressure-park"
+    "-mtt-tensix-optimize-pressure-park "
+    # PROMOTED 2026-08-26 (knob promotion round 3, lane HQ; the installed
+    # pin-32 binary 4943ca7fe176 — conf-only ceremony, sfpi-gcc untouched):
+    # the ordering/tier pair joins the reviewed ON set (34 -> 36).
+    #   park-ordering (lane HN): EL-vs-residency ORDERING — a CC-restore
+    #     loop's EL hoists defer wholesale to the 295t residency walk
+    #     (authority transfer, never coverage); softplus-fresh
+    #     +5.93 -> WIN -3.03 at the exact noel 26-word hand-parity bytes;
+    #   store-source-tier (lane HO): store-consumed loop-class prgm-const
+    #     candidates take the pressure-park LREG tier first (SFPSTORE
+    #     sources L0-L11; the park costs a per-row SFPMOV copy), tier
+    #     refusal keeps the park byte-identically; fill-fresh WIN
+    #     -21.21 -> -25.05 on the delivery-shape composition.
+    # Promotion gates (laneHQ-evidence-20260826): 2 R9 union witnesses
+    # added, each union-verified on the installed pin-32 binary AND
+    # proven flag-attributable (line ABSENT at union-minus-flag);
+    # ON-34-vs-ON-36 leg pair at the installed binary (store
+    # corpus-legs-laneHQ) with EVERY delta TU adjudicated via
+    # single-flag third legs incl the named HN-defer/HO-tier interaction
+    # check (candidate-vs-singles byte comparison); delta TUs CRAQ'd at
+    # the pinned sim; touched board rows re-booked SAME-LEG on silicon;
+    # KNOB_MODES flipped on-plus -> drop-one for both.
+    "-mtt-tensix-optimize-park-ordering "
+    "-mtt-tensix-optimize-store-source-tier"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -1143,19 +1166,16 @@ KNOB_MODES = {
     # (ON + flag) vs plain ON.  on-plus while a booking knob; promotion
     # requires an R9 witness and the ON-vs-ON attribution ceremony.
     "madpair-vocabulary": "on-plus",
-    # HN park-ordering: default-off Init(0) booking knob; the deferral
-    # acts on the reviewed-ON pipeline's EL hoists (there is nothing to
-    # defer without invariant-loadi and no walk to yield to without
-    # const-residency + pressure-park), so the booking A/B is
-    # (ON + flag) vs plain ON.  on-plus while a booking knob; promotion
-    # requires an R9 witness and the ON-vs-ON attribution ceremony.
-    "park-ordering": "on-plus",
-    # HO store-source-tier: default-off Init(0) booking knob; the parked
-    # store-consumed constants it re-tiers exist only under the
-    # reviewed-ON residency classes, so the booking A/B is (ON + flag)
-    # vs plain ON.  on-plus while a booking knob; promotion requires an
-    # R9 witness and the ON-vs-ON attribution ceremony.
-    "store-source-tier": "on-plus",
+    # The ordering/tier pair PROMOTED into the ON set 2026-08-26 (lane HQ,
+    # knob promotion round 3; R9 witnesses + ON-34-vs-ON-36 adjudication
+    # in laneHQ-evidence-20260826) — drop-one from here (was on-plus
+    # while booking knobs; see each flag's ON_FLAGS promotion note).
+    # park-ordering's deferral acts on the reviewed-ON pipeline's EL
+    # hoists; store-source-tier re-tiers constants only the reviewed-ON
+    # residency classes park — both drop-one legs stay structurally
+    # meaningful on the ON pipeline.
+    "park-ordering": "drop-one",
+    "store-source-tier": "drop-one",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
