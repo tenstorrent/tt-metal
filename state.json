@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-08-26T02:00:00Z",
-  "run_id": "32938154957",
+  "last_run": "2026-08-26T12:30:00Z",
+  "run_id": "32968552615",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -13,10 +13,6 @@
     "53113": {
       "issue": 53106,
       "status": "reviewer-blocked (CodeOwners pending, 2 groups: blackhole/wormhole LLK owners); /codeowners ping by blozano-tt 2026-08-14; agentic-threat-detected label is a known tooling-failure false positive, not a real finding"
-    },
-    "53478": {
-      "issue": 53282,
-      "status": "CI checks all passed; mergeable_state=behind but that's just needing a rebase against main, not a real conflict; awaiting maintainer review"
     },
     "53655_moe_stallwait": {
       "issue": 53655,
@@ -88,7 +84,7 @@
     "53078": "fix in draft PR #53103 (AI-assisted LLK triage board)",
     "53106": "fix opened by repo-assist this run, see new PR (reciprocal Newton seed 0x1.554p0f)",
     "52671": "TWO maintainer PRs exist (#52789 full fix, #52790 assert-only) superseding repo-assist's own #52673 -- do not act further, just monitor for closure",
-    "53282": "fix opened by repo-assist this run (addcmul composite-fallback multiply association), verified no existing PR via search_pull_requests",
+    "53282": "PR #53478 MERGED 2026-08-26T08:10:22Z by mateusznowakTT (addcmul composite-fallback fix) - closed out, remove from open_prs tracking",
     "53649": "commented with bisect confirmation citing #53419 diff; labeled bug; already assigned to jmitrovicTT, no PR opened (root cause not independently verified)",
     "53655": "PR opened this run (repo-assist), no other open PR found",
     "53786": "fix in open PR #53767 (reporter's own)",
@@ -314,6 +310,16 @@
     "36184": {
       "date": "2026-08-26",
       "type": "codeowners_ping"
+    },
+    "50277": {
+      "date": "2026-08-26",
+      "type": "author_nudge",
+      "note": "dirty mergeable_state (conflict), detailed review from scardozaTT since 2026-07-27 unaddressed"
+    },
+    "42536": {
+      "date": "2026-08-26",
+      "type": "codeowners_ping",
+      "note": "reviewer-blocked (metalium-developers-infra pending since May), CI validated by nsextonTT"
     }
   },
   "backlog_cursor": {
@@ -386,6 +392,11 @@
     "54045": "2026-08-22: confirmed div_sfpu double-rounding claim against current ckernel_sfpu_binop_with_unary.h:41-43"
   },
   "run_history": [
+    {
+      "run_id": "32968552615",
+      "date": "2026-08-26T12:30:00Z",
+      "summary": "Verified #53478 MERGED (memory corrected). Re-checked 5 tracked Repo Assist PRs (52106/51868/53113/53690/54246) - all unchanged, no new maintainer activity requiring action. Task 6: nudged #50277 (author, dirty/unaddressed review) and #42536 (codeowners ping, infra team pending since May); classified #49627 as already actively pinged by a human (Aswinmcw) 2 days prior, skipped; #50776/#51487 confirmed not real nudge targets (target internal WIP/carry branches, not main), skipped. Task 2: posted substantive feasibility comment on new feature request #54393 (Whisper auto language detection). Task 8: updated Monthly Activity issue #51865."
+    },
     {
       "run_id": "32938154957",
       "date": "2026-08-26",
