@@ -209,11 +209,13 @@ Multi-device modules need collective ops (reduce-scatter, all-gather). `TT_CCL` 
 
 The 2D tensor-placement contract is explicit in each config: source and padded weight shapes, row/column shard dimensions, decode and prefill input/output placement, and transient ownership are resolved before execution. Static strategy decisions do not branch in a module hot path.
 
-Galaxy collectives are injected from `models/common/models/galaxy`; 2D modules do not extend or specialize the 1D `TT_CCL` owner. The target ownership contract makes `Prefetcher2D` the model-owned resource root for subdevice managers, the global circular buffer, and sealed weight-address registration. Modules borrow immutable prefill/decode contexts, and the executor activates a context at operation boundaries and owns deterministic cleanup. Integrated Prefetcher2D/Galaxy-resource ownership has host coverage but is not yet qualified on hardware.
+Galaxy collectives are injected from `models/common/models/galaxy`; 2D modules do not extend or specialize the 1D `TT_CCL` owner. The target ownership contract makes `Prefetcher2D` the model-owned resource root for subdevice managers, the global circular buffer, and sealed weight-address registration. Modules borrow immutable prefill/decode contexts, and the executor activates a context at operation boundaries and owns cleanup. Integrated Prefetcher2D/Galaxy-resource ownership is qualified on hardware for the MLP2D consumer shape: the prefill↔decode transition matrix, the failed-transition rollback, and cleanup from either active mode all run on a `(8, 4)` 6U Galaxy with PCC asserted at every step.
+
+Two ownership limits are known and documented. **Cleanup of the global circular buffer is not deterministic from the owner's side:** ttnn exposes no free for one, so its L1 is reclaimed when the last handle dies, and every module holding a `Prefetcher2DContext` holds one — tear consumers down before, or together with, the owner. And **`Attention2D`'s current decode projection grid is incompatible with the prefetch subdevice partition**; its `(7,1)` QKV grid straddles the sender and worker subdevices, so choosing a compatible grid is Milestone B work.
 
 The reusable 2D set consists of `Embedding2D`, `RotarySetup2D`, `RMSNorm2D`, `Attention2D`, `MLP2D`, `LMHead2D`, and `Sampling2D`. There is no `Penalties2D`.
 
-Milestone A is still in progress. See [Milestone A 2D Module Status](MILESTONE_A_STATUS.md) for the evidence matrix, modularity scorecard, and hardware paths that remain unqualified.
+All seven modules plus Galaxy CCL/resources and `Prefetcher2D` are qualified on real WH `(8, 4)` hardware: 37 device cases pass in one sweep with clean teardown and no reset. See [Milestone A 2D Module Status](MILESTONE_A_STATUS.md) for the evidence matrix, the four defects that qualification uncovered, the modularity scorecard, and the items deferred to later milestones.
 
 ---
 
@@ -236,6 +238,10 @@ pytest models/common/tests/modules/ -v
 ```
 
 Test files follow the module layout and use `test_<name>_1d.py` / `test_<name>_2d.py` where both variants exist. `prefetcher/test_prefetcher_2d.py` covers explicit registration, sealing, activation, and cleanup. Shared infrastructure has its own tests too (`test_lazy_buffer.py`, `test_tensor_utils.py`).
+
+`test_<name>_2d.py` files are **host-only** and run against a mock mesh; the real `(8, 4)` Galaxy suites are `test_<name>_2d_wh_galaxy.py`, plus `sampling/test_sampling_2d_wh_galaxy_stochastic.py` and `prefetcher/test_prefetcher_2d_wh_galaxy.py`. Select against them deliberately — passing a module directory to pytest picks up its device suite as well, which needs 32 devices. Filter with `--ignore-glob="*_wh_galaxy*.py"` for a host-only run.
+
+Both 1D and 2D numerical suites qualify against the same HuggingFace references, shared through `tests/modules/_hf_reference.py`; the Galaxy MLP geometry that several 2D device suites reuse lives in `tests/modules/_mlp_2d_galaxy.py`, and the hardware plumbing in `tests/modules/_wh_galaxy_hardware.py`.
 
 ### Device Topologies Tested
 
