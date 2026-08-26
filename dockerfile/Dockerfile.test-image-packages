@@ -1,0 +1,33 @@
+# Test image, package payload: the build's .deb packages installed into the
+# image a hardware test job already pulls, so the job downloads no artifact and
+# runs no install step. Built by .github/workflows/build-test-image.yaml, which
+# puts the packages artifact at artifact/ in the build context.
+
+# The producer always passes BASE; the default is only so this builds standalone.
+ARG BASE=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-ci-test-amd64:latest
+FROM ${BASE}
+
+# Which validation packages to install; mirrors smoke.yaml's `product` input.
+ARG PRODUCT=tt-metalium
+
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+# Bind-mounted, not COPYed: a COPY layer would carry the whole ~636 MB of debs
+# (and the .ddebs) in the image forever, which is most of the saving.
+#
+# Same package set smoke.yaml installs, and for the same reason: apt will not
+# resolve dependencies from files on disk unless told about all of them.
+# tt-metalium-jit is absent on use-system-sfpi builds, hence nullglob.
+RUN --mount=type=bind,source=artifact,target=/tmp/pkgs \
+    shopt -s nullglob \
+    && pkgs=( \
+        /tmp/pkgs/tt-metalium_*.deb \
+        /tmp/pkgs/tt-metalium-jit_*.deb \
+        /tmp/pkgs/tt-metalium-validation_*.deb \
+        "/tmp/pkgs/${PRODUCT}"_*.deb \
+        "/tmp/pkgs/${PRODUCT}"-validation_*.deb \
+    ) \
+    && if [ "${#pkgs[@]}" -eq 0 ]; then echo "No packages matched in artifact/" >&2; exit 1; fi \
+    && apt-get update \
+    && apt-get install -y "${pkgs[@]}" \
+    && rm -rf /var/lib/apt/lists/*

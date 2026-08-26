@@ -1,0 +1,216 @@
+name: "Build test image"
+# Bakes a build's output into the container image hardware test jobs already pull,
+# so those jobs download no GHA artifact and run no install step.
+#
+# Push-oriented, like build-evaluation-image.yaml: this pushes an image *to* ghcr
+# rather than pulling CI images *through* Harbor, so it deliberately does not use
+# check-harbor.yaml or resolve-docker-pull-refs. The emitted ref is the canonical
+# ghcr one; callers decide whether to Harbor-prefix it for their own pull.
+#
+# Everything path-specific lives in the Dockerfile. The artifact lands at
+# artifact/ in the build context and the optional source checkout at src/, so a
+# consumer path is added by writing a Dockerfile, not by changing this workflow.
+
+permissions:
+  contents: read
+  packages: write
+  actions: read
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        required: true
+        type: string
+        description: "Name of the build artifact to bake into the image"
+      artifact-run-id:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run to take the artifact from (default: this run)"
+      base-image:
+        required: true
+        type: string
+        description: "Full ref of the base image the consumer already pulls"
+      dockerfile:
+        required: true
+        type: string
+        description: "Path to the Dockerfile, e.g. dockerfile/Dockerfile.test-image-packages"
+      build-args:
+        required: false
+        type: string
+        default: ""
+        description: "Extra docker build args; BASE is always supplied"
+      image-name:
+        required: false
+        type: string
+        default: "test-image"
+        description: "ghcr package name, under ghcr.io/<repository>/"
+      checkout-source:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          Check the source tree out to src/ for Dockerfiles that need it. Off by
+          default: it is a multi-GB recursive clone that the package-based paths
+          have no use for.
+      runner-label:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-large-stable"
+        description: "Runner for the image build"
+    outputs:
+      image:
+        description: "Pullable ref of the built image; empty when the build was skipped"
+        value: ${{ jobs.build-test-image.outputs.image }}
+  workflow_dispatch:
+    inputs:
+      artifact-name:
+        required: true
+        type: string
+        description: "Name of the build artifact to bake into the image"
+      artifact-run-id:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run to take the artifact from (default: this run)"
+      base-image:
+        required: true
+        type: string
+        description: "Full ref of the base image the consumer already pulls"
+      dockerfile:
+        required: true
+        type: string
+        description: "Path to the Dockerfile, e.g. dockerfile/Dockerfile.test-image-packages"
+      build-args:
+        required: false
+        type: string
+        default: ""
+        description: "Extra docker build args; BASE is always supplied"
+      image-name:
+        required: false
+        type: string
+        default: "test-image"
+        description: "ghcr package name, under ghcr.io/<repository>/"
+      checkout-source:
+        required: false
+        type: boolean
+        default: false
+        description: "Check the source tree out to src/ for Dockerfiles that need it"
+      runner-label:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-large-stable"
+        description: "Runner for the image build"
+
+jobs:
+  build-test-image:
+    name: "Build and push"
+    # Forks will never have secrets, so they cannot push. Don't fail the job for
+    # them; the ref comes back empty and the caller keeps the artifact path.
+    if: ${{ github.event.pull_request.head.repo.fork != true }}
+    runs-on: ${{ inputs.runner-label }}
+    timeout-minutes: 30
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    steps:
+      # First, so a bad name or an over-long tag fails before paying for a
+      # multi-hundred-MB download.
+      - name: Compute the image ref
+        id: ref
+        env:
+          ARTIFACT_NAME: ${{ inputs.artifact-name }}
+          BASE_IMAGE: ${{ inputs.base-image }}
+          IMAGE_NAME: ${{ inputs.image-name }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+        run: |
+          set -euo pipefail
+          # required: true still lets '' through, and an empty name would make
+          # download-artifact fetch every artifact in the run.
+          if [ -z "$ARTIFACT_NAME" ]; then
+            echo "::error::artifact-name is empty; the upstream build did not produce one"
+            exit 1
+          fi
+          # Names end in <ref><sep><runid>, but packages joins with '-' and the
+          # tarball with '_', so strip by shape rather than by position.
+          CONFIG=$(printf '%s' "$ARTIFACT_NAME" | sed -E 's/[-_][0-9a-f]{7,40}[-_][0-9]+$//')
+          # Different bases must not collide on one artifact's tag.
+          BASE_SLUG="${BASE_IMAGE##*/}"
+          BASE_SLUG="${BASE_SLUG%%:*}"
+          TAG=$(printf '%s-%s-%s' "${GITHUB_SHA:0:12}" "$CONFIG" "$BASE_SLUG" | tr -c 'a-zA-Z0-9_.-' '-')
+          if [ "${#TAG}" -gt 128 ]; then
+            echo "::error::Computed tag is ${#TAG} chars, over Docker's 128 limit: $TAG"
+            exit 1
+          fi
+          echo "tag=${TAG}" | tee -a "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY}/${IMAGE_NAME}:${TAG}" | tee -a "$GITHUB_OUTPUT"
+          # Derived, so a Dockerfile outside dockerfile/ needs no workflow change.
+          echo "dockerfile-dir=$(dirname "$DOCKERFILE")" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Checkout the Dockerfile
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+          sparse-checkout: ${{ steps.ref.outputs.dockerfile-dir }}
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout the source that goes into the image
+        if: ${{ inputs.checkout-source }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          # The workflow's commit: a caller baking another run's artifact must
+          # ensure it matches, or src/ and artifact/ disagree.
+          ref: ${{ github.sha }}
+          path: src
+          submodules: recursive
+
+      - name: Download the build artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        timeout-minutes: 15
+        with:
+          name: ${{ inputs.artifact-name }}
+          run-id: ${{ inputs.artifact-run-id || github.run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: artifact
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The docker driver's classic image store does no zstd and no OCI media
+      # types, and cannot serve the Dockerfile's bind mount.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Extract metadata (tags, labels)
+        id: docker-metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ inputs.image-name }}
+          tags: |
+            type=raw,value=${{ steps.ref.outputs.tag }}
+
+      - name: Build and push the test image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: ${{ inputs.dockerfile }}
+          # Our own ref, not the metadata action's, so the pushed tag is exactly
+          # the one this job hands back to the caller. Labels still come from it.
+          tags: ${{ steps.ref.outputs.image }}
+          labels: ${{ steps.docker-metadata.outputs.labels }}
+          build-args: |
+            BASE=${{ inputs.base-image }}
+            ${{ inputs.build-args }}
+          # One ghcr version per push instead of three. Buildx otherwise emits an
+          # image index plus an attestation manifest, which a tag-based GC sweep
+          # would leave behind holding the layers alive.
+          provenance: false
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
