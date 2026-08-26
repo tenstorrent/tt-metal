@@ -19,6 +19,7 @@ Run:
   MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
     pytest -svq models/demos/blackhole/qwen36/tests/test_model_tp.py
 """
+
 import math
 
 import pytest
@@ -720,7 +721,7 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     Regimes: isl2048 (1 full chunk), isl4096 (2 full chunks), and "mixed" (lengths cycled
     over {128, 1024, 2048, 4096}, exercising short-via-masked-bucket + long-via-chunked in one
     batch with diverging decode positions). Per-user prefill logits, post-prefill GDN recurrent
-    state, and a few decode steps must all match the B=1 reference.
+    state, and a few teacher-forced decode steps must all match the B=1 reference.
     """
     import gc
 
@@ -760,6 +761,7 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     oracle_pf = []
     oracle_rec = []  # per user: list over GDN layers of device-0 rec_state shard [Nv,Dk,Dv]
     oracle_dec = [[] for _ in range(B)]
+    oracle_fed = [[] for _ in range(B)]
     for u in range(B):
         toks = torch.tensor([prompts[u]], dtype=torch.long)
         lg = omodel.prefill_traced_chunked(toks, opt, actual_len=prompt_lens[u])
@@ -775,6 +777,7 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
         pos = prompt_lens[u]
         fed = int(torch.argmax(oracle_pf[u]))
         for s in range(N_DEC):
+            oracle_fed[u].append(fed)
             dev = omodel.prepare_inputs_decode(
                 torch.tensor([[fed]], dtype=torch.int32), torch.tensor([pos], dtype=torch.int32), opt
             )
@@ -802,16 +805,18 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     ]
     batched_dec = [[] for _ in range(B)]
     pos = list(prompt_lens)
-    fed = [int(torch.argmax(batched_pf[u])) for u in range(B)]
     for s in range(N_DEC):
-        tokens_step = torch.tensor([[fed[u]] for u in range(B)], dtype=torch.int32)
+        # Feed exactly the oracle tokens so each PCC compares the same function inputs. A tiny
+        # B=1-vs-B=32 reduction-order delta can flip argmax when two logits tie; self-feeding both
+        # paths would then compare different-token continuations and report a false cache failure.
+        # This mirrors test_model_tp_contract's teacher-forced decode methodology above.
+        tokens_step = torch.tensor([[oracle_fed[u][s]] for u in range(B)], dtype=torch.int32)
         pos_t = torch.tensor(pos, dtype=torch.int32)
         dev = bmodel.prepare_inputs_decode(tokens_step, pos_t, bpt)
         out, _ = bmodel.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
         ls = bmodel.process_output_decode(out, B)
         for u in range(B):
             batched_dec[u].append(ls[u, 0, :vocab].float())
-            fed[u] = int(torch.argmax(ls[u, 0, :vocab]))
         pos = [p + 1 for p in pos]
     bmodel.free_kv_caches()
     del bmodel

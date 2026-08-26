@@ -9,7 +9,7 @@ the ops CSV attributed unambiguously. Correctness for every one of these
 variants is already pinned in test_gated_attention_prefill.py; this file exists
 only to be timed.
 
-Driven by gated_attention_perf_sweep.sh.
+Capture each variant as its own Tracy run so results remain unambiguously attributable.
 """
 
 import math
@@ -88,17 +88,32 @@ VARIANTS = {
 # Variants that drop nlp_concat_heads entirely by having SDPA emit concat-heads
 # layout (fuse_concat_heads=True). Bit-identical to the unfused chain -- see
 # test_gated_attention_prefill.py::test_sdpa_fused_concat_heads_is_bit_identical.
-FUSED_CONCAT = {"m_bf8_fusedconcat": ttnn.bfloat8_b, "n_bf16_fusedconcat": ttnn.bfloat16}
+FUSED_CONCAT = {
+    "m_bf8_fusedconcat": (ttnn.bfloat8_b, ttnn.bfloat8_b),
+    "n_bf16_fusedconcat": (ttnn.bfloat16, ttnn.bfloat16),
+    "y_bf16q_bf8kv_k128_dram": (ttnn.bfloat16, ttnn.bfloat8_b),
+}
 
 # Same as FUSED_CONCAT but SDPA emits into L1 instead of DRAM, so the gate multiply
 # reads its big operand from L1. Removes a DRAM write + DRAM read of [S, NH*HD].
 # Bit-identical -- memory placement does not change values.
-FUSED_CONCAT_L1 = {"o_bf8_l1attn": ttnn.bfloat8_b, "p_bf16_l1attn": ttnn.bfloat16}
+FUSED_CONCAT_L1 = {
+    "o_bf8_l1attn": (ttnn.bfloat8_b, ttnn.bfloat8_b, 128),
+    "p_bf16_l1attn": (ttnn.bfloat16, ttnn.bfloat16, 128),
+    # Production accuracy-safe fast path: Q remains bf16 while the paged K/V cache is bf8.
+    "v_bf16q_bf8kv_k128_l1": (ttnn.bfloat16, ttnn.bfloat8_b, 128),
+    "x_bf16q_bf8kv_k256_l1": (ttnn.bfloat16, ttnn.bfloat8_b, 256),
+}
 
 # k_chunk=256 makes SDPA itself faster (reduce_trigger switches on) but its larger CBs contend
 # with the L1-resident attention output, and the gate multiply pays for it. These put the output
 # back in DRAM to see whether the SDPA win survives once that contention is removed.
-FUSED_CONCAT_DRAM_K256 = {"s_bf8_k256_dram": ttnn.bfloat8_b, "t_bf16_k256_dram": ttnn.bfloat16}
+FUSED_CONCAT_DRAM_K256 = {
+    "s_bf8_k256_dram": (ttnn.bfloat8_b, ttnn.bfloat8_b),
+    "t_bf16_k256_dram": (ttnn.bfloat16, ttnn.bfloat16),
+    # Former production BF8-KV tuning, retained for a direct A/B with the k=256/L1 optimum.
+    "w_bf16q_bf8kv_k256_dram": (ttnn.bfloat16, ttnn.bfloat8_b),
+}
 
 # Best bf8 config (k=256, out DRAM) but with the GATE tensor in bfloat8_b instead of bf16.
 # The gate is one of three full [S, NH*HD] passes in the multiply; halving it should take ~25%
@@ -156,13 +171,13 @@ def test_gated_attention_prefill_perf_k256_dram(device, variant):
     """q_chunk=128, k_chunk=256, SDPA output in DRAM (not L1)."""
     if os.environ.get("TT_METAL_SIMULATOR") and not DRYRUN:
         pytest.skip("perf variants are hardware-only")
-    dtype = FUSED_CONCAT_DRAM_K256[variant]
+    q_dtype, kv_dtype = FUSED_CONCAT_DRAM_K256[variant]
     torch.manual_seed(1234)
     b, nh, nkv, s, d = 1, QWEN36_NH, QWEN36_NKV, SEQ, QWEN36_HD
     scale = 1.0 / math.sqrt(d)
-    tt_q = ttnn.from_torch(fa_rand(b, nh, s, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_k = ttnn.from_torch(fa_rand(b, nkv, s, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_v = ttnn.from_torch(fa_rand(b, nkv, s, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_q = ttnn.from_torch(fa_rand(b, nh, s, d), dtype=q_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_k = ttnn.from_torch(fa_rand(b, nkv, s, d), dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_v = ttnn.from_torch(fa_rand(b, nkv, s, d), dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_gate = ttnn.from_torch(fa_rand(b, 1, s, nh * d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     g = device.compute_with_storage_grid_size()
     pc = ttnn.SDPAProgramConfig(
@@ -199,17 +214,17 @@ def test_gated_attention_prefill_perf_l1_attn(device, variant):
     """SDPA -> L1, gate multiply reads L1. Saves a DRAM round trip of the output."""
     if os.environ.get("TT_METAL_SIMULATOR") and not DRYRUN:
         pytest.skip("perf variants are hardware-only")
-    dtype = FUSED_CONCAT_L1[variant]
+    q_dtype, kv_dtype, k_chunk = FUSED_CONCAT_L1[variant]
     torch.manual_seed(1234)
     b, nh, nkv, s, d = 1, QWEN36_NH, QWEN36_NKV, SEQ, QWEN36_HD
     scale = 1.0 / math.sqrt(d)
-    tt_q = ttnn.from_torch(fa_rand(b, nh, s, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_k = ttnn.from_torch(fa_rand(b, nkv, s, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_v = ttnn.from_torch(fa_rand(b, nkv, s, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_q = ttnn.from_torch(fa_rand(b, nh, s, d), dtype=q_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_k = ttnn.from_torch(fa_rand(b, nkv, s, d), dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_v = ttnn.from_torch(fa_rand(b, nkv, s, d), dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_gate = ttnn.from_torch(fa_rand(b, 1, s, nh * d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     g = device.compute_with_storage_grid_size()
     pc = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(g.x, g.y), q_chunk_size=128, k_chunk_size=128, exp_approx_mode=True
+        compute_with_storage_grid_size=(g.x, g.y), q_chunk_size=128, k_chunk_size=k_chunk, exp_approx_mode=True
     )
     ckc = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=True, fp32_dest_acc_en=False, packer_l1_acc=False
@@ -242,13 +257,13 @@ def test_gated_attention_prefill_perf_fused_concat(device, variant):
     """Same chain minus nlp_concat_heads: SDPA writes concat-heads layout directly."""
     if os.environ.get("TT_METAL_SIMULATOR") and not DRYRUN:
         pytest.skip("perf variants are hardware-only")
-    dtype = FUSED_CONCAT[variant]
+    q_dtype, kv_dtype = FUSED_CONCAT[variant]
     torch.manual_seed(1234)
     b, nh, nkv, s, d = 1, QWEN36_NH, QWEN36_NKV, SEQ, QWEN36_HD
     scale = 1.0 / math.sqrt(d)
-    tt_q = ttnn.from_torch(fa_rand(b, nh, s, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_k = ttnn.from_torch(fa_rand(b, nkv, s, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_v = ttnn.from_torch(fa_rand(b, nkv, s, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_q = ttnn.from_torch(fa_rand(b, nh, s, d), dtype=q_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_k = ttnn.from_torch(fa_rand(b, nkv, s, d), dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_v = ttnn.from_torch(fa_rand(b, nkv, s, d), dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_gate = ttnn.from_torch(fa_rand(b, 1, s, nh * d), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     g = device.compute_with_storage_grid_size()
     pc = ttnn.SDPAProgramConfig(

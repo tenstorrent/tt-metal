@@ -69,15 +69,19 @@ Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
 `MESH_DEVICE` selects the mesh shape (`P150` → `(1,1)`, `P150x4` → `(1,4)`,
 `P150x8` → `(1,8)`).
 
-Optional flags:
+Optional overrides:
 
 ```bash
-# bfloat8_b paged KV cache: halves KV memory and its read bandwidth. Measured end-to-end on
-# 4 chips against a bf16 cache -- ISL 16k TTFT -3.0% / decode +0.7%, ISL 128k TTFT -11.2% /
-# decode +4.5%, with the 128k generation unchanged and long-prefill logits PCC 0.99991 (= bf16).
-# Off by default only because test_model_tp_prefill_chunked_batched[isl4096-B32] drops one user
-# to PCC 0.9219 (< 0.97); the rest of the qwen36 TP suite passes with it on.
-export QWEN_SDPA_BF8=1
+# bfloat8_b paged KV is the default: it halves KV memory and its read bandwidth. Measured
+# end-to-end on 4 chips against the bf16-cache fallback, current mixed-dtype tuning improves
+# ISL 16k TTFT by 3.5% and decode by 0.7%; at ISL 128k, TTFT improves by 12.1% and decode by
+# 4.5%. The full qwen36 TP suite passes, including B=32 chunked serving. Opt out if needed:
+export QWEN_SDPA_BF8=0
+
+# The 24-core long-KV decode reduction is also the default. It adds 1.1% decode throughput at
+# ISL 128k, is neutral at short context, and passes the full TP suite. Restore the conservative
+# 16-core cap if needed:
+export QWEN_SDPA_DECODE_WIDE=0
 
 # Casting Q to bfloat8_b as well is a SEPARATE switch and is off by default: it drops
 # long-prefill logits PCC from 0.99991 to 0.89275, well under the 0.99 threshold. Benchmarking

@@ -15,7 +15,7 @@ limitation.
 So the ISL sweep is done here, on CPU, in torch. This models the two effects
 that actually dominate:
 
-  1. bfloat8_b block-float quantization of Q/K/V (what QWEN_SDPA_BF8 turns on).
+  1. bfloat8_b block-float quantization of Q/K/V (the benchmarking-only full-bf8 mode).
   2. The precision of the flash-attention output accumulator, i.e.
      fp32_dest_acc_en on/off.
 
@@ -169,9 +169,9 @@ def main():
     args = ap.parse_args()
 
     combos = [
-        ("bf16", "fp32"),  # today's default: HiFi2 + fp32_dest_acc_en=True
+        ("bf16", "fp32"),  # Q remains bf16 in the model default
         ("bf16", "bf16"),  # fp32_dest_acc_en=False
-        ("bfp8", "fp32"),  # QWEN_SDPA_BF8=1
+        ("bfp8", "fp32"),  # QWEN_SDPA_BF8_Q=1 benchmarking mode
         ("bfp8", "bf16"),  # both
     ]
 

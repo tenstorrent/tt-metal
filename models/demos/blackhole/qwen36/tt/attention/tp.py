@@ -6,6 +6,7 @@ Q/K-norm: HF-correct (1+weight) uniformly at prefill and decode.
 KV cache is bfloat8_b by default; Q stays bf16 (QWEN_SDPA_BF8_Q=1 casts it, at a real accuracy cost).
 Weights interleaved per device; x replicated in, output reduce-scattered on dim=3.
 """
+
 import os
 
 import torch
@@ -193,18 +194,10 @@ class TPAttention:
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
         self.compute_cfg = tpc.COMPUTE_HIFI2
-        # bf8 KV (QWEN_SDPA_BF8=1): the paged KV cache is bfloat8_b and SDPA reads it directly.
-        # Keeps HiFi2 (HiFi4 was slower). Q stays bf16 -- see below.
-        #
-        # Still default OFF, but for a different and much narrower reason than before. Measured
-        # end-to-end on the 27B, 4 chips, against a bf16 cache: ISL 16k TTFT -3.0% / decode +0.7%,
-        # ISL 128k TTFT -11.2% / decode +4.5%, and the 128k generation is unchanged. The qwen36 TP
-        # suite is 20/21 with it on, and the one holdout is
-        #     test_model_tp_prefill_chunked_batched[isl4096-B32]  user 12 decode1 PCC 0.9219 < 0.97
-        # i.e. batched chunked prefill at B=32 -- a vLLM serving shape, so not one to wave through.
-        # Everything else, including all four paged-attention tests and long prefill, is clean.
-        # Resolve that case and this becomes a default-on change worth ~11% TTFT at long context.
-        self._sdpa_bf8 = os.environ.get("QWEN_SDPA_BF8", "0") == "1"
+        # The paged KV cache is bfloat8_b by default and SDPA reads it directly. Q remains bf16;
+        # the accuracy-unsafe Q cast is a separate benchmarking switch below. Prefill tuning must
+        # follow the bound cache's actual dtype, not the environment: tests and external callers
+        # may attach an explicit bf16 cache even when the model default is bf8.
         # Casting Q to bfloat8_b as well is the one part of bf8 that is NOT accuracy-safe, so it
         # is opt-in and off by default. Measured on the 27B, test_model_tp_long_prefill:
         #
@@ -546,9 +539,10 @@ class TPAttention:
         # (compute_streaming.hpp:1972 -- false at Sk_chunk_t=4, so the early-reduce overlap path
         # is dead code at k=128). That helps bf8 SDPA (189.9 -> 178.8) but not bf16 (276.6 ->
         # 298.0). Its larger CBs also contend with an L1-resident output, so k=256 wants the
-        # output in DRAM: at bf8 the epilogue goes 58.9 -> 39.4 us just from that move.
-        _k_chunk = 256 if self._sdpa_bf8 else ch
-        _attn_mc = ttnn.DRAM_MEMORY_CONFIG if self._sdpa_bf8 else ttnn.L1_MEMORY_CONFIG
+        # output in DRAM: at bf8 the epilogue goes 58.9 -> 39.2 us just from that move.
+        # This non-paged oracle path keeps Q/K/V in bf16, independent of the paged-cache default.
+        _k_chunk = ch
+        _attn_mc = ttnn.L1_MEMORY_CONFIG
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
             exp_approx_mode=True,
@@ -730,10 +724,11 @@ class TPAttention:
         # default of 16 is partly protective, not merely conservative, and this model has less
         # room here than a head_dim=128 model would. 24 is the measured maximum.
         #
-        # OFF BY DEFAULT. It changes the reduction-tree depth and so the float reduction order,
-        # and ttsim can confirm correctness but cannot rank it. Turn on only after a hardware
-        # A/B at long KV. QWEN_SDPA_DECODE_WIDE=1.
-        _wide_reduce = os.environ.get("QWEN_SDPA_DECODE_WIDE") == "1"
+        # Default on after a two-repetition hardware A/B: at 128k, model decode improved from
+        # 25.055 +/- 0.015 to 25.330 +/- 0.000 tok/s (+1.10%), while short-context decode was
+        # flat and the full 21-test qwen36 TP suite passed. It changes the reduction order, so
+        # retain an explicit fallback: QWEN_SDPA_DECODE_WIDE=0.
+        _wide_reduce = os.environ.get("QWEN_SDPA_DECODE_WIDE", "1") != "0"
         _sdpa_grid = self.mesh.compute_with_storage_grid_size()
         _dec_cfg_kw = {"max_cores_per_head_batch": 24} if _wide_reduce else {}
         sdpa_dec_cfg = ttnn.SDPAProgramConfig(
@@ -940,10 +935,19 @@ class TPAttention:
         # agree to ~1e-6 PCC across every fidelity/dtype combination in
         # tests/ttnn/unit_tests/operations/sdpa/test_gated_attention_prefill.py
         # ::test_gated_attention_prefill_precision_sweep.
-        # Same dtype-dependent tuning as forward_prefill -- see the measured table there.
+        # The production mixed-dtype path has its own optimum, measured on Blackhole at S=2048:
+        #
+        #   bf16 Q + bf8 K/V, k=128, out L1     247.1 us
+        #   bf16 Q + bf8 K/V, k=256, out DRAM   240.5 us
+        #   bf16 Q + bf8 K/V, k=256, out L1     233.1 us  <- production optimum
+        #   bf16 Q + bf8 K/V, k=128, out DRAM   254.2 us
+        #
+        # Full-bf8 (QWEN_SDPA_BF8_Q=1) still wants k=256/DRAM (217.4 us), while bf16 wants
+        # k=128/L1 (328.4 us). The output placement therefore depends on Q as well as cache dtype.
         # q_chunk must still satisfy chunk_start_idx % q_chunk == 0; k_chunk is unconstrained.
-        _k_chunk = 256 if self._sdpa_bf8 else qk_chunk
-        _attn_mc = ttnn.DRAM_MEMORY_CONFIG if self._sdpa_bf8 else ttnn.L1_MEMORY_CONFIG
+        paged_kv_bf8 = self.paged_k.dtype == ttnn.bfloat8_b
+        _k_chunk = 256 if paged_kv_bf8 else qk_chunk
+        _attn_mc = ttnn.DRAM_MEMORY_CONFIG if paged_kv_bf8 and self._sdpa_bf8_q else ttnn.L1_MEMORY_CONFIG
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
             exp_approx_mode=True,
