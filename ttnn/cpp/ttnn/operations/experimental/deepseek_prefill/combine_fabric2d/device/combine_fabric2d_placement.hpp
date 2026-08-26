@@ -38,9 +38,11 @@ using StreamPlacements = std::map<StreamId, StreamPlacement>;
 constexpr uint32_t UNTILIZER_GROUPS = 2;
 constexpr uint32_t untilizer_group_of(StreamId stream) { return stream % UNTILIZER_GROUPS; }
 
-// Cores per group. Kept a constant while the untilizers carry no data; it becomes a tuning knob when
-// there is something to tune. Above 5 a group no longer fits one row next to its senders.
-constexpr uint32_t UNTILIZERS_PER_GROUP = 4;
+// Cores per group, from CMBF2D_UNTILIZERS_PER_GROUP. Spreading a group's staging over more cores trades
+// worker cores for L1 read ports; which way that goes is a measurement, so it is a knob. Above 5 a group no
+// longer fits one row next to its senders on a harvested Blackhole.
+uint32_t untilizers_per_group();
+constexpr uint32_t MAX_UNTILIZERS_PER_GROUP = 5;
 
 struct UntilizerPlacement {
     CoreCoord logical;
