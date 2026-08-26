@@ -282,7 +282,7 @@ _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 # 64 is the smallest non-empty point: 2 tile-rows, so only 2 of the 8 M-rows carry real
 # tokens and the op is almost entirely the fixed weight read — the regime where the DRAM
 # work dominates and layout changes show up most clearly.
-_ISL_EXHAUSTIVE_SWEEP = [0, 64, 128, 256, 512, 1024, 2048, 4096, 5120]
+_ISL_EXHAUSTIVE_SWEEP = [0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 5120]
 _ISL_EXHAUSTIVE_MODELS = ("kimi_k26", "glm_51")
 
 
