@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 
-// Transaction-id space is [0, HW_TXN_ID_MAX]. Id 0 is NOC_V2_TRID_STATIC (untagged).
+// Transaction-id space is [0, HW_TXN_ID_MAX]. Id 0 is NOC_OVERLAY_TRID_STATIC (untagged).
 // Quasar-only pool split:
 //   user / kernel : [0, USER_TXN_ID_MAX]
 //   DFB / runtime : [DFB_TXN_ID_BASE, HW_TXN_ID_MAX]  (allocated top-down)
