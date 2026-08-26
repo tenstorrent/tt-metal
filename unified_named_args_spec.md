@@ -1,7 +1,10 @@
 # Spec: porting unified kernel arguments to named arguments
 
-Investigation and proposal. **No implementation.** Written against `origin/main` at
-`9aa797dec5e`, after the rebase.
+Investigation and proposal. Written against `origin/main` at `9aa797dec5e`, after the rebase.
+
+**STATUS: Phase 1 and the Phase 2 sentinel are DONE.** Decision 3 was settled first and in
+the port's favour -- see the note at the end of §4. The rest of the document stands as
+written; §8's decisions are answered, not open.
 
 Motivation is hazard **D17** in `unified_api_hazards.md`: the runtime-argument list is
 positional and untyped, a contract living in the kernel and in every launcher of it with no
@@ -121,10 +124,22 @@ accessor block starts at 0 and stops moving. Today adding one compile-time argum
 every accessor offset in the kernel, which is D18 exactly.
 
 Failure mode on a typo or a missing name: `get_named_ct_arg` walks the map and falls off the
-end into `__builtin_unreachable()`. In a `constexpr` context — which is how we would always
-use it — that is a **build failure**, not a hang. Caveat, from the header's own comment:
-*"Compilation currently fails with a segfault."* A compiler crash is a poor diagnostic, but it
-is a diagnostic at build time rather than a device hang, which is the trade being made.
+end into `__builtin_unreachable()`. In a `constexpr` context — which is how we always use it
+— that is a **build failure**, not a hang.
+
+**The header's "fails with a segfault" caveat is STALE for our toolchain**, which was worth
+the ten minutes to check rather than accept. Both compilers give a clean diagnostic naming
+the line and the offending name:
+
+    // riscv-tt-elf-g++ (what actually builds kernels)
+    typo_test.cpp:10:42: in 'constexpr' expansion of 'get_named_ct_arg(..."mtt")'
+    typo_test.cpp:7:26: error: '__builtin_unreachable()' is not a constant expression
+
+    // clang-20
+    error: constexpr variable 'bad' must be initialized by a constant expression
+    note: in call to 'get_named_ct_arg({3, &"mtt"[0]})'
+
+So decision 3 resolves in favour of the port: the diagnostic is good, not a compiler crash.
 
 ### Phase 2 — named runtime args. Decide, do not default.
 

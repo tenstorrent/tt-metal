@@ -79,6 +79,7 @@ void kernel_main() {
     const uint32_t in0_addr = get_arg_val<uint32_t>(0);
     const uint32_t in1_addr = get_arg_val<uint32_t>(1);
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
+    u::check_runtime_args<3>();
 
     const u::LogicalCoord me = u::LogicalCoord::this_core();
     const uint32_t out_block = me.y * MM_GRID_W + me.x;

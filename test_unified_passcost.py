@@ -92,7 +92,8 @@ def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2, fide
 
     two_operand = mode in ("bcast", "matmul", "alt") or mode in BIN
     tensors = [ta, tv, tout] if two_operand else [ta, tout]
-    ct_args = [rows, cols]
+    ct_args = []
+    named_ct_args = [("rows", rows), ("cols", cols)]
     for t in tensors:
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     rt_args = [t.buffer_address() for t in tensors]
@@ -118,6 +119,7 @@ def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2, fide
         cores=cores,
         cbs=cbs,
         compile_time_args=ct_args,
+        named_compile_time_args=named_ct_args,
         runtime_args=rt_args,
         defines=defines,
         **(fidelity or {}),

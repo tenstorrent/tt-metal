@@ -42,10 +42,10 @@ void kernel_main() {
     // in chunks of ht rows and only ht*wt tiles are ever resident. Which chunks this core
     // owns comes from runtime args. Without this the whole [S, d_model] block had to fit
     // L1 at once, which is 1024 tiles at S=512 by d_model 2048.
-    constexpr uint32_t ht = get_compile_time_arg_val(0);
-    constexpr uint32_t wt = get_compile_time_arg_val(1);
+    constexpr uint32_t ht = get_named_compile_time_arg_val("ht");
+    constexpr uint32_t wt = get_named_compile_time_arg_val("wt");
 
-    constexpr auto x_args = TensorAccessorArgs<2>();
+    constexpr auto x_args = TensorAccessorArgs<0>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 
@@ -55,6 +55,7 @@ void kernel_main() {
     const uint32_t eps_bits = get_arg_val<uint32_t>(3);
     const uint32_t chunk_begin = get_arg_val<uint32_t>(4);
     const uint32_t chunk_count = get_arg_val<uint32_t>(5);
+    u::check_runtime_args<6>();
 
     constexpr auto kAxis = u::Axis::Cols;  // each row is normalised independently
 

@@ -49,7 +49,8 @@ def run(device, num_blocks=2, tiles_per_block=2, rhs_dtype=ttnn.float32, seed=0)
     tout = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
 
     core_ranges, cores = single_core()
-    ct_args = [num_blocks, tiles_per_block]
+    ct_args = []
+    named_ct_args = [("num_blocks", num_blocks), ("tiles_per_block", tiles_per_block)]
     for t in (ta, tb, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     # The last two are the block range. binary.cpp partitions blocks across cores and reads
@@ -72,6 +73,7 @@ def run(device, num_blocks=2, tiles_per_block=2, rhs_dtype=ttnn.float32, seed=0)
         cores=cores,
         cbs=cbs,
         compile_time_args=ct_args,
+        named_compile_time_args=named_ct_args,
         runtime_args=rt_args,
         defines=[("BN_MUL", "1")],
     )

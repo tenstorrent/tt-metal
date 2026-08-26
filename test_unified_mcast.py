@@ -40,7 +40,8 @@ def run(device, row=2, tiles=2, dm_thread=0, barrier=False, seed=0):
     core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(row - 1, 0))])
     cores = [ttnn.CoreCoord(x, 0) for x in range(row)]
 
-    ct_args = [tiles]
+    ct_args = []
+    named_ct_args = [("tiles_per_block", tiles)]
     for t in (ta, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
@@ -53,6 +54,7 @@ def run(device, row=2, tiles=2, dm_thread=0, barrier=False, seed=0):
         cores=cores,
         cbs=[make_cb(CB_IN, core_ranges, num_pages=tiles), make_cb(CB_OUT, core_ranges, num_pages=tiles)],
         compile_time_args=ct_args,
+        named_compile_time_args=named_ct_args,
         runtime_args=per_core,
         defines=[
             ("MC_ROW_W", str(row)),

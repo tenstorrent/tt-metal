@@ -50,11 +50,11 @@ constexpr uint32_t kCbProb = 12;
 constexpr uint32_t kCbOut = 16;
 
 void kernel_main() {
-    constexpr uint32_t sq = get_compile_time_arg_val(0);
-    constexpr uint32_t sk = get_compile_time_arg_val(1);
-    constexpr uint32_t dt = get_compile_time_arg_val(2);
+    constexpr uint32_t sq = get_named_compile_time_arg_val("sq");
+    constexpr uint32_t sk = get_named_compile_time_arg_val("sk");
+    constexpr uint32_t dt = get_named_compile_time_arg_val("dt");
 
-    constexpr auto q_args = TensorAccessorArgs<3>();
+    constexpr auto q_args = TensorAccessorArgs<0>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -66,6 +66,7 @@ void kernel_main() {
     const uint32_t mask_addr = get_arg_val<uint32_t>(3);
     const uint32_t out_addr = get_arg_val<uint32_t>(4);
     const uint32_t scale_bits = get_arg_val<uint32_t>(5);
+    u::check_runtime_args<6>();
 
     using Q = u::Shape<sq, dt>;                          // Sq x D
     using Kt = u::Shape<dt, sk>;                         // D x Sk -- K, grid-transposed by the host

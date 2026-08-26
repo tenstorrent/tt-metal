@@ -84,7 +84,8 @@ def run(device, op, axis, ht=2, wt=3, then_sfpu=False, seed=0):
     )
 
     core_ranges, cores = single_core()
-    ct_args = [ht, wt]
+    ct_args = []
+    named_ct_args = [("ht", ht), ("wt", wt)]
     for t in (ta, tv, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     rt_args = [ta.buffer_address(), tv.buffer_address(), tout.buffer_address()]
@@ -102,6 +103,7 @@ def run(device, op, axis, ht=2, wt=3, then_sfpu=False, seed=0):
         cores=cores,
         cbs=cbs,
         compile_time_args=ct_args,
+        named_compile_time_args=named_ct_args,
         runtime_args=rt_args,
         defines=[(f"BC_AXIS_{axis.upper()}", "1"), (f"BC_OP_{op.upper()}", "1")]
         + ([("BC_THEN_SFPU", "1")] if then_sfpu else []),

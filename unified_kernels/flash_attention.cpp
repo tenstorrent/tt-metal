@@ -100,16 +100,16 @@ constexpr uint32_t kCbRecipL = 21;
 constexpr uint32_t kCbMNow = 22;  // this chunk's new maximum, before it becomes state
 
 void kernel_main() {
-    constexpr uint32_t sq = get_compile_time_arg_val(0);
-    constexpr uint32_t sk = get_compile_time_arg_val(1);
-    constexpr uint32_t dt = get_compile_time_arg_val(2);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(3);
+    constexpr uint32_t sq = get_named_compile_time_arg_val("sq");
+    constexpr uint32_t sk = get_named_compile_time_arg_val("sk");
+    constexpr uint32_t dt = get_named_compile_time_arg_val("dt");
+    constexpr uint32_t num_q_chunks = get_named_compile_time_arg_val("num_q_chunks");
     // Key tiles already behind the first query chunk. Zero is a fresh prefill; a positive
     // value is prefill-with-history, where the queries see context they did not produce.
-    constexpr uint32_t k_offset = get_compile_time_arg_val(4);
+    constexpr uint32_t k_offset = get_named_compile_time_arg_val("k_offset");
     // The head's whole key range in tiles. The causal walk derives its per-chunk bound
     // from k_offset instead, but this is still what the head stride is measured in.
-    constexpr uint32_t k_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t k_tiles = get_named_compile_time_arg_val("k_tiles");
     // GQA: n_heads query heads share n_kv_heads key/value heads, n_heads/n_kv_heads of
     // them per KV head. n_kv_heads == n_heads is ordinary multi-head attention and
     // n_kv_heads == 1 is multi-query; both fall out of the same mapping.
@@ -118,10 +118,10 @@ void kernel_main() {
     // size and so the mapping; which heads this core walks is head_begin/head_count
     // below. A core holding four of thirty-two heads still needs to know there are
     // thirty-two, or it would map its heads onto the wrong KV heads entirely.
-    constexpr uint32_t n_heads = get_compile_time_arg_val(6);
-    constexpr uint32_t n_kv_heads = get_compile_time_arg_val(7);
+    constexpr uint32_t n_heads = get_named_compile_time_arg_val("n_heads");
+    constexpr uint32_t n_kv_heads = get_named_compile_time_arg_val("n_kv_heads");
 
-    constexpr auto q_args = TensorAccessorArgs<8>();
+    constexpr auto q_args = TensorAccessorArgs<0>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -144,6 +144,7 @@ void kernel_main() {
     // the partition is a host policy and this keeps it there.
     const uint32_t head_begin = get_arg_val<uint32_t>(6);
     const uint32_t head_count = get_arg_val<uint32_t>(7);
+    u::check_runtime_args<8>();
 
     using Q = u::Shape<sq, dt>;
     using Kt = u::Shape<dt, sk>;

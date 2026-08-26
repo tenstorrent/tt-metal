@@ -49,16 +49,17 @@ constexpr auto kAxis = u::Axis::Both;
 #endif
 
 void kernel_main() {
-    constexpr uint32_t ht = get_compile_time_arg_val(0);
-    constexpr uint32_t wt = get_compile_time_arg_val(1);
+    constexpr uint32_t ht = get_named_compile_time_arg_val("ht");
+    constexpr uint32_t wt = get_named_compile_time_arg_val("wt");
 
-    constexpr auto block_args = TensorAccessorArgs<2>();
+    constexpr auto block_args = TensorAccessorArgs<0>();
     constexpr auto vec_args = TensorAccessorArgs<block_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<vec_args.next_compile_time_args_offset()>();
 
     const uint32_t block_addr = get_arg_val<uint32_t>(0);
     const uint32_t vec_addr = get_arg_val<uint32_t>(1);
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
+    u::check_runtime_args<3>();
 
     u::compute_init(kCbBlock, kCbOut);
 

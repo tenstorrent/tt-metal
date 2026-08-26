@@ -104,7 +104,7 @@ def bf16_pair(v):
 # --- one launch per kernel ------------------------------------------------------------
 
 
-def launch(device, kernel, cbs, ct_args, rt_args, tensors, defines=None):
+def launch(device, kernel, cbs, ct_args, rt_args, tensors, defines=None, named_ct_args=None):
     """`cbs` entries are (index, pages) or (index, pages, dtype); the default is bfloat16.
 
     A circular buffer's format must match the DRAM tensor it is read from or written to:
@@ -121,6 +121,7 @@ def launch(device, kernel, cbs, ct_args, rt_args, tensors, defines=None):
         cores=cores,
         cbs=[make_cb(c[0], core_ranges, num_pages=c[1], dtype=(c[2] if len(c) > 2 else ttnn.bfloat16)) for c in cbs],
         compile_time_args=args,
+        named_compile_time_args=named_ct_args,
         runtime_args=rt_args,
         defines=defines,
     )
@@ -145,7 +146,7 @@ def rmsnorm(device, x, w, ht, wt):
     # starting at zero. Omitting them does not fail to compile; it feeds the loop bound
     # whatever is in that argument slot, which is how this hung the device once.
     rt = [x.buffer_address(), w.buffer_address(), out.buffer_address(), bf16_pair(EPS), 0, 1]
-    return launch(device, RMSNORM_KERNEL, cbs, [ht, wt], rt, (x, w, out))
+    return launch(device, RMSNORM_KERNEL, cbs, [], rt, (x, w, out), None, [("ht", ht), ("wt", wt)])
 
 
 def matmul(device, a, b, rt_dim, ct_dim, kt_dim):
@@ -183,7 +184,16 @@ def apply_rope(device, x, cos, sin, m, seq_t, dim_t, chunk):
     # The last two are the chunk range rope.cpp partitions across cores. One core here, so
     # it owns all of them. Omitting them compiles and feeds the loop a garbage bound.
     rt = [t.buffer_address() for t in (x, cos, sin, m, out)] + [0, total // chunk]
-    return launch(device, ROPE_KERNEL, cbs, [chunk, total // chunk], rt, (x, cos, sin, m, out))
+    return launch(
+        device,
+        ROPE_KERNEL,
+        cbs,
+        [],
+        rt,
+        (x, cos, sin, m, out),
+        None,
+        [("chunk", chunk), ("num_chunks", total // chunk)],
+    )
 
 
 def binary(device, a, b, rows, cols, mode=None):
@@ -196,7 +206,8 @@ def binary(device, a, b, rows, cols, mode=None):
     # them compiles fine and feeds the loop whatever is in that arg slot -- a hang.
     rt = [a.buffer_address(), b.buffer_address(), out.buffer_address(), 0, 1]
     defines = [("BN_SILU_MUL", "1")] if mode == "silu_mul" else None
-    return launch(device, BINARY_KERNEL, cbs, [1, tiles], rt, (a, b, out), defines)
+    named = [("num_blocks", 1), ("tiles_per_block", tiles)]
+    return launch(device, BINARY_KERNEL, cbs, [], rt, (a, b, out), defines, named)
 
 
 # --- the host-side layout gap --------------------------------------------------------

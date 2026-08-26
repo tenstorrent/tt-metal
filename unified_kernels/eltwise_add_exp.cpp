@@ -38,17 +38,18 @@ constexpr uint32_t kCbIn1 = 1;
 constexpr uint32_t kCbOut = 16;
 
 void kernel_main() {
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(0);
-    constexpr uint32_t tiles_per_block = get_compile_time_arg_val(1);
+    constexpr uint32_t num_blocks = get_named_compile_time_arg_val("num_blocks");
+    constexpr uint32_t tiles_per_block = get_named_compile_time_arg_val("tiles_per_block");
 
     // TensorAccessor compile-time args, laid out in0, in1, out.
-    constexpr auto in0_args = TensorAccessorArgs<2>();
+    constexpr auto in0_args = TensorAccessorArgs<0>();
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
 
     const uint32_t in0_addr = get_arg_val<uint32_t>(0);
     const uint32_t in1_addr = get_arg_val<uint32_t>(1);
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
+    u::check_runtime_args<3>();
 
     u::compute_init(kCbIn0, kCbOut);
 
