@@ -194,10 +194,12 @@ jobs:
           set -euo pipefail
           {
             echo 'driver-opts<<DRIVEROPTS'
+            # No no_proxy: buildx splits driver-opts on commas, and BuildKit only
+            # ever reaches ghcr here. A Harbor-prefixed base would need it back,
+            # comma problem and all.
             if [ -n "${http_proxy:-}" ]; then
               echo "env.http_proxy=${http_proxy}"
               echo "env.https_proxy=${https_proxy:-${http_proxy}}"
-              echo "env.no_proxy=${no_proxy:-}"
             fi
             echo DRIVEROPTS
           } >> "$GITHUB_OUTPUT"
