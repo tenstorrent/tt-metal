@@ -72,10 +72,9 @@ inline void calculate_topk_defuse(std::uint32_t num_tiles) {
     _topk_defuse_tile_<largest, index_store_mode>(num_tiles);
 }
 
-// Rank-stamped stable topk stamp sweep (see _topk_stamp_local_positions_ in the LLK header;
-// the companion strip `_topk_strip_rank_tags_` is called directly from the compute API, like
-// _topk_uint16_move_dest_tile_to_pack_half_). The stamp runs once per freshly transposed
-// 2-tile slab, before every local-sort call. largest is the op's GLOBAL sort order.
+// Rank-stamped stable topk stamp sweep (see _topk_stamp_local_positions_ in the LLK header).
+// The stamp runs once per freshly transposed 2-tile slab, before every local-sort call.
+// largest is the op's GLOBAL sort order.
 template <bool APPROXIMATION_MODE, bool largest>
 inline void calculate_topk_stamp_local_positions() {
     _topk_stamp_local_positions_<largest>();
