@@ -679,7 +679,7 @@ ttnn::Tensor launch_indexer_score(
     bool allow_subshard,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
-    bool block_cyclic_tp_sharded = false,  // MSA frontend never TP-shards; DSA passes it through
+    bool block_cyclic_cache_tp_sharded = false,  // MSA frontend never TP-shards; DSA passes it through
     // Fused ring (all-gather subsumed): k is the gathered [B,1,T,D] persistent output buffer, k_local is this
     // chip's SP shard = the all-gather INPUT, fused_ring carries the AG config. Both nullopt = the classic path.
     std::optional<ttnn::Tensor> k_local = std::nullopt,
@@ -706,8 +706,8 @@ ttnn::Tensor launch_indexer_score(
     // below, so a tp_sharded request without a layout would leave it at 1 and score the TP-striped cache as
     // contiguous -- wrong logits, silently. Reject it here instead.
     TT_FATAL(
-        !block_cyclic_tp_sharded || block_cyclic_sp_axis.has_value(),
-        "indexer_score: block_cyclic_tp_sharded requires block_cyclic_sp_axis / block_cyclic_chunk_local");
+        !block_cyclic_cache_tp_sharded || block_cyclic_sp_axis.has_value(),
+        "indexer_score: block_cyclic_cache_tp_sharded requires block_cyclic_sp_axis / block_cyclic_chunk_local");
     // seq_shard_axes[1] (2D TP sub-shard) only means anything with a block-cyclic layout; reject a stray one.
     TT_FATAL(
         !seq_subshard_axis.has_value() || block_cyclic_sp_axis.has_value(),
@@ -776,10 +776,10 @@ ttnn::Tensor launch_indexer_score(
         }
         // block_cyclic stores the QUERY sharding {sp, chunk_local} (as in sparse_sdpa); KV dedup stripes the
         // KEYS tp-times finer, recorded separately as key_stripe_split (see operation_attributes_t).
-        if (block_cyclic_tp_sharded) {
+        if (block_cyclic_cache_tp_sharded) {
             TT_FATAL(
                 chunk_local % (tp * tt::constants::TILE_WIDTH) == 0,
-                "indexer_score: block_cyclic_tp_sharded needs block_cyclic_chunk_local ({}) divisible by tp ({}) "
+                "indexer_score: block_cyclic_cache_tp_sharded needs block_cyclic_chunk_local ({}) divisible by tp ({}) "
                 "with a tile-aligned ({}) per-stripe chunk",
                 chunk_local,
                 tp,
@@ -878,7 +878,7 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<std::vector<uint32_t>>& seq_shard_axes,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
-    bool block_cyclic_tp_sharded) {
+    bool block_cyclic_cache_tp_sharded) {
     // DSA/GLM: relu, learned per-head gates, one head-summed plane, no pooling. Reads its real weights tensor.
     return launch_indexer_score(
         q,
@@ -898,7 +898,7 @@ ttnn::Tensor indexer_score_dsa(
         /*allow_subshard=*/true,
         block_cyclic_sp_axis,
         block_cyclic_chunk_local,
-        block_cyclic_tp_sharded);
+        block_cyclic_cache_tp_sharded);
 }
 
 ttnn::Tensor indexer_score_msa(
@@ -960,7 +960,7 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<uint32_t> seq_subshard_axis,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
-    bool block_cyclic_tp_sharded) {
+    bool block_cyclic_cache_tp_sharded) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::experimental::indexer_score::FusedRingConfig fused_ring;
@@ -990,7 +990,7 @@ ttnn::Tensor ring_indexer_score_dsa(
         /*allow_subshard=*/true,
         block_cyclic_sp_axis,
         block_cyclic_chunk_local,
-        block_cyclic_tp_sharded,
+        block_cyclic_cache_tp_sharded,
         k_local,
         fused_ring);
 }

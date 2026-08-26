@@ -89,7 +89,7 @@ void bind_indexer_score(nb::module_& mod) {
                 linearization over all devices (linear-approximate under a mid-slab
                 start); seq_shard_axes=[sp, tp] names both axes, giving the rotation-exact
                 2D geometry (see seq_shard_axes above).
-            block_cyclic_tp_sharded: optional bool (default False). KV dedup: the K cache is striped
+            block_cyclic_cache_tp_sharded: optional bool (default False). KV dedup: the K cache is striped
                 across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord), so only the invP key
                 remap moves to (sp*tp, block_cyclic_chunk_local/tp) -- the causal geometry is unchanged.
                 Needs block_cyclic_chunk_local divisible by tp with a tile-aligned quotient.
@@ -109,7 +109,7 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt,
-        nb::arg("block_cyclic_tp_sharded") = false);
+        nb::arg("block_cyclic_cache_tp_sharded") = false);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,
@@ -234,6 +234,11 @@ void bind_indexer_score(nb::module_& mod) {
             block_cyclic_sp_axis: optional int, mesh axis the cache was striped over; MUST equal cluster_axis;
                 see indexer_score_dsa
             block_cyclic_chunk_local: optional int, per-shard chunk length; required with block_cyclic_sp_axis
+            block_cyclic_cache_tp_sharded: optional bool (default False). KV dedup: the K cache is striped
+                across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord), so the invP key remap
+                decodes (sp*tp, block_cyclic_chunk_local/tp) while the causal geometry stays on the query
+                pair (sp, block_cyclic_chunk_local). Requires block_cyclic_sp_axis, and a per-stripe chunk
+                that is tile-aligned. k_local must hold whole stripes. See indexer_score_dsa.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -256,7 +261,7 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("seq_subshard_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
-        nb::arg("block_cyclic_tp_sharded") = false);
+        nb::arg("block_cyclic_cache_tp_sharded") = false);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

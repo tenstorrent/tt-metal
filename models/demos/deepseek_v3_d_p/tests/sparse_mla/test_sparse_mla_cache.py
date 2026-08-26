@@ -524,7 +524,7 @@ def _run_chunked(mla, mesh_device, rope_tensors, kvpe_cache, index_kv_cache, hid
 @pytest.mark.timeout(0)
 def test_sparse_tp_sharded_kv_matches_sp_multichunk(mesh_device, device_params, variant, config_only):
     """A 2-chunk prefill (num_slabs=2) with TP-deduplicated caches must reproduce the SP-only output,
-    exercising the C++ block_cyclic_tp_sharded remap for >1 slab."""
+    exercising the C++ block_cyclic_cache_tp_sharded remap for >1 slab."""
     config = config_only
     CHUNK = 256  # per-chunk global tokens; per-device slab = 256/(sp*tp) = 32 = 1 tile on 2x4
     MC_SEQ = 512  # two chunks
