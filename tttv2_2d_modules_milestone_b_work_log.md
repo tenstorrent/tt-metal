@@ -574,3 +574,52 @@ pytest models/common/models/qwen3_32b_galaxy/demo.py -v
 | 1D regression suites run | None — `ttnn` is not importable in this environment | Outstanding; must run on the Galaxy host |
 | Common-code topology assumptions discovered | Two, both 2D-module-local and both found by reading the TTNN op sources rather than by running anything | Recorded and corrected |
 | Boundary leakage | Concat-32 needed no `Attention2D` change: the injected collectives already receive the recipe identity, and the collective resource keys are invariant to the reshape. Device sampling needed no module change either — the selector is a model-layer collaborator. Both packages still own their graphs; the boundary scan reports zero model-named and zero cross-package imports | Closed |
+
+## Checkpoint 13 - Rebased onto the final Milestone A tree; C1-C10 closed (job0/reconcile, 2026-08-26)
+
+Host-only. Full account in `tttv2_milestone_b_evidence/reconcile/REPORT.md`.
+
+- Rebased onto Milestone A tip **`bc6ad03bfc2`** (re-derived at run time; the reconciliation report's
+  A-side SHAs no longer exist, the branch having been rebased). Merge base `de4c8f4e659` unchanged.
+  Final stack, contract-defect commit isolated at the base as the brief requires:
+  `a38cc7bf506` (D5/C4/C5) -> `35fe6f34115` (the Milestone B commit) -> `c8c96558ad2` (C1) ->
+  `52def65194c` (C6/C9/C2 + the Milestone A status-page corrections). Pre-rebase commit kept as the
+  local tag `mb-prerebase-backup`.
+- **Zero code conflicts.** Two document conflicts, not one: `MILESTONE_A_STATUS.md` (predicted;
+  auto-merged silently, overridden by taking A's side wholesale) and `models/common/modules/README.md`
+  (not predicted; resolved by keeping A's closing sentence and B's two additive paragraphs).
+- **C1 was real and would have aborted every layer.** Fixed, but not by the brief's literal recipe:
+  `plans.py:165` needs a memory config to size the persistent all-gather buffer that
+  `_require_fused_stats_placement` inspects, so the function could not simply be deleted. It now
+  *derives* the stats origin from the decode residual placement instead of *naming* a core, which
+  gives the same guarantee - plan buffer and module-resolved placement are both functions of one
+  residual placement - without breaking allocation. Neither model passes `decode_stats_memcfg` any
+  more. Guard test in both host suites; it fails against the pre-fix state.
+- **D5/C3 was half wrong, and that is the more useful finding.** The swapped `resolve_lazy_weight`
+  arguments are real, but unreachable: `_require_exact_weight_policy` runs first and rejects any
+  weight whose `memory_config` is not already its own config field, and `resolve_lazy_weight` only
+  fills `None` fields. Probed both orderings with two genuinely different configs and got identical
+  results. The fix is kept because the code was wrong; no test claims to fail without it, and the
+  gate that makes it unreachable is now pinned instead. Recorded as latent in `MILESTONE_A_STATUS.md`.
+- C4, C5 isolated with tests that do fail without their change. C2 verified and pinned. C6 promoted
+  into `GalaxyModePlan` validation with an explicit `allow_narrow_semaphore_cores` opt-out, because a
+  blanket rule would have rejected the fused-RMS narrowing A qualified on hardware. C9 de-duplicated,
+  proven field-identical. C7/L3 updated to point at the ring/`gather_in0` recipe, wired but
+  unqualified. C8/L1 recorded, not redesigned.
+- **Checkpoint 5 item 1 is now closed: the four new host suites and the two updated module suites have
+  been executed.** They found four real defects, all test-side against correct production behaviour,
+  all fixed: the stale `prefill_wo` fixture the C4 contract rejects (this failed in the Milestone B
+  tree too), a `SimpleNamespace` mock that a pybind11 binding rejects, a wrong expected rejection
+  message, and a `rank-2` rejection case that built a rank-2 table and so never tested the rank check.
+- Host gates at `52def65194c`: modules+galaxy `300 passed`; both model host suites `59 passed`;
+  `llm_runtime` `1032 passed, 1 skipped`; module host-only set `260 passed`. Boundary greps all empty.
+- **Three unintended device touches, all disclosed in the report §7.** Two were caused by the brief's
+  own gate commands collecting device suites (`tests/models/galaxy` pulls in
+  `test_column_user_selector_wh_galaxy.py`; `tests/modules` pulls in the 1D hardware matrix, which
+  Milestone A P4 deliberately routes off this host). Both were killed; one cost a
+  `tt-smi -glx_reset`, which reported `Re-initialized 32 boards`. **The mesh is clean and free.**
+  Host-only selections need `--ignore-glob="*_wh_galaxy*.py"` *and* explicit file lists under
+  `tests/modules`.
+- Still open: the 1D device matrix (Milestone A P4, not this host); five pre-existing host failures in
+  packages neither milestone owns, proven independent of this job; and everything in Milestone B
+  remains unqualified on hardware.
