@@ -27,8 +27,11 @@ What a case run does
 4. check every returned tensor against its captured output spec — shape, dtype,
    layout and memory config (so a relayout op that hands back its input untouched
    fails), plus finiteness. A multi-output op such as ``nlp_create_qkv_heads`` has
-   all of Q, K and V checked. On top of that, a torch golden (PCC) for the ops
-   where a reference is unambiguous — see ``GOLDEN``.
+   all of Q, K and V checked. Where the capture never observed an output, what the
+   call itself pins down is used instead (``_derived_spec``), and ops whose result
+   metadata cannot show they did anything get an explicit ``POSTCONDITION``;
+5. on top of that, a torch golden (PCC) for the ops where a reference is
+   unambiguous — see ``GOLDEN``.
 
 Fidelity caveats (deliberate, documented, all visible in the generated data)
 ---------------------------------------------------------------------------
@@ -345,12 +348,29 @@ def _embedding_ids(spec, case):
     return torch.randint(0, rows, spec["shape"], dtype=torch.int32)
 
 
+# A cache write is checked by looking for this value in the cache afterwards, so the
+# tensor written into the cache is filled with it instead of random noise. It has to
+# be a value the surrounding random data (standard normal, so |x| < 6) cannot produce
+# even once across a multi-million-element cache, or the count below is meaningless.
+# A power of two is exact in bfloat16/bfloat8_b, and the tolerance is one bfloat8_b
+# mantissa step at this exponent (1024/128), which covers a block-float round-trip.
+CACHE_SENTINEL = 1024.0
+_CACHE_SENTINEL_TOL = 8.0
+
+
+def _cache_sentinel(spec, case):
+    """The tensor a paged-cache op writes: a value we can look for afterwards."""
+    return torch.full(spec["shape"], CACHE_SENTINEL, dtype=torch.bfloat16)
+
+
 # (op name, argument key) -> value generator. Random data in an index tensor
 # faults the device, so these are the ops where values carry meaning.
 INDEX_VALUES = {
     ("ttnn.embedding", "0"): _embedding_ids,
+    ("ttnn.experimental.paged_update_cache", "1"): _cache_sentinel,
     ("ttnn.experimental.paged_update_cache", "page_table"): _arange_pages,
     ("ttnn.experimental.paged_update_cache", "update_idxs_tensor"): _small_position,
+    ("ttnn.experimental.paged_fill_cache", "1"): _cache_sentinel,
     ("ttnn.experimental.paged_fill_cache", "2"): _arange_pages,
     ("ttnn.transformer.paged_scaled_dot_product_attention_decode", "page_table_tensor"): _arange_pages,
     ("ttnn.transformer.paged_scaled_dot_product_attention_decode", "cur_pos_tensor"): _small_position,
@@ -575,6 +595,91 @@ GOLDEN = {
 
 
 # =============================================================================
+# Derived expectations (for outputs the capture never observed)
+# =============================================================================
+
+# An op's output spec is recovered only if that tensor is used again later in the
+# capture. When it is not (``outs`` entry is None), shape/dtype/layout/placement
+# would go unchecked and an op that returned its input untouched would pass on
+# finiteness alone — which is precisely what an identity PCC cannot catch either.
+# So what the *call itself* pins down is reconstructed instead:
+#
+#   * a ``memory_config`` argument is where the output must land, by definition;
+#   * a layout-changing op fixes the output layout whatever else is unknown;
+#   * a relayout/move op preserves the input's shape.
+#
+# Nothing here is a guess about the op's semantics: each rule is a property of the
+# call as written. Anything not derivable stays unchecked (see POSTCONDITION for
+# the ops whose real content check needs more than metadata).
+
+_OUTPUT_LAYOUT = {
+    "ttnn.untilize": "ROW_MAJOR",
+    "ttnn.untilize_with_unpadding": "ROW_MAJOR",
+    "ttnn.tilize": "TILE",
+    "ttnn.tilize_with_val_padding": "TILE",
+}
+
+# Ops that move or relayout data without reshaping it (the identity goldens).
+_SHAPE_PRESERVING = frozenset(op for op, ref in GOLDEN.items() if ref is _ref_identity)
+
+
+def _derived_spec(case, op_name, index):
+    """What the call itself says the output must be; {} when it says nothing."""
+    spec = {}
+
+    first = case["args"][0] if case["args"] else None
+    if index == 0 and op_name in _SHAPE_PRESERVING and first is not None and first["k"] == "t":
+        spec["shape"] = first["shape"]
+
+    layout = _OUTPUT_LAYOUT.get(op_name)
+    if layout is None:
+        layout = next((v["v"] for v in case["kwargs"].values() if v["k"] == "layout"), None)
+    if layout is not None:
+        spec["layout"] = layout
+
+    dtype = next((v["v"] for v in case["kwargs"].values() if v["k"] == "dtype"), None)
+    if dtype is not None:
+        spec["dtype"] = dtype
+
+    mem = case["kwargs"].get("memory_config")
+    if mem is not None and mem["k"] == "mem":
+        spec["mem"] = {"layout": mem["layout"], "buffer": mem["buffer"], "shard": mem.get("shard")}
+
+    return spec
+
+
+# =============================================================================
+# Postconditions (ops whose result metadata alone cannot show they did anything)
+# =============================================================================
+
+
+def _check_cache_written(args, case, op_name, mesh_device):
+    """A paged-cache op must actually write the cache it was handed.
+
+    The capture never sees these outputs again, so without this the case passes as
+    long as the (unchanged, finite) cache comes back. The tensor being written is
+    filled with ``CACHE_SENTINEL`` instead of noise, so the write is visible by
+    counting how much of the cache holds that value afterwards. Only the count is
+    asserted, never the position — where a paged write lands is the op's business
+    and is not reconstructible from the capture.
+    """
+    cache, update = args[0], case["args"][1]
+    host = from_tt(cache, mesh_device)
+    written = int(((host - CACHE_SENTINEL).abs() <= _CACHE_SENTINEL_TOL).sum())
+    want = _numel(update["shape"])
+    assert written >= want, (
+        f"{op_name}: {written} of the {want} written value(s) are in the cache afterwards "
+        f"— the op did not write what it was given (cache holds {host.numel()} elements)"
+    )
+
+
+POSTCONDITION = {
+    "ttnn.experimental.paged_update_cache": _check_cache_written,
+    "ttnn.experimental.paged_fill_cache": _check_cache_written,
+}
+
+
+# =============================================================================
 # Case runner
 # =============================================================================
 
@@ -632,20 +737,21 @@ def _check_finite(host, case, op_name, index):
     )
 
 
-def _check_placement(got, spec, mesh_device, op_name, index):
-    """Assert the output landed in the captured layout / buffer type / shard.
+def _check_placement(got, spec, mesh_device, op_name, index, source="captured"):
+    """Assert the output landed in the expected layout / buffer type / shard.
 
     Without this a no-op ``to_memory_config`` or ``interleaved_to_sharded`` — one
     that hands back its input untouched — passes on shape and dtype alone, which is
     exactly the regression those cases exist to catch.
 
     The shard *detail* (grid, per-core shape, orientation) is compared only when the
-    captured grid exists on this device: on a smaller device the op derives its own
+    expected grid exists on this device: on a smaller device the op derives its own
     grid, and the capture's absolute core coordinates are then not the answer to
     compare against (the memory layout and buffer type still are).
     """
-    want_layout = LAYOUT[spec["layout"]]
-    assert got.layout == want_layout, f"{op_name}: output[{index}] layout {got.layout} != captured {want_layout}"
+    if "layout" in spec:
+        want_layout = LAYOUT[spec["layout"]]
+        assert got.layout == want_layout, f"{op_name}: output[{index}] layout {got.layout} != {source} {want_layout}"
 
     mem = spec.get("mem")
     if mem is None or not ttnn.is_tensor_storage_on_device(got):
@@ -654,18 +760,18 @@ def _check_placement(got, spec, mesh_device, op_name, index):
     got_mem = got.memory_config()
     want_mem_layout = MEM_LAYOUT[mem["layout"]]
     assert got_mem.memory_layout == want_mem_layout, (
-        f"{op_name}: output[{index}] memory layout {got_mem.memory_layout} != captured {want_mem_layout} "
+        f"{op_name}: output[{index}] memory layout {got_mem.memory_layout} != {source} {want_mem_layout} "
         f"— the op did not place its output where the model expects it"
     )
     want_buffer = BUFFER_TYPE[mem["buffer"]]
     assert (
         got_mem.buffer_type == want_buffer
-    ), f"{op_name}: output[{index}] buffer type {got_mem.buffer_type} != captured {want_buffer}"
+    ), f"{op_name}: output[{index}] buffer type {got_mem.buffer_type} != {source} {want_buffer}"
 
     if mem.get("shard") is None or not _shard_grid_fits(mem, mesh_device)[0]:
         return
     want_mem = build_memory_config(mem, mesh_device)
-    assert got_mem == want_mem, f"{op_name}: output[{index}] memory config {got_mem} != captured {want_mem}"
+    assert got_mem == want_mem, f"{op_name}: output[{index}] memory config {got_mem} != {source} {want_mem}"
 
 
 def _check_output(out, case, mesh_device, op_name):
@@ -675,7 +781,8 @@ def _check_output(out, case, mesh_device, op_name):
     order — multi-output ops (``nlp_create_qkv_heads``: Q, K, V) get all of theirs
     checked, not just the first. An entry is None when that output was never
     consumed again in the capture, so its spec was never observed; the entry is
-    still present, which is what makes the output *count* checkable.
+    still present, which is what makes the output *count* checkable, and the checks
+    fall back to ``_derived_spec`` rather than to nothing.
     """
     expected = case.get("outs") or []
     tensors = list(out) if isinstance(out, (list, tuple)) else [out]
@@ -687,15 +794,23 @@ def _check_output(out, case, mesh_device, op_name):
 
     for i, got in enumerate(tensors):
         spec = expected[i] if i < len(expected) else None
+        source = "captured"
         if spec is None:
+            # Fall back to what the call itself pins down, so an unobserved output
+            # is still held to its memory config / layout / shape (see _derived_spec).
+            spec, source = _derived_spec(case, op_name, i), "implied by the call"
+        if not spec:
             continue
-        want_shape = tuple(spec["shape"])
-        assert (
-            tuple(got.shape) == want_shape
-        ), f"{op_name}: output[{i}] shape {tuple(got.shape)} != captured {want_shape}"
-        want_dtype = DTYPE[spec["dtype"]]
-        assert got.dtype == want_dtype, f"{op_name}: output[{i}] dtype {got.dtype} != captured {want_dtype}"
-        _check_placement(got, spec, mesh_device, op_name, i)
+
+        if "shape" in spec:
+            want_shape = tuple(spec["shape"])
+            assert (
+                tuple(got.shape) == want_shape
+            ), f"{op_name}: output[{i}] shape {tuple(got.shape)} != {source} {want_shape}"
+        if "dtype" in spec:
+            want_dtype = DTYPE[spec["dtype"]]
+            assert got.dtype == want_dtype, f"{op_name}: output[{i}] dtype {got.dtype} != {source} {want_dtype}"
+        _check_placement(got, spec, mesh_device, op_name, i, source)
 
     for i, t in enumerate(tensors):
         _check_finite(from_tt(t, mesh_device), case, op_name, i)
@@ -725,6 +840,10 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     out = op(*args, **kwargs)
 
     _check_output(out, case, mesh_device, op_name)
+
+    post_fn = POSTCONDITION.get(op_name)
+    if post_fn is not None:
+        post_fn(args, case, op_name, mesh_device)
 
     ref_fn = None if NO_GOLDEN else GOLDEN.get(op_name)
     if ref_fn is not None:

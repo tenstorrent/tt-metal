@@ -68,6 +68,7 @@ ORIENTATION = _keys("ORIENTATION")
 PROGRAM_CONFIG_FIELDS = _field_map("_PROGRAM_CONFIG_FIELDS")
 DROPPED_FIELDS = _field_map("_DROPPED_FIELDS")
 GOLDEN_OPS = set(re.findall(r'^\s+"(ttnn\.[^"]+)": _ref', _graph_case_src, re.M))
+POSTCONDITION_OPS = set(re.findall(r'^\s+"(ttnn\.[^"]+)": _check_', _graph_case_src, re.M))
 INDEX_OPS = {op for op, _ in re.findall(r'\("(ttnn\.[^"]+)", "([^"]+)"\)', _graph_case_src)}
 
 KINDS = {"t", "tlist", "mem", "cfg", "dtype", "layout", "acts", "device", "lit", "slices"}
@@ -231,6 +232,8 @@ def main():
         notes.append(f"graph_case.GOLDEN has a reference for {op}, which this capture never called")
     for op in sorted(INDEX_OPS - ops_seen):
         notes.append(f"graph_case.INDEX_VALUES targets {op}, which this capture never called")
+    for op in sorted(POSTCONDITION_OPS - ops_seen):
+        notes.append(f"graph_case.POSTCONDITION has a check for {op}, which this capture never called")
 
     print(
         f"{len(files)} op file(s), {n_cases} case(s) covering {n_calls} captured call(s), "
