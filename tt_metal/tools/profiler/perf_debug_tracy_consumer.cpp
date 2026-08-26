@@ -148,58 +148,103 @@ void PerfDebugTracyConsumer::flush_zones() {
     }
     std::sort(keys.begin(), keys.end());
     uint64_t pushes = 0;
-    for (const uint32_t key : keys) {
-        Lane& lane = lanes_[key];
-        const auto& li = lane.info;
-        // Arrival is per-lane END order = post-order over the zone forest. Pre-order is (start asc,
-        // end desc); reversing first makes the stable sort break exact [start,end] ties toward the
-        // LATER-arrived zone, which under stack discipline is the outer one.
-        std::reverse(lane.zones.begin(), lane.zones.end());
-        std::stable_sort(lane.zones.begin(), lane.zones.end(), [](const BufZone& a, const BufZone& b) {
-            return a.start != b.start ? a.start < b.start : a.end > b.end;
-        });
-        const uint64_t base = clock_synced_[lane.dev] ? 0 : ts_base_[lane.dev];
-        const auto push = [&](const BufZone& z, bool is_start) {
-            WorkerZonePacket pkt;
-            pkt.chip_id = li.chip_id;
-            pkt.core_virtual_x = li.virtual_x;
-            pkt.core_virtual_y = li.virtual_y;
-            pkt.core_noc0_x = li.noc0_x;
-            pkt.core_noc0_y = li.noc0_y;
-            pkt.risc = li.risc;
-            pkt.timer_id = z.id;
-            pkt.name = names_.lookup(z.id);
-            {
-                // Colour by zone NAME and by role -- see zone_colors_ in the header.
-                const auto& tbl = li.role == PerfDebugLaneRole::Mover ? zone_colors_mover_ : zone_colors_;
-                if (auto it = tbl.find(pkt.name); it != tbl.end()) {
-                    pkt.color = it->second;
-                } else if (auto it2 = zone_colors_.find(pkt.name); it2 != zone_colors_.end()) {
-                    pkt.color = it2->second;  // mover table has no override for this zone
-                }
+    // One flush event: {ts, zone, owning lane, begin-or-end}. Generated per lane in non-decreasing ts
+    // order (see the bracket comment below), then MERGED BY TIMESTAMP across the lanes of one Tracy
+    // CONTEXT (= one core, 5 lanes) before anything is pushed.
+    //
+    // The merge is LOAD-BEARING, not cosmetic. Tracy's server carries an unwrap heuristic for GPUs
+    // whose hardware timestamp counters wrap (TracyWorker.cpp ProcessGpuTime): any backwards jump
+    // > 2^31 ticks in a context's GpuTime stream is read as a counter wrap, and every later zone in
+    // that context gets shifted up by a power-of-two, once per apparent wrap. Flushing lane-by-lane
+    // sends lane 0's whole capture span, then jumps BACK to the capture start for lane 1 -- so any
+    // capture whose per-lane span exceeds 2^31 ticks (~1.6 s at 1.35 GHz) trips the heuristic at
+    // every lane boundary: lane r renders shifted by r * 2^45-ish, i.e. RISCs staggered hours apart
+    // and the 5th lane's shift wrapping the 48-bit packed field into negative garbage (measured on a
+    // 5 s-zone capture, 2026-08-26; ordinary us-scale captures never noticed because their backwards
+    // jumps stay far below 2^31). Merging makes each context's GpuTime stream monotone, so the
+    // heuristic can never fire; per-lane begin/end order -- all Tracy's per-thread zone stacks need
+    // -- is preserved because a stable sort keyed on ts alone cannot reorder a lane's own events
+    // (each lane's stream is already non-decreasing in ts).
+    struct FlushEv {
+        uint64_t ts;
+        const BufZone* z;
+        const Lane* ln;
+        bool is_start;
+    };
+    const auto push = [&](const FlushEv& e) {
+        const auto& li = e.ln->info;
+        WorkerZonePacket pkt;
+        pkt.chip_id = li.chip_id;
+        pkt.core_virtual_x = li.virtual_x;
+        pkt.core_virtual_y = li.virtual_y;
+        pkt.core_noc0_x = li.noc0_x;
+        pkt.core_noc0_y = li.noc0_y;
+        pkt.risc = li.risc;
+        pkt.timer_id = e.z->id;
+        pkt.name = names_.lookup(e.z->id);
+        {
+            // Colour by zone NAME and by role -- see zone_colors_ in the header.
+            const auto& tbl = li.role == PerfDebugLaneRole::Mover ? zone_colors_mover_ : zone_colors_;
+            if (auto it = tbl.find(pkt.name); it != tbl.end()) {
+                pkt.color = it->second;
+            } else if (auto it2 = zone_colors_.find(pkt.name); it2 != zone_colors_.end()) {
+                pkt.color = it2->second;  // mover table has no override for this zone
             }
-            const uint64_t ts = is_start ? z.start : z.end;
-            pkt.timestamp = ts >= base ? ts - base : 0;
-            pkt.is_start = is_start;
-            handler_->HandleWorkerZone(pkt);
-            pushes++;
-        };
-        // Emit the bracket sequence: begins in pre-order, each open zone's end as soon as the next
-        // zone starts at or past it. `<=` closes an exactly-abutting zone before its successor opens,
-        // matching device program order (the RAII end write precedes the next scope's start).
-        std::vector<BufZone> open;
-        for (const BufZone& z : lane.zones) {
-            while (!open.empty() && open.back().end <= z.start) {
-                push(open.back(), false);
+        }
+        const uint64_t base = clock_synced_[e.ln->dev] ? 0 : ts_base_[e.ln->dev];
+        pkt.timestamp = e.ts >= base ? e.ts - base : 0;
+        pkt.is_start = e.is_start;
+        handler_->HandleWorkerZone(pkt);
+        pushes++;
+    };
+    // Walk contexts: lanes of one core are CONSECUTIVE in the sorted key order (key = dev<<10 | lane,
+    // lane = core * 5 + risc), so a context is the run of keys sharing (dev, lane/5).
+    std::vector<FlushEv> evs;
+    // Context key = (dev, lane/5) split EXPLICITLY -- a plain key/5 would merge dev N's last core with
+    // dev N+1's first whenever a device carries >1020 lanes.
+    const auto ctx_of = [](uint32_t key) { return (key & ~1023u) | ((key & 1023u) / 5u); };
+    size_t gi = 0;
+    while (gi < keys.size()) {
+        size_t ge = gi;
+        while (ge < keys.size() && ctx_of(keys[ge]) == ctx_of(keys[gi])) {
+            ge++;
+        }
+        evs.clear();
+        for (size_t k = gi; k < ge; k++) {
+            Lane& lane = lanes_[keys[k]];
+            // Arrival is per-lane END order = post-order over the zone forest. Pre-order is (start asc,
+            // end desc); reversing first makes the stable sort break exact [start,end] ties toward the
+            // LATER-arrived zone, which under stack discipline is the outer one.
+            std::reverse(lane.zones.begin(), lane.zones.end());
+            std::stable_sort(lane.zones.begin(), lane.zones.end(), [](const BufZone& a, const BufZone& b) {
+                return a.start != b.start ? a.start < b.start : a.end > b.end;
+            });
+            // Emit the bracket sequence: begins in pre-order, each open zone's end as soon as the next
+            // zone starts at or past it. `<=` closes an exactly-abutting zone before its successor opens,
+            // matching device program order (the RAII end write precedes the next scope's start). The
+            // emitted ts sequence is NON-DECREASING: begins ascend by the sort, an end is only emitted
+            // once it is <= the next begin, and nested ends pop innermost-first (smallest end first).
+            std::vector<const BufZone*> open;
+            for (const BufZone& z : lane.zones) {
+                while (!open.empty() && open.back()->end <= z.start) {
+                    evs.push_back(FlushEv{open.back()->end, open.back(), &lane, false});
+                    open.pop_back();
+                }
+                evs.push_back(FlushEv{z.start, &z, &lane, true});
+                open.push_back(&z);
+            }
+            while (!open.empty()) {
+                evs.push_back(FlushEv{open.back()->end, open.back(), &lane, false});
                 open.pop_back();
             }
-            push(z, true);
-            open.push_back(z);
         }
-        while (!open.empty()) {
-            push(open.back(), false);
-            open.pop_back();
+        // ts-only stable sort = the k-way merge (ties keep lane-concatenation order, so a lane's own
+        // equal-ts end-then-begin sequence survives).
+        std::stable_sort(evs.begin(), evs.end(), [](const FlushEv& a, const FlushEv& b) { return a.ts < b.ts; });
+        for (const FlushEv& e : evs) {
+            push(e);
         }
+        gi = ge;
     }
     log_info(
         tt::LogMetal,

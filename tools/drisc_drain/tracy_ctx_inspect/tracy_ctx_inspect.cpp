@@ -100,7 +100,12 @@ static void sample_top_zones(
             return;
         }
         const char* nm = w.GetZoneName(e);
-        printf("      %-16s dur=%lld ticks\n", nm ? nm : "(null)", (long long)(e.GpuEnd() - e.GpuStart()));
+        printf(
+            "      %-16s start=%lld end=%lld dur=%lld ticks\n",
+            nm ? nm : "(null)",
+            (long long)e.GpuStart(),
+            (long long)e.GpuEnd(),
+            (long long)(e.GpuEnd() - e.GpuStart()));
         printed++;
     };
     if (vec.is_magic()) {
@@ -175,6 +180,14 @@ int main(int argc, char** argv) {
                         printf("  --- deepest path, tid=%llu ---\n", (unsigned long long)td.first);
                         dump_deep_path(worker, td.second.timeline, 0);
                     }
+                }
+            }
+            // --all-threads: per-tid top-level zone list (name + gpu start/end), bounded. For
+            // diagnosing cross-RISC timeline skew: prints the actual begin/end ticks per thread.
+            if (getenv("CTX_ALL_THREADS") != nullptr) {
+                for (const auto& td : c->threadData) {
+                    printf("  --- top-level zones, tid=%llu ---\n", (unsigned long long)td.first);
+                    sample_top_zones(worker, td.second.timeline, 16);
                 }
             }
             static bool sampled = false;
