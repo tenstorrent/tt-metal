@@ -62,7 +62,9 @@ void kernel_main() {
     constexpr auto dfb_m_in = dfb::m_in;
     constexpr auto dfb_l_in = dfb::l_in;
 #ifdef USE_CUR_POS_TENSOR
-    // #44366: c_8 is the writer-only cur_pos CB after the split.
+    // #44366: writer_cur_pos is the writer-only cur_pos DFB after the split.
+    // Compute reads from compute_cur_pos (see sdpa_flash_decode.cpp), so the writer
+    // owns writer_cur_pos alone and can always pop it.
     constexpr auto dfb_cur_pos = dfb::cur_pos;
 #endif
     constexpr auto dfb_col_identity = dfb::col_identity;

@@ -105,7 +105,8 @@ void kernel_main() {
 #endif
     constexpr auto dfb_zero_in = dfb::zero_in;
 #ifdef USE_CUR_POS_TENSOR
-    // #44366: compute reads cur_pos from c_15 (writer reads from c_8) — see reader_decode_all.cpp.
+    // #44366: compute reads cur_pos from compute_cur_pos (legacy c_15; writer reads
+    // writer_cur_pos, legacy c_8) — see reader_decode_all.cpp.
     constexpr auto dfb_cur_pos = dfb::cur_pos;
 #endif
 

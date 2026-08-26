@@ -85,9 +85,10 @@ void kernel_main() {
     constexpr auto dfb_attention_sink = dfb::attention_sink;
 #endif
 #ifdef USE_CUR_POS_TENSOR
-    // #44366: cur_pos is consumed by both the writer (c_8) and compute (c_15).
-    // Using one shared CB races — whichever consumer pops first drains the
-    // count and the other hangs waiting for tiles. Each consumer gets its own CB.
+    // #44366: cur_pos is consumed by both the writer (writer_cur_pos)
+    // and compute (compute_cur_pos). Using one shared DFB races —
+    // whichever consumer pops first drains the count and the other hangs waiting
+    // for tiles. Each consumer gets its own DFB.
     constexpr auto dfb_writer_cur_pos = dfb::writer_cur_pos;
     constexpr auto dfb_compute_cur_pos = dfb::compute_cur_pos;
 #endif
@@ -126,9 +127,9 @@ void kernel_main() {
             cur_pos = cur_pos_arg;
         } else {
 #ifdef USE_CUR_POS_TENSOR
-            // Reader fills dfb_writer_cur_pos (c_8) first (from DRAM, or via the
+            // Reader fills dfb_writer_cur_pos first (from DRAM, or via the
             // aliased sharded buffer) then copies the same stick into
-            // dfb_compute_cur_pos (c_15) via an L1->L1 read.
+            // dfb_compute_cur_pos via an L1->L1 read.
             DataflowBuffer dfb_writer(dfb_writer_cur_pos);
             dfb_writer.reserve_back(1);
             uint32_t index_dfb_wr_ptr = dfb_writer.get_write_ptr();

@@ -688,6 +688,13 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
 
     // c_8 writer_cur_pos / c_15 compute_cur_pos — reader produces, writer/compute consume (conditional).
     if (use_cur_pos_tensor) {
+        // #44366: cur_pos is consumed by both the writer and compute kernels.
+        // A single shared DFB races: whichever consumer pops first drains the
+        // count and the other hangs waiting for tiles. Use one DFB per consumer —
+        // writer_cur_pos (legacy c_8) for the writer, compute_cur_pos (legacy c_15)
+        // for compute — each with capacity 1. The reader fills writer_cur_pos
+        // (from DRAM, or via the borrowed sharded buffer) then does an L1->L1 copy
+        // into compute_cur_pos.
         add_dfb(
             DFB_WRITER_CUR_POS,
             cur_pos_stick_size,
@@ -1175,12 +1182,38 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         // Compute tree reduction parameters for this core
         TreeReductionParams tree_params = get_tree_reduction_params(core_num_in_reduce, num_cores_per_head);
 
+        log_debug(tt::LogOp, "---- core_id: {}, coord: {} ----", i, core);
+        log_debug(tt::LogOp, "worker_id_for_reduce: {}", worker_id_for_reduce);
+        log_debug(tt::LogOp, "worker_id_for_output: {}", worker_id_for_output);
+        log_debug(tt::LogOp, "do_reduce: {}", do_reduce);
+        log_debug(tt::LogOp, "do_output: {}", do_output);
+        log_debug(tt::LogOp, "cur_head: {}", cur_head);
+        log_debug(tt::LogOp, "cur_batch: {}", cur_batch);
+        log_debug(tt::LogOp, "core_num_in_reduce: {}", core_num_in_reduce);
+        log_debug(tt::LogOp, "core_num_in_output: {}", core_num_in_output);
+        log_debug(tt::LogOp, "cur_pos: {}", cur_pos);
+        log_debug(tt::LogOp, "tree_params.is_root: {}", tree_params.is_root);
+        log_debug(tt::LogOp, "tree_params.parent_core_in_group: {}", tree_params.parent_core_in_group);
+        log_debug(tt::LogOp, "tree_params.send_at_round: {}", tree_params.send_at_round);
+        log_debug(tt::LogOp, "tree_params.num_children: {}", tree_params.num_children);
+        log_debug(tt::LogOp, "tree_params.my_active_rounds: {}", tree_params.my_active_rounds);
+        log_debug(tt::LogOp, "do_k_mcast: {}", do_k_mcast);
+        log_debug(tt::LogOp, "mcast_x: {}", mcast_x);
+        log_debug(tt::LogOp, "mcast_y0: {}", mcast_y0);
+        log_debug(tt::LogOp, "mcast_y1: {}", mcast_y1);
+        log_debug(tt::LogOp, "num_dests: {}", num_dests);
+
+        // Calculate base index for this reduction group's cores in the physical coordinate arrays
+        // reduction_group_core_xs/ys are populated in row-major order (by linear index i)
+        // So we use 'i' directly to find the start of this core's reduction group
         uint32_t reduction_group_base_idx = 0;
         if (use_col_major_group_indexing) {
+            // For column-major indexing: the group starts at (i / num_cores_per_head) * num_cores_per_head
             reduction_group_base_idx = (i / num_cores_per_head) * num_cores_per_head;
         } else {
             reduction_group_base_idx = (cur_batch * num_cores_per_batch) + (cur_head * num_cores_per_head);
         }
+        log_debug(tt::LogOp, "reduction_group_base_idx: {}", reduction_group_base_idx);
 
         // Reader named RTAs
         AddRuntimeArgsForNode(
@@ -1278,7 +1311,12 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     // value so the schema is satisfied on these nodes, do_reduce==65 marks them idle so each kernel
     // early-returns before touching bindings/semaphores, and the varargs the idle kernels never read
     // are zero-filled to the active layout.
+    if (!core_group_idle.empty()) {
+        log_debug(tt::LogOp, "idle cores {}", core_group_idle.size());
+    }
+    // Set the rest of the cores to idle
     for (const CoreCoord& core : core_group_idle) {
+        log_debug(tt::LogOp, "Setting core {} to idle", core);
         AddRuntimeArgsForNode(
             reader_ra.runtime_arg_values,
             core,
