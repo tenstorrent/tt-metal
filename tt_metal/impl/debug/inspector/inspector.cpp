@@ -19,6 +19,7 @@
 #include "program.hpp"
 #include <map>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <tt-metalium/experimental/inspector.hpp>
 #include "impl/kernels/kernel.hpp"
@@ -333,16 +334,17 @@ void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buff
         if (data->mesh_buffer_logging_enabled) {
             data->logger.log_mesh_buffer_deallocated(mesh_buffer);
         }
+        std::optional<inspector::MeshSocketData> destroyed_socket;
         {
             std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
             data->mesh_buffers_data.erase(mesh_buffer);
-        }
-        std::lock_guard<std::mutex> lock(data->mesh_sockets_mutex);
-        if (auto it = data->mesh_sockets_data.find(mesh_buffer); it != data->mesh_sockets_data.end()) {
-            if (data->mesh_socket_logging_enabled) {
-                data->logger.log_mesh_socket_destroyed(mesh_buffer, it->second);
+            if (auto it = data->mesh_sockets_data.find(mesh_buffer); it != data->mesh_sockets_data.end()) {
+                destroyed_socket = std::move(it->second);
+                data->mesh_sockets_data.erase(it);
             }
-            data->mesh_sockets_data.erase(it);
+        }
+        if (destroyed_socket.has_value() && data->mesh_socket_logging_enabled) {
+            data->logger.log_mesh_socket_destroyed(mesh_buffer, *destroyed_socket);
         }
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh buffer deallocated: {}", e.what());
@@ -358,7 +360,6 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         return;
     }
     try {
-        std::lock_guard<std::mutex> lock(data->mesh_sockets_mutex);
         const distributed::SocketSenderSize sender_size;
         auto config_buffer = socket->get_config_buffer();
         const bool is_sender = socket->get_socket_endpoint_type() == distributed::SocketEndpoint::SENDER;
@@ -418,6 +419,7 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         if (data->mesh_socket_logging_enabled) {
             data->logger.log_mesh_socket_created(config_buffer.get(), socket_data);
         }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
         data->mesh_sockets_data.insert_or_assign(config_buffer.get(), std::move(socket_data));
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh socket created: {}", e.what());

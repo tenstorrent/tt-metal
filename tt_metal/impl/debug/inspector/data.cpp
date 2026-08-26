@@ -165,7 +165,7 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
 }
 
 void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) {
-    std::lock_guard<std::mutex> lock(mesh_sockets_mutex);
+    std::lock_guard<std::mutex> lock(mesh_buffers_mutex);
     auto sockets = results.initSockets(mesh_sockets_data.size());
     uint32_t i = 0;
     for (const auto& [config_buffer, socket_data] : mesh_sockets_data) {

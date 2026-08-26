@@ -62,7 +62,6 @@ private:
     std::mutex programs_mutex;
     std::mutex mesh_buffers_mutex;
     std::mutex mesh_devices_mutex;
-    std::mutex mesh_sockets_mutex;
     std::mutex mesh_workloads_mutex;
     std::mutex runtime_entries_mutex;
     // mutex to protect dispatch core info

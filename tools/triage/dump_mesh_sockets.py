@@ -28,8 +28,8 @@ Description:
       rd_addr     receiver read_ptr, absolute L1 address               kernel frame
 
     A kernel flushes its own counters to L1 only at exit, so live values are read from its
-    Socket{Sender,Receiver}Interface local, matched on config_addr. This halts the core. A column
-    reads ? when no kernel was running there or the local was optimized out.
+    Socket{Sender,Receiver}Interface local, matched on config_addr. This halts the core. A kernel
+    frame column reads N/A when no kernel was running on the core or the local was optimized out.
 
 Owner:
     onenezicTT
@@ -58,10 +58,6 @@ script_config = ScriptConfig(
 RECV_FMT = "<6I"  # bytes_sent, read_ptr, fifo_addr, fifo_total_size, bytes_acked, is_h2d
 SEND_FMT = "<7I"  # bytes_sent, num_downstreams, write_ptr, dstr_bytes_sent_addr, dstr_fifo_addr,
 #                   dstr_fifo_total_size, is_d2h
-
-
-def hex_or_unknown(value: int | str | None) -> str:
-    return value if isinstance(value, str) else hex_serializer(value)
 
 
 def node_label(mesh_id: int, fabric_chip_id: int) -> str:
@@ -125,12 +121,12 @@ class SocketRow:
     downstream_config_addr: int | None = triage_field("Downstream Addr", hex_serializer)
     num_downstreams: int | None = triage_field("Downstreams")
     downstream: int | None = triage_field("Downstream #")
-    sent_at_sender: int | str | None = triage_field("sent@snd")
+    sent_at_sender: int | None = triage_field("sent@snd")
     acked_at_sender: int | None = triage_field("acked@snd")
-    write_ptr: int | str | None = triage_field("wr_off")
+    write_ptr: int | None = triage_field("wr_off")
     sent_at_receiver: int | None = triage_field("sent@rcv")
-    acked_at_receiver: int | str | None = triage_field("acked@rcv")
-    read_ptr: int | str | None = triage_field("rd_addr", hex_or_unknown)
+    acked_at_receiver: int | None = triage_field("acked@rcv")
+    read_ptr: int | None = triage_field("rd_addr", hex_serializer)
     fifo_size: int | None = triage_field("fifo")
     peer: str = triage_field("Peer")
 
@@ -247,9 +243,9 @@ def sender_row(core: SocketCore, md: SenderMd, index: int) -> SocketRow:
         config_addr=core.config_addr,
         downstream_config_addr=md.downstream_config_addr,
         downstream=index,
-        sent_at_sender=core.interface.get("bytes_sent", "?"),
+        sent_at_sender=core.interface.get("bytes_sent"),
         acked_at_sender=md.bytes_acked[index],
-        write_ptr=core.interface.get("write_ptr", "?"),
+        write_ptr=core.interface.get("write_ptr"),
         sent_at_receiver=None,  # receiver's buffer
         acked_at_receiver=None,  # receiver's buffer
         read_ptr=None,  # receiver's buffer
@@ -271,8 +267,8 @@ def receiver_row(core: SocketCore, md: ReceiverMd) -> SocketRow:
         acked_at_sender=None,  # sender's buffer
         write_ptr=None,  # sender's buffer
         sent_at_receiver=md.bytes_sent,
-        acked_at_receiver=core.interface.get("bytes_acked", "?"),
-        read_ptr=core.interface.get("read_ptr", "?"),
+        acked_at_receiver=core.interface.get("bytes_acked"),
+        read_ptr=core.interface.get("read_ptr"),
         fifo_size=md.fifo_total_size,
         num_downstreams=None,  # sender's buffer
         peer=", ".join(p.label() for p in core.peers),
