@@ -103,9 +103,11 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
 
 #### Unstable index contract (`stable=False`)
 
-- Unstable indices are always a valid per-row permutation: gathering the
-  input by the returned indices reproduces the sorted values, and no index
-  repeats or leaves the logical range. The CrossCore factory runs the
+- Unstable indices are a valid per-row permutation: gathering the input by
+  the returned indices reproduces the sorted values, and no index repeats or
+  leaves the logical range. Known exception: on the MultiCore DRAM factory,
+  wide `float32` descending sorts can still emit padding indices past the
+  logical row (issue #53326). The CrossCore factory runs the
   index-aware comparator for **both** stabilities (issue #54043: the raw
   positional tie decision was not consistent between the two cores sharing a
   spanning tile pair, so ties could duplicate indices) — its unstable output
