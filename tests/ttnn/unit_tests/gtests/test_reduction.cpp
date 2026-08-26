@@ -1205,3 +1205,8 @@ TEST_F(ReductionSmoke, ManualSeedPerUserSeeds) {
 }
 
 }  // namespace ttnn::operations::reduction::test
+
+// TEMPORARY -- DROP BEFORE MERGE. Touch under tests/ttnn/** so find-changed-files.sh sets
+// tt-metalium-or-tt-nn-tests-changed, which is what gates ttnn-basic-tests in merge-gate.yaml.
+// A workflow-only diff flips none of those flags, so the job this PR modifies would otherwise
+// be skipped and the change would go unvalidated.

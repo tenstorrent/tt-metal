@@ -28,6 +28,10 @@ on:
         description: "Enable watcher"
         default: false
         type: boolean
+      enable-kernel-ccache:
+        description: 'Enable kernel ccache for JIT compilation at runtime'
+        default: false
+        type: boolean
       test-category:
         required: false
         type: string
@@ -105,7 +109,9 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions/download-artifact-with-retry
+          sparse-checkout: |
+            .github/actions/download-artifact-with-retry
+            .github/scripts/ccache_log_filter.sh
           sparse-checkout-cone-mode: false
 
       - uses: ./.github/actions/download-artifact-with-retry
@@ -133,6 +139,42 @@ jobs:
           echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
           echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
           echo "TT_METAL_WATCHER_DISABLE_ETH=1" >> $GITHUB_ENV
+
+      # Kept byte-identical to the same step in smoke.yaml so the two stay diffable.
+      # Note this job declares no `environment:`, unlike smoke.yaml's, so
+      # secrets.REDIS_CCACHE_PASSWORD is empty here on every event -- as it already is for
+      # smoke on merge_group and pull_request, where its `mainline` environment does not
+      # apply either. The gate therefore reads the cache anonymously; see #<TBD>.
+      - name: Set up kernel ccache
+        if: ${{ inputs.enable-kernel-ccache == true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        run: |
+          echo "Enabling TT Metal kernel ccache"
+          echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_ONLY=true" >> $GITHUB_ENV
+          echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESS=true" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESSLEVEL=3" >> $GITHUB_ENV
+          echo "CCACHE_LOGFILE=/tmp/ccache.log" >> $GITHUB_ENV
+          echo "CCACHE_BASEDIR=/work" >> $GITHUB_ENV
+          echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
+          echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
+          mkdir -p /tmp/ccache
+          # Build Redis URL in bash so that the password is never embedded in a
+          # workflow input string (GHA does not pass secrets through string inputs
+          # to reusable workflows). This also ensures forks leave CCACHE_REMOTE_STORAGE
+          # unset — the step is guarded by the fork check above.
+          REDIS_USER="${{ vars.REDIS_CCACHE_USER }}"
+          REDIS_PASSWORD="${{ secrets.REDIS_CCACHE_PASSWORD }}"
+          REDIS_HOST="${{ vars.REDIS_CCACHE_HOST }}"
+          REDIS_PORT="${{ vars.REDIS_CCACHE_PORT }}"
+          REDIS_READONLY="${{ vars.REDIS_CCACHE_IS_READONLY }}"
+          CCACHE_REMOTE_STORAGE="redis://${REDIS_USER}:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
+          # ccache 4.13 bug: the read-only optional trips the write gate whenever
+          # it has *any* value — even false. Only append it when actually true.
+          if [ "${REDIS_READONLY}" = "true" ]; then
+            CCACHE_REMOTE_STORAGE="${CCACHE_REMOTE_STORAGE}|read-only=true"
+          fi
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
 
       - name: Run a test
         id: test
@@ -169,3 +211,29 @@ jobs:
         with:
           path: /work/test-reports/
           prefix: "test_reports_"
+
+      # Without this there is no way to tell a working cache from a broken one: a ccache
+      # miss is silent and just looks like normal compile time. The second block needs
+      # .github/scripts/ccache_log_filter.sh, which is why it is in the sparse-checkout above.
+      - name: Publish ccache summary
+        if: ${{ !cancelled() && inputs.enable-kernel-ccache == true }}
+        run: |
+          echo '<details><summary>CCache Summary (kernel)</summary>' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '</details>' >> $GITHUB_STEP_SUMMARY
+
+          # Surface remote storage stats and errors from the ccache log.
+          # Uses a filter script to avoid overflowing the 1024k step summary limit.
+          if [ -f /tmp/ccache.log ]; then
+            echo '<details><summary>CCache Remote Storage (kernel)</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            "$GITHUB_WORKSPACE/.github/scripts/ccache_log_filter.sh" /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
+          fi
