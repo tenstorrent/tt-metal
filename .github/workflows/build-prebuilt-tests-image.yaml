@@ -46,14 +46,6 @@ on:
         type: string
         default: "prebuilt-tests-image"
         description: "ghcr package name, under ghcr.io/<repository>/"
-      tag-suffix:
-        required: false
-        type: string
-        default: ""
-        description: >-
-          Extra tag discriminator. Needed when one caller builds several images
-          from the same artifact and base, since nothing else in the tag reflects
-          the dockerfile or build-args.
       checkout-source:
         required: false
         type: boolean
@@ -103,11 +95,6 @@ on:
         type: string
         default: "prebuilt-tests-image"
         description: "ghcr package name, under ghcr.io/<repository>/"
-      tag-suffix:
-        required: false
-        type: string
-        default: ""
-        description: "Extra tag discriminator when several images share an artifact and base"
       checkout-source:
         required: false
         type: boolean
@@ -139,7 +126,8 @@ jobs:
           BASE_IMAGE: ${{ inputs.base-image }}
           IMAGE_NAME: ${{ inputs.image-name }}
           DOCKERFILE: ${{ inputs.dockerfile }}
-          TAG_SUFFIX: ${{ inputs.tag-suffix }}
+          BUILD_ARGS: ${{ inputs.build-args }}
+          CHECKOUT_SOURCE: ${{ inputs.checkout-source }}
         run: |
           set -euo pipefail
           # required: true still lets '' through, and an empty name would make
@@ -151,12 +139,22 @@ jobs:
           # Names end in <ref><sep><runid>, but packages joins with '-' and the
           # tarball with '_', so strip by shape rather than by position.
           CONFIG=$(printf '%s' "$ARTIFACT_NAME" | sed -E 's/[-_][0-9a-f]{7,40}[-_][0-9]+$//')
-          # Different bases must not collide on one artifact's tag. The tag says
-          # nothing about the dockerfile or build-args, so a caller building
-          # several images from one artifact and base must set tag-suffix.
           BASE_SLUG="${BASE_IMAGE##*/}"
           BASE_SLUG="${BASE_SLUG%%:*}"
-          TAG=$(printf '%s-%s-%s%s' "${GITHUB_SHA:0:12}" "$CONFIG" "$BASE_SLUG" "${TAG_SUFFIX:+-$TAG_SUFFIX}" | tr -c 'a-zA-Z0-9_.-' '-')
+          # Everything that decides what ends up in the image, at full length.
+          # Two calls differing only in build-args, say PRODUCT, would otherwise
+          # push the same tag and the second would overwrite the first. Equal
+          # hashes mean identical images, so sharing a tag is then correct.
+          # CONFIG rather than the raw artifact name: the run id must not leak in
+          # or a re-run of the same commit would mint a new tag.
+          RECIPE=$(printf '%s\n%s\n%s\n%s\n%s' \
+            "$CONFIG" "$BASE_IMAGE" "$DOCKERFILE" "$BUILD_ARGS" "$CHECKOUT_SOURCE" \
+            | sha256sum | cut -c1-8)
+          # The readable parts are truncated so the tag is bounded by construction.
+          # Real configs reach 142 chars untruncated, over Docker's 128 limit, and
+          # a legitimate build should not fail on its name. Truncation cannot cause
+          # a collision because the full values are in RECIPE.
+          TAG=$(printf '%s-%s-%s-%s' "${GITHUB_SHA:0:12}" "${CONFIG:0:48}" "${BASE_SLUG:0:32}" "$RECIPE" | tr -c 'a-zA-Z0-9_.-' '-')
           if [ "${#TAG}" -gt 128 ]; then
             echo "::error::Computed tag is ${#TAG} chars, over Docker's 128 limit: $TAG"
             exit 1
