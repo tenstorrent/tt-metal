@@ -74,35 +74,17 @@ bool supported_by_codegen(
 }
 
 bool is_demoted(
-    const ttnn::prim::PadCodegenParams& operation_attributes, const ttnn::prim::PadCodegenInputs& tensor_args) {
-    const Tensor& input = tensor_args.input;
-    if (input.layout() != Layout::ROW_MAJOR) {
-        // supported_by_codegen() admits TILE only for whole-tile back-pads, so every transfer the
-        // tiled reader issues is a whole tile page and it can never reach a staging fallback.
-        return false;
-    }
-
-    // Native's RM pad-value packing has no FLOAT32 case and falls through to the BFLOAT16 one, so
-    // it fills with a bf16-rounded constant for every nonzero float32 value (3.0 lands as
-    // 3.00392, 65536.0 as 65679.0) while codegen is exact. Demoting these would buy speed with a
-    // wrong answer, so they stay on codegen at whatever the staging path costs. Only float32 is
-    // affected; bfloat16/int32/uint32 fills are byte-exact on both paths.
-    if (input.dtype() == DataType::FLOAT32 && operation_attributes.packed_pad_value != 0) {
-        return false;
-    }
-
-    // An input row that is not a multiple of the NOC transfer granularity cannot be read directly:
-    // reader_pad_rm_interleaved.cpp has to pull the alignment-padded page into scratch and RISC-
-    // memmove the real bytes out, which costs a barrier and a byte copy per stick and measures
-    // 0.55-0.67x of native on Blackhole at every size tried up to 1.3MB. Every other shape reaches
-    // that reader's batched fast path and wins 1.25-1.57x. The bound is the NOC granularity, so it
-    // moves with the buffer: a width that stages against a 64B DRAM alignment can run direct
-    // against a 32B one.
-    //
-    // tensor_args.input is always the 4D-unsqueezed tensor (PadCodegenInputs is only ever built
-    // from input_4d), so logical_shape()[3] is W directly.
-    const uint32_t stick_size = input.logical_shape()[3] * input.element_size();
-    return stick_size % input.buffer()->alignment() != 0;
+    const ttnn::prim::PadCodegenParams& /*operation_attributes*/, const ttnn::prim::PadCodegenInputs& /*tensor_args*/) {
+    // No shape is perf-demoted. This gate used to demote row-major inputs whose stick size is not a
+    // multiple of the buffer alignment, on the theory that reader_pad_rm_interleaved.cpp's staging
+    // fallback -- pull the alignment-padded page into scratch, RISC-memmove the real bytes out --
+    // costs a barrier and a byte copy per stick and so runs slower than native. Cross-arch CI does
+    // not bear that out: over the ledger's 140 configs the 30 the predicate selected all beat native
+    // on device on both arches, from 0.92x at the narrowest margin to 0.135x on blackhole and 0.091x
+    // on wormhole_b0. Staging costs something, but native pays more elsewhere, so demoting these
+    // gave away the port's largest wins. The gate stays as the routing extension point for a genuine
+    // future device regression.
+    return false;
 }
 
 bool supported_execution_controls(bool use_multicore, const std::optional<CoreRangeSet>& sub_core_grids) {

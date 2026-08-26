@@ -25,6 +25,13 @@ struct PadCodegenProgramFactory {
 // Packs one pad word in the output tensor's physical scalar format. Transcribed from
 // ops/pad/builder.py's ``_pack_pad_value`` (float32 keeps the exact IEEE-754 bit pattern;
 // bfloat16 round-to-nearest-even's it into both halves of the word; int32/uint32 truncate).
+//
+// The float32 case is the one place the two prims do not agree. Native's row-major packing
+// (pad_rm_reader_writer_multi_core_default_program_factory.cpp) has no FLOAT32 branch: float32 falls
+// into its bfloat16 case and fills with two bf16 halves packed into the word, so a nonzero float32
+// pad value lands bf16-precise there and exact here. Codegen is the correct one, so this is not
+// something to match -- but it does mean a bit-exact native/codegen compare only holds for float32
+// when the pad value is zero, which packs to 0 on both paths.
 uint32_t pack_pad_value(tt::tt_metal::DataType dtype, float value);
 
 // RM-only batch shrink for the wide-stick L1 cliff. Transcribed from

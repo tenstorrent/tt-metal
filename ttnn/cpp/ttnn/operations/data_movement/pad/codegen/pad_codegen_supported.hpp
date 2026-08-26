@@ -24,7 +24,9 @@ bool supported_by_codegen(
 // such fields, so its validate has nothing to check.
 bool supported_execution_controls(bool use_multicore, const std::optional<CoreRangeSet>& sub_core_grids);
 
-// Perf gate, auto-only: an in-scope case that codegen can do but shouldn't be routed to.
+// Perf gate, auto-only: an in-scope case that codegen can do but shouldn't be routed to. Currently
+// demotes nothing -- every in-scope case measures faster on codegen on both archs. Kept as the
+// routing extension point; see the definition for what a previous version of it cost.
 bool is_demoted(
     const ttnn::prim::PadCodegenParams& operation_attributes, const ttnn::prim::PadCodegenInputs& tensor_args);
 

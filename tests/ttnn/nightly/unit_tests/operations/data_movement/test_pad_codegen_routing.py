@@ -61,8 +61,13 @@ def test_pad_codegen_routing(device, shape, padding, layout, dtype):
     assert device.num_program_cache_entries() == entries_before, msg
 
 
+# A row-major width that is not a multiple of the buffer alignment makes the reader take its
+# staging fallback: pull the alignment-padded page into scratch, then RISC-memmove the real bytes
+# out. That path was demoted on the theory it lost to native; cross-arch CI measured it winning on
+# both archs, so it routes to codegen now. Pinned here because the staging path is only reachable
+# through these widths -- a future demotion that took it back out would silently drop its coverage.
 @pytest.mark.parametrize("width", [17, 33], ids=["w17", "w33"])
-def test_pad_codegen_routing_ragged_width_demoted(device, width):
+def test_pad_codegen_routing_ragged_width(device, width):
     shape = [1, 1, 32, width]
     padding = ((0, 0), (0, 0), (0, 0), (0, 32))
     x = torch.rand(shape, dtype=torch.bfloat16)
@@ -71,8 +76,8 @@ def test_pad_codegen_routing_ragged_width_demoted(device, width):
     entries_before = device.num_program_cache_entries()
     out = ttnn.pad(xt, padding=padding, value=0)
     assert_equal(golden, ttnn.to_torch(out))
-    msg = "auto routed a perf-demoted ragged-W case to codegen (program cache grew); expected native"
-    assert device.num_program_cache_entries() == entries_before, msg
+    msg = "auto declined a ragged-W case (program cache unchanged); expected the codegen staging path"
+    assert device.num_program_cache_entries() > entries_before, msg
 
 
 def test_pad_codegen_routing_sharded_input(device):
