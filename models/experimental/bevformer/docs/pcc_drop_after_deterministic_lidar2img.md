@@ -10,17 +10,25 @@ FAILED test_encoder.py::test_bevformer_encoder_forward[...nuscenes_tiny...0.996.
 FAILED test_encoder.py::test_bevformer_encoder_forward[...carla_tiny...0.995...]    - PCC: 0.994937
 ```
 
-The commit that changed the geometry:
+The commit that exposed it, by changing the geometry:
 
-- `752990330b96edf4e0ca0c2125592d932f1998cb` — *Use deterministic lidar2img
-  matrices in BEVFormer tests* (branch `ctr-mmicic/bev-former`, 2026-08-25).
-  Replaces `torch.randn(4, 4)` projection matrices with an approximate nuScenes
-  camera rig in `config/encoder_config/camera_rig.py`; consumed by
-  `tests/pcc/test_encoder.py`, `tests/layer_common.py` and
-  `tests/profile/test_encoder_profile.py` through `img_metas_for_dataset`.
+- [`752990330b9`](https://github.com/tenstorrent/tt-metal/commit/752990330b96edf4e0ca0c2125592d932f1998cb)
+  — *Use deterministic lidar2img matrices in BEVFormer tests*
+  (branch `ctr-mmicic/bev-former`, 2026-08-25). Replaces `torch.randn(4, 4)`
+  projection matrices with an approximate nuScenes camera rig in
+  `config/encoder_config/camera_rig.py`; consumed by `tests/pcc/test_encoder.py`,
+  `tests/layer_common.py` and `tests/profile/test_encoder_profile.py` through
+  `img_metas_for_dataset`. It changed no model or kernel code — only the operating
+  point the tests measure.
 
-The commit changed no model or kernel code. It changed the operating point the
-tests measure.
+The commit that fixes it:
+
+- [`d897012f5cc`](https://github.com/tenstorrent/tt-metal/commit/d897012f5cc8b276f6afa6f55ad22818d65764c8)
+  — *bevformer: fix double output projection in spatial cross attention*
+  (branch `ctr-mmicic/bev-former`, 2026-08-25). Nests the deformable attention's
+  parameters under their own key so its `output_proj` is no longer dropped and the
+  SCA's no longer applied twice. Details and post-fix measurements in
+  **Fix — applied and verified** below.
 
 ## Conclusion first
 
@@ -101,8 +109,8 @@ matrices were.
 
 ## Bottom-up ladder
 
-Each level holds weights and feature inputs fixed and varies only the rig.
-Harness: `tests/pcc/test_geometry_divergence.py` (diagnostic, no thresholds).
+Each level holds weights and feature inputs fixed and varies only the rig. The
+harness was diagnostic and is no longer in the tree — see **Reproducing**.
 
 ### L1 — `point_sampling_3d_to_2d` — diverges, but geometry-independent
 
@@ -394,14 +402,19 @@ that treats `tiny` as a 2-point-pillar configuration is wrong.
 
 ## Reproducing
 
+The end state is covered by the standing suite:
+
 ```
-pytest models/experimental/bevformer/tests/pcc/test_geometry_divergence.py -sv -k point_sampling
-pytest models/experimental/bevformer/tests/pcc/test_geometry_divergence.py -sv -k ms_deformable
-pytest models/experimental/bevformer/tests/pcc/test_geometry_divergence.py -sv -k spatial_cross
-pytest models/experimental/bevformer/tests/pcc/test_geometry_divergence.py -sv -k stage_isolation
-pytest models/experimental/bevformer/tests/pcc/test_geometry_divergence.py -sv -k layer_divergence
-pytest models/experimental/bevformer/tests/pcc/test_geometry_divergence.py -sv -k "encoder_divergence and nuscenes_tiny"
+pytest models/experimental/bevformer/tests/pcc/test_encoder.py -v
+pytest models/experimental/bevformer/tests/pcc/test_layer.py -v
+pytest models/experimental/bevformer/tests/pcc/test_spatial_cross_attention.py -v
 ```
 
-Run the levels as separate invocations; several TT modules instantiated in one
-process exhaust DRAM.
+The `test_geometry_divergence.py` harness that produced the L1–L6 ladder was
+diagnostic — every level logged its PCC and asserted nothing — and was removed
+once the cause was found. Rebuilding a level from the tables above needs only two
+things: `lidar2img` from `camera_rig.py:lidar2img_for_dataset` for `rig` or a
+`torch.randn(num_cams, 4, 4)` draw for `random`, and, for the sub-op levels, the
+rebatch that `reference/spatial_cross_attention.py:150-172` performs. Run each
+level as its own pytest invocation; several TT modules instantiated in one process
+exhaust DRAM, which is what the two OOMs in the run log were.
