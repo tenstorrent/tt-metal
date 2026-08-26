@@ -98,6 +98,12 @@ buffers, which it currently cannot).
 
 - `ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/ring_reduce_scatter_minimal_async_reader.cpp`
 - `ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/ring_reduce_scatter_minimal_async_writer.cpp`
+- `ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/ring_reduction.cpp` —
+  added to the deferral after the post-rebase hardware retest: keeping the migrated compute
+  kernel against upstream's restructured reader/writer HUNG the first ring case (upstream
+  changed the trio's chunking contract together — `chunk_ring_parity` + the dual staging
+  protocol). The three ring kernels form one CB contract and are deferred as a unit; the
+  re-migration design pass covers all three.
 
 **(b) V1 -> V2 fabric-mux migration obsoletes the V1 `MuxConn` egress.** Upstream migrated
 this kernel to `FabricMuxV2Sender` (`tt_fabric_mux_v2_sender.hpp`), which obsoletes the
