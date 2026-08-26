@@ -725,11 +725,12 @@ public:
 //  - Host weights in OIHW layout: each chunk re-prepares its own weight slice on host.
 //  - Prepared device weights in the 1D-depthwise layout [1, 1, act_block_h*32*K, C_padded]
 //    (TILE, see convert_conv_weight_tensor_to_depthwise_layout): each chunk slices its
-//    channel range out fully on device (untilize once, slice the last dim, tilize) and
-//    the chunk conv consumes the TILE slice as-is (valid device weights), so no host
-//    weight re-preparation runs and the path stays safe under trace capture. The chunk
-//    conv_config pins act_block_h to the prepared tap-slab height so the kernel reads
-//    each kernel tap's slab at the boundaries the preparation laid out.
+//    channel range out of the last dim directly in TILE (chunk ends are TILE_WIDTH-aligned,
+//    so the slice stays in TILE with no ROW_MAJOR round-trip and no host re-preparation)
+//    and the chunk conv consumes the TILE slice as-is (valid device weights), so the path
+//    stays safe under trace capture. The chunk conv_config pins act_block_h to the prepared
+//    tap-slab height so the kernel reads each kernel tap's slab at the boundaries the
+//    preparation laid out.
 static uint32_t channel_chunk_count_if_needed(
     const ttnn::Tensor& weight_tensor,
     const std::optional<const ttnn::Tensor>& bias_tensor,
@@ -1093,31 +1094,24 @@ Result conv2d_DRAM(
         const uint32_t chunk_out_channels = out_channels / num_channel_chunks;
         const uint32_t chunk_groups = groups / num_channel_chunks;
 
-        // Host OIHW weights: the composite ttnn::slice cannot slice HOST tensors, so
-        // stage them to DRAM once and row-slice each chunk's output channels on device;
-        // from_device brings the chunk slice back to the host OIHW layout the chunk's
-        // own weight preparation (inside the L1 op) expects.
+        // Host OIHW weights: ttnn::prim::slice fatals on HOST tensors and round-tripping
+        // each chunk through the device would serialize the loop on the host anyway.
+        // Slice each chunk on the host with Tensor::unpad (host-only API); the chunk's own
+        // weight preparation inside conv2d_L1 prepares that host slice exactly as the
+        // unchunked path prepares the full weight.
         // Prepared depthwise device weights ([1, 1, act_block_h*32*K, C_padded], TILE):
-        // untilize once to ROW_MAJOR DRAM, then slice each chunk's channel range (last
-        // dim) and tilize it back — the chunk conv consumes the TILE slice as-is (valid
-        // device weights), so no host weight re-preparation runs and the path stays safe
-        // under trace capture. act_block_h is pinned to the prepared tap slab height so
-        // the kernel reads each kernel tap's slab at its prepared boundaries.
+        // slice each chunk's channel range (last dim) directly in TILE — TILE_WIDTH-aligned
+        // chunk ends land on tile boundaries so SliceTileProgramFactory applies without
+        // untilize/re-tilize or host re-preparation, and the chunk conv consumes the TILE
+        // slice as-is (valid device weights), which keeps the path safe under trace capture.
+        // act_block_h is pinned to the prepared tap slab height so the kernel reads each
+        // kernel tap's slab at its prepared boundaries.
         const bool chunk_prepared_device_weights =
             is_1d_depthwise_conv(
                 groups, in_channels, out_channels, kernel_size[0], input_height, bias_tensor.has_value()) &&
             ttnn::is_device_tensor(weight_tensor);
-        Tensor chunkable_weight_src;
-        std::optional<Tensor> chunkable_bias_src =
-            bias_tensor.has_value()
-                ? std::make_optional(
-                      ttnn::operations::core::to_device(bias_tensor.value(), device, ttnn::DRAM_MEMORY_CONFIG))
-                : std::nullopt;
-        Tensor prepared_weight_rm;
         Conv2dConfig chunk_conv_config = conv_config;
         if (chunk_prepared_device_weights) {
-            prepared_weight_rm = ttnn::untilize(ttnn::to_memory_config(
-                weight_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
             const uint32_t prepared_tap_slab_rows =
                 weight_tensor.logical_shape()[2] / (kernel_size[0] * kernel_size[1]);
             chunk_conv_config.act_block_h_override = prepared_tap_slab_rows;
@@ -1125,9 +1119,6 @@ Result conv2d_DRAM(
                 tt::LogOp,
                 "Conv2D DRAM channel chunking: prepared device weights with {} rows per kernel tap slab.",
                 prepared_tap_slab_rows);
-        } else {
-            chunkable_weight_src =
-                ttnn::operations::core::to_device(weight_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
         }
 
         for (uint32_t chunk_index = 0; chunk_index < num_channel_chunks; chunk_index++) {
@@ -1136,31 +1127,27 @@ Result conv2d_DRAM(
 
             Tensor chunk_weight;
             if (chunk_prepared_device_weights) {
-                const uint32_t prepared_slab_rows = weight_tensor.logical_shape()[2];
-                Tensor chunk_weight_rm = ttnn::slice(
-                    prepared_weight_rm,
+                chunk_weight = ttnn::slice(
+                    weight_tensor,
                     ttsl::SmallVector<uint32_t>{0, 0, 0, out_channels_begin},
-                    ttsl::SmallVector<uint32_t>{1, 1, prepared_slab_rows, out_channels_begin + chunk_out_channels},
+                    ttsl::SmallVector<uint32_t>{1, 1, weight_tensor.logical_shape()[2], out_channels_begin + chunk_out_channels},
                     ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
-                chunk_weight = ttnn::to_layout(chunk_weight_rm, tt::tt_metal::Layout::TILE);
             } else {
-                const auto& weight_shape = chunkable_weight_src.logical_shape();
-                chunk_weight = ttnn::operations::core::from_device(ttnn::slice(
-                    chunkable_weight_src,
-                    ttsl::SmallVector<uint32_t>{out_channels_begin, 0, 0, 0},
-                    ttsl::SmallVector<uint32_t>{
-                        out_channels_begin + chunk_out_channels, weight_shape[1], weight_shape[2], weight_shape[3]},
-                    ttsl::SmallVector<uint32_t>{1, 1, 1, 1}));
+                chunk_weight = weight_tensor.unpad(
+                    tt::tt_metal::Shape({out_channels_begin, 0, 0, 0}),
+                    tt::tt_metal::Shape(
+                        {out_channels_begin + chunk_out_channels,
+                         weight_tensor.logical_shape()[1],
+                         weight_tensor.logical_shape()[2],
+                         weight_tensor.logical_shape()[3]}));
             }
             std::optional<Tensor> chunk_bias = std::nullopt;
-            if (chunkable_bias_src.has_value()) {
-                const auto& bias_shape = chunkable_bias_src.value().logical_shape();
-                chunk_bias = ttnn::operations::core::from_device(ttnn::slice(
-                    chunkable_bias_src.value(),
-                    ttsl::SmallVector<uint32_t>{0, 0, 0, out_channels_begin},
-                    ttsl::SmallVector<uint32_t>{
-                        bias_shape[0], bias_shape[1], bias_shape[2], out_channels_begin + chunk_out_channels},
-                    ttsl::SmallVector<uint32_t>{1, 1, 1, 1}));
+            if (bias_tensor.has_value()) {
+                const auto& bias_shape = bias_tensor.value().logical_shape();
+                chunk_bias = bias_tensor.value().unpad(
+                    tt::tt_metal::Shape({0, 0, 0, out_channels_begin}),
+                    tt::tt_metal::Shape(
+                        {bias_shape[0], bias_shape[1], bias_shape[2], out_channels_begin + chunk_out_channels}));
             }
             auto chunk_attr = Conv2dSliceAttr(
                 batch_size,
@@ -1181,16 +1168,30 @@ Result conv2d_DRAM(
                 compute_config,
                 device);
 
-            // Slice this chunk's input channels straight into the sharded input config
-            // the chunk's conv expects (padded_slice requires a sharded output config).
+            // Isolate this chunk's channel window with ttnn::slice (the output shard's
+            // row size equals chunk_in_channels, so the reader copies exactly the
+            // chunk's channels and never a neighbour's), then padded_slice places the
+            // isolated window into the sharded input config the chunk's conv expects.
+            // padded_slice must start at channel 0 of the isolated tensor: its C++
+            // pad_value parameter is ignored (the pad writer only zeroes what it fills
+            // when the shard row is wider than the input row), so slicing the full
+            // tensor with in_channels_begin != 0 would copy real neighbour channels
+            // into the pad region instead of zeros.
             auto chunk_input_memory_config = chunk_attr.get_input_memory_config({0, 0}, {output_height, output_width});
-            const Tensor chunk_input_tensor = ttnn::experimental::padded_slice(
+            const Tensor chunk_input_window = ttnn::slice(
                 input_tensor_on_device,
                 ttsl::SmallVector<uint32_t>{0, 0, 0, in_channels_begin},
                 ttsl::SmallVector<uint32_t>{
                     batch_size, input_height, input_width, in_channels_begin + chunk_in_channels},
+                ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+            const Tensor chunk_input_tensor = ttnn::experimental::padded_slice(
+                chunk_input_window,
+                ttsl::SmallVector<uint32_t>{0, 0, 0, 0},
+                ttsl::SmallVector<uint32_t>{batch_size, input_height, input_width, chunk_in_channels},
                 ttsl::SmallVector<uint32_t>{1, 1, 1, 1},
-                chunk_input_memory_config);
+                chunk_input_memory_config,
+                std::nullopt,
+                0.f);
 
             auto chunk_output_tensors = chunk_attr.run_L1_op(chunk_input_tensor, {0, 0}, {output_height, output_width});
             TT_FATAL(
@@ -1224,15 +1225,6 @@ Result conv2d_DRAM(
                 ttsl::SmallVector<uint32_t>{
                     batch_size, output_height, output_width, out_channels_begin + chunk_out_channels},
                 ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
-        }
-
-        if (!chunk_prepared_device_weights) {
-            chunkable_weight_src.deallocate(true);
-        } else {
-            prepared_weight_rm.deallocate(true);
-        }
-        if (chunkable_bias_src.has_value()) {
-            chunkable_bias_src.value().deallocate(true);
         }
 
         if (should_deallocate_act) {

@@ -1077,6 +1077,7 @@ def _run_conv1d_route(
     groups,
     slice_config,
     has_bias,
+    prepared_weights=False,
 ):
     torch.manual_seed(0)
     torch_input_ncl = torch.randn(1, C, T, dtype=torch.bfloat16).float()
@@ -1114,6 +1115,30 @@ def _run_conv1d_route(
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
+    if prepared_weights:
+        # Prepared-device route: prepare the full weight once (has_bias must match the
+        # conv call so the grouped form is not mistaken for the depthwise layout).
+        weight_tt = ttnn.prepare_conv_weights(
+            weight_tensor=weight_tt,
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            weights_format="OIHW",
+            in_channels=C,
+            out_channels=groups,
+            batch_size=1,
+            input_height=1,
+            input_width=T,
+            kernel_size=(1, K),
+            stride=(1, 1),
+            padding=(0, pad),
+            dilation=(1, 1),
+            has_bias=has_bias,
+            groups=groups,
+            device=device,
+            input_dtype=ttnn.bfloat16,
+            conv_config=conv_config,
+            compute_config=compute_config,
+        )
     kwargs = dict(
         input_tensor=input_tt,
         weight_tensor=weight_tt,
@@ -1145,25 +1170,36 @@ def _run_conv1d_route(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "C,K,T,pad,groups,slice_config,has_bias",
+    "C,K,T,pad,groups,slice_config,has_bias,prepared_weights",
     [
         # GDN host-weight DRAM auto-slice: C=10240 does not fit; TILE_WIDTH-aligned 32x320 chunks.
-        (10240, 4, 12, 3, 10240, None, True),
+        (10240, 4, 12, 3, 10240, None, True, False),
         # Same shape, forced L1_FULL (qwen36 GDN prefill form). Must reroute, not TT_FATAL.
-        (10240, 4, 12, 3, 10240, ttnn.Conv2dL1FullSliceConfig, True),
+        (10240, 4, 12, 3, 10240, ttnn.Conv2dL1FullSliceConfig, True, False),
         # TILE_WIDTH-aligned smaller depthwise (64/2=32). C=96/4=24 is rejected;
         # C=96/3=32 is a legal non-power-of-two chunk count the old search missed.
-        (96, 4, 12, 3, 96, None, True),
-        (64, 4, 12, 3, 64, None, True),
+        (96, 4, 12, 3, 96, None, True, False),
+        (64, 4, 12, 3, 64, None, True, False),
         # Grouped 1x1 + L1_FULL + DRAM input: mm_conv ignores groups; must stay a matmul, not chunk.
-        (32, 1, 8, 0, 32, ttnn.Conv2dL1FullSliceConfig, True),
+        (32, 1, 8, 0, 32, ttnn.Conv2dL1FullSliceConfig, True, False),
+        # Prepared 1D-depthwise device weights, no bias: is_1d_depthwise_conv is true, so
+        # the TILE last-dim slice path chunks on device (96/3=32 and 64/2=32 chunks).
+        (96, 4, 12, 3, 96, None, False, True),
+        (64, 4, 12, 3, 64, None, False, True),
+        # Prepared grouped device weights with bias do NOT take the depthwise TILE-slice
+        # path (is_1d_depthwise_conv is false with bias); C=32 fits in one call, so this
+        # exercises prepared+bias end-to-end without channel chunking.
+        (32, 4, 12, 3, 32, None, True, True),
     ],
 )
-def test_conv1d_grouped_dram_channel_chunk_routes(device, C, K, T, pad, groups, slice_config, has_bias):
+def test_conv1d_grouped_dram_channel_chunk_routes(
+    device, C, K, T, pad, groups, slice_config, has_bias, prepared_weights
+):
     """Host-weight grouped conv1d routes: channel-chunk when spatial slicing cannot
     fit, L1_FULL reroute, TILE_WIDTH-aligned chunks, and 1x1 mm_conv must not throw.
-    Prepared-device + no-bias is a separate layout (is_1d_depthwise_conv); host+bias
-    here covers the GDN fact. PCC on C=10240 alone is not blast-radius."""
+    Prepared-device weights cover both forms: no-bias is the true depthwise TILE-slice
+    chunk path, while prepared+bias runs unchunked at a size that fits (can_chunk_channels
+    refuses device prepared+bias). PCC on C=10240 alone is not blast-radius."""
     _run_conv1d_route(
         device,
         C=C,
@@ -1173,4 +1209,5 @@ def test_conv1d_grouped_dram_channel_chunk_routes(device, C, K, T, pad, groups, 
         groups=groups,
         slice_config=slice_config,
         has_bias=has_bias,
+        prepared_weights=prepared_weights,
     )
