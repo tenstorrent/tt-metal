@@ -317,7 +317,7 @@ models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d.py:
     env:
       TT_METAL_ENV: dev
       TT_METAL_SLOW_DISPATCH_MODE: 1
-      PYTEST_TIMEOUT: 1200
+      PYTEST_ADDOPTS: "--timeout=1200"
 
 models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_1x3.py:
   - runner: pytest
