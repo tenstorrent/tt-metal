@@ -23,6 +23,21 @@ from ..utils.tensor import local_device_to_torch
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
 _ZEROS_CACHE: dict = {}
 
+# Dedup noisy construction / fallback warnings across every call in this process.
+_ONCE_WARNINGS: set = set()
+
+
+def _warn_once(key, message: str) -> None:
+    if key not in _ONCE_WARNINGS:
+        logger.warning(message)
+        _ONCE_WARNINGS.add(key)
+
+
+def _warn_padded_out_channels(unpadded: int, padded: int) -> None:
+    if unpadded != padded:
+        _warn_once(("padded_out", unpadded, padded), f"Padding out_channels from {unpadded} to {padded}")
+
+
 CONV_SPLIT_MODES = ("off", "weight", "full")
 
 # Default cap on conv3d's C_in_block for the H3 audio blocking table; the sweep that keeps it at
@@ -359,9 +374,10 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, pref
             compute_config=cache["cc"],
             cache=cache,
         )
-        logger.warning(
+        _warn_once(
+            ("dw_chunk", T_pad, C, K, stride, chunk),
             f"depthwise conv1d needs C-chunking at T_pad={T_pad}, C={C}, K={K}, stride={stride}; "
-            f"using {C // chunk} chunks of {chunk}"
+            f"using {C // chunk} chunks of {chunk}",
         )
         return out
 
@@ -835,8 +851,7 @@ class Conv2dViaConv3d(Module):
         self.unpadded_out_channels = out_channels
         self.in_channels = aligned_channels(in_channels)
         self.out_channels = max(32, out_channels)
-        if self.out_channels != self.unpadded_out_channels:
-            logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
+        _warn_padded_out_channels(self.unpadded_out_channels, self.out_channels)
 
         kh, kw = _ntuple(kernel_size, 2)
         sh, sw = _ntuple(stride, 2)
@@ -999,8 +1014,7 @@ class Conv1dViaConv3d(Module):
         self.unpadded_out_channels = out_channels
         self.in_channels = aligned_channels(in_channels, self.channel_align)
         self.out_channels = aligned_channels(max(32, out_channels), self.channel_align)
-        if self.out_channels != self.unpadded_out_channels:
-            logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
+        _warn_padded_out_channels(self.unpadded_out_channels, self.out_channels)
 
         self.kernel_size = (kernel_size, 1, 1)
         self.stride = (stride, 1, 1)
