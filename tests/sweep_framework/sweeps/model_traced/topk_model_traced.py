@@ -192,7 +192,19 @@ def run(
         # vectors without one instead of aborting at the TT_FATAL. The values are unaffected
         # either way -- the kernel generates identical indices itself.
         dim_is_last = dim_val in (-1, len(shape) - 1)
-        if idx_shape != shape or not dim_is_last:
+        # ttnn.topk now also honours the supplied tensor's index width (#54168): a UINT16
+        # indices tensor is rejected once 32-bit indices are required -- reduced dim above
+        # 65535, or a float32 input. The traced Llama 3.x configs carry a UINT16 indices
+        # tensor at width 65536 from that same retired sampling code, so drop it for the
+        # same reason rather than aborting at the TT_FATAL. Dropping is also the only
+        # correct replay now that the tensor is honoured: the traced values are not
+        # recorded, so the placeholder we would pass (all zeros) would come back as the
+        # op's indices output and disagree with the torch golden.
+        reduced_w = shape[dim_val if dim_val != -1 else len(shape) - 1]
+        padded_reduced_w = ((reduced_w + 31) // 32) * 32
+        idx_needs_32_bit = padded_reduced_w > 65535 or input_a_dtype == ttnn.float32
+        idx_is_16_bit = indices_tensor_info.get("dtype") == ttnn.uint16
+        if idx_shape != shape or not dim_is_last or (idx_is_16_bit and idx_needs_32_bit):
             indices_tensor_info = None
     if indices_tensor_info and indices_tensor_info["shape"] is not None:
         idx_dtype = indices_tensor_info.get("dtype") or ttnn.uint16
