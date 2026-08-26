@@ -60,9 +60,9 @@
  * wall clock and the wire carries 3 words per zone instead of 2+2:
  *   [0] word0 = pp_zone_atomic_w0(id)   [1] end timer_low   [2] duration (end - start, 32-bit cycles)
  * end = (sticky timer_hi << 32) | word1 ; start = end - word2. The 32-bit duration bounds a zone at
- * ~3.2 s @ 1.35 GHz; a producer whose zone outlives that falls back to a legacy START/END pair with a
- * sticky refresh before each half (exact, but the stale start trips the host's per-lane order-
- * regression diagnostic once -- desirable visibility for a >3.2 s on-device zone, which is a bug).
+ * ~3.2 s @ 1.35 GHz; a producer whose zone outlives that ships a self-contained 5-word ZONE_L instead
+ * (exact; the decoder's synthetic START still trips the per-lane order-regression diagnostic once --
+ * desirable visibility for a >3.2 s on-device zone, which is a bug).
  * PRODUCER-STALL ships as ZONE_ATOMIC too (pinned to this width: its close writes into the stall
  * reserve with no room check, so its footprint must be fixed; a >=2^32-cycle stall saturates the
  * duration instead of taking the fallback). Per-lane wire order is END order, so nested zones

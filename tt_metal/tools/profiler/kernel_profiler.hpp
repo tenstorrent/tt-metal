@@ -98,9 +98,9 @@ TT_ZONE_DEFINE_ID(PROFILER_STALL_ZONE_ID, "PRODUCER-STALL");
 // build lacks that include path). word0 = type(5) | low27. A zone ships WHOLE at scope close, sized
 // by need: a 2-word ZONE_S when its end sits within 2^16 cycles of the lane cursor (the previous
 // S/ATOMIC zone's end) and its duration fits 16 bits, else the 3-word ZONE_ATOMIC (id | end timer_low
-// | duration), which also re-anchors the cursor; the legacy 2-word START/END markers survive only for
-// the >3.2s fallback. Lane identity and time's high half
-// are host-reconstructed from stickies: STICKY_PROG (runtime host-id, 1 word; 2-word PROG_EXT past
+// | duration), which also re-anchors the cursor; a >3.2s duration ships as the self-contained 5-word
+// ZONE_L (two full 64-bit values). The legacy 2-word START/END markers have NO emitter here any more. Lane identity and
+// time's high half are host-reconstructed from stickies: STICKY_PROG (runtime host-id, 1 word; 2-word PROG_EXT past
 // 2^27), STICKY_TIMER (timer_hi, on high-half tick), STICKY_SRC (injected by the drainer reader).
 struct ppfmt {
     static constexpr uint32_t TYPE_SHIFT = 27;
@@ -108,8 +108,8 @@ struct ppfmt {
     static constexpr uint32_t LOW27_MASK = 0x7FFFFFFu;
     // This wire's OWN type space -- never pass a hostdevcommon PacketTypes value through (that aliased
     // unrelated types on this wire before). Retired values (11 = ZONE_TOTAL) are never reused.
-    static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START (long-zone fallback only)
-    static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END   (long-zone fallback only)
+    static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START (retired from this producer; decode-only)
+    static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END   (retired from this producer; decode-only)
     static constexpr uint32_t T_ZONE_ATOMIC = 2u;       // PP_ZONE_ATOMIC (3 words: id | end_lo | duration)
     static constexpr uint32_t T_ZONE_S = 3u;            // PP_ZONE_S (2 words: id | end_delta16<<16 | dur16)
     static constexpr uint32_t T_ZONE_L = 4u;            // PP_ZONE_L (5 words: id | end_lo | end_hi | dur_lo | dur_hi)
@@ -305,21 +305,27 @@ inline __attribute__((always_inline)) void ring_ensure_room(uint32_t nwords) {
     }
 }
 
+// ZONE_L packet size: word0 (type|id) + end_lo + end_hi + dur_lo + dur_hi.
+static constexpr uint32_t SPSC_ZONE_L_WORDS = 5;
+
 // Long-zone fallback (duration >= 2^32 cycles, ~3.2 s): the 32-bit duration word cannot carry it, so
-// ship the zone as an exact legacy START/END pair, refreshing the sticky before each half (the two
-// halves are guaranteed to differ in timer_hi -- that is what put us here). The stale start timestamp
-// trips the host's per-lane order-regression diagnostic ONCE, which is desirable visibility: a >3.2 s
-// on-device zone is a wedge, not a measurement. Out of line: this path must cost nothing at the
-// (always_inline) zone sites that can never take it.
+// ship ONE self-contained ZONE_L packet -- two full 64-bit values, no sticky involvement (the packet
+// carries its own high words) and no cursor movement (mirrored by the decoder, which leaves the lane
+// cursor alone for L). The decoder normalizes it to a synthetic START/END pair for the pairing stack,
+// whose in-the-past START trips the per-lane order-regression diagnostic ONCE -- kept on purpose as
+// visibility: a >3.2 s on-device zone is a wedge, not a measurement. With this, NOTHING on a worker
+// emits the legacy wire pair any more (types 0/1 remain decode-only until they are retired).
+// Out of line: this path must cost nothing at the (always_inline) zone sites that can never take it.
 __attribute__((noinline)) void mark_zone_long(
     uint32_t timer_id, uint32_t start_hi, uint32_t start_lo, uint32_t end_hi, uint32_t end_lo) {
-    ring_ensure_room(2 * (SPSC_MARKER_WORDS + 1));
-    ring_write_sticky_timer(start_hi);
-    ring_write_word(ppfmt::zone_w0(timer_id, ZoneKind::Start));
-    ring_write_word(start_lo);
-    ring_write_sticky_timer(end_hi);
-    ring_write_word(ppfmt::zone_w0(timer_id, ZoneKind::End));
+    ring_ensure_room(SPSC_ZONE_L_WORDS);
+    const uint32_t dur_lo = end_lo - start_lo;
+    const uint32_t dur_hi = end_hi - start_hi - (end_lo < start_lo);
+    ring_write_word(ppfmt::w0(ppfmt::T_ZONE_L, timer_id));
     ring_write_word(end_lo);
+    ring_write_word(end_hi);
+    ring_write_word(dur_lo);
+    ring_write_word(dur_hi);
     publish_tail();
 }
 
