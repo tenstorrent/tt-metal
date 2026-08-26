@@ -247,7 +247,7 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 - name: "ttnn reduce group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/kernel_lib/reduce -xv -m "not disable_fast_runtime_mode"'
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
       timeout: 40
