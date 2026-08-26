@@ -224,8 +224,9 @@ void calculate_sum_exp_x() {
         sub_binary_tile_init();
         sub_binary_tile(working_register, max_value_register, working_register);  // subtract max value from each tile
 
-        // Hand-scheduled TTI exp shared with SDPA: ~3x cheaper on the SFPU than the
-        // generic accurate exp_tile at bf16 output precision.
+        // exp via the shared SDPA path: on Blackhole this dispatches to the hand-scheduled
+        // TTI exp (~3x cheaper on the SFPU than the generic accurate exp_tile at bf16
+        // output precision); on Wormhole it falls back to the same accurate sfpi exp.
         sdpa_exp_tile_init();
         sdpa_exp_tile(working_register);  // calculate exp for each tile in tile register
 
