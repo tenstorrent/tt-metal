@@ -40,14 +40,12 @@ template <
     uint32_t dilation_w,
     bool zero_pages,
     uint32_t in_cb_sz,
-    uint32_t bf16_init_value>
+    uint32_t bf16_init_value,
+    uint32_t MAX_TILES_PER_REDUCTION>
 ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
-    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
-    // otherwise we can reduce 8 tiles at a time.
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
-    constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
+    constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t num_tilized_rows =
         wide_reduction ? (in_cb_sz / (MAX_TILES_PER_REDUCTION * TILE_WIDTH)) : (in_cb_sz / (in_ntiles_c * TILE_WIDTH));
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
@@ -220,6 +218,7 @@ void kernel_main() {
     constexpr uint32_t in_nblocks_c = get_arg(args::in_nblocks_c);
     constexpr uint32_t in_cb_sz = get_arg(args::in_cb_sz);
     constexpr uint32_t max_sticks_for_reduction = get_arg(args::max_sticks_for_reduction);
+    constexpr uint32_t max_tiles_per_reduction = get_arg(args::max_tiles_per_reduction);
     constexpr uint32_t ceil_pad_w = get_arg(args::ceil_pad_w);
 
     // CB ids now come from Metal 2.0 DFB bindings. Split-reader uses per-reader input/scalar
@@ -474,7 +473,8 @@ void kernel_main() {
                 dilation_w,
                 zero_pages,
                 in_cb_sz,
-                bf16_init_value>(ind, in_l1_read_base_addr);
+                bf16_init_value,
+                max_tiles_per_reduction>(ind, in_l1_read_base_addr);
 #if ENABLE_DEBUG_PRINT == 1
             // [DIAG] Peek THIS reader's just-filled input CB (reader is producer; on DM get_read_ptr still
             // points at the base page it filled, before compute pops). Tilized face0 row0 = first 16

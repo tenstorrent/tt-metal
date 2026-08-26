@@ -93,27 +93,16 @@ void kernel_main() {
         last_tile_is_partial && (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face) ? 1 : 2;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::AVG;
-    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
-    // otherwise we can reduce 8 tiles at a time. Callers (e.g. grid_sample under fp32_dest_acc_en) can
-    // also force the 4-tile limit via ct_arg[16] so each chunk fits in half-sync DEST (= 4 fp32 tiles)
-    // without forcing dst_full_sync_en.
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
-    constexpr bool force_max_tiles_per_reduction_4 = get_arg(args::force_max_tiles_per_reduction_4);
-    constexpr uint32_t MAX_TILES_PER_REDUCTION =
-        (force_max_tiles_per_reduction_4 || (is_avg_pool && is_large_kernel)) ? 4 : 8;
+    // The host factory resolves DEST-capacity limits (fp32 vs fp16, half-sync vs full-sync) and
+    // equal-width c-block constraints into a single value; kernels consume it directly.
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = get_arg(args::max_tiles_per_reduction);
     constexpr uint32_t max_tiles_per_iter =
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
+    static_assert(partial_iter_output_tiles == max_tiles_per_iter, "c-blocks must all be the same width");
 
-#if PACK_TO_SCRATCH == 1
-    // The scratch path assembles every c-block into one full-width stick, and llk_pack_untilize places
-    // a slice at block_c_index * block_ct_dim -- an offset in units of the block's own width -- which a
-    // narrower (remainder) last block cannot express for most widths. Allow one c-block only.
-    static_assert(
-        in_ntiles_c <= MAX_TILES_PER_REDUCTION,
-        "PACK_TO_SCRATCH does not support wide reduction: channels per shard must fit in a single reduction.");
-#endif
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::AVG, "Only supports REDUCE_OP = MAX or AVG");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::AVG) ? true : false;
