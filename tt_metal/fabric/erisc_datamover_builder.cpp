@@ -313,20 +313,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
         this->receiver_channel_remote_completion_counters_base_addr = next_l1_addr;
         next_l1_addr += num_words_consumed_per_counter;
-
-        // [CREDIT-ADDR PROBE] Print the actual L1 addresses of the flow-control credit counters the
-        // sender/receiver channel steps use (distinct from the 0x6F2xx debug-mirror slots). One line per
-        // EDM config build. Remove once the addresses are captured.
-        log_info(
-            tt::LogFabric,
-            "[CREDIT-ADDR] num_sender_channels={} bytes/counter={} | to_sender_remote_ack=0x{:X} "
-            "to_sender_remote_completion=0x{:X} | local_receiver_ack=0x{:X} local_receiver_completion=0x{:X}",
-            num_sender_channels,
-            num_words_consumed_per_counter,
-            this->to_sender_channel_remote_ack_counters_base_addr,
-            this->to_sender_channel_remote_completion_counters_base_addr,
-            this->receiver_channel_remote_ack_counters_base_addr,
-            this->receiver_channel_remote_completion_counters_base_addr);
     }
 
     this->edm_channel_ack_addr = next_l1_addr;
