@@ -18,7 +18,7 @@ from models.common.llama_models import (
     extract_images_from_messages,
     sample_top_p,
 )
-from models.common.model_capabilities import ModelCapabilitiesMixin
+from models.common.model_capabilities import ModelCapabilitiesMixin, floor_to_alignment, resume_offset_alignment
 from models.common.sampling import (
     SamplingParams,
     broadcast_sampling_params,
@@ -164,6 +164,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.trace_output_decode = defaultdict(lambda: None)
         self.prefill_traces_warmup = False
         self.already_warmed_up_prefill = False
+        self._declared_alignment_checked = False
         self.mode = None
         # Set for the duration of the first traced prefill call: its decode trace is prepared before that
         # call's prefill captures anything, and recorded once the prefill is done. Prefill traces are
@@ -948,6 +949,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         assert len(num_cached_per_user) == len(
             prompt_lens
         ), f"start_pos length {len(num_cached_per_user)} != prompt_lens length {len(prompt_lens)}"
+        if start_pos is not None:
+            num_cached_per_user = self._align_resume_offsets(num_cached_per_user, kv_cache)
+            # The per-user loop below re-reads the offset from ``start_pos``, so the
+            # aligned list has to replace it: otherwise the padded length computed
+            # here would not match the token slice the kernel receives.
+            start_pos = num_cached_per_user
         for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
             assert 0 <= num_cached < seq_len, f"user {i}: num_cached={num_cached} must be < seq_len={seq_len}"
         prefill_seq_lens = [
@@ -1388,6 +1395,76 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             return output_tokens, reformat_logprobs(output_log_probs, batch_size)
         else:
             return output_tensor
+
+    def _resume_offset_alignment(self, kv_cache):
+        """Multiple every resume offset has to land on, or None when unpaged.
+
+        See :func:`resume_offset_alignment` for the two constraints it combines.
+        """
+        if kv_cache is None or kv_cache[0] is None:
+            return None
+        block_size = self._paged_prefill_block_size(kv_cache[0])
+        declared = self.model_capabilities.get("chunked_prefill_token_alignment")
+        if declared and not self._declared_alignment_checked:
+            self._check_declared_alignment(int(declared), block_size)
+            self._declared_alignment_checked = True
+        return resume_offset_alignment(block_size, declared)
+
+    def _check_declared_alignment(self, declared, block_size):
+        """Reject a declaration that does not satisfy the model's own constraints.
+
+        The plugin has to read this at config time, long before the model exists,
+        so it can only take the model's word for it. A value below the traced
+        SDPA's q_chunk_size yields an offset the op cannot honour, and it answers
+        from the wrong prefix rather than raising. A value the block size does not
+        divide is repaired by the LCM, but silently, so say so instead.
+
+        Runs once per generator rather than per prefill: a bad declaration is a
+        model bug that should surface on the first request, not repeatedly.
+        Queried at ``max_seq_len`` because q_chunk_size grows with sequence
+        length, so that is the binding value.
+        """
+        if declared % block_size:
+            logger.warning(
+                f"model_capabilities['chunked_prefill_token_alignment']={declared} is not a "
+                f"multiple of the paged KV block_size={block_size}; resume offsets will be "
+                f"aligned to their least common multiple ({resume_offset_alignment(block_size, declared)}) "
+                "instead, which recomputes more tokens than the declaration implies."
+            )
+        get_config = getattr(self.model_args[0], "get_attn_sdpa_program_config", None)
+        if get_config is None:
+            return
+        try:
+            q_chunk = get_config(Mode.PREFILL, self.model_args[0].max_seq_len, 0, None).q_chunk_size
+        except (AttributeError, TypeError, ValueError):
+            # A model whose program config this signature does not describe.
+            return
+        if declared % q_chunk:
+            raise ValueError(
+                f"model_capabilities['chunked_prefill_token_alignment']={declared} is not a "
+                f"multiple of the q_chunk_size={q_chunk} this model's traced prefill SDPA is "
+                "built with, so a resume offset aligned to it would still be one the op cannot "
+                "honour. Raise the declared alignment to a multiple of the q_chunk_size."
+            )
+
+    def _align_resume_offsets(self, num_cached_per_user, kv_cache):
+        """Floor each resume offset to :meth:`_resume_offset_alignment`.
+
+        Prefix-cache hits are block-aligned by construction but not necessarily
+        q_chunk-aligned, and the vLLM scheduler splits a chunked prefill on the
+        token budget alone, so a continuation can resume anywhere.
+        """
+        alignment = self._resume_offset_alignment(kv_cache)
+        if not alignment:
+            # Non-paged prefill: there is no page table to slice.
+            return num_cached_per_user
+        aligned = floor_to_alignment(num_cached_per_user, alignment)
+        for i, (before, after) in enumerate(zip(num_cached_per_user, aligned)):
+            if before != after:
+                logger.debug(
+                    f"Resume offset alignment: user {i} start_pos {before} -> {after} " f"(multiple of {alignment})"
+                )
+        return aligned
 
     def _paged_prefill_block_size(self, kv_cache):
         """Block size for chunked-prefill page-table padding/slicing.
