@@ -12,11 +12,18 @@
 namespace hal::atomic
 {
 
-/** @brief Select the hardware-managed FIFO pointer operated on by ATINCGETPTR. */
+/** @brief Select the hardware-managed FIFO pointer encoded by a low-level ATINCGETPTR descriptor. */
 enum class FifoPointer : std::uint8_t
 {
     Read  = 0,
     Write = 1
+};
+
+/** @brief Select the FIFO condition that blocks a readiness wait. */
+enum class FifoState : std::uint8_t
+{
+    Empty,
+    Full
 };
 
 /**
@@ -43,7 +50,7 @@ struct FetchIncrement
 };
 
 /**
- * @brief Describe a blocking FIFO-pointer acquire or readiness probe (ATINCGETPTR).
+ * @brief Describe a blocking FIFO pointer update or state wait (ATINCGETPTR).
  *
  * @tparam AddressIndex: FIFOControl address GPR type index.
  * @tparam DataIndex: Pointer-result GPR type index.
@@ -157,36 +164,54 @@ struct Fifo
     hal::Gpr<AddressIndex> control_address;
 
     /**
-     * @brief Build a blocking pointer-acquire descriptor without issuing it.
+     * @brief Build a blocking read-counter advance descriptor without issuing it.
      *
-     * @tparam Pointer: Pointer to acquire, values = <Read/Write>.
      * @tparam IncrementLog2: Base-two logarithm of the pointer increment, in [0, 15].
      * @tparam ResultIndex: Pointer-result GPR type index.
-     * @param result: GPR receiving the pre-increment pointer.
+     * @param result: GPR receiving the pre-increment read pointer.
      */
-    template <FifoPointer Pointer, std::uint8_t IncrementLog2 = 0, std::uint32_t ResultIndex>
-    constexpr FifoAcquire<AddressIndex, ResultIndex> acquire_slot(hal::Gpr<ResultIndex> result) const;
+    template <std::uint8_t IncrementLog2 = 0, std::uint32_t ResultIndex>
+    constexpr FifoAcquire<AddressIndex, ResultIndex> pop_slots(hal::Gpr<ResultIndex> result) const;
 
     /**
-     * @brief Build a runtime-increment blocking pointer-acquire descriptor without issuing it.
+     * @brief Build a runtime-increment blocking read-counter advance descriptor without issuing it.
      *
-     * @tparam Pointer: Pointer to acquire, values = <Read/Write>.
      * @tparam ResultIndex: Pointer-result GPR type index.
-     * @param result: GPR receiving the pre-increment pointer.
+     * @param result: GPR receiving the pre-increment read pointer.
      * @param increment_log2: Base-two logarithm of the pointer increment, in [0, 15].
      */
-    template <FifoPointer Pointer, std::uint32_t ResultIndex>
-    constexpr FifoAcquire<AddressIndex, ResultIndex> acquire_slot(hal::Gpr<ResultIndex> result, std::uint8_t increment_log2) const;
+    template <std::uint32_t ResultIndex>
+    constexpr FifoAcquire<AddressIndex, ResultIndex> pop_slots(hal::Gpr<ResultIndex> result, std::uint8_t increment_log2) const;
 
     /**
-     * @brief Build a blocking readiness-probe descriptor without issuing it.
+     * @brief Build a blocking write-counter advance descriptor without issuing it.
      *
-     * @tparam Pointer: Pointer to probe, values = <Read/Write>.
+     * @tparam IncrementLog2: Base-two logarithm of the pointer increment, in [0, 15].
      * @tparam ResultIndex: Pointer-result GPR type index.
-     * @param result: GPR receiving the current pointer without incrementing it.
+     * @param result: GPR receiving the pre-increment write pointer.
      */
-    template <FifoPointer Pointer, std::uint32_t ResultIndex>
-    constexpr FifoAcquire<AddressIndex, ResultIndex> wait_ready(hal::Gpr<ResultIndex> result) const;
+    template <std::uint8_t IncrementLog2 = 0, std::uint32_t ResultIndex>
+    constexpr FifoAcquire<AddressIndex, ResultIndex> push_slots(hal::Gpr<ResultIndex> result) const;
+
+    /**
+     * @brief Build a runtime-increment blocking write-counter advance descriptor without issuing it.
+     *
+     * @tparam ResultIndex: Pointer-result GPR type index.
+     * @param result: GPR receiving the pre-increment write pointer.
+     * @param increment_log2: Base-two logarithm of the pointer increment, in [0, 15].
+     */
+    template <std::uint32_t ResultIndex>
+    constexpr FifoAcquire<AddressIndex, ResultIndex> push_slots(hal::Gpr<ResultIndex> result, std::uint8_t increment_log2) const;
+
+    /**
+     * @brief Build a blocking FIFO-state wait descriptor without issuing it.
+     *
+     * @tparam State: Condition that blocks the operation, values = <Empty/Full>.
+     * @tparam ResultIndex: Pointer-result GPR type index.
+     * @param result: GPR receiving the current read pointer for Empty or write pointer for Full.
+     */
+    template <FifoState State, std::uint32_t ResultIndex>
+    constexpr FifoAcquire<AddressIndex, ResultIndex> wait_while(hal::Gpr<ResultIndex> result) const;
 };
 
 /**
@@ -253,6 +278,20 @@ constexpr bool is_valid(const hal::Gpr<Index> operand)
 constexpr bool is_valid(const FifoPointer pointer)
 {
     return pointer == FifoPointer::Read || pointer == FifoPointer::Write;
+}
+
+template <FifoState State>
+constexpr FifoPointer pointer_for()
+{
+    static_assert(State == FifoState::Empty || State == FifoState::Full, "FIFO state must be Empty or Full");
+    if constexpr (State == FifoState::Empty)
+    {
+        return FifoPointer::Read;
+    }
+    else
+    {
+        return FifoPointer::Write;
+    }
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
@@ -377,7 +416,7 @@ constexpr bool is_valid(const FetchIncrement<AddressIndex, DataIndex> operation)
     return detail::is_valid(operation);
 }
 
-/** @brief Return whether a FIFO-acquire descriptor can be encoded without truncation. */
+/** @brief Return whether a FIFO descriptor can be encoded without truncation. */
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
 constexpr bool is_valid(const FifoAcquire<AddressIndex, DataIndex> operation)
 {
@@ -476,31 +515,45 @@ inline constexpr __attribute__((always_inline)) FetchIncrement<AddressIndex, Dat
 }
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
-template <FifoPointer Pointer, std::uint8_t IncrementLog2, std::uint32_t ResultIndex>
-inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::acquire_slot(
+template <std::uint8_t IncrementLog2, std::uint32_t ResultIndex>
+inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::pop_slots(
     const hal::Gpr<ResultIndex> result) const
 {
-    static_assert(detail::is_valid(Pointer), "FIFO pointer must be Read or Write");
     static_assert(IncrementLog2 <= 15u, "FIFO increment logarithm must be in [0, 15]");
-    return FifoAcquire<AddressIndex, ResultIndex> {control_address, result, Pointer, CapacityLog2, IncrementLog2, false};
+    return FifoAcquire<AddressIndex, ResultIndex> {control_address, result, FifoPointer::Read, CapacityLog2, IncrementLog2, false};
 }
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
-template <FifoPointer Pointer, std::uint32_t ResultIndex>
-inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::acquire_slot(
+template <std::uint32_t ResultIndex>
+inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::pop_slots(
     const hal::Gpr<ResultIndex> result, const std::uint8_t increment_log2) const
 {
-    static_assert(detail::is_valid(Pointer), "FIFO pointer must be Read or Write");
-    return FifoAcquire<AddressIndex, ResultIndex> {control_address, result, Pointer, CapacityLog2, increment_log2, false};
+    return FifoAcquire<AddressIndex, ResultIndex> {control_address, result, FifoPointer::Read, CapacityLog2, increment_log2, false};
 }
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
-template <FifoPointer Pointer, std::uint32_t ResultIndex>
-inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::wait_ready(
+template <std::uint8_t IncrementLog2, std::uint32_t ResultIndex>
+inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::push_slots(
     const hal::Gpr<ResultIndex> result) const
 {
-    static_assert(detail::is_valid(Pointer), "FIFO pointer must be Read or Write");
-    return FifoAcquire<AddressIndex, ResultIndex> {control_address, result, Pointer, CapacityLog2, 0, true};
+    static_assert(IncrementLog2 <= 15u, "FIFO increment logarithm must be in [0, 15]");
+    return FifoAcquire<AddressIndex, ResultIndex> {control_address, result, FifoPointer::Write, CapacityLog2, IncrementLog2, false};
+}
+
+template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
+template <std::uint32_t ResultIndex>
+inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::push_slots(
+    const hal::Gpr<ResultIndex> result, const std::uint8_t increment_log2) const
+{
+    return FifoAcquire<AddressIndex, ResultIndex> {control_address, result, FifoPointer::Write, CapacityLog2, increment_log2, false};
+}
+
+template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
+template <FifoState State, std::uint32_t ResultIndex>
+inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::wait_while(
+    const hal::Gpr<ResultIndex> result) const
+{
+    return FifoAcquire<AddressIndex, ResultIndex> {control_address, result, detail::pointer_for<State>(), CapacityLog2, 0, true};
 }
 
 template <std::uint32_t AddressIndex>
@@ -564,7 +617,7 @@ inline __attribute__((always_inline)) void run(const FetchIncrement<AddressIndex
  *
  * @tparam AddressIndex: FIFOControl address GPR type index.
  * @tparam DataIndex: Pointer-result GPR type index.
- * @param operation: Complete FIFO-acquire descriptor.
+ * @param operation: Complete FIFO descriptor.
  * @note Enable LLK assertions to diagnose invalid fields. Disabled assertions preserve
  *       the raw TT_ATINCGETPTR instruction path.
  */
@@ -641,79 +694,126 @@ inline __attribute__((always_inline)) void fetch_add(const Counter<WidthBits, Ad
 }
 
 /**
- * @brief Issue a compile-time blocking FIFO-pointer acquire as one immediate ATINCGETPTR.
+ * @brief Issue a compile-time blocking FIFO-state wait as one immediate ATINCGETPTR.
  *
- * @tparam Pointer: Pointer to acquire, values = <Read/Write>.
+ * @tparam State: Condition that blocks the operation, values = <Empty/Full>.
  * @tparam FifoIdentity: Complete constexpr @ref Fifo supplied inside angle brackets.
- * @tparam IncrementLog2: Base-two logarithm of the pointer increment, in [0, 15].
  * @tparam ResultIndex: Pointer-result GPR type index.
- * @param result: GPR receiving the pre-increment pointer.
+ * @param result: GPR receiving the current read pointer for Empty or write pointer for Full.
  */
-template <FifoPointer Pointer, auto FifoIdentity, std::uint8_t IncrementLog2 = 0, std::uint32_t ResultIndex>
-inline __attribute__((always_inline)) void acquire_slot(const hal::Gpr<ResultIndex> result)
+template <FifoState State, auto FifoIdentity, std::uint32_t ResultIndex>
+inline __attribute__((always_inline)) void wait_while(const hal::Gpr<ResultIndex> result)
 {
-    static_assert(ResultIndex != hal::detail::DynamicGprIndex, "immediate FIFO acquire requires hal::gpr<Index>()");
+    static_assert(ResultIndex != hal::detail::DynamicGprIndex, "immediate FIFO wait requires hal::gpr<Index>()");
     static_assert(is_valid(FifoIdentity), "invalid atomic FIFO identity");
-    constexpr auto operation = FifoIdentity.template acquire_slot<Pointer, IncrementLog2>(hal::Gpr<ResultIndex> {});
+    constexpr auto operation = FifoIdentity.template wait_while<State>(hal::Gpr<ResultIndex> {});
     (void)result;
     run<operation>();
 }
 
 /**
- * @brief Encode and issue a value-selected blocking FIFO-pointer acquire.
+ * @brief Encode and issue a value-selected blocking FIFO-state wait.
  *
- * Hardware checks only empty/nonempty or full/nonfull; callers using an increment greater
- * than one must establish that the complete batch is available.
- *
- * @tparam Pointer: Pointer to acquire, values = <Read/Write>.
+ * @tparam State: Condition that blocks the operation, values = <Empty/Full>.
  * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 15].
  * @tparam AddressIndex: FIFOControl address GPR type index.
  * @tparam ResultIndex: Pointer-result GPR type index.
  * @param fifo: FIFO identity supplying the control line and capacity.
- * @param result: GPR receiving the pre-increment pointer.
- * @param increment_log2: Base-two logarithm of the pointer increment, in [0, 15].
+ * @param result: GPR receiving the current read pointer for Empty or write pointer for Full.
  * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
-template <FifoPointer Pointer, std::uint8_t CapacityLog2, std::uint32_t AddressIndex, std::uint32_t ResultIndex>
-inline __attribute__((always_inline)) void acquire_slot(
+template <FifoState State, std::uint8_t CapacityLog2, std::uint32_t AddressIndex, std::uint32_t ResultIndex>
+inline __attribute__((always_inline)) void wait_while(const Fifo<CapacityLog2, AddressIndex> fifo, const hal::Gpr<ResultIndex> result)
+{
+    run(fifo.template wait_while<State>(result));
+}
+
+/**
+ * @brief Pop FIFO slots from the read-counter bookkeeping as one immediate ATINCGETPTR.
+ *
+ * Hardware checks only empty/nonempty; callers using an increment greater than one must
+ * establish that the complete batch is available.
+ *
+ * @tparam FifoIdentity: Complete constexpr @ref Fifo supplied inside angle brackets.
+ * @tparam IncrementLog2: Base-two logarithm of the read-pointer increment, in [0, 15].
+ * @tparam ResultIndex: Pointer-result GPR type index.
+ * @param result: GPR receiving the pre-increment read pointer.
+ * @note Move the payload separately; this operation updates FIFO bookkeeping only.
+ */
+template <auto FifoIdentity, std::uint8_t IncrementLog2 = 0, std::uint32_t ResultIndex>
+inline __attribute__((always_inline)) void pop_slots(const hal::Gpr<ResultIndex> result)
+{
+    static_assert(ResultIndex != hal::detail::DynamicGprIndex, "immediate FIFO pop requires hal::gpr<Index>()");
+    static_assert(is_valid(FifoIdentity), "invalid atomic FIFO identity");
+    constexpr auto operation = FifoIdentity.template pop_slots<IncrementLog2>(hal::Gpr<ResultIndex> {});
+    (void)result;
+    run<operation>();
+}
+
+/**
+ * @brief Pop FIFO slots from value-selected read-counter bookkeeping.
+ *
+ * Hardware checks only empty/nonempty; callers using an increment greater than one must
+ * establish that the complete batch is available.
+ *
+ * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 15].
+ * @tparam AddressIndex: FIFOControl address GPR type index.
+ * @tparam ResultIndex: Pointer-result GPR type index.
+ * @param fifo: FIFO identity supplying the control line and capacity.
+ * @param result: GPR receiving the pre-increment read pointer.
+ * @param increment_log2: Base-two logarithm of the read-pointer increment, in [0, 15].
+ * @note Move the payload separately; this operation updates FIFO bookkeeping only.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
+ */
+template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex, std::uint32_t ResultIndex>
+inline __attribute__((always_inline)) void pop_slots(
     const Fifo<CapacityLog2, AddressIndex> fifo, const hal::Gpr<ResultIndex> result, const std::uint8_t increment_log2 = 0)
 {
-    run(fifo.template acquire_slot<Pointer>(result, increment_log2));
+    run(fifo.pop_slots(result, increment_log2));
 }
 
 /**
- * @brief Issue a compile-time blocking FIFO readiness probe as one immediate ATINCGETPTR.
+ * @brief Push FIFO slots into the write-counter bookkeeping as one immediate ATINCGETPTR.
  *
- * @tparam Pointer: Pointer to probe, values = <Read/Write>.
+ * Hardware checks only full/nonfull; callers using an increment greater than one must
+ * establish that the complete batch fits.
+ *
  * @tparam FifoIdentity: Complete constexpr @ref Fifo supplied inside angle brackets.
+ * @tparam IncrementLog2: Base-two logarithm of the write-pointer increment, in [0, 15].
  * @tparam ResultIndex: Pointer-result GPR type index.
- * @param result: GPR receiving the current pointer without incrementing it.
+ * @param result: GPR receiving the pre-increment write pointer.
+ * @note Move the payload separately; this operation updates FIFO bookkeeping only.
  */
-template <FifoPointer Pointer, auto FifoIdentity, std::uint32_t ResultIndex>
-inline __attribute__((always_inline)) void wait_ready(const hal::Gpr<ResultIndex> result)
+template <auto FifoIdentity, std::uint8_t IncrementLog2 = 0, std::uint32_t ResultIndex>
+inline __attribute__((always_inline)) void push_slots(const hal::Gpr<ResultIndex> result)
 {
-    static_assert(ResultIndex != hal::detail::DynamicGprIndex, "immediate FIFO probe requires hal::gpr<Index>()");
+    static_assert(ResultIndex != hal::detail::DynamicGprIndex, "immediate FIFO push requires hal::gpr<Index>()");
     static_assert(is_valid(FifoIdentity), "invalid atomic FIFO identity");
-    constexpr auto operation = FifoIdentity.template wait_ready<Pointer>(hal::Gpr<ResultIndex> {});
+    constexpr auto operation = FifoIdentity.template push_slots<IncrementLog2>(hal::Gpr<ResultIndex> {});
     (void)result;
     run<operation>();
 }
 
 /**
- * @brief Encode and issue a value-selected blocking FIFO readiness probe.
+ * @brief Push FIFO slots into value-selected write-counter bookkeeping.
  *
- * @tparam Pointer: Pointer to probe, values = <Read/Write>.
+ * Hardware checks only full/nonfull; callers using an increment greater than one must
+ * establish that the complete batch fits.
+ *
  * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 15].
  * @tparam AddressIndex: FIFOControl address GPR type index.
  * @tparam ResultIndex: Pointer-result GPR type index.
  * @param fifo: FIFO identity supplying the control line and capacity.
- * @param result: GPR receiving the current pointer without incrementing it.
+ * @param result: GPR receiving the pre-increment write pointer.
+ * @param increment_log2: Base-two logarithm of the write-pointer increment, in [0, 15].
+ * @note Move the payload separately; this operation updates FIFO bookkeeping only.
  * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
-template <FifoPointer Pointer, std::uint8_t CapacityLog2, std::uint32_t AddressIndex, std::uint32_t ResultIndex>
-inline __attribute__((always_inline)) void wait_ready(const Fifo<CapacityLog2, AddressIndex> fifo, const hal::Gpr<ResultIndex> result)
+template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex, std::uint32_t ResultIndex>
+inline __attribute__((always_inline)) void push_slots(
+    const Fifo<CapacityLog2, AddressIndex> fifo, const hal::Gpr<ResultIndex> result, const std::uint8_t increment_log2 = 0)
 {
-    run(fifo.template wait_ready<Pointer>(result));
+    run(fifo.push_slots(result, increment_log2));
 }
 
 /**
