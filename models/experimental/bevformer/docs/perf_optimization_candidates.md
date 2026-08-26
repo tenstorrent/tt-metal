@@ -1,7 +1,7 @@
 # BEVFormer encoder — performance optimization candidates
 
 Status: draft list of candidates, no measurements attached yet. Baseline profiling
-(`models/experimental/bevformer/tests/test_encoder_profile.py` + `tt:profiler`) still has to
+(`models/experimental/bevformer/tests/perf/test_encoder_perf.py` + `tt:profiler`) still has to
 be run before any of these are ranked by actual device/host time.
 
 ## Candidate 1 — host round-trips (`ttnn.to_torch` / `ttnn.from_torch`) in the encoder

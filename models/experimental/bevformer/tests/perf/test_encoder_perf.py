@@ -53,7 +53,7 @@ def _head_sha():
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("expected_pcc", [0.997])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
-def test_bevformer_encoder_profile(
+def test_bevformer_encoder_perf(
     device,
     config_name,
     bev_size,

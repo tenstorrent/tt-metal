@@ -17,7 +17,7 @@ The commit that exposed it, by changing the geometry:
   (branch `ctr-mmicic/bev-former`, 2026-08-25). Replaces `torch.randn(4, 4)`
   projection matrices with an approximate nuScenes camera rig in
   `config/encoder_config/camera_rig.py`; consumed by `tests/pcc/test_encoder.py`,
-  `tests/layer_common.py` and `tests/profile/test_encoder_profile.py` through
+  `tests/layer_common.py` and `tests/perf/test_encoder_perf.py` through
   `img_metas_for_dataset`. It changed no model or kernel code — only the operating
   point the tests measure.
 

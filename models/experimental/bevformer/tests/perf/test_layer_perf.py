@@ -3,7 +3,7 @@
 
 """Tracy harness for a single BEVFormer encoder layer.
 
-Same shape as ``test_bevformer_encoder_profile``, one layer instead of six: PCC
+Same shape as ``test_bevformer_encoder_perf``, one layer instead of six: PCC
 gate, warmup, then signposted iterations so the report covers already-compiled,
 already-dispatched programs. The reference points and the camera projection are
 built once outside the measured region — the encoder does the same, so what is
@@ -46,7 +46,7 @@ def _head_sha():
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("expected_pcc", [0.997])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
-def test_bevformer_layer_profile(
+def test_bevformer_layer_perf(
     device,
     config_name,
     bev_size,
