@@ -63,6 +63,13 @@ else
     export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
 fi
 
+# matmul_blocked was briefly removed from this list as "the suite that hangs". It was not
+# hanging: with asserts on it named a circular buffer the host had not allocated, the
+# capacity assert fired, the device stopped, and every suite after it failed for that
+# reason. Which read as a sequence-dependent stall and was not one. Fixed at the source --
+# the harnesses now allocate the accumulator buffer unconditionally -- and it is back here
+# where it belongs. A suite that "hangs" only in a full run deserves the same suspicion:
+# check what ran before it, with asserts on, from a reset device.
 SUITES=(
     unary binary bcast reduction add_exp mixed_format
     matmul matmul_bias matmul_mcast matmul_transpose matmul_blocked
@@ -71,7 +78,22 @@ SUITES=(
 )
 [ $# -gt 0 ] && SUITES=("$@")
 
-# Reset between batches, if tt-smi is here to do it. See UNRESOLVED above.
+# Per-suite timeout. NOT 900s: a suite that stalls should cost seconds of attention, not a
+# quarter of an hour, and the whole point of a short bound is that a stall is a RESULT
+# rather than something to sit through. Not 30s either, though, because real suites are
+# slower than that -- binary is 29s and flash around 40 -- so the default is 120 with
+# overrides for the two that legitimately run long: layer sweeps eight configs in two
+# formats, and negative launches subprocesses that each open a device.
+TIMEOUT_DEFAULT="${TIMEOUT_DEFAULT:-120}"
+timeout_for() {
+    case "$1" in
+        layer) echo 600 ;;
+        negative) echo 400 ;;
+        *) echo "$TIMEOUT_DEFAULT" ;;
+    esac
+}
+
+# Reset between batches, if tt-smi is here to do it.
 RESET_EVERY="${RESET_EVERY:-8}"
 have_reset=0
 command -v tt-smi > /dev/null 2>&1 && have_reset=1
@@ -96,17 +118,33 @@ for suite in "${SUITES[@]}"; do
         failed_names+=("$suite")
         continue
     fi
+    limit=$(timeout_for "$suite")
     start=$(date +%s)
-    timeout 900 python3 "$script" > "/tmp/unified_${suite}.log" 2>&1
+    timeout "$limit" python3 "$script" > "/tmp/unified_${suite}.log" 2>&1
     rc=$?
+
+    # A timeout leaves the device stopped, and a stopped device fails everything after it
+    # for reasons of its own. So reset and give the suite one more go: that also separates
+    # the two causes worth telling apart -- a suite that passes on the retry was stalled by
+    # what ran before it, while one that times out twice is stalled by itself.
+    if [ $rc -eq 124 ] && [ $have_reset -eq 1 ]; then
+        echo "  ${suite}: timed out at ${limit}s -- resetting and retrying once"
+        tt-smi -r > /dev/null 2>&1
+        start=$(date +%s)
+        timeout "$limit" python3 "$script" > "/tmp/unified_${suite}.log" 2>&1
+        rc=$?
+        [ $rc -eq 0 ] && echo "      passed on the retry, so the stall came from what ran before it"
+    fi
+
     took=$(($(date +%s) - start))
     if [ $rc -eq 0 ]; then
         echo "  ${suite}: ok (${took}s)"
         pass=$((pass + 1))
     else
         if [ $rc -eq 124 ]; then
-            echo "  ${suite}: TIMED OUT (${took}s) -- an assert may have halted a RISC;"
+            echo "  ${suite}: TIMED OUT twice (${limit}s each) -- an assert may have halted a RISC;"
             echo "      re-run it under ./run_unified_tests.sh --watcher ${suite} for the line"
+            [ $have_reset -eq 1 ] && tt-smi -r > /dev/null 2>&1
         else
             echo "  ${suite}: FAIL rc=${rc} (${took}s) -- /tmp/unified_${suite}.log"
         fi
