@@ -6,9 +6,15 @@ MATH_ISOLATE perf for the EMA SFPU kernel (ckernel_sfpu_ema.h).
 
 The EMA kernel had no perf coverage at all, which is why the Wormhole scheduling
 change to _compute_ema_math_ could not be quantified from the existing suite. This
-drives sources/sfpu_ema_perf.cpp, whose TILE_LOOP marker under MATH_ISOLATE is just
-the SFPU math block -- no datacopy, no dest handshake -- so the number attributable
-to the kernel is not diluted by the surrounding pipeline.
+drives sources/sfpu_ema_perf.cpp, whose TILE_LOOP marker under MATH_ISOLATE covers the
+math pipe with no dest handshake with pack.
+
+It does still include the datacopy that feeds Dest, because that is what retires the
+SrcA valid bits unpack sets -- the same arrangement eltwise_unary_sfpu_perf.cpp uses for
+every unary SFPU op. So mean(MATH_ISOLATE) is not the standalone cost of the SFPU block;
+it is the SFPU block plus a fixed datacopy. That offset is constant across a
+before/after comparison of the kernel, so it cancels in a delta, but do not read the
+absolute number as the kernel alone.
 
 cycles/tile lands in the TILE_LOOP row of the .post.csv as mean(MATH_ISOLATE).
 

@@ -139,8 +139,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // Only the SFPU math block: no datacopy and no dest handshake, so the
-            // measurement is the EMA kernel itself.
+            // Isolates the math pipe: no dest handshake with pack, so what is left is
+            // the datacopy plus the EMA kernel.
             //
             // Same shape as eltwise_unary_sfpu_perf.cpp's MATH_ISOLATE: the datacopy
             // stays in. It is what consumes the SrcA valid bits that unpack sets, so

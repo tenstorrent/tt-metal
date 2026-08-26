@@ -74,16 +74,17 @@ sfpi_inline void _compute_ema_math_()
     // Transpose the input data to the correct order
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    // EMA equation: EMA_new = α * EMA_old + β * input
-    // Where: LREG0=input, LREG4=EMA_old, LREG5=α, LREG6=(1-α), LREG7=EMA_new
-    // Thus, LREG7 = LREG5 * LREG4 + LREG6 * LREG0
-    // We do this for each of the 4 inputs.
-
     // EMA_new = alpha * EMA_old + beta * input, chained across the 4 rows.
     //
-    // The straightforward encoding is two MADs per row -- LREG7 = alpha * prev, then
-    // row = beta * input + LREG7 -- but both halves sit on the dependency chain, so each
-    // one needs an SFPNOP behind it and the block costs 8 MADs plus 8 NOPs.
+    // Registers: LREG0-3 hold the 4 input rows and are updated in place to become the 4
+    // outputs; LREG4 carries EMA_old in from the previous block and the new carry out;
+    // LREG5 = alpha; LREG6 = beta. LREG7 is not used -- the earlier schedule needed it as
+    // a temp, this one does not.
+    //
+    // That earlier schedule (no longer what the code below does) spent two MADs per row:
+    // LREG7 = alpha * prev, then row = beta * input + LREG7. Both halves sat on the
+    // dependency chain, so each needed an SFPNOP behind it and the block cost 8 MADs plus
+    // 8 NOPs.
     //
     // Scaling every input by beta up front instead leaves one MAD per row on the chain
     // (row_i = alpha * row_{i-1} + beta_scaled_i, a single fused multiply-add), and the
