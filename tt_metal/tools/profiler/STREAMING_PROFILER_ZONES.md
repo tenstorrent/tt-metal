@@ -4,7 +4,8 @@ This documents the variable-width zone packet family the SPSC streaming profiler
 (producer: `kernel_profiler.hpp`; decoder: `spsc_marker_decode.hpp`; plain-C constants:
 `spsc_packet.h`), and the measurements that shaped it. For how to *consume* the stream, see
 [STREAMING_PROFILER.md](STREAMING_PROFILER.md) — consumers see complete zones either way and none of
-this changes that contract.
+this changes that contract. For what zones and point markers look like in the Tracy GUI,
+see [docs/zone_gifs/README.md](docs/zone_gifs/README.md).
 
 ## Zone packets
 
