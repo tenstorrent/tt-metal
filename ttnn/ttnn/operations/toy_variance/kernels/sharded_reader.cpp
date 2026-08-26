@@ -75,7 +75,7 @@ void kernel_main() {
         noc.async_read_barrier();
 
         auto pipe = mc.sender(noc);
-        if constexpr (mc.active) {
+        if constexpr (mc.has_receivers) {
             pipe.send(mean_entry, mean_entry, Ht * tile_bytes);
         }
         dfb_mean_src.pop_front(Ht);

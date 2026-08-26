@@ -3,7 +3,7 @@
 //
 // One sender per grid row reads that row's tile from DRAM and broadcasts it across the row.
 // The mcast wire is decoded by MCAST_ARGS(row): every name it reads -- the two sem:: bindings and
-// the four args:: words including row_rt_base -- was written by McastFamily.attach() on the host,
+// the five args:: words including row_rt_base -- was written by McastFamily.attach() on the host,
 // so this kernel chains no CT or RT offsets.
 
 #include <stdint.h>
@@ -37,7 +37,7 @@ void kernel_main() {
         noc.async_read_barrier();
 
         auto pipe = mc.sender(noc);
-        if constexpr (mc.active) {
+        if constexpr (mc.has_receivers) {
             pipe.send(entry, entry, tile_bytes);
         }
     } else {

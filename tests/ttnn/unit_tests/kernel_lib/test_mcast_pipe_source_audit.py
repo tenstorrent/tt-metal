@@ -14,16 +14,22 @@ LEDGER_PATH = REPO_ROOT / "helper_design/mcast_pipe/migration/ledger.json"
 
 def test_mcast_args_owns_its_compile_time_presence_tag():
     helper = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp").read_text()
-    host = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp").read_text()
+    host = "\n".join(
+        (REPO_ROOT / path).read_text()
+        for path in (
+            "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp",
+            "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.cpp",
+        )
+    )
 
     assert "OptionalMcastArgs" not in helper
     assert "McastArgsImpl<(get_compile_time_arg_val(CT_BASE) != 0)" in helper
     assert "return CT_BASE + 7;" in helper
     assert "return CT_BASE + 1;" in helper
-    assert "McastArgs::sender() cannot be used when the presence tag is false" in helper
-    assert "McastArgs::receiver() cannot be used when the presence tag is false" in helper
+    assert "No multicast on this core; a sender pipe cannot be built" in helper
+    assert "No multicast on this core; a receiver pipe cannot be built" in helper
     assert "return {0u};" in host
-    assert host.count("            1u,\n            has_receivers_ ? 1u : 0u,") == 2
+    assert host.count("        1u,\n        active_ ? 1u : 0u,") == 2
 
 
 def test_mcast_args_has_one_template_owned_runtime_base():
@@ -111,7 +117,7 @@ def test_migrated_kernels_do_not_repeat_rotating_span_as_a_template_argument():
 
 def test_mixed_role_kernels_use_direct_mcast_pipe_aliases():
     helper = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp").read_text()
-    assert re.search(r"using SenderPipe\s*=\s*SenderPipeFor<noc_index>;", helper)
+    assert re.search(r"using SenderPipe\s*=\s*dataflow_kernel_lib::SenderPipe<", helper)
     assert re.search(r"using ReceiverPipe\s*=\s*dataflow_kernel_lib::ReceiverPipe<", helper)
 
     kernels, _ = _migrated_sources()

@@ -29,7 +29,7 @@ using namespace dataflow_kernel_lib;
 void kernel_main() {
     constexpr uint32_t cb = get_compile_time_arg_val(0);              // mcast source (in place) + landing region
     constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/4>();              // mcast config (CT 1..) + per-core args (RT 4..)
-    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 6, right after the mcast CT block
+    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 8, right after the mcast CT block
     constexpr uint32_t num_blocks = get_compile_time_arg_val(SCALARS + 0);
     constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 1);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 2);
@@ -83,7 +83,7 @@ void kernel_main() {
         // RECEIVER — built ONCE above the block loop and reused every block (no per-block reconstruction).
         auto pipe = mc.receiver(noc);
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-            pipe.receive();
+            pipe.receive(blk);
             for (uint32_t i = 0; i < payload_pages; ++i) {
                 noc.async_write(
                     cb_obj,

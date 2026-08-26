@@ -20,8 +20,8 @@ base as the ``<prefix>_rt_base`` named arg so the kernel's ``MCAST_ARGS(prefix)`
     mc_r = McastFamily(device, rect, "r", sender=ttnn.CoreCoord(0, 0))
     mc_r.attach(spec, run_args, kernels=["reader"])
 
-Both topologies present the same face to the kernel -- four named CT words and a 4-word (or
-rotating 4 + 2*rounds) vararg block -- so ``MCAST_ARGS(prefix)`` is unchanged and the kernel cannot
+Both topologies present the same face to the kernel -- five named CT words and a 6-word (or
+rotating 6 + 2*rounds) vararg block -- so ``MCAST_ARGS(prefix)`` is unchanged and the kernel cannot
 tell which topology it was handed. The coord math (logical->virtual, per-NoC rect corner order,
 sender placement, rotating rounds) is ttnn.Mcast1D's / ttnn.Mcast2D's, unchanged.
 """
@@ -158,7 +158,7 @@ class McastFamily:
         return self._mcast.num_receivers(core)
 
     def num_runtime_varargs(self) -> int:
-        return 4 if not self._config.rotating_sender else 4 + 2 * self._mcast.num_senders()
+        return 6 if not self._config.rotating_sender else 6 + 2 * self._mcast.num_senders()
 
     def semaphores(self) -> list:
         return [
@@ -173,21 +173,21 @@ class McastFamily:
         ]
 
     def compile_time_args(self, rt_base: int, *, pre_handshake: bool = None) -> dict:
-        """The four named CT words. Semaphore ids are absent: they arrive via sem:: bindings."""
+        """The five named CT words. Semaphore ids are absent: they arrive via sem:: bindings."""
         # Reuse the topology helper's flags computation by reading the descriptor-path block:
-        # [active, data_ready, consumer_ready, num_active, flags, rotating_span]. Only the leading
-        # five are read here, and dropping the trailing span is deliberate rather than lossy: on the
+        # [present, has_receivers, data_ready, consumer_ready, num_active, flags, rotating_span].
+        # Dropping the trailing span is deliberate rather than lossy: on the
         # spec path the span is a TEMPLATE argument the kernel passes itself via
         # MCAST_ARGS_ROTATING(prefix, span), because McastArgsSpec takes it as a non-type template
         # param. The descriptor path has no such channel, which is the only reason the helpers ship
-        # it as a sixth CT word. Slice rather than unpack-all so a future seventh word cannot break
-        # us. Both Mcast1D and Mcast2D emit this same six-word block.
+        # it as a seventh CT word. Both Mcast1D and Mcast2D emit this same seven-word block.
         block = (
             self._mcast.compile_time_args() if pre_handshake is None else self._mcast.compile_time_args(pre_handshake)
         )
-        active, _, _, num_active, flags = block[:5]
+        active, has_receivers, _, _, num_active, flags, _ = block
         return {
             f"{self.prefix}_active": active,
+            f"{self.prefix}_has_receivers": has_receivers,
             f"{self.prefix}_num_active": num_active,
             f"{self.prefix}_flags": flags,
             f"{self.prefix}_rt_base": rt_base,

@@ -724,7 +724,14 @@ def test_f3_degenerate(device):
 # shard to the whole line; every core records what it saw per round to DRAM. The check
 # output[c*N + r] == shard(r) validates BOTH the data path AND that the receiver indexes the sender
 # coords in the RIGHT ORDER -- a mis-ordered coord list would hand core c shard(r' != r).
-def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_indices=None):
+def _run_rotating_line(
+    device,
+    span,
+    payload_tiles,
+    receiver_span=None,
+    sender_indices=None,
+    data_ready_mode=ttnn.McastDataReady.Flag,
+):
     receiver_span = span if receiver_span is None else receiver_span
     sender_indices = list(range(span)) if sender_indices is None else sender_indices
     assert len(sender_indices) == span
@@ -755,7 +762,13 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
 
     # ---- the host helper owns sems + CT + per-core RT for the rotating line ----
     if sender_indices == list(range(span)) and receiver_span == span:
-        mc = ttnn.Mcast1D(device, receiver_grid, ttnn.Mcast1DShape.PerRow, 0, ttnn.McastConfig(rotating_sender=True))
+        mc = ttnn.Mcast1D(
+            device,
+            receiver_grid,
+            ttnn.Mcast1DShape.PerRow,
+            0,
+            ttnn.McastConfig(rotating_sender=True, data_ready=data_ready_mode),
+        )
     else:
         sender_lines = [[ttnn.CoreCoord(sender, 0) for sender in sender_indices]]
         mc = ttnn.Mcast1D(
@@ -763,7 +776,7 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
             receiver_grid,
             ttnn.Mcast1DShape.PerRow,
             sender_lines,
-            ttnn.McastConfig(rotating_sender=True),
+            ttnn.McastConfig(rotating_sender=True, data_ready=data_ready_mode),
         )
     assert mc.compile_time_args()[6] == span, f"expected {span} sender rounds"
     semaphores = mc.owned_semaphores()
@@ -825,6 +838,10 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
 # / wire errors before the full sweep.
 def test_rotating_line_smoke(device):
     _run_rotating_line(device, span=2, payload_tiles=1)
+
+
+def test_rotating_line_counter_smoke(device):
+    _run_rotating_line(device, span=2, payload_tiles=1, data_ready_mode=ttnn.McastDataReady.Counter)
 
 
 def test_rotating_line_outside_sender(device):

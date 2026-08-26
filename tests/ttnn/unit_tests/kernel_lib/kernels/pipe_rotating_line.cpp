@@ -30,7 +30,7 @@ using namespace dataflow_kernel_lib;
 void kernel_main() {
     constexpr uint32_t cb = get_compile_time_arg_val(0);  // mcast + landing region (one per core)
     constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/4>();
-    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 7
+    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 8
     constexpr uint32_t num_rounds = get_compile_time_arg_val(SCALARS + 0);
     constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 1);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 2);
@@ -55,6 +55,10 @@ void kernel_main() {
     const bool can_send = mc.can_send();
     const bool can_receive = mc.can_receive();
 
+    // Both faces built ONCE and reused every round: on its own round the core sends, on the others it
+    // receives — over the SAME data_ready cell. (Rotating, so the pipe resets that cell to INVALID after
+    // each broadcast; without that the next receive would return on this core's own stale VALID.) The
+    // faces are optional because a core may hold only one role, and the pipes are not default-constructible.
     using SendPipe = decltype(mc.sender(noc));
     using ReceivePipe = decltype(mc.receiver(noc));
     std::optional<SendPipe> send_pipe;
@@ -68,6 +72,8 @@ void kernel_main() {
 
     for (uint32_t r = 0; r < num_rounds; ++r) {
         if (mc.should_send(r)) {
+            // SENDER: stage my shard into cb, then broadcast it IN PLACE (src == dst => EXCLUDE_SRC) to
+            // the other cores on the line.
             for (uint32_t i = 0; i < payload_pages; ++i) {
                 noc.async_read(
                     in, cb_obj, page_bytes, {.page_id = input_start_id + i}, {.offset_bytes = i * page_bytes});
@@ -75,6 +81,7 @@ void kernel_main() {
             noc.async_read_barrier();
             send_pipe->send(cb_addr, cb_addr, payload_bytes);
         } else if (can_receive) {
+            // RECEIVER: the shard the round-r sender broadcasts lands in cb.
             recv_pipe->receive(r);
         } else {
             continue;  // sender-only core outside its sender phase

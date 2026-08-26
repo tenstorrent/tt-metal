@@ -14,7 +14,7 @@ tile. The sender may sit inside the rectangle or outside it.
 The point of the op is the mcast plumbing: one McastFamily.attach() call writes the semaphores,
 bindings, named CT args and per-core varargs into the spec, and the kernel reads them back with
 MCAST_ARGS(row). Neither side spells a CT or RT offset -- and the SAME reader kernel serves both
-topologies unchanged, because the wire (four named CT words + a 4-word vararg block) is identical.
+topologies unchanged, because the wire (five named CT words + a 6-word vararg block) is identical.
 """
 
 from pathlib import Path

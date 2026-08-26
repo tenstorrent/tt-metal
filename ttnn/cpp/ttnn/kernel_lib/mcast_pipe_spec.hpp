@@ -35,12 +35,14 @@ template <
     uint32_t DATA_READY_SEM_ID,
     uint32_t CONSUMER_READY_SEM_ID,
     uint32_t ACTIVE,
+    uint32_t HAS_RECEIVERS,
     uint32_t NUM_ACTIVE,
     uint32_t FLAGS,
     uint32_t RT_BASE,
     uint32_t SPAN = 0>
 struct McastArgsSpec {
     static constexpr uint32_t active = ACTIVE;
+    static constexpr uint32_t has_receivers = HAS_RECEIVERS;
     static constexpr uint32_t data_ready = DATA_READY_SEM_ID;
     static constexpr uint32_t consumer_ready = CONSUMER_READY_SEM_ID;
     static constexpr uint32_t num_active = NUM_ACTIVE;
@@ -52,11 +54,19 @@ struct McastArgsSpec {
     static constexpr bool rotating = SPAN > 0;
     static constexpr uint32_t num_senders = SPAN == 0 ? 1u : SPAN;
 
-    static constexpr uint32_t num_runtime_varargs() { return SPAN == 0 ? 4u : (4u + 2u * SPAN); }
+    static constexpr uint32_t num_runtime_varargs() { return SPAN == 0 ? 6u : (6u + 2u * SPAN); }
     static constexpr uint32_t next_runtime_varargs_offset() { return RT_BASE + num_runtime_varargs(); }
+
+    bool can_send() const { return (get_vararg(next_runtime_varargs_offset() - 2u) & 0x1u) != 0u; }
+    bool can_receive() const { return (get_vararg(next_runtime_varargs_offset() - 2u) & 0x2u) != 0u; }
+    static constexpr uint32_t sender_index(uint32_t round) { return round % num_senders; }
+    bool should_send(uint32_t round) const {
+        return can_send() && sender_index(round) == get_vararg(next_runtime_varargs_offset() - 1u);
+    }
 
     template <uint8_t NOC_ID = noc_index>
     SenderPipe<NOC_ID, data_ready, pre_handshake, consumer_ready, signal, rotating> sender(const Noc& noc) const {
+        ASSERT(can_send());
         return SenderPipe<NOC_ID, data_ready, pre_handshake, consumer_ready, signal, rotating>(
             noc, rect<NOC_ID>(), num_active);
     }
@@ -69,6 +79,7 @@ struct McastArgsSpec {
     // [sender_x, sender_y] at RT_BASE for a fixed sender, and one pair per round from RT_BASE + 4
     // in rotating mode (where RT_BASE..RT_BASE+3 is the rect).
     ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders> receiver(const Noc& noc) const {
+        ASSERT(can_receive());
         return ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders>(
             noc, get_vararg_addr(RT_BASE + (SPAN == 0 ? 0u : 4u)));
     }
@@ -91,27 +102,29 @@ struct McastArgsSpec {
 // template argument.
 //
 // Every name it reads is emitted by McastFamily.attach() on the host: the two semaphore bindings and
-// the four named compile-time args, including <prefix>_rt_base — which is why the caller never chains
+// the five named compile-time args, including <prefix>_rt_base — which is why the caller never chains
 // a vararg offset the way the descriptor path chains RT_BASE.
 //
 //   constexpr auto mc = MCAST_ARGS(row);
 //   auto sender = mc.sender(noc);
-#define MCAST_ARGS(prefix)                  \
-    ::dataflow_kernel_lib::McastArgsSpec<   \
-        sem::prefix##_data_ready,           \
-        sem::prefix##_consumer_ready,       \
-        get_arg(args::prefix##_active),     \
-        get_arg(args::prefix##_num_active), \
-        get_arg(args::prefix##_flags),      \
+#define MCAST_ARGS(prefix)                     \
+    ::dataflow_kernel_lib::McastArgsSpec<      \
+        sem::prefix##_data_ready,              \
+        sem::prefix##_consumer_ready,          \
+        get_arg(args::prefix##_active),        \
+        get_arg(args::prefix##_has_receivers), \
+        get_arg(args::prefix##_num_active),    \
+        get_arg(args::prefix##_flags),         \
         get_arg(args::prefix##_rt_base)> {}
 
 // Rotating variant: `span` is the round count (== the broadcast span), which sizes the RT block.
-#define MCAST_ARGS_ROTATING(prefix, span)   \
-    ::dataflow_kernel_lib::McastArgsSpec<   \
-        sem::prefix##_data_ready,           \
-        sem::prefix##_consumer_ready,       \
-        get_arg(args::prefix##_active),     \
-        get_arg(args::prefix##_num_active), \
-        get_arg(args::prefix##_flags),      \
-        get_arg(args::prefix##_rt_base),    \
+#define MCAST_ARGS_ROTATING(prefix, span)      \
+    ::dataflow_kernel_lib::McastArgsSpec<      \
+        sem::prefix##_data_ready,              \
+        sem::prefix##_consumer_ready,          \
+        get_arg(args::prefix##_active),        \
+        get_arg(args::prefix##_has_receivers), \
+        get_arg(args::prefix##_num_active),    \
+        get_arg(args::prefix##_flags),         \
+        get_arg(args::prefix##_rt_base),       \
         (span)> {}

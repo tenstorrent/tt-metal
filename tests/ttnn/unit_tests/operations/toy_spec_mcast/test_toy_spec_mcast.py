@@ -81,8 +81,8 @@ def test_attach_is_addressed_by_name_not_offset(device):
 
     ct = dict(spec.kernels[0].compile_time_args)
     assert ct["row_rt_base"] == 0
-    assert ct["col_rt_base"] == 4
-    assert spec.kernels[0].advanced_options.num_runtime_varargs == 8
+    assert ct["col_rt_base"] == 6
+    assert spec.kernels[0].advanced_options.num_runtime_varargs == 12
     assert [str(s.unique_id) for s in spec.semaphores] == [
         "row_data_ready",
         "row_consumer_ready",
@@ -90,7 +90,7 @@ def test_attach_is_addressed_by_name_not_offset(device):
         "col_consumer_ready",
     ]
     for core in cores:
-        assert len(run_args.kernel_run_args[0].advanced_options.runtime_varargs[core]) == 8
+        assert len(run_args.kernel_run_args[0].advanced_options.runtime_varargs[core]) == 12
 
 
 def test_attach_rejects_unknown_kernel(device, expect_error):
@@ -142,12 +142,12 @@ def test_declared_vararg_count_shifts_the_family_block(device):
     family.attach(spec, run_args, kernels=["r"], cores=cores)
 
     # attach honoured the DECLARED count (2), so the family's block starts at vararg index 2 --
-    # but only its own 4 values were ever supplied, at indices 0..3. The device would read the
-    # rect from 2..5. get_vararg is not bounds-checked, so only the host validator catches this,
+    # but only its own 6 values were ever supplied, at indices 0..5. The device would read the
+    # payload from 2..7. get_vararg is not bounds-checked, so only the host validator catches this,
     # and only when ttnn.CONFIG.validate_program_args is on.
     assert dict(spec.kernels[0].compile_time_args)["row_rt_base"] == 2
-    assert spec.kernels[0].advanced_options.num_runtime_varargs == 6
-    assert len(run_args.kernel_run_args[0].advanced_options.runtime_varargs[cores[0]]) == 4
+    assert spec.kernels[0].advanced_options.num_runtime_varargs == 8
+    assert len(run_args.kernel_run_args[0].advanced_options.runtime_varargs[cores[0]]) == 6
 
 
 # ---------------------------------------------------------------------------------------------
@@ -232,14 +232,15 @@ def test_2d_and_1d_families_pack_end_to_end(device):
 
     ct = dict(spec.kernels[0].compile_time_args)
     assert ct["row_rt_base"] == 0
-    assert ct["rect_rt_base"] == 4
-    assert spec.kernels[0].advanced_options.num_runtime_varargs == 8
+    assert ct["rect_rt_base"] == 6
+    assert spec.kernels[0].advanced_options.num_runtime_varargs == 12
     # One mcast over the whole 4x2 rect: fan-out 7 acks, against 3 per row for the 1D family.
     assert ct["rect_num_active"] == 7
     assert ct["row_num_active"] == 3
     assert ct["rect_active"] == 1
+    assert ct["rect_has_receivers"] == 1
     for core in cores:
-        assert len(run_args.kernel_run_args[0].advanced_options.runtime_varargs[core]) == 8
+        assert len(run_args.kernel_run_args[0].advanced_options.runtime_varargs[core]) == 12
 
 
 def test_2d_one_sender_over_the_whole_rect(device):
@@ -277,7 +278,7 @@ def test_2d_outside_sender_joins_the_node_set(device):
         assert semaphore.target_nodes.contains(outside)
     varargs = run_args.kernel_run_args[0].advanced_options.runtime_varargs
     assert set(varargs) == set(ttnn.corerange_to_cores(family.nodes, None, True))
-    assert len(varargs[outside]) == 4
+    assert len(varargs[outside]) == 6
 
 
 def test_2d_rejects_1d_only_arguments(device, expect_error):
