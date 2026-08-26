@@ -449,6 +449,20 @@ static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> vc_1_free_
     vc_1_free_slots_from_downstream_edge_3_stream_id,
     vc_1_free_slots_from_downstream_edge_4_stream_id};
 
+// Compact-keyed local copy of downstream free-slots. Both overloads read the same array so init
+// (runtime compact_index) and the indexed space check (NTTP compact / LIVE slot) cannot diverge.
+template <size_t Compact>
+constexpr uint32_t vc0_local_free_slots_stream_id() {
+    return vc_0_free_slots_stream_ids[Compact];
+}
+constexpr uint32_t vc0_local_free_slots_stream_id(size_t compact) { return vc_0_free_slots_stream_ids[compact]; }
+
+template <size_t Compact>
+constexpr uint32_t vc1_local_free_slots_stream_id() {
+    return vc_1_free_slots_stream_ids[Compact];
+}
+constexpr uint32_t vc1_local_free_slots_stream_id(size_t compact) { return vc_1_free_slots_stream_ids[compact]; }
+
 enum PacketLocalForwardType : uint8_t {
     PACKET_FORWARD_INVALID = 0x0,
     PACKET_FORWARD_LOCAL_ONLY = 0x1,
@@ -590,14 +604,20 @@ constexpr bool dispatch_arm_is_realizable() {
     return get_downstream_edm_interface_index<DIRECTION>() < DOWNSTREAM_EDM_SIZE;
 }
 
+// Credit read is get_ptr_val<stream_id>() with stream_id = vc0_local_free_slots_stream_id<compact>(),
+// the same compact-keyed table init writes onto the adapter. Going through
+// adapter.edm_has_space_for_packet() reloads worker_credits_stream_id from the stack and rebuilds
+// the overlay address at runtime (lbu / slli 12). Compact is the LIVE slot: fwd_dirs order is the
+// compact ranking, pinned below. The adapter still holds the id for send/credit decrement.
 template <typename DownstreamSenderT, eth_chan_directions DIRECTION, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE bool check_downstream_has_space(
-    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces) {
+    [[maybe_unused]] std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces) {
     if constexpr (DIRECTION == my_direction) {
         return true;
     } else {
-        constexpr auto edm_index = get_downstream_edm_interface_index(DIRECTION);
-        return downstream_edm_interfaces[edm_index].template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
+        constexpr auto compact = get_downstream_edm_interface_index<DIRECTION>();
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        return get_ptr_val<vc0_local_free_slots_stream_id<compact>()>() != 0;
     }
 }
 
@@ -607,7 +627,7 @@ template <
     eth_chan_directions DIRECTION,
     size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE bool check_downstream_has_space(
-    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    [[maybe_unused]] std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
     if constexpr (DIRECTION == my_direction) {
         if constexpr (udm_mode) {
@@ -616,8 +636,9 @@ FORCE_INLINE bool check_downstream_has_space(
             return true;
         }
     } else {
-        constexpr auto edm_index = get_downstream_edm_interface_index<DIRECTION>();
-        return downstream_edm_interfaces[edm_index].template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
+        constexpr auto compact = get_downstream_edm_interface_index<DIRECTION>();
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        return get_ptr_val<vc0_local_free_slots_stream_id<compact>()>() != 0;
     }
 }
 
@@ -788,6 +809,17 @@ constexpr uint8_t indexed_live_eth_mask() {
     }
     return live;
 }
+
+// LIVE slot i is compact index i: fwd_dirs is enum order with self removed, matching
+// direction_to_compact_index_map and host direction_compact_index. The credit-read helper
+// is compact-keyed, so this identity is what keeps admit's stream id on the same slot init wrote.
+constexpr bool live_slot_is_compact_index() {
+    constexpr auto my_dir = static_cast<eth_chan_directions>(my_direction);
+    constexpr auto dirs = IndexedMeshRoutingFields::fwd_dirs<my_dir>();
+    return get_downstream_edm_interface_index<dirs[0]>() == 0 && get_downstream_edm_interface_index<dirs[1]>() == 1 &&
+           get_downstream_edm_interface_index<dirs[2]>() == 2 && get_downstream_edm_interface_index<dirs[3]>() == 3;
+}
+static_assert(live_slot_is_compact_index());
 
 // Checks local relay capacity when ld, plus the downstream queue for every LIVE direction whose
 // action bit is set. Only UDM mode queues local delivery through a relay interface.
@@ -2898,9 +2930,9 @@ void kernel_main() {
                 // reset the handshake addresses to 0 (this is for router -> router handshake for connections over noc)
                 *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
 #if defined(FABRIC_2D)
-                auto receiver_channel_free_slots_stream_id = StreamId{vc_0_free_slots_stream_ids[compact_index]};
+                auto receiver_channel_free_slots_stream_id = StreamId{vc0_local_free_slots_stream_id(compact_index)};
 #else
-                auto receiver_channel_free_slots_stream_id = StreamId{vc_0_free_slots_stream_ids[0]};
+                auto receiver_channel_free_slots_stream_id = StreamId{vc0_local_free_slots_stream_id(0)};
 #endif
                 new (&downstream_edm_noc_interfaces_vc0[compact_index])
                     RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>(
@@ -2955,6 +2987,15 @@ void kernel_main() {
                         receiver_channel_free_slots_stream_id,
                         receiver_channel_forwarding_data_cmd_buf_ids[0],
                         receiver_channel_forwarding_sync_cmd_buf_ids[0]);
+#if defined(FABRIC_2D)
+                ASSERT(
+                    downstream_edm_noc_interfaces_vc0[compact_index].get_worker_credits_stream_id() ==
+                    vc0_local_free_slots_stream_id(compact_index));
+#else
+                ASSERT(
+                    downstream_edm_noc_interfaces_vc0[compact_index].get_worker_credits_stream_id() ==
+                    vc0_local_free_slots_stream_id(0));
+#endif
                 // Only receiver channel servicing cores should be setting up the noc cmd buf.
                 if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                     downstream_edm_noc_interfaces_vc0[compact_index]
@@ -2985,7 +3026,7 @@ void kernel_main() {
                 // reset the handshake addresses to 0 (this is for router -> router handshake for connections over
                 // noc)
                 *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
-                auto receiver_channel_free_slots_stream_id = StreamId{vc_1_free_slots_stream_ids[compact_index]};
+                auto receiver_channel_free_slots_stream_id = StreamId{vc1_local_free_slots_stream_id(compact_index)};
                 new (&downstream_edm_noc_interfaces_vc1[compact_index])
                     RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
                         is_persistent_fabric,
@@ -3004,6 +3045,9 @@ void kernel_main() {
                         receiver_channel_free_slots_stream_id,
                         receiver_channel_forwarding_data_cmd_buf_ids[1],
                         receiver_channel_forwarding_sync_cmd_buf_ids[1]);
+                ASSERT(
+                    downstream_edm_noc_interfaces_vc1[compact_index].get_worker_credits_stream_id() ==
+                    vc1_local_free_slots_stream_id(compact_index));
                 // Only receiver channel servicing cores should be setting up the noc cmd buf.
                 if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                     downstream_edm_noc_interfaces_vc1[compact_index]
