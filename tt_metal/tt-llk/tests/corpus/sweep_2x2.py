@@ -848,6 +848,46 @@ KNOBS = {
     # (cycle-identical under the knob; named lreg-file-exhausted / no
     # admissible candidate).
     "pressure-park": "-mtt-tensix-optimize-pressure-park",
+    # HH (launch-flatten): complete-unroll request for counted innermost
+    # Tensix DELIVERY loops (typed TTREPLAY records/launches, fixed raw
+    # .ttinsn words, typed SFPU builtins, own scalar control), placed
+    # immediately before the GIMPLE complete unroller so cunroll bypasses
+    # the typed-spelling size ESTIMATE (~13x over delivered words) and
+    # folds per-trip conditionals (direction flip-flops, record-once init
+    # guards) at their proven values.  Closes the lane-HD topk
+    # replay-window-density gap at its true layer: the hand raw-word arm
+    # has always unrolled these loops (its asm estimates small), so the
+    # typed arm's per-trip loop control rode the timed issue path between
+    # launches.  Annotation-only; trips must prove (single exit, SCEV
+    # constant latch count); word budget = the replay-unroll table
+    # constants; refusals by name (trip-count-unproven, memory,
+    # foreign-stmt/asm, unpriced-builtin, word-budget, multi-exit,
+    # row-too-small); QSR refuses wholesale.  Target row: topk-perf
+    # (typed-multiresult ph0-3 phase drivers + steps-4-1 while flatten to
+    # hand-shaped straight-line launch runs; ph4 step-N nest refuses
+    # trip-count-unproven -- rolled in the hand arm too).  Also admits
+    # computed-word VOLATILE delivery stores (the TT_ macro
+    # `instrn_buffer[0] = word` shape; volatile loads refuse), which
+    # unlocks the merge/rebuild ii-loops.  MEASURED (lane HH 2026-08-26,
+    # 3-rep cycle-exact): topk-perf sem KERNEL 6022 -> 5708 (vs hand
+    # 5755 = L +4.64 -> WIN -0.82; the hand arm is raw-spelling and is
+    # byte-untouched by the knob under the final binary); TOPK_BODY
+    # 5317 -> 4974 (sem faster than hand in the sort body); corr 12/12
+    # device-golden + paired CRAQ 12/12 at knob flags.  SCOPE RULE
+    # (typed-content requirement, final binary): the request demands at
+    # least one typed SFPU word in the body -- a raw-only body (raw
+    # .ttinsn words, computed-word stores, TTREPLAY/TTSETRWC owners) IS
+    # the raw-spelling world whose size pricing is already word-accurate,
+    # and bypassing it granted raw launch loops an unroll pricing
+    # correctly refused: the topk_xl K=2048 corr vehicles overflowed
+    # TRISC1_CODE (+1836 bytes, loud link error) and the topkxl profile
+    # regressed (production 11070 -> 11493, x6 11075 -> 11198;
+    # i-fetch-bound loop class) under the earlier raw-admitting build.
+    # With the rule, raw-spelling TUs are untouched BY CONSTRUCTION
+    # (refusal launch-flatten-no-typed-content), and the function-level
+    # census budget XTT_LAUNCH_FLATTEN_FN_BUDGET_WORDS stays as a belt.
+    # Booking lever for topk-perf; typed-delivery rows only.
+    "launch-flatten": "-mtt-tensix-optimize-launch-flatten",
 }
 
 
@@ -960,6 +1000,36 @@ KNOB_MODES = {
     # knob; promotion requires an R9 witness and ON-vs-ON attribution
     # ceremony.
     "crossrow-pairing-seed": "on-plus",
+    # GJ window-pairing-stride remains a default-off on-plus knob at pin-28;
+    # promotion requires an R9 witness and ON-vs-ON attribution ceremony.
+    "window-pairing-stride": "on-plus",
+    # GP crossrow-pairing: default-off Init(0) booking knob; the pairing
+    # phase runs before the region schedulers and composes with the
+    # ON-28 replay capture (record + halved launches).  on-plus while a
+    # booking knob; promotion requires an R9 witness and ON-vs-ON
+    # attribution ceremony.
+    "crossrow-pairing": "on-plus",
+    # GQ record-hoist-peel: default-off on-plus booking knob — the peel
+    # rescues a record-hoist refusal, so its shape only exists on the
+    # reviewed-ON pipeline (record-hoist is in the ON set); the booking
+    # A/B is (ON + flag) vs plain ON.
+    "record-hoist-peel": "on-plus",
+    # GW native-compare: default-off Init(0) booking knob; a pure
+    # expansion-time lowering choice (no scheduler interaction beyond
+    # shorter CC webs).  on-plus while a booking knob; promotion requires
+    # an R9 witness and ON-vs-ON attribution ceremony.
+    "native-compare": "on-plus",
+    # GV pressure-park: default-off on-plus knob — the residency classes
+    # it widens run in the ON set (const-residency), so attribution is
+    # ON vs ON+flag.  Promotion requires an R9 witness and the ON-vs-ON
+    # attribution ceremony.
+    "pressure-park": "on-plus",
+    # HH launch-flatten: default-off Init(0) booking knob; a pure
+    # GIMPLE unroll-request (delivery-shape change only, dynamic word
+    # stream unchanged by construction).  on-plus while a booking knob;
+    # promotion requires an R9 witness and the ON-vs-ON attribution
+    # ceremony.
+    "launch-flatten": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
