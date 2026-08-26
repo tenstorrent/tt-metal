@@ -27,6 +27,7 @@
 // per-slice ops are supported for now.
 
 // Allocates and programs the PACK1 buffer descriptor viewing the L1 output as SrcS slices.
+// Internal helper for llk_sfpu_srcs_{unary,binary}_init. Do not call standalone.
 inline void llk_sfpu_srcs_configure_pack_impl(
     const ckernel::TensorShape& srcs_shape,
     const std::uint32_t l1_addr_16B,
@@ -38,6 +39,7 @@ inline void llk_sfpu_srcs_configure_pack_impl(
 }
 
 // One SrcS slice = ydim rows x XDIM datums, single face (x=16, y=ydim, z=1).
+// Internal helper for llk_sfpu_srcs_{unary,binary}_init. Do not call standalone.
 inline ckernel::TensorShape llk_sfpu_srcs_slice_shape_impl(const std::uint32_t ydim) {
     return ckernel::make_tensor_shape(
         static_cast<std::uint8_t>(ydim), static_cast<std::uint8_t>(ckernel::trisc::srcs_dims::XDIM), 1, 1);
