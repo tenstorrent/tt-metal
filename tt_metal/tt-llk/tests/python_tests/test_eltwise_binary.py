@@ -674,6 +674,9 @@ def _compute_dest_reuse_golden(
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
     tile_dimensions=[[32, 32], [16, 32], [8, 32]],
     input_dimensions=[[512, 32]],
+    # [256, 32] fills the DEST bank (8 output tiles), which is what reaches dst_index 7.
+    # Only the Float16_b arm gets there: Float32 halves the bank, so it blocks at 4 tiles
+    # and dst_index caps at 3.
     output_dimensions=lambda tile_dimensions: (
         [[128, 32], [256, 32]] if tile_dimensions == [32, 32] else [[128, 32]]
     ),

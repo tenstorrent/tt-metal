@@ -349,6 +349,33 @@ inline void eltwise_binary_reuse_dest_as_src()
 }
 
 /**
+ * @brief Clear one 16-row DEST face using ZEROACC's one-row mode.
+ *
+ * Rows are spelled out instead of looped because TTI_ZEROACC's operand must constant-fold; a loop
+ * would only assemble when the unroll hint is honoured, making legality depend on the optimiser.
+ * Same reason move_d2a_row_broadcast_fixed_face writes out its row moves.
+ */
+inline void zeroacc_face_by_row()
+{
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0 /*use_32_bit_mode*/, 0 /*clear_zero_flags*/, ADDR_MOD_1, 0);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 1);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 2);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 3);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 4);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 5);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 6);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 7);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 8);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 9);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 10);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 11);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 12);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 13);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 14);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_1, 15);
+}
+
+/**
  * @brief Configure MOP for eltwise binary operations with dest reuse.
  *
  * MOP outer loop = 1 face, called multiple times externally with ZEROACC between calls.
@@ -481,9 +508,10 @@ inline void eltwise_binary_run_with_dest_reuse(
 {
     constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
     // DEST rows one face spans -- what ZEROACC's 16-row mode clears in a single instruction.
-    constexpr std::uint32_t DEST_ROWS_PER_FACE = 16;
-    // Rows in one DEST bank (half). See the bank-select note below.
-    constexpr std::uint32_t DEST_ROWS_PER_BANK = 512;
+    constexpr std::uint32_t DEST_ROWS_PER_FACE = FACE_R_DIM;
+    constexpr std::uint32_t DEST_ROWS_PER_TILE = 4 * DEST_ROWS_PER_FACE;
+    // Rows in one 16-bit DEST bank. The 32-bit bank is half this, but it is excluded below.
+    constexpr std::uint32_t DEST_ROWS_PER_BANK = DEST_REGISTER_HALF_SIZE;
 
 #pragma GCC unroll 0
     for (std::uint32_t n = 0; n < loop_count; n++)
@@ -511,18 +539,18 @@ inline void eltwise_binary_run_with_dest_reuse(
         // A 32-bit bank tops out at 240 + 15 and never trips it. ZEROACC's one-row mode addresses purely
         // in rows (dest offset + RWC + index) and has no such mismatch, so use it for that one face.
         // tt-metal#53693.
-        const std::uint32_t dest_row_offset = (local_tile << 6) + ((face_offset + n) << 4);
-        if (dest_row_offset + face_index >= DEST_ROWS_PER_BANK)
+        // The fallback is restricted to a 16-bit DEST at compile time. A 32-bit CLR_16 block is not 16
+        // consecutive DEST rows, so the row-by-row clear would not be equivalent there -- and a 32-bit
+        // bank cannot reach the boundary anyway (its offset tops out at 240 and its index at 15).
+        // Note this keys off is_fp32_dest_acc_en, not clear_fp32: with clear_fp32_dst_acc false (the
+        // LLK-level default) clear_fp32 is 0 even in FP32 mode, so it says nothing about DEST geometry.
+        constexpr bool bank_is_16bit        = !is_fp32_dest_acc_en;
+        const std::uint32_t dest_row_offset = (local_tile * DEST_ROWS_PER_TILE) + ((face_offset + n) * DEST_ROWS_PER_FACE);
+        const bool crosses_bank             = bank_is_16bit && (dest_row_offset + face_index >= DEST_ROWS_PER_BANK);
+
+        if (crosses_bank)
         {
-            // Only reachable with a 16-bit bank: in 32-bit mode the offset tops out at 240 and the index
-            // at 15. That matters because a 32-bit CLR_16 block is not 16 consecutive DEST rows, so the
-            // row-by-row fallback below would not be equivalent.
-            LLK_ASSERT(clear_fp32 == 0, "dest-reuse ZEROACC bank-crossing fallback assumes a 16-bit DEST bank");
-#pragma GCC unroll DEST_ROWS_PER_FACE
-            for (std::uint32_t row = 0; row < DEST_ROWS_PER_FACE; row++)
-            {
-                TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0 /*use_32_bit_mode*/, 0 /*clear_zero_flags*/, ADDR_MOD_1, row);
-            }
+            zeroacc_face_by_row();
         }
         else
         {
