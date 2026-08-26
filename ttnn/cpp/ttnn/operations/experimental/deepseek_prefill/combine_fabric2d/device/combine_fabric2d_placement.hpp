@@ -20,6 +20,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 using StreamId = uint32_t;
 
 constexpr StreamId make_stream_id(uint32_t link_idx, bool is_cw) { return link_idx * 2 + (is_cw ? 0u : 1u); }
+constexpr bool stream_is_cw(StreamId stream) { return stream % 2 == 0; }
 constexpr uint32_t stream_count(uint32_t num_links) { return num_links * 2; }
 
 struct StreamPlacement {

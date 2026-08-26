@@ -85,6 +85,10 @@ constexpr uint32_t slice_begin(uint32_t begin, uint32_t n, uint32_t idx, uint32_
 
 uint32_t slot_addr_of(uint32_t slot) { return ct.ring_addr + slot * ct.slot_stride(); }
 
+// Step `i` of a prefetch window of `n` pages, as an offset from the window's base. Which IS the pad its
+// metadata was prefetched into, whichever way the window is walked.
+constexpr uint32_t pad_at(uint32_t n, uint32_t i) { return ct.walks_down ? n - 1 - i : i; }
+
 // A destination one hop away is written straight into its output region; anything further is staged into
 // the neighbour's forwarding buffer and re-sent from there.
 bool is_direct(uint32_t dst_chip_id) { return dst_chip_id == ct.nbr_chip_id; }
@@ -279,22 +283,33 @@ struct Reader {
         }
     }
 
-    // Stage [lo, hi) of one run: prefetch their metadata, then issue and announce them `batch` at a time.
+    // Pages [lo, hi) in the order this stream walks them, a prefetch window at a time: `body(base, n)` gets
+    // a window whose metadata is already in the pads, and steps it with pad_at.
+    template <typename Body>
+    void walk_pages(uint32_t lo, uint32_t hi, Body body) {
+        for (uint32_t done = 0; done < hi - lo;) {
+            const uint32_t n = (hi - lo - done) > ct.meta_prefetch_cap ? ct.meta_prefetch_cap : hi - lo - done;
+            const uint32_t base = ct.walks_down ? hi - done - n : lo + done;
+            prefetch_metadata(base, base + n);
+            body(base, n);
+            done += n;
+        }
+    }
+
+    // Stage [lo, hi) of one run: issue and announce its pages `batch` at a time.
     void stage_run_slice(uint32_t dst_chip_id, uint32_t lo, uint32_t hi) {
-        for (uint32_t base = lo; base < hi; base += ct.meta_prefetch_cap) {
-            const uint32_t end = (hi - base) > ct.meta_prefetch_cap ? base + ct.meta_prefetch_cap : hi;
-            prefetch_metadata(base, end);
+        walk_pages(lo, hi, [&](uint32_t base, uint32_t n) {
             // `batch` tokens' reads in flight at a time, then one barrier and one announcement.
-            for (uint32_t q = base; q < end;) {
-                const uint32_t k = (end - q) > ct.batch ? ct.batch : (end - q);
+            for (uint32_t q = 0; q < n;) {
+                const uint32_t k = (n - q) > ct.batch ? ct.batch : (n - q);
                 for (uint32_t j = 0; j < k; j++) {
-                    issue_token(dst_chip_id, q + j, q + j - base);
+                    issue_token(dst_chip_id, base + pad_at(n, q + j), pad_at(n, q + j));
                 }
                 noc_async_read_barrier();  // every token of the ct.batch is in L1 before any is announced
                 publish_n(k);
                 q += k;
             }
-        }
+        });
     }
 
     // One own assignment for one local expert: what this chip owes ONE destination chip out of that
@@ -434,15 +449,14 @@ struct Reader {
         const uint32_t n = ctl.run_end(ct.my_dg_index, e) - begin;
         const uint32_t lo = slice_begin(begin, n, ct.my_stream, ct.local_split_count);
         const uint32_t hi = slice_begin(begin, n, ct.my_stream + 1, ct.local_split_count);
-        for (uint32_t base = lo; base < hi; base += ct.meta_prefetch_cap) {
-            const uint32_t end = (hi - base) > ct.meta_prefetch_cap ? base + ct.meta_prefetch_cap : hi;
-            prefetch_metadata(base, end);
-            for (uint32_t p = base; p < end; p++) {
-                volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    meta_pads_addr + (p - base) * cmbf2d::META_PAD_STRIDE);
+        walk_pages(lo, hi, [&](uint32_t base, uint32_t window) {
+            for (uint32_t i = 0; i < window; i++) {
+                const uint32_t pad = pad_at(window, i);
+                volatile tt_l1_ptr uint32_t* meta =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * cmbf2d::META_PAD_STRIDE);
                 const uint32_t out_page = meta[1] * ct.num_experts_per_tok + meta[2];
                 const uint64_t out_addr = dram.out.get_noc_addr(out_page);
-                noc_async_read(dram.in.get_noc_addr(p), slot_addr, ct.token_size_bytes);
+                noc_async_read(dram.in.get_noc_addr(base + pad), slot_addr, ct.token_size_bytes);
                 noc_async_read_barrier();
                 noc_async_write(slot_addr, out_addr, ct.token_size_bytes);
                 // Serialised on purpose: the slot IS the buffer, so it cannot be refilled until the write
@@ -450,7 +464,7 @@ struct Reader {
                 // from the sender's ring accounting.
                 noc_async_write_barrier();
             }
-        }
+        });
         claimed--;  // hand the staging slot back; nothing was ever announced for it
     }
 
