@@ -1194,19 +1194,6 @@ KNOB_MODES = {
     # meaningful on the ON pipeline.
     "park-ordering": "drop-one",
     "store-source-tier": "drop-one",
-    # HN park-ordering: default-off Init(0) booking knob; the deferral
-    # acts on the reviewed-ON pipeline's EL hoists (there is nothing to
-    # defer without invariant-loadi and no walk to yield to without
-    # const-residency + pressure-park), so the booking A/B is
-    # (ON + flag) vs plain ON.  on-plus while a booking knob; promotion
-    # requires an R9 witness and the ON-vs-ON attribution ceremony.
-    "park-ordering": "on-plus",
-    # HO store-source-tier: default-off Init(0) booking knob; the parked
-    # store-consumed constants it re-tiers exist only under the
-    # reviewed-ON residency classes, so the booking A/B is (ON + flag)
-    # vs plain ON.  on-plus while a booking knob; promotion requires an
-    # R9 witness and the ON-vs-ON attribution ceremony.
-    "store-source-tier": "on-plus",
     # HR crossloop-cc-peel: default-off Init(0) booking knob; the peel
     # placements it lifts exist only under the reviewed-ON residency
     # classes + pressure-park, so the booking A/B is (ON + flag) vs
