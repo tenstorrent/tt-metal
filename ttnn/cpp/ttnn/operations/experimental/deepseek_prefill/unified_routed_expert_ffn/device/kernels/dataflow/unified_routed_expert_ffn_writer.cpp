@@ -184,9 +184,13 @@ void kernel_main() {
     // UP_SPLIT and DOWN_SPLIT phases advance it once per block, gated on the same
     // sender core, so the two kernels stay in lockstep across the phase boundary.
     uint32_t up_seq = 0;
-    // cb_in1_down's live slot index. up_seq cannot serve here because the up and
-    // down phases share it; down_blk counts down blocks only, and runs across
-    // chunks AND experts because the CB cadence is program-wide.
+    // Live CB slot indices. up_seq CANNOT derive either one: the UP_SPLIT and
+    // DOWN_SPLIT phases share it (they share the go/done semaphore pair), so it
+    // counts both kinds of block. Each phase therefore needs its own counter,
+    // and both run across chunks AND experts because the CB cadence is
+    // program-wide. Deriving the `up` slot from up_seq silently mis-slots every
+    // chunk after the first whenever num_blocks_d is odd.
+    uint32_t up_blk = 0;
     uint32_t down_blk = 0;
 
     // ======================= per-local-expert loop =======================
@@ -227,7 +231,7 @@ void kernel_main() {
                     // The CB write pointer is PER-RISC and the reader owns push, so
                     // the writer's get_write_ptr never advances. Replicate the
                     // reader's cadence: cb_in1_up is double-buffered, one push per
-                    // K-block, so the live slot is base + (up_seq-1)%2 * slot.
+                    // K-block, so the live slot is base + up_blk%2 * slot.
                     constexpr uint32_t kUpNumSlots = 2;
                     CircularBuffer cb_in1_up_buf(cb_in1_up);
                     const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
@@ -235,7 +239,8 @@ void kernel_main() {
                     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                         ++up_seq;
                         up_go_sem.wait_min(up_seq);
-                        uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
+                        uint32_t l1_w_up = up_cb_base + (up_blk % kUpNumSlots) * up_slot_bytes;
+                        ++up_blk;
 #ifdef WEIGHTS_ND_SHARDED
                         // One request per K-row: the shard IS this core's whole N
                         // slice, contiguous in one bank. The N-OOB tail inside the
