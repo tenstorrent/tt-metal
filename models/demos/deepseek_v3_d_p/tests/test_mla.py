@@ -496,28 +496,17 @@ def test_kimi_mla(
     )
 
 
-# sp x tp -- Mistral Small 4 bringup. Copied from test_kimi_mla above and deliberately narrowed;
-# every axis Kimi sweeps is pinned here to ONE value unless it changes the number being measured.
-#   mesh_device        (8, 4) only. Production SP-axis shape for this box; a (2, 4) PCC is not a
-#                      production-shape result, and the TTNN weight cache is keyed on device count.
-#   device_params      fabric2d only. FABRIC_1D is not in CI_ALLOWED_FABRICS for BH galaxy (8,4), so
-#                      pinning it skips the row; TorusXY needs a certified cabling descriptor.
-#   use_pretrained     random only. This row measures the MLA math, which the random-weight path
-#                      exercises identically; the pretrained checkpoint is covered by the chunked
-#                      rows below and by the transformer row.
-#   seq_len            5k only. 25k roughly quadruples the host reference's attention cost for no
-#                      extra coverage of the config fields under test.
-#   skip_host_comparison  check_pcc only. skip_check does the device work and computes NO PCC; the
-#                      gate for this step IS the PCC, so that case would be a silent zero-signal run.
-#   is_balanced        sequential only, as Kimi.
-# scale_down_sl stays swept (2 cases): it is the one axis that changes the seq_len actually run
-# (max_sl 5120 vs scaled_sl (5120//32)*8 = 1280), which exercises different padding/rotation paths.
+# sp x tp -- Mistral Small 4 bringup. Copied from test_kimi_mla and deliberately narrowed: every axis
+# Kimi sweeps is pinned to one value unless it changes the number being measured. Two pins are not
+# obvious -- fabric2d because FABRIC_1D is not in CI_ALLOWED_FABRICS for BH galaxy (8,4) and TorusXY
+# needs a certified cabling descriptor, and 8x4 because the TTNN weight cache is keyed on device
+# count. scale_down_sl stays swept: it is the one axis that changes the seq_len actually run
+# (5120 vs 1280), exercising different padding/rotation paths.
 #
-# NOT WIRED ON PURPOSE: reference_attention_cls. run_reference_mla returns None for a variant with
-# no reference (reference_runners.py:63), so the [reference_output] PCC is skipped and the three
-# gate PCCs below still come from create_mla_reference -- the vendored DeepSeek MLA, which is
-# variant-independent. Whether that vendored reference is the right truth for Mistral is a separate
-# question and is deliberately NOT settled by this test.
+# NOT WIRED ON PURPOSE: reference_attention_cls. run_reference_mla returns None for a variant with no
+# reference, so the [reference_output] PCC is skipped and the gate PCCs come from create_mla_reference
+# -- the vendored DeepSeek MLA. Whether that is the right truth for Mistral is deliberately not
+# settled here.
 @pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -1059,32 +1048,22 @@ def test_mla_chunked_prefill(
     variant.pretrained_mla_layer. Its rotation scenarios still matter: rotation comes from the
     block-cyclic cache write and the causal offset, not from RoPE."""
     # Per-variant, not module-level: two CI selectors for this test are variant-unqualified, so
-    # without this a kimi_k3 case would run on Wormhole T3K where it has never been validated.
-    if variant.name == "kimi_k3" and not is_blackhole():
-        pytest.skip("kimi_k3 is validated on Blackhole only")
+    # without this these would run on Wormhole T3K, where neither has been validated.
+    if variant.name in ("kimi_k3", "mistral_small_4") and not is_blackhole():
+        pytest.skip(f"{variant.name} is validated on Blackhole only")
     # The metadata contract serves the trace-safe runtime (inbound_socket_service_sync feeds forward
     # tt_metadata directly). K3 has no runtime -- build_runtime/allocate_kv_cache deliberately raise
     # -- so the path is unreachable for it and passes only via the shared arch-agnostic ttMLA.forward.
     # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
     if variant.name == "kimi_k3" and use_metadata_tensor:
         pytest.skip("kimi_k3 has no runtime, so the metadata (device-scalar) path is unreachable for it")
-    # No K3 checkpoint is reachable, so no GPU trace was ever recorded for it. _run_chunked_prefill
-    # already asserts on supports_pretrained, but only once a trace root is configured -- so on a box
-    # with MLA_CHUNKED_TRACE_DIR set these cases would hard-fail instead of being cleanly out of
-    # scope. Skip up front; the assert stays as the backstop for any future supports_pretrained=False
-    # variant and for the silent K2.6-trace-substitution it was written to catch.
-    if variant.name == "kimi_k3" and reference == "trace":
-        pytest.skip("kimi_k3 has no reachable checkpoint, so no GPU trace exists for it")
-    # Same reason as K3's: the variant-unqualified CI selectors for this test would otherwise run
-    # Mistral on Wormhole T3K, where it has never been brought up.
-    if variant.name == "mistral_small_4" and not is_blackhole():
-        pytest.skip("mistral_small_4 is validated on Blackhole only")
-    # No GPU trace has ever been recorded for Mistral and none is required for CI; 'cpu' and 'func'
-    # cover all 13 scenarios between them. Skipped up front for K3's reason: the supports_pretrained
-    # assert inside _run_chunked_prefill only fires once a trace root is configured, so on a box with
-    # MLA_CHUNKED_TRACE_DIR set these would hard-fail instead of reading as out of scope.
-    if variant.name == "mistral_small_4" and reference == "trace":
-        pytest.skip("no GPU trace recorded for mistral_small_4; cpu and func cover all 13 scenarios")
+    # Neither has a recorded GPU trace: K3's checkpoint is unreachable, Mistral's was never recorded
+    # ('cpu' and 'func' cover all 13 scenarios). Skipped up front because _run_chunked_prefill's
+    # supports_pretrained assert only fires once a trace root is configured, so with
+    # MLA_CHUNKED_TRACE_DIR set these would hard-fail instead of reading as out of scope. That assert
+    # stays as the backstop for the silent K2.6-trace-substitution it was written to catch.
+    if variant.name in ("kimi_k3", "mistral_small_4") and reference == "trace":
+        pytest.skip(f"no GPU trace recorded for {variant.name}")
     # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
     # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
     # fixture skips the test if the env var is set but the checkpoint is incomplete.

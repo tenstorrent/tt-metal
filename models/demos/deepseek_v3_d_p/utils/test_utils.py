@@ -501,16 +501,3 @@ def convert_state_dict(
         "quantized; dequantizing weights."
     )
     return dequantize_state_dict(state_dict, hf_config, dtype)
-
-
-def token_normalized(t: torch.Tensor) -> torch.Tensor:
-    """Per-token RMS-normalized copy: each position's feature vector divided by its own RMS.
-
-    Raw PCC on late-layer hidden states of a model with massive activations (an attention-sink
-    effect: a few channels carry values orders of magnitude larger than the rest) is dominated by
-    those channels and measures almost nothing about the other thousands. Normalizing PER TOKEN --
-    not globally -- makes the metric insensitive to them while still catching a genuine regression,
-    because a real error moves the whole feature vector rather than rescaling it.
-    """
-    x = t.float()
-    return x / x.pow(2).mean(dim=-1, keepdim=True).clamp_min(1e-12).sqrt()

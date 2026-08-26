@@ -980,14 +980,7 @@ def test_kimi_k3_moe(
 # reference is a different class; the shared run_model body is unchanged.
 #
 # 640 x dgs 8 = 5120 tokens, matching the rest of the mistral4 suite. 128 experts at top-4 exercises
-# the unfused extract -> FFN -> insert path that DSv3/Kimi/GLM only cover at top-8. Random weights
-# only: the checkpoint stacks the routed experts, so the pretrained fixture loads attention alone.
-#
-# The [reference_output] check sits at its threshold by construction, for two reasons that are both
-# about routing rather than device numerics: Mistral's router scores with softmax while the device op
-# only knows sigmoid, and the fixture emits an e_score_correction_bias that the device consumes but
-# Mistral's router does not have. Together those cap this comparison near 0.977, against the
-# moe_pcc_threshold of 0.971. A miss here is far more likely to be routing than arithmetic.
+# the unfused extract -> FFN -> insert path that DSv3/Kimi/GLM only cover at top-8.
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
