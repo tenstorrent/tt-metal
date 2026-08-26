@@ -62,9 +62,7 @@ SPEAKERS_PER_LANG = 6
 # collapse -- past this a run did not say the sentence. Tiered, not fitted per language: the worst
 #             of a few dozen draws is too noisy to fit to.
 #
-# cs and hi sit above the rule: their baselines are the model's own quality, so a ceiling at 3x
-# would gate nothing. Theirs are the tightest here relative to their means, catching a language
-# getting worse rather than asserting it is good.
+# cs and hi sit above the rule; theirs are the tightest here relative to their means.
 LIMITS = {
     "en": (0.02, 0.30),
     "es": (0.03, 0.30),

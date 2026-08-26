@@ -6,11 +6,8 @@
 # output, so anything else changes the tokens the GPT sees.
 #
 # One change that is not a deletion:
-#   * the archived coqui-ai/TTS asks num2words for language "cz", which is not a registered code,
-#     so every Czech number path raises. The code is "cs" -- which the maintained fork
-#     (idiap/coqui-ai-TTS) already uses. With it corrected, cardinals, decimals and currency work.
-#   * _expand_ordinal falls back to a cardinal where num2words has no ordinals, rather than
-#     raising. Only Czech reaches this.
+#   * the Czech language code, "cz" upstream, corrected to "cs" -- the code num2words registers.
+#   * _expand_ordinal falls back to a cardinal where num2words has no ordinals, instead of raising.
 # Changes from upstream, all deletions:
 #   * split_sentence / get_spacy_lang dropped -- they are upstream's optional text splitter and
 #     the only users of spacy. Sentence splitting is the caller's job here.
@@ -480,11 +477,7 @@ def _expand_currency(m, lang="en", currency="USD"):
 def _expand_ordinal(m, lang="en"):
     try:
         return num2words(int(m.group(1)), ordinal=True, lang=lang)
-    except NotImplementedError:
-        # num2words has no ordinals for this language (cs). The pattern cannot tell a real ordinal
-        # from a number that merely ends the sentence, so reading it as a cardinal is right for
-        # "Bylo tam 50." and wrong for "3. test" -- but it never raises, and upstream already
-        # swallows num2words failures for currency.
+    except NotImplementedError:  # no ordinals for this language; read it as a cardinal
         return num2words(int(m.group(1)), lang=lang)
 
 

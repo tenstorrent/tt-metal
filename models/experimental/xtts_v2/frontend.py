@@ -292,9 +292,8 @@ ROMANIZERS = {"ja": _romanize_japanese, "ko": _romanize_korean, "zh": _romanize_
 # Chinese is tagged [zh-cn] in the vocab; a bare [zh] is not a token and would shatter into <unk>.
 VOCAB_TAG = {"zh": "zh-cn"}
 
-# Past these lengths coqui warns that audio may truncate, and the romanized languages sit far below
-# the rest: their text expands on the way to the BPE, so far fewer characters fit the token budget.
-# A warning rather than an error, matching upstream -- MAX_TEXT_TOKENS is the hard limit.
+# Past these lengths coqui warns that audio may truncate. The romanized languages sit far below the
+# rest, their text expanding before it reaches the BPE. MAX_TEXT_TOKENS is the hard limit.
 CHAR_LIMITS = {
     "ar": 166,
     "cs": 186,
