@@ -3,18 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Tracy sink on the PUBLIC paired-Zone contract -- an ordinary consumer callback, registered
-// through add_consumer exactly like the ops CSV. Tracy's timeline encodes nesting through the
-// ORDER of begin/end pushes per lane, but the paired stream emits a zone only when it CLOSES
-// (child before parent, start not monotonic), so no push-in-arrival-order can render it. The
-// consumer therefore buffers every zone and reconstructs the push order at teardown: per lane,
-// sort to pre-order (start asc, end desc; ties broken toward the later-arrived = outer zone),
-// then a single stack walk emits the begin/end bracket sequence. Point markers (Data/Event)
-// carry no nesting and are forwarded as they arrive.
-//
-// The deferred flush is a real cost of zones-at-close, on purpose: nothing reaches Tracy until
-// the capture ends, and the whole capture's zones are held in memory (24 B each). Lane identity
-// is COPIED out of the capture context on first sight because the context dies with the
-// receiver, before this consumer's destructor runs the flush.
+// through add_consumer exactly like the ops CSV. Tracy takes device zones WHOLE now (QueueGpuZone:
+// both timestamps in one lock-free item, TracyTTPushZone), and the paired stream already delivers
+// zones whole in per-lane COMPLETION order -- exactly the order the Tracy server rebuilds nesting
+// from. So every record forwards to Tracy as it arrives and NOTHING is buffered: no per-lane zone
+// vectors, no teardown flush, no bracket reconstruction, no cross-lane timestamp merge. (All of
+// those existed only because the old wire-level begin/end push encoded nesting in push order; see
+// git history at 48b1e5c36f9 and before.) Point markers (Data/Event) forward as they arrive, as
+// always.
 #pragma once
 
 #include <cstdint>
@@ -52,35 +48,17 @@ private:
         uint64_t vals[kMaxEventValues] = {};
     };
 
-    // One completed zone, buffered until the teardown flush.
-    struct BufZone {
-        uint64_t start;
-        uint64_t end;
-        uint32_t id;
-        uint32_t prog;
-    };
-    struct Lane {
-        PerfDebugLaneInfo info;  // copied: the capture context is gone by flush time
-        uint32_t dev = 0;
-        std::vector<BufZone> zones;  // arrival order = per-lane END order
-    };
-
     void flush_event(const PerfDebugCaptureContext& ctx);
     void note_ts(uint32_t dev, uint64_t ts);
-    // Teardown: reconstruct each lane's begin/end push order and push everything to Tracy.
-    void flush_zones();
 
     PerfDebugTracyHandler* handler_;
     PendingEvent pend_;
     // Per device: rebase origin when the device clock is unsynced. A running MIN over zone starts
-    // and marker timestamps: with end-ordered zones the earliest start tends to arrive LAST (the
-    // outermost zone closes last), so a first-record base would clamp it. Zones flush at teardown
-    // and get the final min; a point marker forwarded live uses the min so far, so on an unsynced
-    // device it can sit slightly right of zones -- accepted, the synced path never uses this.
+    // and marker timestamps. Everything forwards live now, so an unsynced device uses the min SO
+    // FAR; the base only ever DECREASES, which shifts later pushes right and so cannot break the
+    // per-lane end-order Tracy depends on. The synced path never uses this.
     std::vector<uint64_t> ts_base_;
     std::vector<uint8_t> clock_synced_;
-    std::unordered_map<uint32_t, Lane> lanes_;  // key: dev << 10 | lane
-    uint64_t zones_buffered_ = 0;
     // id -> name, mirrored per-ELF from llrt::ZoneMetaRegistry. Member (not shared): this consumer runs
     // on its own delivery thread, so lookups take no lock.
     ZoneNameMirror names_;

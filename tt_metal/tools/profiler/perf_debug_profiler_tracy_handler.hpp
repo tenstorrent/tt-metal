@@ -12,7 +12,6 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -56,8 +55,10 @@ public:
     // hot path). worker_noc0 = the chip's worker-core NOC0 coords.
     void PreCreateContexts(uint32_t chip_id, const std::vector<std::pair<uint32_t, uint32_t>>& worker_noc0);
 
-    // Push one fully-resolved zone (ZONE_START or ZONE_END) onto its core's Tracy lane. Zones arrive in
-    // emission order per lane, so pushing in arrival order nests correctly.
+    // Push one COMPLETE zone (both endpoints) onto its core's Tracy lane, as a single lock-free
+    // QueueGpuZone item (TracyTTPushZone). Contract inherited from Tracy: per (context, thread),
+    // calls must arrive in zone-completion order (non-decreasing end) -- which is exactly the paired
+    // stream's per-lane arrival order, so the caller forwards in arrival order and nothing buffers.
     void HandleWorkerZone(const perf_debug::WorkerZonePacket& zone);
 
     // Label a drainer core with its ROLE, so a plot row reads "DRISC 9-9 FILLER" rather than coordinates
@@ -75,6 +76,12 @@ private:
         return (static_cast<uint64_t>(chip_id) << 40) | (static_cast<uint64_t>(core_x) << 20) |
                (static_cast<uint64_t>(core_y) & 0xFFFFF);
     }
+    // Everything this handler emits -- context creation, zones (PushZoneSerial), markers -- rides the
+    // SERIAL queue, so the stream is totally ordered by construction and a zone or marker can never
+    // reach the server before the GpuNewContext it references (the server hard-asserts on an unknown
+    // context). The lock-free PushZone/PopulateLockfree variants exist in the fork but are NOT used
+    // here: the client drains the lock-free queues BEFORE the serial one each pass, so mixing queues
+    // makes creation/use ordering racy -- measured as an intermittent tracy-capture segfault.
     TracyTTCtx GetOrCreateContext(uint32_t chip_id, uint32_t core_x, uint32_t core_y, const std::string& name);
 
     // ContextKey -> immortal role string ("FILLER"/"MOVER"). Empty for any core never registered, which is
@@ -99,11 +106,13 @@ private:
     // on parts where the two counters agree, in which case every lookup falls through to chip_anchors_.
     std::unordered_map<uint64_t, ChipAnchor> core_anchors_;
     std::unordered_map<uint64_t, TracyTTCtx> tracy_contexts_;
-    // Shadow of Tracy's per-(context,risc) GPU zone stack depth, so an unmatched ZONE_END (which would
-    // pop an empty stack and SEGV tracy-capture) is dropped here. Key: (ContextKey<<3)|risc.
-    std::unordered_map<uint64_t, int32_t> lane_depth_;
-    uint64_t orphan_end_count_ = 0;
-    std::unordered_set<uint64_t> orphan_lanes_;
+    // Zone-id/colour -> immortal Tracy SourceLocationData. QueueGpuZone carries a POINTER the server
+    // dereferences by querying this client whenever it likes, so both the struct and the name string
+    // it points at must live for the rest of the process -- interned once, never freed (a few hundred
+    // distinct zone names per capture). Key: id << 32 | color (the same name can carry per-role
+    // colours, and colour lives inside the srcloc). Stored as void* so this header stays valid in
+    // non-TRACY builds.
+    std::unordered_map<uint64_t, const void*> zone_srclocs_;
     // Per-drainer latest per-sweep NoC KB, for the derived aggregate plot. Keyed by ContextKey.
     // Per-drainer state for the NoC-footprint RATE plots: the previous sample's device-ns instant, and the
     // latest computed rate. A rate needs two samples, so the first one per drainer only seeds the timestamp.

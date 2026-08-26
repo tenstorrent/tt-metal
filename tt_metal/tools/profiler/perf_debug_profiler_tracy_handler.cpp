@@ -57,14 +57,6 @@ PerfDebugTracyHandler::PerfDebugTracyHandler() = default;
 PerfDebugTracyHandler::~PerfDebugTracyHandler() {
     std::lock_guard<std::mutex> lock(mutex_);
 #if defined(TRACY_ENABLE)
-    if (orphan_end_count_ > 0) {
-        log_debug(
-            tt::LogMetal,
-            "[perf-debug profiler] dropped {} orphan ZONE_ENDs across {} lanes (capture-boundary straddles / "
-            "over-run); each would SEGV tracy-capture",
-            orphan_end_count_,
-            orphan_lanes_.size());
-    }
     for (auto& entry : tracy_contexts_) {
         TracyTTDestroy(entry.second);
     }
@@ -172,9 +164,6 @@ void PerfDebugTracyHandler::PreCreateContexts(
 
 void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::WorkerZonePacket& zone) {
 #if defined(TRACY_ENABLE)
-    // if (!tracy::GetProfiler().IsConnected()) {
-    //     return;
-    // }
     TracyTTCtx ctx = GetOrCreateContext(
         zone.chip_id,
         zone.core_noc0_x,
@@ -191,58 +180,41 @@ void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::
         tracy::RiscType::TRISC_1,
         tracy::RiscType::TRISC_2};
 
-    tracy::TTDeviceMarker marker;
-    marker.chip_id = zone.chip_id;
-    marker.core_x = zone.core_noc0_x;
-    marker.core_y = zone.core_noc0_y;
-    // per-hart lane labels; Tensix RISCs map the 0..4 index through kRisc.
-    marker.risc = kRisc[zone.risc % 5];
-    // MUST be set: PushStartMarker/PushEndMarker derive the zone's gpuTime from this field alone
-    // (round(marker.timestamp / m_frequency)). Leaving it default (INVALID_NUM) gave every zone on every
-    // core the same constant gpuTime, so all durations came out 0 or negative and the GUI nested them
-    // arbitrarily -- the "wrong parent/child, inconsistent durations" symptom.
-    marker.timestamp = zone.timestamp;
-    marker.runtime_host_id = zone.timer_id;
-    marker.marker_type = zone.is_start ? tracy::TTDeviceMarkerType::ZONE_START : tracy::TTDeviceMarkerType::ZONE_END;
-    marker.marker_name = zone.name.empty() ? fmt::format("Zone_{}", zone.timer_id) : std::string(zone.name);
-    marker.file = "kernel_profiler";
-    marker.line = 0;
-    marker.color = zone.color;
+    // Same thread-id packing the marker path uses (TTDeviceMarker::get_thread_id), so zones and point
+    // markers land on the same per-RISC row of the core's context.
+    tracy::TTDeviceMarker tm;
+    tm.chip_id = zone.chip_id;
+    tm.core_x = zone.core_noc0_x;
+    tm.core_y = zone.core_noc0_y;
+    tm.risc = kRisc[zone.risc % 5];
+    const uint32_t thread = tm.get_thread_id();
 
-    // Mirror Tracy's per-lane GPU zone stack depth; drop an unmatched ZONE_END (would pop an empty
-    // stack -> SEGV in tracy-capture). A never-opened lane's first END is a benign capture-start
-    // straddle (its START predates the drain); an extra END after balanced traffic is a pairing bug.
-    const uint64_t lane_key = (ContextKey(zone.chip_id, zone.core_noc0_x, zone.core_noc0_y) << 3) | (zone.risc & 0x7);
-    // lane_depth_ / orphan_* are SHARED across the (multiple) socket-drain threads that call this. Guard the
-    // read-modify-write: without the lock, concurrent inserts from two drain threads rehash the map and
-    // corrupt an UNRELATED lane's depth, which then spuriously trips the orphan-END drop below and loses a
-    // burst of real ZONE_ENDs -> a deep unclosed-zone staircase on a random single lane (rare, intermittent).
-    // Release before the Tracy push so pushes stay concurrent (a lane is single-threaded, so push order is
-    // preserved regardless; Tracy's serial queue is itself thread-safe).
+    // Intern the srcloc: QueueGpuZone ships a raw pointer that the SERVER dereferences by querying this
+    // process later, so the SourceLocationData and its name string must outlive the capture -- allocated
+    // once per (zone id, colour), never freed. Bounded by distinct zone names, not zone count.
+    const tracy::SourceLocationData* srcloc = nullptr;
     {
+        const uint64_t key = (static_cast<uint64_t>(zone.timer_id) << 32) | zone.color;
         std::lock_guard<std::mutex> lock(mutex_);
-        if (zone.is_start) {
-            lane_depth_[lane_key]++;
-        } else {
-            auto it = lane_depth_.find(lane_key);
-            const int32_t depth = (it == lane_depth_.end()) ? 0 : it->second;
-            if (depth <= 0) {
-                ++orphan_end_count_;
-                orphan_lanes_.insert(lane_key);
-                return;  // orphan END -> drop (lock_guard releases on return)
-            }
-            --it->second;
+        auto it = zone_srclocs_.find(key);
+        if (it == zone_srclocs_.end()) {
+            const std::string nm = zone.name.empty() ? fmt::format("Zone_{}", zone.timer_id) : std::string(zone.name);
+            char* nm_copy = new char[nm.size() + 1];
+            std::memcpy(nm_copy, nm.c_str(), nm.size() + 1);
+            auto* sl = new tracy::SourceLocationData{nm_copy, "kernel_profiler", "kernel_profiler", 0, zone.color};
+            it = zone_srclocs_.emplace(key, sl).first;
         }
+        srcloc = static_cast<const tracy::SourceLocationData*>(it->second);
     }
 
-    // (no per-marker zone here: it would emit one CPU zone per device marker -> millions, doubling Tracy load
-    // and distorting the measurement. The steady per-marker push cost is captured by the per-batch tracy-emit
-    // zone's duration; the startup spike is the ctx-create children.)
-    if (zone.is_start) {
-        TracyTTPushStartMarker(ctx, marker);
-    } else {
-        TracyTTPushEndMarker(ctx, marker);
-    }
+    // One complete zone, one SERIAL queue item. No begin/end split and no per-lane depth mirror (there
+    // is nothing to orphan: the server never pops a stack). Serial rather than lock-free, deliberately:
+    // context creation and point markers ride the serial queue, and the client drains the lock-free
+    // queues BEFORE the serial one each pass, so a lock-free zone could overtake the GpuNewContext it
+    // references -- an intermittent tracy-capture segfault, reproduced 2026-08-26. All-serial is totally
+    // ordered by construction, and one serial item per zone is still cheaper than the legacy pair (two
+    // serial items plus an alloc'd srcloc each).
+    TracyTTPushZoneSerial(ctx, srcloc, thread, zone.start, zone.end);
 #endif
 }
 

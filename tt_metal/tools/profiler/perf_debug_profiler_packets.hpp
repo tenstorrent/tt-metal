@@ -18,12 +18,16 @@ struct WorkerZonePacket {
     uint32_t core_virtual_y = 0;
     uint32_t core_noc0_x = 0;  // translated -> matches the standard DeviceProfiler / DRAM view
     uint32_t core_noc0_y = 0;
-    uint32_t risc = 0;       // 0=BRISC 1=NCRISC 2/3/4=TRISC_0/1/2
-    uint32_t timer_id = 0;   // the 27-bit structural zone id (hostdevcommon/profiler_zone_id.h)
-    std::string_view name;   // zone name, resolved from the kernel's own ELF; stable for the profiler session
-    uint64_t timestamp = 0;  // full device ticks (59-bit, reconstructed from STICKY_TIMER)
-    bool is_start = false;   // true = ZONE_START, false = ZONE_END
-    uint32_t color = 0;      // explicit Tracy zone color (0 = auto by name)
+    uint32_t risc = 0;      // 0=BRISC 1=NCRISC 2/3/4=TRISC_0/1/2
+    uint32_t timer_id = 0;  // the 27-bit structural zone id (hostdevcommon/profiler_zone_id.h)
+    std::string_view name;  // zone name, resolved from the kernel's own ELF; stable for the profiler session
+    // One COMPLETE zone, both endpoints in full device ticks. The wire ships zones whole at close, and
+    // Tracy now takes them whole (QueueGpuZone), so there is no begin/end split anywhere on this path.
+    // Per (core, risc) packets must arrive in zone-COMPLETION order (non-decreasing `end`) -- that is the
+    // paired stream's arrival order, and it is what the Tracy server rebuilds nesting from.
+    uint64_t start = 0;
+    uint64_t end = 0;
+    uint32_t color = 0;  // explicit Tracy zone color (0 = auto by name)
 };
 
 // A point-in-time worker-core event: a PP_DATA packet (payload) or a PP_EVENT flag (none). Resolved
