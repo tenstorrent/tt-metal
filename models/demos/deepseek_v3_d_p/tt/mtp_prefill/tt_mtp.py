@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -29,15 +28,6 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import eh_proj_to_tt_layout
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
-
-# Debug lever. `cat([e,h]) @ Wt` is algebraically `e @ W[:, :H].T + h @ W[:, H:].T` at identical
-# FLOPs, and the split form needs no row permutation at all. If PCC passes with this set and fails
-# without it, `eh_proj_to_tt_layout` is wrong and nothing else is.
-SPLIT_MM_ENV = "PREFILL_MTP_SPLIT_MM"
-
-
-def _split_mm_enabled() -> bool:
-    return os.environ.get(SPLIT_MM_ENV, "0") == "1"
 
 
 class TtFusedMTP(LightweightModule):
@@ -99,9 +89,6 @@ class TtFusedMTP(LightweightModule):
         # tt_prefill_block.py:280 so a tuple never reaches ttnn.
         self.topology = topology[tp_axis] if isinstance(topology, tuple) else topology
         self.compute_kernel_config = compute_kernel_config
-        self.split_mm = _split_mm_enabled()
-        if self.split_mm:
-            logger.warning(f"{SPLIT_MM_ENV}=1: running the two-matmul form of eh_proj (debug lever, not serving)")
 
         if state_dict is None and weight_cache_path is None:
             raise ValueError(
@@ -127,7 +114,7 @@ class TtFusedMTP(LightweightModule):
             torch_weight=sd.get("hnorm"), cache_name_prefix=f"{cache_name_prefix}.hnorm", **norm_kwargs
         )
 
-        weights = self._convert_and_cache_eh_proj(
+        self.eh_proj = self._convert_and_cache_eh_proj(
             sd.get("eh_proj"),
             hidden_size=self.hidden_size,
             tp=self.tp,
@@ -136,12 +123,8 @@ class TtFusedMTP(LightweightModule):
             weights_dtype=weights_dtype,
             cache_path=weight_cache_path,
             cache_name_prefix=cache_name_prefix,
-            split_mm=self.split_mm,
             device=mesh_device,
         )
-        self.eh_proj = weights.get("eh_proj")
-        self.eh_proj_e = weights.get("eh_proj_e")
-        self.eh_proj_h = weights.get("eh_proj_h")
 
     @staticmethod
     def _convert_and_cache_eh_proj(
@@ -154,9 +137,8 @@ class TtFusedMTP(LightweightModule):
         weights_dtype: ttnn.DataType,
         cache_path: Optional[Path],
         cache_name_prefix: Optional[str],
-        split_mm: bool,
         device: Optional[ttnn.MeshDevice],
-    ) -> dict:
+    ) -> ttnn.Tensor:
         """Transpose, permute, shard and (optionally) cache ``eh_proj``.
 
         ``device=None`` builds cache files only. Shared by ``__init__`` and :meth:`build_ttnn_cache`
@@ -182,22 +164,11 @@ class TtFusedMTP(LightweightModule):
                 cache_file_name=cache_file_name,
             )
 
-        if split_mm:
-            # e @ W[:, :H].T and h @ W[:, H:].T: each half is already contiguous in the sharded dim,
-            # so no permutation is involved. That is the whole point of the lever.
-            if eh_proj_weight is not None:
-                e_w = eh_proj_weight[:, :h].t().contiguous()
-                h_w = eh_proj_weight[:, h:].t().contiguous()
-            else:
-                e_w = torch.empty(h, h)
-                h_w = torch.empty(h, h)
-            return {"eh_proj_e": _to_ttnn(e_w, "eh_proj_e"), "eh_proj_h": _to_ttnn(h_w, "eh_proj_h")}
-
         if eh_proj_weight is not None:
             w = eh_proj_to_tt_layout(eh_proj_weight, tp)
         else:
             w = torch.empty(2 * h, h)
-        return {"eh_proj": _to_ttnn(w, "eh_proj")}
+        return _to_ttnn(w, "eh_proj")
 
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str = "mtp_0") -> bool:
@@ -208,7 +179,6 @@ class TtFusedMTP(LightweightModule):
             return False
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{cache_name_prefix}.hnorm"):
             return False
-        # The concat form only — the split form is a debug lever and is never the serving cache.
         if not pattern_exists(f"{cache_name_prefix}.eh_proj*.tensorbin", "FusedMTP"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.eh_proj")
             return False
@@ -239,7 +209,6 @@ class TtFusedMTP(LightweightModule):
             weights_dtype=weights_dtype,
             cache_path=cache_path,
             cache_name_prefix=cache_name_prefix,
-            split_mm=False,
             device=None,
         )
 
@@ -261,14 +230,8 @@ class TtFusedMTP(LightweightModule):
         e = self.enorm(embed)
         h = self.hnorm(hidden)
 
-        if self.split_mm:
-            out_full = ttnn.matmul(e, self.eh_proj_e, compute_kernel_config=self.compute_kernel_config)
-            out_full = ttnn.add(
-                out_full, ttnn.matmul(h, self.eh_proj_h, compute_kernel_config=self.compute_kernel_config)
-            )
-        else:
-            x = ttnn.concat([e, h], dim=-1)
-            out_full = ttnn.matmul(x, self.eh_proj, compute_kernel_config=self.compute_kernel_config)
+        x = ttnn.concat([e, h], dim=-1)
+        out_full = ttnn.matmul(x, self.eh_proj, compute_kernel_config=self.compute_kernel_config)
 
         # Contracted dim was sharded, so every chip holds a full-width partial sum.
         if self.mesh_device.shape[self.tp_axis] > 1:

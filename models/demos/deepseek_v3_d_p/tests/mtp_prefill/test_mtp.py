@@ -4,14 +4,15 @@
 
 """PCC tests for one GLM-5.2 MTP module (issue #53533).
 
-Three levels, most-local first, so a failure localises itself:
+Two levels, most-local first, so a failure localises itself:
 
-1. ``test_eh_proj_shard_permutation`` / ``test_mtp_indexer_slot`` — pure host, no device. These
-   cover the two layout traps that produce *plausible* wrong answers rather than errors.
-2. ``test_fused_mtp_pcc`` — ``TtFusedMTP`` vs ``fused_mtp_reference``. The only new math in the
-   feature, on both random and real weights.
-3. ``test_mtp_module_pcc`` — the whole ``TtMTPModule`` (fused projection + layer 78 + ``shared_head.norm``)
-   vs ``glm_mtp_module_reference``.
+1. ``test_fused_mtp_pcc`` — ``TtFusedMTP`` vs ``fused_mtp_reference``. The only new math in the
+   feature, on both random and real weights. It opens with a host-side check of the ``eh_proj`` TP
+   shard permutation, which fails per chip before any device op — end-to-end PCC alone would say
+   that something is wrong but not which chip.
+2. ``test_mtp_module_pcc`` — the whole ``TtMTPModule`` (fused projection + layer 78 + ``shared_head.norm``)
+   vs ``glm_mtp_module_reference``. Its ``index_kv_cache`` sizing is what covers the MTP layer's
+   ``indexer_types`` slot; see the comment at that call.
 
 Structure follows ``tests/dflash_prefill/test_dflash.py``; the GLM device plumbing (rope, KV caches,
 sharding, thresholds) follows ``tests/test_prefill_block.py::test_glm_prefill_block``.
@@ -28,19 +29,17 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_2 import fused_mtp_reference, glm_mtp_module_reference
-from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config, glm_5_2_hf_config
+from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtFusedMTP, TtMTPModule
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import (
     eh_proj_expected_chip_shard,
     eh_proj_to_tt_layout,
     enable_mtp_indexer_slot,
-    mtp_indexer_types,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
@@ -134,100 +133,6 @@ def _glm_random_moe_weights(hidden, moe_intermediate, n_routed, seed):
 
 
 # ---------------------------------------------------------------------------
-# Host-only: the two layout traps
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("tp", [1, 2, 4, 8], ids=lambda v: f"tp{v}")
-@pytest.mark.parametrize("hidden", [6144], ids=["h6144"])
-def test_eh_proj_shard_permutation(tp, hidden):
-    """``eh_proj_to_tt_layout`` must hand chip ``c`` the rows the two norms actually feed it.
-
-    ``enorm``/``hnorm`` each emit chip ``c``'s contiguous slice of the *global* hidden, so the
-    concatenated activation covers global input columns ``{c*H/tp..} u {H + c*H/tp..}`` — not the
-    contiguous ``[c*2H/tp, (c+1)*2H/tp)`` block a plain ``dims=(None, -2)`` mapper would hand it.
-    Getting this wrong yields a tensor of exactly the right shape holding exactly the wrong rows: no
-    error, just wrong numbers. Hence a dedicated host test, and hence the third assertion below,
-    which fails if anyone "simplifies" the permutation back to a bare transpose.
-    """
-    torch.manual_seed(0)
-    w = torch.randn(hidden, 2 * hidden, dtype=torch.bfloat16)
-    permuted = eh_proj_to_tt_layout(w, tp)
-    assert tuple(permuted.shape) == (2 * hidden, hidden)
-
-    block = 2 * hidden // tp
-    for chip in range(tp):
-        got = permuted[chip * block : (chip + 1) * block]
-        # Derived independently from the HF layout, so this is a cross-check, not a restatement.
-        assert torch.equal(got, eh_proj_expected_chip_shard(w, tp, chip)), f"chip {chip} holds the wrong rows"
-
-    # The sharded computation must reconstruct the unsharded one: sum_c (local activation @ local rows).
-    seq, blk = 32, hidden // tp
-    e = torch.randn(seq, hidden, dtype=torch.bfloat16)
-    h = torch.randn(seq, hidden, dtype=torch.bfloat16)
-    acc = torch.zeros(seq, hidden)
-    for chip in range(tp):
-        x_local = torch.cat([e[:, chip * blk : (chip + 1) * blk], h[:, chip * blk : (chip + 1) * blk]], -1)
-        acc += x_local.float() @ permuted[chip * block : (chip + 1) * block].float()
-    torch.testing.assert_close(acc, torch.cat([e, h], -1).float() @ w.float().t(), atol=2e-2, rtol=2e-2)
-
-    # A bare transpose (no permutation) must NOT satisfy the above — otherwise this test proves nothing.
-    naive = w.t().contiguous()
-    wrong = sum(
-        not torch.equal(naive[c * block : (c + 1) * block], eh_proj_expected_chip_shard(w, tp, c)) for c in range(tp)
-    )
-    if tp == 1:
-        assert wrong == 0, "at tp=1 the permutation is the identity"
-    else:
-        assert wrong == tp, f"the naive shard should be wrong on every chip, was wrong on {wrong}/{tp}"
-
-
-def test_mtp_indexer_slot():
-    """The MTP layer needs an explicit ``indexer_types`` entry — the out-of-range fallbacks disagree.
-
-    ``indexer_layer_is_reused``/``full_indexer_rank`` guard on ``layer_idx < len(types)`` and fail
-    *open*, so layer 78 is correctly treated as a ``full`` indexer layer with rank 21. But
-    ``TtIndexer``'s compacted cache accounting reads ``num_full_indexer_layers`` for the stride, which
-    is 21 too — slot 21 of 21, one past the end. As a pipeline stage it is worse: slot 0 of 0.
-    """
-    config = glm_5_2_hf_config(5120)
-    mtp_layer = MTPConfig.from_hf_config(config).mtp_layer_idx
-    assert len(config.indexer_types) == mtp_layer, "GLM-5.2's map covers layers 0..77 only"
-
-    def slot_and_stride(cfg, first_layer_idx, layer_num):
-        """Reproduces tt/mla/indexer.py's compacted accounting (indexer.py:350-362)."""
-        base = full_indexer_rank(cfg, first_layer_idx) if first_layer_idx is not None else 0
-        idx = full_indexer_rank(cfg, mtp_layer) - base
-        n = (
-            num_full_indexer_layers(cfg)
-            if first_layer_idx is None
-            else full_indexer_rank(cfg, first_layer_idx + layer_num) - base
-        )
-        return idx, n
-
-    for first_layer_idx, layer_num in ((None, 1), (mtp_layer, 1)):
-        idx, n = slot_and_stride(config, first_layer_idx, layer_num)
-        assert not (0 <= idx < n), f"expected the un-extended map to be broken, got slot {idx} of {n}"
-
-    extended = copy.copy(config)
-    enable_mtp_indexer_slot(extended)
-    assert len(extended.indexer_types) == mtp_layer + 1
-    assert extended.indexer_types[mtp_layer] == "full"
-    for first_layer_idx, layer_num in ((None, 1), (mtp_layer, 1)):
-        idx, n = slot_and_stride(extended, first_layer_idx, layer_num)
-        assert 0 <= idx < n, f"slot {idx} of {n} still out of range after extending"
-
-    # Extending must not move any trunk layer's slot.
-    for layer in range(mtp_layer):
-        assert full_indexer_rank(config, layer) == full_indexer_rank(extended, layer), f"layer {layer} slot moved"
-
-    # Idempotent: enabling twice must not append twice.
-    enable_mtp_indexer_slot(extended)
-    assert len(extended.indexer_types) == mtp_layer + 1
-    assert mtp_indexer_types(config) == extended.indexer_types
-
-
-# ---------------------------------------------------------------------------
 # Device: the fused projection alone
 # ---------------------------------------------------------------------------
 
@@ -248,6 +153,21 @@ def test_fused_mtp_pcc(mesh_device, device_params, num_links, seq_len, use_pretr
     topology = per_axis_topology(device_params["fabric_config"])
     hidden = mtp_cfg.hidden_size
     embed, hid = _mtp_inputs(seq_len, hidden)
+
+    # The eh_proj TP shard, checked on the host before any device op. enorm/hnorm each emit the chip's
+    # own slice of the *global* hidden, so chip c's concatenated activation covers two disjoint global
+    # column ranges — not the contiguous block a plain dims=(None, -2) mapper hands it. Getting that
+    # wrong yields a tensor of exactly the right shape holding exactly the wrong rows: no error, and a
+    # collapsed PCC below that names no chip. eh_proj_expected_chip_shard slices the original [H, 2H]
+    # weight rather than restating the permutation, so this is a cross-check, not a tautology.
+    tp = mesh_device.shape[TP_AXIS]
+    permuted = eh_proj_to_tt_layout(mtp_state_dict["eh_proj"], tp)
+    block = permuted.shape[0] // tp
+    for chip in range(tp):
+        assert torch.equal(
+            permuted[chip * block : (chip + 1) * block],
+            eh_proj_expected_chip_shard(mtp_state_dict["eh_proj"], tp, chip),
+        ), f"chip {chip} holds the wrong eh_proj rows"
 
     logger.info(f"[fused mtp] use_pretrained={use_pretrained} seq_len={seq_len} mesh={list(mesh_device.shape)}")
     fused = TtFusedMTP(
@@ -318,6 +238,10 @@ def test_mtp_module_pcc(
     # indexer_types — a 79-entry map left behind would follow every other GLM-5.2 test in the session.
     config = copy.copy(config_only)
     config.max_seq_len = seq_len
+    # Not optional setup: GLM-5.2's indexer_types covers layers 0..77 only, so without this the MTP
+    # layer's compacted index-cache slot is 21 of 21 — one past the end — and the index_kv_cache
+    # allocated below is a slot short. mtp_indexer_types' docstring in tt/mtp_prefill/utils.py has the
+    # detail, including why indexer_layer_is_reused/full_indexer_rank look correct regardless.
     enable_mtp_indexer_slot(config, layer_idx)
     hidden = config.hidden_size
     assert hidden == mtp_cfg.hidden_size
