@@ -19,26 +19,26 @@ ALWI BlockAccumulate BlockAccumulate::arm(uint32_t cb_a, uint32_t cb_b, uint32_t
     // most of these kernels re-issue it per chunk. Hardware startup stays with the kernel (see the
     // header's ownership note): compute_kernel_hw_startup and binary_op_init_common are NOT
     // interchangeable, so arm() must not pick one on the caller's behalf.
-    add_tiles_init(cb_a, cb_b, false);
+    add_init(cb_a, cb_b, false);
     return BlockAccumulate(cb_a, cb_b, cb_out, granularity);
 }
 
 ALWI void BlockAccumulate::rearm() {
-    // Restoring the op init alone is NOT enough. add_tiles_init issues state_configure (the
+    // Restoring the op init alone is NOT enough. add_init issues state_configure (the
     // ComputeKernelSentinel tracker), the math binary init and llk_unpack_AB_init — but NOT
     // reconfig_data_format. An interleaved op that touched the unpack/pack data-format registers
     // therefore leaves them pointing at ITS operands, so the formats must be re-established explicitly
     // or the next add_tiles unpacks this accumulator's CBs through the wrong format.
     reconfig_data_format(cb_a_, cb_b_);
     pack_reconfig_data_format(cb_out_);
-    add_tiles_init(cb_a_, cb_b_, false);
+    add_init(cb_a_, cb_b_, false);
     programmed_seeded_ = false;
 }
 
 ALWI void BlockAccumulate::ensure_mode(bool seeded) {
     if (programmed_seeded_ != seeded) {
         // acc_to_dest distinguishes "DST = a + b" from "DST += a + b"; only re-program on a real change.
-        add_tiles_init(cb_a_, cb_b_, seeded);
+        add_init(cb_a_, cb_b_, seeded);
         programmed_seeded_ = seeded;
     }
 }
@@ -83,7 +83,7 @@ ALWI void BlockAccumulate::run_seeded(uint32_t cb_seed, uint32_t num_tiles) {
     }
     // copy_tile_init reprogrammed the unpacker, so the add init must follow it unconditionally
     // rather than going through ensure_mode(); record the resulting mode for the next run().
-    add_tiles_init(cb_a_, cb_b_, true);  // DST += a + b
+    add_init(cb_a_, cb_b_, true);  // DST += a + b
     programmed_seeded_ = true;
     for (uint32_t i = 0; i < num_tiles; ++i) {
         add_tiles(cb_a_, cb_b_, i, i, i);
@@ -114,7 +114,7 @@ ALWI void sum_blocks(uint32_t cb_in, uint32_t cb_out, uint32_t num_blocks, uint3
     const uint32_t first_pair_block = seed_first_block ? 1 : 0;
 
     if (!seed_first_block) {
-        add_tiles_init(cb_in, cb_in, true);
+        add_init(cb_in, cb_in, true);
     }
 
     uint32_t tiles_done = 0;
@@ -128,7 +128,7 @@ ALWI void sum_blocks(uint32_t cb_in, uint32_t cb_out, uint32_t num_blocks, uint3
                 copy_tile(cb_in, tiles_done + i, i);
             }
             // copy_tile_init reprogrammed the unpacker, so re-establish the add per chunk.
-            add_tiles_init(cb_in, cb_in, true);
+            add_init(cb_in, cb_in, true);
         }
         for (uint32_t block = first_pair_block; block < num_blocks; block += 2) {
             for (uint32_t i = 0; i < n; ++i) {
