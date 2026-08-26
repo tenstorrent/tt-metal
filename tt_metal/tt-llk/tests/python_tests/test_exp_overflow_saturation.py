@@ -13,9 +13,12 @@ instead, +inf would still come out right (inf is handled distinctly) while every
 finite input silently returned a tiny wrong value -- exp(100) would read 2^-112 rather than
 +inf, and no other test would notice.
 
-Probe values are chosen to be exactly representable in bfloat16, because dest_acc=No routes
-a Float32 input through the source registers as bfloat16; a value like 88.7 is quantised to
-88.5 before the kernel ever sees it and would test the unpacker, not exp.
+The data is bfloat16 in L1, so every probe near the overflow threshold is chosen to be
+exactly representable there: a literal like 88.7 is rounded to 88.5 on the way in, and a
+probe written next to the threshold would be pinned to a value other than the one it names.
+1e30 is the one probe without that property -- it lands on 1.000255552e+30 -- and does not
+need it, being a deep-overflow stress value where every nearby representable input
+saturates alike.
 """
 import pytest
 import torch
@@ -29,7 +32,11 @@ from helpers.llk_params import (
     FastMode,
     MathOperation,
 )
-from helpers.param_config import get_num_blocks_and_num_tiles_in_block
+from helpers.param_config import (
+    get_num_blocks_and_num_tiles_in_block,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -43,8 +50,9 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
-# All exactly representable in bfloat16. 88.5 is the last finite result below the fp32
-# overflow point (exp(88.5) = 2.72e38); 89.0 and up must all be +inf.
+# Every threshold probe is exactly representable in bfloat16; 1e30 is not (it lands on
+# 1.000255552e+30) and does not need to be. 88.5 is the last input whose result stays under
+# the bfloat16 max of 3.39e38 (exp(88.5) = 2.72e38); 89.0 and up must all be +inf.
 PROBES = [
     0.0,
     1.0,
@@ -63,18 +71,23 @@ PROBES = [
 
 
 @pytest.mark.nightly
-def test_exp_overflow_saturates():
-    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
-    dest_acc = (
-        DestAccumulation.No
-    )  # -> is_fp32_dest_acc_en=false -> the bf16 TTI kernel
-    input_dimensions = [32, 32]
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    # dest_acc=No -> is_fp32_dest_acc_en=false -> the bf16 TTI kernel
+    dest_acc=[DestAccumulation.No],
+    input_dimensions=[[32, 32]],
+)
+def test_exp_overflow_saturates(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
     n = input_dimensions[0] * input_dimensions[1]
 
-    src_A = torch.zeros(n, dtype=torch.float32)
+    src_A = torch.zeros(n, dtype=torch.bfloat16)
     for i, v in enumerate(PROBES):
         src_A[i] = v
-    src_B = torch.zeros(n, dtype=torch.float32)
+    src_B = torch.zeros(n, dtype=torch.bfloat16)
     tile_cnt = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(

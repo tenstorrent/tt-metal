@@ -15,8 +15,8 @@ Two instruction-count reductions to the shipped bfloat16-accurate exponential
 | Functional | **257 passed, 129 skipped, 0 failed** (`test_sfpu_unary.py -k Exp`) |
 
 Both changes are pure implementation. Nothing about the approximation moves, so there is no
-accuracy trade to weigh — the outputs were verified byte-identical to main across the full
-overflow range.
+accuracy trade to weigh — on every input that was tested, the standard `Exp` sweep plus the
+overflow probes listed in §4.2, the outputs were byte-identical to main.
 
 ---
 
@@ -127,8 +127,8 @@ instead of `+inf`, with nothing to catch it.
 
 ### 4.2 Direct measurement, against main as the control
 
-`tests/python_tests/test_exp_overflow_saturation.py` (new) drives bfloat16-exact probes through
-the kernel. Run on both the branch and main:
+`tests/python_tests/test_exp_overflow_saturation.py` (new) drives overflow probes through the
+kernel. Run on both the branch and main:
 
 | input | branch | main | |
 |---|---|---|---|
@@ -146,10 +146,18 @@ the kernel. Run on both the branch and main:
 **Byte-for-byte identical to main on every probe.** Saturation confirmed, and the change verified
 behaviourally identical across the range no other test reaches.
 
-Probes are bfloat16-exact deliberately: `dest_acc=No` routes a Float32 input through the source
-registers as bfloat16, so a value like 88.7 is quantised to 88.5 before the kernel sees it. An
-earlier version of the probe used 88.7 and 88.8 and flagged both as failures — on **both** the
-branch and main, which is what identified it as an unpacker artifact rather than a kernel fault.
+The test runs `Float16_b → Float16_b` with `dest_acc=No`: the kernel under test is the bfloat16
+one, so the data is bfloat16 and Dest is in the matching 16-bit mode. `dest_acc=No` is what
+selects the kernel — `calculate_exponential` dispatches on `!APPROXIMATION_MODE &&
+!is_fp32_dest_acc_en` alone and never looks at the L1 format.
+
+Every probe around the overflow threshold is bfloat16-exact deliberately, because the data is
+bfloat16 in L1: a literal like 88.7 is rounded to 88.5 on the way in, so a probe written next to
+the threshold would be pinned to a value other than the one it names. An earlier version used 88.7
+and 88.8 and flagged both as failures — on **both** the branch and main, which is what identified
+it as a rounding artifact rather than a kernel fault. `1e30` is the one exception and does not need
+the property: it lands on 1.000255552e+30, but it is a deep-overflow stress value where any nearby
+representable input saturates the same way.
 
 ### 4.3 Suite
 
