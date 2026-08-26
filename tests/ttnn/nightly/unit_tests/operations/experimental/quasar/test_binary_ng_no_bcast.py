@@ -169,10 +169,11 @@ def test_no_bcast_sharded(device, op_name, layout, post_relu):
 
 @pytest.mark.parametrize("op_name", ["add", "multiply"])
 @pytest.mark.parametrize("layout", ["interleaved", "height"])
-def test_no_bcast_lhs_activation(device, op_name, layout):
+@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
+def test_no_bcast_lhs_activation(device, op_name, layout, dtype_tt):
     # lhs activation forces the post_lhs DFB (CBIndex c_3) — a compute-kernel self-loop (the kernel
-    # both produces and consumes it), plus a post activation. Exercised on the FPU (add) and SFPU
-    # (multiply) compute kernels, interleaved and sharded. The activation packs relu(a) into post_lhs,
+    # both produces and consumes it), plus a post activation. Exercised on the FPU/SFPU paths for
+    # bf16/fp32 add and multiply, interleaved and sharded. The activation packs relu(a) into post_lhs,
     # which on Quasar needs the pack_init retarget (pack_reconfig_data_format is gasket-only there).
     if layout == "interleaved":
         mem_config = ttnn.DRAM_MEMORY_CONFIG
@@ -184,7 +185,7 @@ def test_no_bcast_lhs_activation(device, op_name, layout):
         device,
         op_name,
         mem_config,
-        ttnn.bfloat16,
+        dtype_tt,
         shape,
         lhs_act=ttnn.UnaryOpType.RELU,
         post_act=ttnn.UnaryOpType.RELU,

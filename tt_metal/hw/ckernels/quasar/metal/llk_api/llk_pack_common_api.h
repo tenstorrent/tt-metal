@@ -160,7 +160,16 @@ inline void llk_pack_dest_section_done() {
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
  * compute APIs.
  */
-inline void llk_pack_dest_init() { _llk_pack_dest_init_<p_pacr::PACK0, DST_SYNC_MODE>(); }
+inline void llk_pack_dest_init() {
+    _llk_pack_dest_init_<p_pacr::PACK0, DST_SYNC_MODE>();
+
+    // Unpack-to-dest PACR addresses destination through the pack thread's SEC2 base.
+    // Initialize it once here; later llk_pack_init() calls may retarget the output DFB
+    // mid-kernel and must preserve the current SyncHalf bank parity.
+    if constexpr (UnpackToDestEn && DST_SYNC_MODE == DstSync::SyncHalf) {
+        _set_dest_section_base_<ckernel::TRISC_ID>(_get_dest_buffer_base_());
+    }
+}
 
 /**
  * @brief Configure packer ReLU at runtime from a packed uint32.

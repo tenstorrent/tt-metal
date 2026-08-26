@@ -29,15 +29,6 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
 
     llk_pack_program_bfd(output_id);
     _llk_pack_init_(ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
-
-    // 32-bit unpack-to-dest path: PACR addresses dest via SEC{TRISC_ID}_Offset (pack thread).
-    // Initialize the section base to bank 0 for SyncHalf so the first PACR reads bank 0.
-    if constexpr (UnpackToDestEn) {
-        if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
-            _reset_dest_register_offset_();
-            _set_dest_section_base_<ckernel::TRISC_ID>(_get_dest_buffer_base_());
-        }
-    }
 }
 
 /**
