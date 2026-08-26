@@ -695,9 +695,19 @@ KNOBS = {
     # makespan oracle: as-emitted makespan 50 -> 48 = the audited lower
     # bound; capture composition intact, 28-word record + 15 launches).
     # Residual rops webs refuse crossrow-pairing-seed-no-free-lreg (the
-    # 8-LREG wall).  relu / mulint32-fresh / lcm-fresh / recip expected
-    # inherited from the pairing's adjudication; hardsigmoid-fresh /
-    # sqrt-fresh = no-fire controls.
+    # 8-LREG wall).  MEASURED (laneHB-evidence-20260825, BH p150, 3 reps
+    # cycle-identical, device corr GREEN at ON-28/pairing/pairing+seed):
+    # roundingops + ceil-fresh KERNEL 66967 (ON-28) / 66964 (pairing) ->
+    # 62867 (pairing+seed) = -6.12%; the knobA->knobB delta is EXACTLY
+    # -4097 cy = the 2 recovered issue slots x 2048 pairs (the modeled
+    # interleave transfers cycle-exact); vs-hand +7.80% -> +1.20%
+    # (same-leg hand 62121).  Corpus knob delta: (pairing+seed) vs
+    # plain pairing = ZERO changed TUs (the seed is corpus-inert; both
+    # equal GP's 2-TU pairing delta vs ON-28) -- the seed's fire
+    # surface is the headline Floor/Ceil TUs.  hardsigmoid-fresh:
+    # 59028 -> 50962 = -13.66% under the PAIRING alone (knobA == knobB;
+    # the pairing's own surprise on this perf TU, vs-hand +0.87% ->
+    # -12.91%); sqrt-fresh byte/cycle-inert control.
     "crossrow-pairing-seed": "-mtt-tensix-optimize-crossrow-pairing "
     "-mtt-tensix-optimize-crossrow-pairing-seed",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
