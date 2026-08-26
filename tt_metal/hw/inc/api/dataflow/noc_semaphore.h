@@ -8,6 +8,15 @@
 #include "api/dataflow/noc.h"
 #include "api/debug/assert.h"
 
+// Force-inlining is what makes the host-chosen mechanism constant-fold away on Quasar (a cached
+// up() becomes a single bare AMO). Gen1 resolves every semaphore to LOCAL_NONATOMIC anyway, so
+// there the attribute only perturbs the compiler's own inlining choices -- leave those to it.
+#if defined(ARCH_QUASAR)
+#define TT_SEM_INLINE __attribute__((always_inline))
+#else
+#define TT_SEM_INLINE
+#endif
+
 /**
  * @brief Physical path a semaphore's accesses take. This is picked by the host at compile time
  *        and baked into the kernel. The path picked provides the fastest access that keeps the
@@ -39,7 +48,7 @@ enum class SemScope : uint8_t {
 // Looks up the host-chosen mechanism for a semaphore id. Codegen injects the table
 // (TT_METAL2_SEM_SCOPE_TABLE) into each Metal 2.0 kernel at build time, any id without
 // a table entry uses LOCAL_NONATOMIC.
-inline __attribute__((always_inline)) constexpr SemScope sem_scope_of(uint32_t semaphore_id) {
+inline TT_SEM_INLINE constexpr SemScope sem_scope_of(uint32_t semaphore_id) {
 #ifdef TT_METAL2_SEM_SCOPE_TABLE
     constexpr SemScope table[] = TT_METAL2_SEM_SCOPE_TABLE;
     constexpr uint32_t n = sizeof(table) / sizeof(table[0]);
@@ -84,7 +93,7 @@ class Semaphore {
     friend class Semaphore;
 
     // DM_LOCAL_CACHED semaphores live in their own dedicated pool
-    static __attribute__((always_inline)) inline uintptr_t sem_l1_offset(uint32_t id) {
+    static TT_SEM_INLINE inline uintptr_t sem_l1_offset(uint32_t id) {
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
         if (sem_scope_of(id) == SemScope::DM_LOCAL_CACHED) {
             ASSERT(id < MEM_DM_CACHED_SEM_SIZE / MEM_DM_CACHED_SEM_ROW);
@@ -114,7 +123,7 @@ class Semaphore {
 
 public:
     // l1_offset_ holds the physical L1 offset of the semaphore word.
-    explicit __attribute__((always_inline)) Semaphore(uint32_t semaphore_id) :
+    explicit TT_SEM_INLINE Semaphore(uint32_t semaphore_id) :
         l1_offset_(sem_l1_offset(semaphore_id)), scope_(sem_scope_of(semaphore_id)) {}
 
     /**
@@ -128,7 +137,7 @@ public:
      *
      * @param value The value to increment the semaphore by.
      */
-    __attribute__((always_inline)) void up(uint32_t value) {
+    TT_SEM_INLINE void up(uint32_t value) {
         if (scope_ == SemScope::DM_LOCAL_CACHED) {
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
             __atomic_add_fetch(reinterpret_cast<uint32_t*>(l1_offset_), value, __ATOMIC_SEQ_CST);
@@ -160,7 +169,7 @@ public:
      * @param value The value to increment the semaphore by.
      * @param vc The virtual channel to use for the transaction (default is NOC_UNICAST_WRITE_VC).
      */
-    __attribute__((always_inline)) void up(
+    TT_SEM_INLINE void up(
         const Noc& noc, uint32_t noc_x, uint32_t noc_y, uint32_t value, uint8_t vc = NOC_UNICAST_WRITE_VC) {
         if (scope_ == SemScope::DM_LOCAL_CACHED) {
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
@@ -187,7 +196,7 @@ public:
      *
      * @param value The value to decrement the semaphore by.
      */
-    __attribute__((always_inline)) void down(uint32_t value) {
+    TT_SEM_INLINE void down(uint32_t value) {
         auto* sem_addr = local_ptr();
         WAYPOINT("NSDW");
         if (scope_ == SemScope::DM_LOCAL_CACHED) {
@@ -279,14 +288,14 @@ public:
      *
      * @param value The value to wait for.
      */
-    __attribute__((always_inline)) void wait(uint32_t value) { noc_semaphore_wait(local_ptr(), value); }
+    TT_SEM_INLINE void wait(uint32_t value) { noc_semaphore_wait(local_ptr(), value); }
 
     /**
      * @brief Block until the semaphore is at least the specified value.
      *
      * @param value The minimum value to wait for.
      */
-    __attribute__((always_inline)) void wait_min(uint32_t value) { noc_semaphore_wait_min(local_ptr(), value); }
+    TT_SEM_INLINE void wait_min(uint32_t value) { noc_semaphore_wait_min(local_ptr(), value); }
 
     /**
      * @brief Set the semaphore to the specified value.
@@ -295,12 +304,12 @@ public:
      *
      * @param value The value to set the semaphore to.
      */
-    __attribute__((always_inline)) void set(uint32_t value) { noc_semaphore_set(local_ptr(), value); }
+    TT_SEM_INLINE void set(uint32_t value) { noc_semaphore_set(local_ptr(), value); }
 
     /**
      * @brief Read the current semaphore value through this scope's coherent view.
      */
-    __attribute__((always_inline)) uint32_t value() const {
+    TT_SEM_INLINE uint32_t value() const {
         invalidate_l1_cache();
         return *local_ptr();
     }
@@ -433,7 +442,7 @@ private:
     SemScope scope_;       // host-chosen mechanism (from the codegen table)
 
     // Local access pointer for reads / non-atomic writes.
-    __attribute__((always_inline)) volatile tt_l1_ptr uint32_t* local_ptr() const {
+    TT_SEM_INLINE volatile tt_l1_ptr uint32_t* local_ptr() const {
         uintptr_t addr = l1_offset_;
 #ifdef ARCH_QUASAR
         if (scope_ != SemScope::DM_LOCAL_CACHED) {
