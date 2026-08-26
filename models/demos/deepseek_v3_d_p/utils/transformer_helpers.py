@@ -13,6 +13,7 @@ Provides:
 """
 
 import gc
+import inspect
 import json
 import os
 from copy import deepcopy
@@ -211,6 +212,56 @@ def create_hf_model(variant, config, num_layers, n_routed_experts=None):
 
     model = variant.reference_model_cls(test_config)
     return model.eval().to(torch.bfloat16)
+
+
+def reference_rope(hf_model, hidden_states, position_ids):
+    """The reference ``(cos, sin)``, built in fp32 from the CONFIG rather than copied from the model.
+
+    A reference instantiated in bf16 carries a bf16 ``inv_freq`` buffer and ``.float()`` cannot
+    recover the lost bits; the resulting ~4.4e-4 frequency error is a phase error that grows with
+    position. Depends only on the positions, so build it once per run.
+    """
+    rotary = getattr(hf_model, "rotary_emb", None)
+    assert rotary is not None, f"{type(hf_model).__name__} exposes no rotary_emb to build rope from"
+    # Check the signature rather than catching: a bare `except` would also swallow a genuine
+    # construction failure and silently fall back to the bf16 buffer this function exists to avoid.
+    rotary_cls = type(rotary)
+    if "config" in inspect.signature(rotary_cls.__init__).parameters:
+        rotary_f32 = rotary_cls(config=hf_model.config).float()
+    else:  # a rotary that predates `config=`; the bf16 buffer is then unavoidable
+        rotary_f32 = deepcopy(rotary).float()
+    # `forward` reads this tensor only for device and dtype (transformers 5.12), so pass a view --
+    # a full fp32 copy of the hidden states is ~251 MB at seq 15360.
+    probe = hidden_states[:1, :1].float()
+    with torch.no_grad():
+        return rotary_f32(probe, position_ids)
+
+
+def layer_wants_position_embeddings(hf_layer) -> bool:
+    """Does this reference decoder layer take ``position_embeddings``?
+
+    The predicate that decides whether a rope table has to be built at all. Layers differ across
+    transformers generations: a transformers-5.x layer (e.g. Mistral4) REQUIRES the caller to pass
+    ``(cos, sin)``, while an older or vendored layer (e.g. DeepSeekV3) computes rope internally from
+    ``position_ids`` and exposes no top-level ``rotary_emb`` to build one from. Asking the signature
+    keeps both working; assuming either shape breaks the other.
+    """
+    return "position_embeddings" in inspect.signature(hf_layer.forward).parameters
+
+
+def reference_position_embeddings(hf_model, hidden_states, position_ids, num_layers: int):
+    """The reference rope table for a whole run, or ``None`` when no layer takes one.
+
+    Built once: it depends only on the positions, and building per layer would construct a rotary
+    module and a full fp32 copy of the hidden states each time (~251 MB at seq 15360).
+
+    Returns None rather than raising for a reference whose layers compute rope internally --
+    DeepSeekV3's vendored layer does, and its model exposes no top-level ``rotary_emb``, so asking
+    unconditionally asserted on exactly the models that never needed a table.
+    """
+    if not num_layers or not layer_wants_position_embeddings(hf_model.layers[0]):
+        return None
+    return reference_rope(hf_model, hidden_states, position_ids)
 
 
 def extract_layer_state_dict(variant, full_sd, layer_idx, hf_layer):
@@ -568,6 +619,16 @@ def load_and_compute_layer_by_layer(
     first_k_dense = config.first_k_dense_replace
     n_routed = config.n_routed_experts
 
+    # Once for the whole reference: identical across layers, and each build would otherwise construct
+    # a rotary module and a full fp32 copy of the hidden states.
+    #
+    # Only when a layer actually takes position_embeddings. A vendored reference such as DeepSeekV3
+    # computes rope internally and exposes no top-level rotary_emb, so building this unconditionally
+    # asserts on exactly the models that never needed it.
+    ref_position_embeddings = (
+        reference_position_embeddings(hf_model, h_ref, position_ids, num_layers) if compute_reference else None
+    )
+
     for i in range(num_layers):
         logger.info(f"Processing layer {i}/{num_layers}...")
 
@@ -579,14 +640,18 @@ def load_and_compute_layer_by_layer(
             hf_model.load_state_dict(layer_with_prefix, strict=False)
 
             with torch.no_grad():
-                layer_out = hf_model.layers[i](
-                    h_ref,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_value=ref_cache,
-                    use_cache=True,
-                )
-                h_ref = layer_out[0]
+                layer_kwargs = {
+                    "attention_mask": attention_mask,
+                    "position_ids": position_ids,
+                    "past_key_value": ref_cache,
+                    "use_cache": True,
+                }
+                if ref_position_embeddings is not None:
+                    cos, sin = ref_position_embeddings
+                    layer_kwargs["position_embeddings"] = (cos.to(h_ref.dtype), sin.to(h_ref.dtype))
+                layer_out = hf_model.layers[i](h_ref, **layer_kwargs)
+                # A transformers-5.x layer returns a bare tensor, not a tuple; [0] would strip a dim.
+                h_ref = layer_out[0] if isinstance(layer_out, (tuple, list)) else layer_out
             ref_snapshots.append(h_ref)
 
             # Clear layer weights from hf_model

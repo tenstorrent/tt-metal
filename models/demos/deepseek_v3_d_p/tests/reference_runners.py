@@ -11,6 +11,7 @@ bundled reference return `None` and the comparison is skipped at the call
 site.
 """
 
+import inspect
 from copy import copy, deepcopy
 from typing import Optional
 
@@ -119,14 +120,32 @@ def run_reference_mla(
     attn.load_state_dict(weights, strict=False)
     attn = attn.eval().to(torch.bfloat16)
     causal = torch.triu(torch.full((q_len, q_len), float("-inf"), dtype=hidden_states.dtype), diagonal=1)
-    with torch.no_grad():
-        out = attn(
-            hidden_states=hidden_states,
-            attention_mask=causal[None, None],
-            position_ids=position_ids,
-            past_key_value=None,
-            use_cache=False,
+    # Bind by signature: vendored DeepSeek/Kimi attentions take `past_key_value` and derive rope
+    # internally; transformers >= 5 takes `past_key_values` and requires `position_embeddings`. The
+    # wrong cache name lands silently in **kwargs and captures no KV.
+    fwd_params = inspect.signature(attn.forward).parameters
+    kwargs = {
+        "hidden_states": hidden_states,
+        "attention_mask": causal[None, None],
+        "position_ids": position_ids,
+        "use_cache": False,
+    }
+    kwargs["past_key_values" if "past_key_values" in fwd_params else "past_key_value"] = None
+    if "position_embeddings" in fwd_params:
+        rotary_cls = getattr(variant, "reference_rotary_cls", None)
+        assert rotary_cls is not None, (
+            f"{type(attn).__name__} requires position_embeddings but {variant.name!r} exposes no "
+            "reference_rotary_cls to build (cos, sin) from"
         )
+        # Built from the CONFIG, not from the model: a reference instantiated in bf16 carries a bf16
+        # `inv_freq` buffer, and .float() cannot recover the lost bits. The resulting ~4.4e-4
+        # frequency error is a phase error that grows with position.
+        rotary = rotary_cls(config=config).float()
+        with torch.no_grad():
+            cos, sin = rotary(hidden_states.float(), position_ids)
+            kwargs["position_embeddings"] = (cos.to(hidden_states.dtype), sin.to(hidden_states.dtype))
+    with torch.no_grad():
+        out = attn(**kwargs)
     # DeepseekV3Attention returns (out, attn_weights, past_kv); Kimi-K3's KimiMLAAttention returns a
     # bare tensor (upstream shape). Accept either.
     return out[0] if isinstance(out, tuple) else out
