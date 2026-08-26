@@ -11,16 +11,16 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileBfp8b) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+TEST_F(UnitMeshFixture, MatmulSingleTileBfp8b) {
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -30,12 +30,12 @@ TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileBfp8b) {
     uint32_t num_tiles = 1;
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-    InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
 
-    auto src0_dram_buffer = CreateBuffer(dram_config);
-    auto src1_dram_buffer = CreateBuffer(dram_config);
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 1;
@@ -83,7 +83,7 @@ TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileBfp8b) {
         /*is_exp_a=*/false,
         100,
         std::chrono::system_clock::now().time_since_epoch().count());
-    detail::WriteToBuffer(src0_dram_buffer, activations);
+    slow_dispatch::WriteToBuffer(*src0_dram_buffer, activations);
 
     int num_float_in_tile = 32 * 32;
     std::vector<float> vec(num_float_in_tile, (float)0);
@@ -93,15 +93,15 @@ TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileBfp8b) {
     std::vector<uint32_t> weights =
         pack_as_bfp8_tiles(ttsl::make_const_span(vec), /*row_major_input=*/true, /*is_exp_a=*/false);
 
-    detail::WriteToBuffer(src1_dram_buffer, weights);
+    slow_dispatch::WriteToBuffer(*src1_dram_buffer, weights);
 
     SetRuntimeArgs(
         program,
         mm_reader_kernel,
         core,
-        {src0_dram_buffer->address(),
+        {(uint32_t)src0_dram_buffer->address(),
          0,
-         src1_dram_buffer->address(),
+         (uint32_t)src1_dram_buffer->address(),
          0,
          1,
          1,
@@ -109,12 +109,12 @@ TEST_F(MeshDeviceSingleCardFixture, MatmulSingleTileBfp8b) {
          1 * single_tile_size,
          1 * single_tile_size});
 
-    SetRuntimeArgs(program, unary_writer_kernel, core, {dst_dram_buffer->address(), 0, num_tiles});
+    SetRuntimeArgs(program, unary_writer_kernel, core, {(uint32_t)dst_dram_buffer->address(), 0, num_tiles});
 
-    detail::LaunchProgram(dev, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
 
     // Validation - matmul with identity should return same result
     EXPECT_EQ(activations, result_vec);

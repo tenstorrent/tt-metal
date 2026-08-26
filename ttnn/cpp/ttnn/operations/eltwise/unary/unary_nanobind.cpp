@@ -2015,6 +2015,18 @@ void py_module(nb::module_& mod) {
         mod, "exponent", "exponent value. Non-positive values are not supported.", "");
     bind_unary_operation_with_float_parameter_default<"celu", &ttnn::celu>(
         mod, "alpha", "The alpha parameter for the CELU function", 1.0f, "", R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    // The up half of Moonshot's SiTU activation. No default beta: it is a model
+    // hyperparameter (Kimi K3 uses 25 for the up half).
+    bind_unary_operation_with_float_parameter<"softcap", &ttnn::softcap>(
+        mod,
+        "beta",
+        "The beta parameter. Bounds the output to +/-beta. Must be non-zero",
+        // No pipe-delimited absolute values here: Sphinx reads |x| as an rST substitution.
+        "Bounds the input smoothly to +/-beta: near-linear well inside beta, saturating at the limits. Known as "
+        "soft capping (e.g. Gemma logit softcapping); also the up half of Moonshot's SiTU activation.",
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        "",
+        R"doc(\mathrm{output\_tensor}_i = \verb|beta| \cdot \tanh(\mathrm{input\_tensor}_i / \verb|beta|))doc");
 
     bind_unary_operation_with_scalar_parameter<"fill", &ttnn::fill>(
         mod,

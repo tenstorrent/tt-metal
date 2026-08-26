@@ -259,6 +259,7 @@ class TtIndexer:
         active_seq_len: int | None = None,
         slot_num: int = 1,
         layer_num: int = 1,
+        first_layer_idx: int | None = None,
     ):
         """Architecture constants are read from the HF config with no defaults (index_n_heads,
         index_head_dim, index_topk, index_rope_interleave — a sparse config that omits any of them
@@ -340,12 +341,25 @@ class TtIndexer:
         # validated — rotated + chunked suites match BF16 within bf16 noise, ~5e-4 PCC — so it can be
         # allocated BF8 to halve mem).
         # GLM-5.2 cross-layer indexer reuse: the index key cache is allocated for full layers only, so this
-        # layer writes/reads its compacted rank among full layers, and the folded (user-major) slot stride
-        # is num_full, not all layers. _index_cache_layers is that stride.
-        self._num_index_layers = num_full_indexer_layers(config)
-        self._is_index_compact = self._num_index_layers is not None
-        self._index_layer_idx = full_indexer_rank(config, layer_idx) if self._is_index_compact else layer_idx
-        self._index_cache_layers = self._num_index_layers if self._is_index_compact else self.layer_num
+        # layer writes/reads its compacted rank among them and the folded (user-major) slot stride is the
+        # cache's full-layer count, not its layer count. _index_cache_layers is that stride.
+        # `first_layer_idx` declares this instance a pipeline stage owning global layers
+        # [first_layer_idx, first_layer_idx + layer_num): the cache then holds THAT stage's full layers
+        # only, numbered from 0. None means the cache spans the whole model -- what a layer built outside
+        # the transformer (unit tests) allocates.
+        num_full = num_full_indexer_layers(config)
+        self._is_index_compact = num_full is not None
+        base = full_indexer_rank(config, first_layer_idx) if first_layer_idx is not None else 0
+        if not self._is_index_compact:
+            self._index_layer_idx = layer_idx
+            self._index_cache_layers = self.layer_num
+        else:
+            self._index_layer_idx = full_indexer_rank(config, layer_idx) - base
+            self._index_cache_layers = (
+                num_full
+                if first_layer_idx is None
+                else full_indexer_rank(config, first_layer_idx + self.layer_num) - base
+            )
         # Stable, worst-case TP gather outputs.  Indexer layers execute serially, so TT_CCL shares each
         # buffer across them.  This keeps the high-bandwidth gathers allocation-free and their output
         # address fixed on the hot forward path.
@@ -525,6 +539,12 @@ class TtIndexer:
         ttnn.deallocate(nope)
         return out
 
+    def _cache_slot(self, cache_layer_idx: int) -> int:
+        """Slot this layer owns in the index key cache. A compacted cache (GLM-5.2 cross-layer reuse)
+        holds one slot per FULL layer, so the caller's per-layer KVPE slot does not address it; every
+        entry point has to translate, not just forward()."""
+        return self._index_layer_idx if self._is_index_compact else cache_layer_idx
+
     def write_k(
         self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0, cache_layer_idx=0, index_kbuf=None
     ):
@@ -556,6 +576,7 @@ class TtIndexer:
         # offset (pad-aware) — the same math the query/key rope above uses. Single-shot is folded onto this
         # path as one full-seq chunk at start_pos=0, so the indexer is always block-cyclic. num_layers is the
         # compacted stride (_index_cache_layers) so it matches the cache_batch_idx computed in forward().
+        cache_layer_idx = self._cache_slot(cache_layer_idx)
         k = self._bc_rope_pe(k, rope_tensors, start_pos)  # [1, 1, S/sp, D_idx] bf16
         if k.dtype != index_kbuf.dtype:  # write dtype must match the cache (update_padded_kv_cache asserts)
             k = ttnn.typecast(k, index_kbuf.dtype)
@@ -600,8 +621,7 @@ class TtIndexer:
         drive the per-user block-cyclic key cache + block-cyclic scoring. Scoring and transport are bounded
         by the written prefix, rounded to complete block-cyclic slabs for the fixed-size ring protocol."""
         a = self.index_args
-        if self._is_index_compact:
-            cache_layer_idx = self._index_layer_idx
+        cache_layer_idx = self._cache_slot(cache_layer_idx)
         glob = seq_len * self.sp_factor  # global query/key count this chunk
         end_pos = start_pos + glob
         # Block-cyclic key cache is caller-owned (like the KVPE cache) — required, never self-allocated.

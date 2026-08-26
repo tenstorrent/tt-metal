@@ -243,6 +243,9 @@ def run(
 
     # Pre-allocate output tensor if the master config recorded one
     output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
+    # Initialised unconditionally: the traced-output block below is conditional, and the gather
+    # references this, so leaving it unbound raises UnboundLocalError on every vector that skips it.
+    ot_placement = None
     if output_tensor_info and output_tensor_info.get("shape"):
         ot_shape = tuple(output_tensor_info["shape"])
         ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
@@ -301,7 +304,11 @@ def run(
 
         output_tensor = ttnn.multiply(input_tensor_a, input_tensor_b, **op_kwargs)
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        output_tensor,
+        device if is_mesh_device else None,
+        scatter_placement=(ot_placement or input_a_tensor_placement) if is_mesh_device else None,
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     # Reconcile the per-chip torch golden to the mesh-stitched actual output:

@@ -129,8 +129,7 @@ void kernel_main() {
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
     DataflowBuffer dfb_out0(dfb_out0_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
-    const DataFormat data_format = get_dataformat(dfb_ex_partial_id);
+    const uint32_t single_tile_size_bytes = dfb_ex_partial.get_tile_size();
     const uint32_t num_bytes_read = datum_size_bytes;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)

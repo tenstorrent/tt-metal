@@ -93,6 +93,19 @@ void kernel_main() {
     constexpr uint32_t per_batch_bias = get_compile_time_arg_val(42);
     constexpr uint32_t rows_per_batch_tiles = get_compile_time_arg_val(43);
 
+    CircularBuffer cb_input(input_cb);
+    CircularBuffer cb_mean(mean_cb);
+    CircularBuffer cb_invstd(invstd_cb);
+    CircularBuffer cb_combine(combine_cb);
+    CircularBuffer cb_weight(weight_cb);
+    CircularBuffer cb_bias(bias_cb);
+    CircularBuffer cb_output(output_cb);
+    CircularBuffer cb_xmm(xmm_cb);
+    CircularBuffer cb_stats_local(stats_local_cb);
+    CircularBuffer cb_stats_gathered(stats_gathered_cb);
+    CircularBuffer cb_recip_lut(recip_lut_cb);
+    CircularBuffer cb_welford_zero(welford_zero_cb);
+
     // Welford reduces over the local shard: num_tile_cols * TILE_WIDTH features.
     constexpr uint32_t tile_width = 32u;
     constexpr uint32_t reduce_width = num_tile_cols * tile_width;  // = feat_local
@@ -105,7 +118,7 @@ void kernel_main() {
     // SFPU as the per-sample 1/(N+1) lookup; see dit_rmsnorm_fused_reader.cpp.
     const std::array<uint32_t, reduce_width>* p_recip = nullptr;
     if constexpr (use_recip_lut != 0) {
-        cb_wait_front(recip_lut_cb, 1);
+        cb_recip_lut.wait_front(1);
         p_recip = norm::kernel_util::compute::memory::get_pointer_to_cb_data<std::array<uint32_t, reduce_width>>(
             recip_lut_cb, 0);
     }
@@ -132,6 +145,8 @@ void kernel_main() {
     // has_bias implies has_weight (enforced in validate).
     constexpr uint32_t norm_result_cb = (has_weight != 0) ? intermediate_cb : output_cb;
     constexpr uint32_t weight_result_cb = (has_bias != 0) ? intermediate_cb : output_cb;
+    CircularBuffer cb_norm_result(norm_result_cb);
+    CircularBuffer cb_weight_result(weight_result_cb);
 
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
     // Worker's first GLOBAL tile-row (RT arg 1): maps each local row to its batch for per-batch
@@ -149,15 +164,15 @@ void kernel_main() {
         welford_init();
         welford_save_state(mean_dst);  // LREG4/5 (cleared) -> mean_dst / var_dst
         tile_regs_commit();
-        cb_reserve_back(welford_zero_cb, 2);
+        cb_welford_zero.reserve_back(2);
         tile_regs_wait();
         pack_reconfig_data_format(welford_zero_cb);
         pack_tile(mean_dst, welford_zero_cb);
         pack_tile(var_dst, welford_zero_cb);
         tile_regs_release();
-        cb_push_back(welford_zero_cb, 2);
+        cb_welford_zero.push_back(2);
     }
-    cb_wait_front(welford_zero_cb, 2);  // resident for the whole kernel (never popped)
+    cb_welford_zero.wait_front(2);  // resident for the whole kernel (never popped)
 
     for (uint32_t row = 0; row < num_tile_rows; row++) {
         // Per-batch adaLN (per_batch_weight/bias): the reader streams THIS row's batch slice to
@@ -167,7 +182,7 @@ void kernel_main() {
         // Resident layout: whole row stays in L1 (Welford PRE + POST re-read).
         // Streaming layout (wide shards): each pass waits/pops per block instead.
         if constexpr (streaming_low_l1 == 0) {
-            cb_wait_front(input_cb, num_tile_cols);
+            cb_input.wait_front(num_tile_cols);
         }
 
         // -------- PHASE 1: PRE — local per-token Welford (mean, var) over the shard --------
@@ -194,13 +209,13 @@ void kernel_main() {
                 // Streamed 1st pass: wait + Welford + pop each block; LREG4/5 accumulate
                 // across blocks. The reader re-pushes the row for the POST 2nd pass.
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
-                    cb_wait_front(input_cb, block_size);
+                    cb_input.wait_front(block_size);
                     for (uint32_t i = 0; i < block_size; i++) {
                         transpose_tile(input_cb, i, welford_in_dst);
                         wf_update(welford_in_dst, start_n);
                         start_n += tile_width;
                     }
-                    cb_pop_front(input_cb, block_size);
+                    cb_input.pop_front(block_size);
                 }
             } else {
                 for (uint32_t col = 0; col < num_tile_cols; col++) {
@@ -214,34 +229,34 @@ void kernel_main() {
 
             if constexpr (is_tp_1 != 0) {
                 // Local stat IS the full mean/var: stash row 0 for the transpose below.
-                cb_reserve_back(mean_cb, 1);
-                cb_reserve_back(invstd_cb, 1);
+                cb_mean.reserve_back(1);
+                cb_invstd.reserve_back(1);
                 tile_regs_wait();
                 pack_reconfig_data_format(mean_cb);
                 pack_tile(mean_dst, mean_cb);
                 pack_reconfig_data_format(invstd_cb);
                 pack_tile(var_dst, invstd_cb);
                 tile_regs_release();
-                cb_push_back(mean_cb, 1);
-                cb_push_back(invstd_cb, 1);
+                cb_mean.push_back(1);
+                cb_invstd.push_back(1);
             } else {
                 // Push the local (mean, var) partial (row 0) for the worker writer to
                 // ring-gather. stats_local_cb holds [mean, var] for this shard.
-                cb_reserve_back(stats_local_cb, 2);
+                cb_stats_local.reserve_back(2);
                 tile_regs_wait();
                 pack_reconfig_data_format(stats_local_cb);
                 pack_tile(mean_dst, stats_local_cb);
                 pack_tile(var_dst, stats_local_cb);
                 tile_regs_release();
-                cb_push_back(stats_local_cb, 2);
+                cb_stats_local.push_back(2);
             }
         }
 
         // -------- Produce per-token mean (col 0) + 1/std (col 0) into mean_cb / invstd_cb --------
         if constexpr (is_tp_1 != 0) {
             // Transpose row 0 -> col 0; 1/std = rsqrt(var + eps).
-            cb_wait_front(mean_cb, 1);
-            cb_wait_front(invstd_cb, 1);
+            cb_mean.wait_front(1);
+            cb_invstd.wait_front(1);
             reconfig_data_format_srca(mean_cb);
             transpose_init(mean_cb);
             tile_regs_acquire();
@@ -255,18 +270,18 @@ void kernel_main() {
             rsqrt_tile<true>(var_dst);
             tile_regs_commit();
 
-            cb_pop_front(mean_cb, 1);
-            cb_pop_front(invstd_cb, 1);
-            cb_reserve_back(mean_cb, 1);
-            cb_reserve_back(invstd_cb, 1);
+            cb_mean.pop_front(1);
+            cb_invstd.pop_front(1);
+            cb_mean.reserve_back(1);
+            cb_invstd.reserve_back(1);
             tile_regs_wait();
             pack_reconfig_data_format(mean_cb);
             pack_tile(mean_dst, mean_cb);
             pack_reconfig_data_format(invstd_cb);
             pack_tile(var_dst, invstd_cb);
             tile_regs_release();
-            cb_push_back(mean_cb, 1);
-            cb_push_back(invstd_cb, 1);
+            cb_mean.push_back(1);
+            cb_invstd.push_back(1);
         } else {
             // Equal-count Welford (Chan) combine. All ring_size shards have identical count
             // n_i == reduce_width, so the exact parallel-Welford combine collapses in closed
@@ -285,7 +300,7 @@ void kernel_main() {
             constexpr uint32_t DT = 3;   // scratch
             constexpr uint32_t two_ring = 2u * ring_size;
             constexpr uint32_t recip_k_bits = __builtin_bit_cast(uint32_t, 1.0f / static_cast<float>(ring_size));
-            cb_wait_front(stats_gathered_cb, two_ring);
+            cb_stats_gathered.wait_front(two_ring);
             reconfig_data_format(stats_gathered_cb, stats_gathered_cb);
             pack_reconfig_data_format(combine_cb);
             tile_regs_acquire();
@@ -329,37 +344,37 @@ void kernel_main() {
             rsqrt_tile_init<true>();
             rsqrt_tile<true>(DV);  // DV = 1/std (legacy, matches baseline)
             tile_regs_commit();
-            cb_reserve_back(combine_cb, 2);
+            cb_combine.reserve_back(2);
             tile_regs_wait();
             pack_tile(DM, combine_cb);  // mean_g -> tile 0
             pack_tile(DV, combine_cb);  // 1/std  -> tile 1
             tile_regs_release();
-            cb_pop_front(stats_gathered_cb, two_ring);
-            cb_push_back(combine_cb, 2);
+            cb_stats_gathered.pop_front(two_ring);
+            cb_combine.push_back(2);
 
             // Transpose merged mean / 1/std row 0 -> col 0.
-            cb_wait_front(combine_cb, 2);
+            cb_combine.wait_front(2);
             reconfig_data_format_srca(combine_cb);
             transpose_init(combine_cb);
             tile_regs_acquire();
             transpose_tile(combine_cb, 0, mean_dst);
             transpose_tile(combine_cb, 1, var_dst);
             tile_regs_commit();
-            cb_pop_front(combine_cb, 2);
-            cb_reserve_back(mean_cb, 1);
-            cb_reserve_back(invstd_cb, 1);
+            cb_combine.pop_front(2);
+            cb_mean.reserve_back(1);
+            cb_invstd.reserve_back(1);
             tile_regs_wait();
             pack_reconfig_data_format(mean_cb);
             pack_tile(mean_dst, mean_cb);
             pack_reconfig_data_format(invstd_cb);
             pack_tile(var_dst, invstd_cb);
             tile_regs_release();
-            cb_push_back(mean_cb, 1);
-            cb_push_back(invstd_cb, 1);
+            cb_mean.push_back(1);
+            cb_invstd.push_back(1);
         }
 
-        cb_wait_front(mean_cb, 1);
-        cb_wait_front(invstd_cb, 1);
+        cb_mean.wait_front(1);
+        cb_invstd.wait_front(1);
 
         // -------- PHASE 2: POST — (x - mean) * (1/std) [* weight] [+ bias] --------
         if constexpr (block_major_post != 0) {
@@ -370,11 +385,11 @@ void kernel_main() {
             // (col 0) and weight_cb / bias_cb (whole-row) stay resident.
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 // (x - mean) -> xmm_cb
-                cb_wait_front(input_cb, block_size);
+                cb_input.wait_front(block_size);
                 reconfig_data_format(input_cb, mean_cb);
                 pack_reconfig_data_format(xmm_cb);
                 sub_bcast_cols_init(input_cb, mean_cb);
-                cb_reserve_back(xmm_cb, block_size);
+                cb_xmm.reserve_back(block_size);
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < block_size; i++) {
                     sub_tiles_bcast_cols(input_cb, mean_cb, i, 0, i);
@@ -385,32 +400,32 @@ void kernel_main() {
                     pack_tile(i, xmm_cb);
                 }
                 tile_regs_release();
-                cb_push_back(xmm_cb, block_size);
-                cb_pop_front(input_cb, block_size);
+                cb_xmm.push_back(block_size);
+                cb_input.pop_front(block_size);
 
                 // (x - mean) * (1/std) -> norm_result_cb
-                cb_wait_front(xmm_cb, block_size);
+                cb_xmm.wait_front(block_size);
                 reconfig_data_format(xmm_cb, invstd_cb);
                 pack_reconfig_data_format(norm_result_cb);
                 mul_bcast_cols_init(xmm_cb, invstd_cb);
-                cb_reserve_back(norm_result_cb, block_size);
+                cb_norm_result.reserve_back(block_size);
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < block_size; i++) {
                     mul_tiles_bcast_cols(xmm_cb, invstd_cb, i, 0, i);
                 }
                 tile_regs_commit();
-                cb_pop_front(xmm_cb, block_size);
+                cb_xmm.pop_front(block_size);
                 tile_regs_wait();
                 for (uint32_t i = 0; i < block_size; i++) {
                     pack_tile(i, norm_result_cb);
                 }
                 tile_regs_release();
-                cb_push_back(norm_result_cb, block_size);
+                cb_norm_result.push_back(block_size);
 
                 // * weight
                 if constexpr (has_weight != 0) {
-                    cb_wait_front(weight_cb, col_tile + block_size);
-                    cb_wait_front(norm_result_cb, block_size);
+                    cb_weight.wait_front(col_tile + block_size);
+                    cb_norm_result.wait_front(block_size);
                     reconfig_data_format(norm_result_cb, weight_cb);
                     pack_reconfig_data_format(weight_result_cb);
                     if constexpr (per_token_weight != 0) {
@@ -418,7 +433,7 @@ void kernel_main() {
                     } else {
                         mul_bcast_rows_init(norm_result_cb, weight_cb);
                     }
-                    cb_reserve_back(weight_result_cb, block_size);
+                    cb_weight_result.reserve_back(block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size; i++) {
                         if constexpr (per_token_weight != 0) {
@@ -428,19 +443,19 @@ void kernel_main() {
                         }
                     }
                     tile_regs_commit();
-                    cb_pop_front(norm_result_cb, block_size);
+                    cb_norm_result.pop_front(block_size);
                     tile_regs_wait();
                     for (uint32_t i = 0; i < block_size; i++) {
                         pack_tile(i, weight_result_cb);
                     }
                     tile_regs_release();
-                    cb_push_back(weight_result_cb, block_size);
+                    cb_weight_result.push_back(block_size);
                 }
 
                 // + bias
                 if constexpr (has_bias != 0) {
-                    cb_wait_front(bias_cb, col_tile + block_size);
-                    cb_wait_front(weight_result_cb, block_size);
+                    cb_bias.wait_front(col_tile + block_size);
+                    cb_weight_result.wait_front(block_size);
                     reconfig_data_format(weight_result_cb, bias_cb);
                     pack_reconfig_data_format(output_cb);
                     if constexpr (per_token_bias != 0) {
@@ -448,7 +463,7 @@ void kernel_main() {
                     } else {
                         add_bcast_rows_init(weight_result_cb, bias_cb);
                     }
-                    cb_reserve_back(output_cb, block_size);
+                    cb_output.reserve_back(block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size; i++) {
                         if constexpr (per_token_bias != 0) {
@@ -458,13 +473,13 @@ void kernel_main() {
                         }
                     }
                     tile_regs_commit();
-                    cb_pop_front(weight_result_cb, block_size);
+                    cb_weight_result.pop_front(block_size);
                     tile_regs_wait();
                     for (uint32_t i = 0; i < block_size; i++) {
                         pack_tile(i, output_cb);
                     }
                     tile_regs_release();
-                    cb_push_back(output_cb, block_size);
+                    cb_output.push_back(block_size);
                 }
             }
             // Per-row affine (per-token OR per-batch adaLN): the reader pushes row r's slice; pop
@@ -472,10 +487,10 @@ void kernel_main() {
             // divisible num_tile_cols, so the whole row's num_tile_cols was consumed above).
             // Broadcast weight/bias stays resident (never popped).
             if constexpr (per_token_weight != 0 || per_batch_weight != 0) {
-                cb_pop_front(weight_cb, num_tile_cols);
+                cb_weight.pop_front(num_tile_cols);
             }
             if constexpr (per_token_bias != 0 || per_batch_bias != 0) {
-                cb_pop_front(bias_cb, num_tile_cols);
+                cb_bias.pop_front(num_tile_cols);
             }
         } else {
             // ===== Resident POST (shard fits L1) =====
@@ -485,7 +500,7 @@ void kernel_main() {
             // slot is stale and dropped by the writer, which also drains in block_size units).
             // This keeps the resident POST + the worker writer divisibility-agnostic. The
             // whole-row weight_cb / bias_cb instead hold exactly num_tile_cols and use a
-            // cumulative (col + n) wait. CBs are sized div_up(num_tile_cols, block_size).
+            // cumulative (col + n) wait_front. CBs are sized div_up(num_tile_cols, block_size).
             // Sub-phase A: x - mean (broadcast mean over feature cols) -> xmm_cb.
             {
                 reconfig_data_format(input_cb, mean_cb);
@@ -493,7 +508,7 @@ void kernel_main() {
                 sub_bcast_cols_init(input_cb, mean_cb);
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
-                    cb_reserve_back(xmm_cb, block_size);
+                    cb_xmm.reserve_back(block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < n; i++) {
                         sub_tiles_bcast_cols(input_cb, mean_cb, col + i, 0, i);
@@ -504,7 +519,7 @@ void kernel_main() {
                         pack_tile(i, xmm_cb);
                     }
                     tile_regs_release();
-                    cb_push_back(xmm_cb, block_size);
+                    cb_xmm.push_back(block_size);
                 }
             }
 
@@ -515,8 +530,8 @@ void kernel_main() {
                 mul_bcast_cols_init(xmm_cb, invstd_cb);
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
-                    cb_wait_front(xmm_cb, block_size);
-                    cb_reserve_back(norm_result_cb, block_size);
+                    cb_xmm.wait_front(block_size);
+                    cb_norm_result.reserve_back(block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < n; i++) {
                         mul_tiles_bcast_cols(xmm_cb, invstd_cb, i, 0, i);
@@ -527,8 +542,8 @@ void kernel_main() {
                         pack_tile(i, norm_result_cb);
                     }
                     tile_regs_release();
-                    cb_push_back(norm_result_cb, block_size);
-                    cb_pop_front(xmm_cb, block_size);
+                    cb_norm_result.push_back(block_size);
+                    cb_xmm.pop_front(block_size);
                 }
             }
 
@@ -543,10 +558,10 @@ void kernel_main() {
                 }
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
-                    // whole-row weight: cumulative wait; per-batch offsets into this batch's
+                    // whole-row weight: cumulative wait_front; per-batch offsets into this batch's
                     // resident num_tile_cols slice (w_off==0 for broadcast/per-token).
-                    cb_wait_front(weight_cb, col + n);
-                    cb_wait_front(norm_result_cb, block_size);
+                    cb_weight.wait_front(col + n);
+                    cb_norm_result.wait_front(block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < n; i++) {
                         if constexpr (per_token_weight != 0) {
@@ -556,20 +571,20 @@ void kernel_main() {
                         }
                     }
                     tile_regs_commit();
-                    cb_pop_front(norm_result_cb, block_size);
-                    cb_reserve_back(weight_result_cb, block_size);
+                    cb_norm_result.pop_front(block_size);
+                    cb_weight_result.reserve_back(block_size);
                     tile_regs_wait();
                     for (uint32_t i = 0; i < n; i++) {
                         pack_tile(i, weight_result_cb);
                     }
                     tile_regs_release();
-                    cb_push_back(weight_result_cb, block_size);
+                    cb_weight_result.push_back(block_size);
                 }
                 // Per-row affine (per-token OR per-batch adaLN): weight is pushed fresh per row by
                 // the reader (row r's slice at the front); pop this row's num_tile_cols so row
                 // r+1's slice is at the front next iteration. Broadcast weight stays resident.
                 if constexpr (per_token_weight != 0 || per_batch_weight != 0) {
-                    cb_pop_front(weight_cb, num_tile_cols);
+                    cb_weight.pop_front(num_tile_cols);
                 }
             }
 
@@ -584,9 +599,9 @@ void kernel_main() {
                 }
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
-                    // whole-row bias: cumulative wait; per-batch offsets into this batch's slice.
-                    cb_wait_front(bias_cb, col + n);
-                    cb_wait_front(weight_result_cb, block_size);
+                    // whole-row bias: cumulative wait_front; per-batch offsets into this batch's slice.
+                    cb_bias.wait_front(col + n);
+                    cb_weight_result.wait_front(block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < n; i++) {
                         if constexpr (per_token_bias != 0) {
@@ -596,27 +611,27 @@ void kernel_main() {
                         }
                     }
                     tile_regs_commit();
-                    cb_pop_front(weight_result_cb, block_size);
-                    cb_reserve_back(output_cb, block_size);
+                    cb_weight_result.pop_front(block_size);
+                    cb_output.reserve_back(block_size);
                     tile_regs_wait();
                     for (uint32_t i = 0; i < n; i++) {
                         pack_tile(i, output_cb);
                     }
                     tile_regs_release();
-                    cb_push_back(output_cb, block_size);
+                    cb_output.push_back(block_size);
                 }
                 // Per-row affine bias (per-token OR per-batch adaLN): pop this row's slice.
                 if constexpr (per_token_bias != 0 || per_batch_bias != 0) {
-                    cb_pop_front(bias_cb, num_tile_cols);
+                    cb_bias.pop_front(num_tile_cols);
                 }
             }
         }  // end resident POST (else of block_major_post)
 
-        cb_pop_front(mean_cb, 1);
-        cb_pop_front(invstd_cb, 1);
+        cb_mean.pop_front(1);
+        cb_invstd.pop_front(1);
         if constexpr (block_major_post == 0) {
             // Resident path holds the row through POST; block-major popped per block.
-            cb_pop_front(input_cb, num_tile_cols);
+            cb_input.pop_front(num_tile_cols);
         }
     }
 }

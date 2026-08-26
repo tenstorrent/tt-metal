@@ -10,7 +10,7 @@
 
 namespace basic_tests::CoreRangeSet {
 
-TEST_F(CoreCoordFixture, TestCoreRangeSetIntersects) {
+TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetIntersects) {
     // Intersects CoreCoord
     EXPECT_TRUE(::CoreRangeSet(this->cr1).intersects(this->cr5.start_coord));
     EXPECT_TRUE(::CoreRangeSet(this->cr5).intersects(this->cr1.end_coord));
@@ -32,7 +32,7 @@ TEST_F(CoreCoordFixture, TestCoreRangeSetIntersects) {
     EXPECT_TRUE(::CoreRangeSet(this->sc2).intersects(::CoreRangeSet(std::vector{this->cr7, this->cr1})));
 }
 
-TEST_F(CoreCoordFixture, TestCoreRangeSetNotIntersects) {
+TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetNotIntersects) {
     // Not Intersects CoreCoord
     EXPECT_FALSE(::CoreRangeSet(this->cr1).intersects(this->cr2.start_coord));
     EXPECT_FALSE(

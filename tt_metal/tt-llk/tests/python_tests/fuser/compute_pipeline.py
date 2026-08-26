@@ -196,9 +196,7 @@ class ComputePipeline:
         hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
         init_code = ""
-        init_code += unpack_common.dvalid_init(
-            quasar_use_dvalid=config.quasar_use_dvalid
-        )
+        init_code += unpack_common.dvalid_init(config=config, operation=operation)
         init_code += config.sentinel.hw_configure_unpack(config, operation)
         if hoist_reconfig and unpack_ops and not config.skip_unpack_init:
             init_code += config.sentinel.configure_unpack(
@@ -257,6 +255,9 @@ class ComputePipeline:
 
         init_code = config.sentinel.hw_configure_math(config, operation)
         init_code += fpu_common.math_pack_sync_init(config, operation)
+        init_code += fpu_common.math_dest_remap_config(
+            any(pn.packer.requires_dest_remap for pn in self._get_pack_nodes())
+        )
         if hoist_reconfig and fpu_ops and not config.skip_math_init:
             init_code += config.sentinel.configure_math(config, operation, fpu_ops[0])
         if hoist and not fpu_ops[0].fpu.per_block_init:
