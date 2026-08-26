@@ -18,7 +18,7 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-// SDPA-specific custom init for the blocked sub+bcast(col) unpack flow.
+// Custom init for the blocked sub+bcast(col) unpack flow.
 // @param tensor_shape Shape of the operand tile (2 faces for 16x32 tiny tiles, 4 faces for full 32x32 tiles).
 inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
@@ -33,7 +33,7 @@ inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape
     TT_SETADCXX(p_setadc::UNP1, x_end, 0x0);
 }
 
-// SDPA-specific custom blocked unpack: one SrcB tile + ct_dim SrcA tiles.
+// Custom blocked unpack: one SrcB tile + ct_dim SrcA tiles.
 inline void _llk_unpack_AB_sub_bcast_col_custom_(const std::uint32_t address_a, const std::uint32_t address_b, const std::uint32_t ct_dim = 1)
 {
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters

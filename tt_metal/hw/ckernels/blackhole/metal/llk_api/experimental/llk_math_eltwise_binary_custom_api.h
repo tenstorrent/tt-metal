@@ -52,6 +52,17 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
     _llk_math_sub_bcast_cols_reuse_custom_(ct_dim, tensor_shape, dst_index);
 }
 
+inline void llk_math_sub_bcast_cols_compensated_init(
+    [[maybe_unused]] const std::uint32_t operandA, [[maybe_unused]] const std::uint32_t operandB) {
+    _llk_math_sub_bcast_cols_compensated_init_();
+}
+
+inline void llk_math_sub_bcast_cols_compensated(
+    const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim) {
+    const auto tensor_shape = get_operand_tensor_shape(get_operand_id(operandA));
+    _llk_math_sub_bcast_cols_compensated_(ct_dim, tensor_shape, dst_index);
+}
+
 /**
  * @brief Init the math (FPU) thread for the indexer_score blocked bcast-col MUL path.
  *

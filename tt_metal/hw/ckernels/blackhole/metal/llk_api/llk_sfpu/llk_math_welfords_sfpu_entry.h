@@ -35,9 +35,9 @@ inline void llk_math_two_pass_sfpu_update_shifted_rows(
         num_rows);
 }
 
-template <bool dual_sum>
+template <bool dual_sum, bool retain_anchor = false>
 inline void llk_math_two_pass_sfpu_finish_shifted_mean(std::uint32_t reciprocal_bits) {
-    ckernel::sfpu::_two_pass_finish_shifted_mean_<dual_sum>(reciprocal_bits);
+    ckernel::sfpu::_two_pass_finish_shifted_mean_<dual_sum, retain_anchor>(reciprocal_bits);
 }
 
 inline void llk_math_two_pass_sfpu_clear_stats() { ckernel::sfpu::_two_pass_clear_stats_(); }
@@ -45,6 +45,13 @@ inline void llk_math_two_pass_sfpu_clear_stats() { ckernel::sfpu::_two_pass_clea
 template <bool dual_m2>
 inline void llk_math_two_pass_sfpu_store_mean_m2_to_dst(std::uint32_t mean_dst_idx) {
     _llk_math_welfords_sfpu_params_(ckernel::sfpu::_two_pass_store_mean_m2_to_dst_<dual_m2>, mean_dst_idx);
+}
+
+template <bool dual_m2>
+inline void llk_math_two_pass_sfpu_store_split_mean_var_to_dst_row(
+    std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
+    _llk_math_welfords_sfpu_params_(
+        ckernel::sfpu::_two_pass_store_split_mean_var_to_dst_row_<dual_m2>, mean_dst_idx, reciprocal_bits);
 }
 
 template <bool dual_m2>

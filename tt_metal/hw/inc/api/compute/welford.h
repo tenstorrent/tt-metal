@@ -94,9 +94,9 @@ ALWI void two_pass_stats_update_shifted_rows(
         input_dst_idx, start_row, num_rows)));
 }
 
-template <bool dual_sum = true>
+template <bool dual_sum = true, bool retain_anchor = false>
 ALWI void two_pass_stats_finish_shifted_mean(std::uint32_t reciprocal_bits) {
-    MATH((llk_math_two_pass_sfpu_finish_shifted_mean<dual_sum>(reciprocal_bits)));
+    MATH((llk_math_two_pass_sfpu_finish_shifted_mean<dual_sum, retain_anchor>(reciprocal_bits)));
 }
 
 ALWI void two_pass_stats_clear() { MATH((llk_math_two_pass_sfpu_clear_stats())); }
@@ -104,6 +104,11 @@ ALWI void two_pass_stats_clear() { MATH((llk_math_two_pass_sfpu_clear_stats()));
 template <bool dual_m2 = true>
 ALWI void two_pass_stats_save_state(std::uint32_t mean_dst_idx) {
     MATH((llk_math_two_pass_sfpu_store_mean_m2_to_dst<dual_m2>(mean_dst_idx)));
+}
+
+template <bool dual_m2 = true>
+ALWI void two_pass_stats_finalize_split_mean_to_row(std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
+    MATH((llk_math_two_pass_sfpu_store_split_mean_var_to_dst_row<dual_m2>(mean_dst_idx, reciprocal_bits)));
 }
 
 template <bool dual_m2 = true>

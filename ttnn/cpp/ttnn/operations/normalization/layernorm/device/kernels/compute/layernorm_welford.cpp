@@ -262,7 +262,7 @@ void kernel_main() {
         welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
 
         // Store the mean and variance to the destination registers
-        two_pass_stats_finalize_to_row(mean_dst, (*p_reciprocals)[W - 1]);
+        two_pass_stats_finalize_split_mean_to_row(mean_dst, (*p_reciprocals)[W - 1]);
         tile_regs_commit();
 
         // Pop dfb_x_welford so its rd_ptr advances in lock-step with dfb_x's pop in the eltwise
@@ -317,14 +317,12 @@ void kernel_main() {
         if constexpr (FLOAT32_DTYPE) {
             reconfig_data_format(dfb_x, dfb_ex);
         }
-        dfb_ex_obj.wait_front(onetile);  // should have 1 tile
+        dfb_ex_obj.wait_front(onetile);  // packed anchor and low correction
         dfb_xmm_obj.reserve_back(total_buffer_size);
-        sub_bcast_cols_init(dfb_x, dfb_ex);
+        sub_bcast_cols_compensated_init(dfb_x, dfb_ex);
         for (auto block : generic::blocks(Wt, blk)) {
             tile_regs_acquire();
-            for (auto i : block.local()) {
-                sub_tiles_bcast_cols(dfb_x, dfb_ex, i, 0, i);
-            }
+            sub_bcast_cols_compensated(dfb_x, dfb_ex, 0, 0, block.size());
             tile_regs_commit();
             tile_regs_wait();
             for (auto i : block.local()) {
@@ -334,7 +332,7 @@ void kernel_main() {
             dfb_xmm_obj.push_back(block.full_block_size());
             dfb_x_obj.pop_front(block.full_block_size());
         }
-        dfb_ex_obj.pop_front(1);
+        dfb_ex_obj.pop_front(onetile);
         dfb_xmm_obj.wait_front(total_buffer_size);
 
         if constexpr (!fuse_pre_add) {

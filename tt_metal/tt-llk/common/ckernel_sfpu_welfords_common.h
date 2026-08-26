@@ -619,9 +619,13 @@ sfpi_inline void _two_pass_update_shifted_rows_(std::uint32_t start_row, std::ui
     _two_pass_shifted_block_rows_<initialize_anchor, dual_accumulator, 1, 3>(start_row, end_row);
 }
 
-template <bool dual_sum>
+template <bool dual_sum, bool retain_anchor = false>
 sfpi_inline void _two_pass_finish_shifted_mean_(std::uint32_t reciprocal_bits)
 {
+    if constexpr (retain_anchor)
+    {
+        TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, 0);
+    }
     TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, reciprocal_bits >> 16);
     TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, reciprocal_bits & 0xffff);
     if constexpr (dual_sum)
@@ -630,8 +634,72 @@ sfpi_inline void _two_pass_finish_shifted_mean_(std::uint32_t reciprocal_bits)
         TTI_SFPNOP;
     }
     TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG4, 0);
+    if constexpr (retain_anchor)
+    {
+        // LREG7 is otherwise unused by the dual-M2 pass. The paired
+        // SFPTRANSP operations in each input load preserve it.
+        TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG7, 0);
+    }
     TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+}
+
+template <bool dual_m2>
+sfpi_inline void _two_pass_store_split_mean_var_to_dst_row_(std::uint32_t reciprocal_bits)
+{
+    static_assert(dual_m2, "The split-mean finalizer requires LREG7 to retain the anchor");
+
+    TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, 0);
+
+    // Form anchor - mean so the fused FPU finalizer can seed DEST with the
+    // correction and accumulate x - anchor into it.
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG4, 0);
+    WELFORD_SFPU_ONLINE_HAZARD_NOP();
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG1, 0);
+    TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, reciprocal_bits >> 16);
+    TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, reciprocal_bits & 0xffff);
+    TTI_SFPMUL(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG4, 0);
+    WELFORD_SFPU_ONLINE_HAZARD_NOP();
+
+    constexpr std::uint32_t split_mean_tile_offset = 0;
+    constexpr std::uint32_t var_tile_offset        = 64;
+    constexpr std::uint32_t offset0                = 0;
+    constexpr std::uint32_t offset1                = 2;
+    constexpr std::uint32_t offset2                = 16;
+    constexpr std::uint32_t offset3                = 18;
+
+    // Save variance while the two transpose groups form row 0 (anchor) and
+    // row 16 (anchor - mean) of one split-mean tile.
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset);
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG4, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, split_mean_tile_offset + offset0);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, split_mean_tile_offset + offset1);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, split_mean_tile_offset + offset2);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, split_mean_tile_offset + offset3);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, split_mean_tile_offset + 32 + offset0);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, split_mean_tile_offset + 32 + offset1);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG6, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, split_mean_tile_offset + 32 + offset2);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, split_mean_tile_offset + 32 + offset3);
+
+    // Expand the saved variance vector into its own row tile.
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset + offset0);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset + offset1);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG6, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset + offset2);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset + offset3);
 }
 
 sfpi_inline void _two_pass_clear_stats_()

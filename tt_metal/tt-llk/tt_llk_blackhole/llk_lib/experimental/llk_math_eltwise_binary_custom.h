@@ -188,3 +188,54 @@ inline void _llk_math_sub_bcast_cols_reuse_custom_(
 {
     _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWSUB>(ct_dim, tensor_shape, dst_index);
 }
+
+inline void _llk_math_sub_bcast_cols_compensated_init_()
+{
+    eltwise_binary_configure_addrmod_custom<BroadcastType::COL>();
+    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 0x3F & -8}, .dest = {.incr = 8}}.set(ADDR_MOD_5);
+    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 24}, .dest = {.incr = 8}}.set(ADDR_MOD_6);
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_4);
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+inline void _compensated_move_broadcast_col_to_dest_(const std::uint32_t src_row, const std::uint32_t dst_row)
+{
+    TTI_MOVB2D(0, src_row + 0, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 0);
+    TTI_MOVB2D(0, src_row + 4, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 4);
+    TTI_MOVB2D(0, src_row + 8, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 8);
+    TTI_MOVB2D(0, src_row + 12, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 12);
+}
+
+inline void _llk_math_sub_bcast_cols_compensated_(
+    const std::uint32_t ct_dim, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
+{
+    LLK_ASSERT(tensor_shape.total_num_faces() == 4, "compensated column broadcast requires 32x32 tiles");
+
+    for (std::uint32_t tile = 0; tile < ct_dim; ++tile)
+    {
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + tile);
+        math::clear_dst_reg_addr();
+
+        // Seed DEST with anchor - mean. The split statistic tile stores the
+        // upper and lower row halves in faces 1 and 3 respectively.
+        _compensated_move_broadcast_col_to_dest_(16, 0);
+        _compensated_move_broadcast_col_to_dest_(16, 16);
+        _compensated_move_broadcast_col_to_dest_(48, 32);
+        _compensated_move_broadcast_col_to_dest_(48, 48);
+
+        // Accumulate x - anchor into the correction already in DEST.
+        for (std::uint32_t face_row = 0; face_row < tensor_shape.num_faces_r_dim; ++face_row)
+        {
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_7, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0);
+        }
+
+        // Publish SrcA for the next input tile while keeping the split mean resident.
+        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    }
+    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    math::clear_dst_reg_addr();
+}
