@@ -34,8 +34,8 @@ namespace {
 
 inline bool from_bool_param(const std::string& value) {
     return (
-        (value.length() == 4) && ('t' == value[0] || 'T' == value[0]) && ('r' == value[0] || 'R' == value[0]) &&
-        ('u' == value[0] || 'U' == value[0]) && ('e' == value[0] || 'E' == value[0]));
+        (value.length() == 4) && ('t' == value[0] || 'T' == value[0]) && ('r' == value[1] || 'R' == value[1]) &&
+        ('u' == value[2] || 'U' == value[2]) && ('e' == value[3] || 'E' == value[3]));
 }
 
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
