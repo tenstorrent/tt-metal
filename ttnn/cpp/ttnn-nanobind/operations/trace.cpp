@@ -49,6 +49,8 @@ void py_module(nb::module_& mod) {
         [](MeshDevice* device, std::optional<ttnn::QueueId> cq_id) {
             return ttnn::operations::trace::begin_trace_capture(device, cq_id);
         },
+        nb::sig("def begin_trace_capture(mesh_device: ttnn.MeshDevice, \\*, cq_id: Optional[ttnn.QueueId] = None) -> "
+                "ttnn.MeshTraceId"),
         nb::arg("mesh_device"),
         nb::kw_only(),
         nb::arg("cq_id") = nb::none(),
@@ -75,6 +77,8 @@ void py_module(nb::module_& mod) {
         [](MeshDevice* device, MeshTraceId trace_id, std::optional<ttnn::QueueId> cq_id) {
             ttnn::operations::trace::end_trace_capture(device, trace_id, cq_id);
         },
+        nb::sig("def end_trace_capture(mesh_device: ttnn.MeshDevice, trace_id: ttnn.MeshTraceId, \\*, "
+                "cq_id: Optional[ttnn.QueueId] = None) -> None"),
         nb::arg("mesh_device"),
         nb::arg("trace_id"),
         nb::kw_only(),
@@ -99,6 +103,8 @@ void py_module(nb::module_& mod) {
         [](MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id, bool blocking) {
             ttnn::operations::trace::execute_trace(device, trace_id, cq_id, blocking);
         },
+        nb::sig("def execute_trace(mesh_device: ttnn.MeshDevice, trace_id: ttnn.MeshTraceId, \\*, "
+                "cq_id: Optional[ttnn.QueueId] = None, blocking: bool = True) -> None"),
         nb::arg("mesh_device"),
         nb::arg("trace_id"),
         nb::kw_only(),
