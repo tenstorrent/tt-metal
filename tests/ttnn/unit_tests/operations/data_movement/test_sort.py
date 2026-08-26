@@ -217,7 +217,8 @@ def test_sort_fp32_wide_values(descending, device):
         # entries and can emit padding indices (>= n) into the output on the
         # MultiCore DRAM factory. Non-strict: on grids where this padded width
         # lands on the CrossCore factory instead (e.g. an unharvested 8x8 WH
-        # grid), the #54043 comparator flip fixes the leak and the test passes.
+        # grid), the index-aware comparator keeps padding entries in place and
+        # the test passes.
         pytest.param(
             True,
             marks=pytest.mark.xfail(
@@ -1000,7 +1001,7 @@ def test_sort_row_major_multi_core_correctness(descending, device):
 
 
 # ---------------------------------------------------------------------------
-# stable=True (issue #33492)
+# stable=True
 #
 # The stable contract is torch.sort(..., stable=True): equal values keep their
 # original (ascending-index) order in the output, in BOTH sort directions.
@@ -1055,8 +1056,7 @@ def _tie_heavy_tensor(shape, levels, seed, dtype=torch.bfloat16):
     ],
 )
 def test_sort_stable_index_parity(shape, dim, descending, device, stable):
-    """Exact torch.sort(stable=True) value and index parity on the basic shape
-    (the literal reproduction from issue #33492)."""
+    """Exact torch.sort(stable=True) value and index parity on the basic shape."""
     torch.manual_seed(0)
 
     torch_dtype = torch.bfloat16
@@ -1230,8 +1230,8 @@ def test_sort_stable_program_cache(shape, device):
 def test_sort_zero_size_dim(shape, stable, device):
     """torch.sort on a zero-size tensor returns empty values/indices of the input
     shape; ttnn.sort must do the same via a composite early-exit instead of
-    reaching the prim's non-empty-tensor TT_FATAL (issue #33492 truth-sync, hole
-    C2 — the prim guard stays as the backstop for direct prim callers). Index
+    reaching the prim's non-empty-tensor TT_FATAL (the prim guard stays as the
+    backstop for direct prim callers). Index
     dtype follows the early-exit contract, which matches the on-device rule for
     bf16 at these widths: UINT16 for both stabilities."""
     input_tensor = torch.randn(shape).to(torch.bfloat16)
@@ -1248,12 +1248,12 @@ def test_sort_zero_size_dim(shape, stable, device):
 
 
 # ---------------------------------------------------------------------------
-# Issue #54043: unstable CrossCore sorts must return valid index permutations
-# on ties. The CrossCore factory pins the index-aware comparator for BOTH
-# stabilities, so its unstable output is exactly the torch-stable permutation.
-# Widths here are chosen to land on the CrossCore factory (padded W=4096/8192
-# on the CI grids); the DRAM factory's separate tie defect is issue #53326 and
-# is not covered by these cells.
+# Unstable index contract: unstable CrossCore sorts must return valid index
+# permutations on ties. The CrossCore factory pins the index-aware comparator
+# for BOTH stabilities, so its unstable output is exactly the torch-stable
+# permutation. Widths here are chosen to land on the CrossCore factory (padded
+# W=4096/8192 on the CI grids); the DRAM factory's separate tie defect is
+# issue #53326 and is not covered by these cells.
 # ---------------------------------------------------------------------------
 
 
@@ -1262,7 +1262,7 @@ def _crosscore_serves(device, padded_w):
     interleaved bf16/fp32): Wt <= cores * min(128, max(Wt // cores, 2)). Approximate —
     keep in sync with SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core.
     Widths past the capacity route to the MultiCore DRAM factory, whose separate tie
-    defect is issue #53326 and out of scope for the #54043 cells."""
+    defect is issue #53326 and out of scope for these cells."""
     grid = device.compute_with_storage_grid_size()
     cores = grid.x * grid.y
     wt = padded_w // 32
@@ -1302,8 +1302,8 @@ def _assert_unstable_sort_invariants(input_tensor, ttnn_values, ttnn_indices, de
     ids=["w4096_tile", "w8192_tile", "w4096_rm"],
 )
 def test_sort_unstable_all_ones_permutation(width, layout, descending, device):
-    """Issue #54043 repro A, verbatim: an all-ones row is one giant tie group,
-    so every compare crosses a tie. Pre-fix, 0/32 rows returned a permutation."""
+    """An all-ones row is one giant tie group, so every compare crosses a tie:
+    the harshest input for the unstable index-permutation contract."""
     if not _crosscore_serves(device, width):
         pytest.skip(f"W={width} routes to the MultiCore DRAM factory on this grid (#53326 out of scope)")
     input_tensor = torch.ones((32, width), dtype=torch.bfloat16)
@@ -1315,9 +1315,9 @@ def test_sort_unstable_all_ones_permutation(width, layout, descending, device):
 @pytest.mark.parametrize("descending", [False, True])
 @pytest.mark.parametrize("width", [3000, 5000])
 def test_sort_unstable_nonpow2_index_range(width, descending, device):
-    """Issue #54043 repro B: non-pow2 logical widths pad with +/-inf sentinels.
-    Sentinel-tied entries could leak pad positions, so idx.max() reached past
-    the logical width — an OOB hazard for downstream gather/scatter."""
+    """Non-pow2 logical widths pad with +/-inf sentinels. Entries tied with a
+    sentinel must not leak pad positions: idx.max() has to stay below the
+    logical width, else downstream gather/scatter reads out of bounds."""
     padded = 1 << (width - 1).bit_length()
     if not _crosscore_serves(device, padded):
         pytest.skip(f"padded W={padded} routes to the MultiCore DRAM factory on this grid (#53326 out of scope)")
@@ -1412,8 +1412,8 @@ def test_sort_unstable_stable_cache_alternation(device):
     reason="https://github.com/tenstorrent/tt-metal/issues/54309: pre-existing — CrossCore "
     "ROW_MAJOR inputs with more than 32 rows return wrong VALUES for every tile-row block "
     "after the first (indices stay a valid permutation; TILE layout unaffected; reproduces "
-    "with stable=True and stable=False alike, so it is unrelated to the #54043 comparator "
-    "pin). Non-strict: the cell passes on grids that route W=4096 away from CrossCore.",
+    "with stable=True and stable=False alike, so it is unrelated to the CrossCore "
+    "comparator pin). Non-strict: the cell passes on grids that route W=4096 away from CrossCore.",
 )
 @pytest.mark.parametrize("descending", [False, True])
 def test_sort_unstable_row_major_multi_tile_row_values(descending, device):
