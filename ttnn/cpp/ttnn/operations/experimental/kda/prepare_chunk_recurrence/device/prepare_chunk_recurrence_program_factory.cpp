@@ -107,36 +107,36 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const m2::KernelSpecName READER{"reader"};
     const m2::KernelSpecName WRITER{"writer"};
     const m2::KernelSpecName COMPUTE{"compute"};
-    const m2::DFBSpecName Q{"q"};
-    const m2::DFBSpecName K{"k"};
-    const m2::DFBSpecName V{"v"};
-    const m2::DFBSpecName GATE{"g"};
-    const m2::DFBSpecName BETA{"beta"};
-    const m2::DFBSpecName EYE{"eye"};
-    const m2::DFBSpecName TRIL{"tril"};
-    const m2::DFBSpecName ONES{"ones"};
-    const m2::DFBSpecName STATE{"state"};
-    const m2::DFBSpecName DECAY{"decay"};
-    const m2::DFBSpecName DECAY_EXP{"decay_exp"};
-    const m2::DFBSpecName DECAY_FACTOR{"decay_factor"};
-    const m2::DFBSpecName LOWER_MASK{"lower_mask"};
-    const m2::DFBSpecName T_INV{"t_inv"};
-    const m2::DFBSpecName V_BETA{"v_beta"};
-    const m2::DFBSpecName K_BETA{"k_beta"};
-    const m2::DFBSpecName W{"w"};
-    const m2::DFBSpecName Q_DECAY{"q_decay"};
-    const m2::DFBSpecName INTRA{"intra"};
-    const m2::DFBSpecName STATE_TWO{"state_two"};
-    const m2::DFBSpecName V_NEW{"v_new"};
-    const m2::DFBSpecName OUTPUT_INTERMEDIATE{"output_intermediate"};
-    const m2::DFBSpecName K_DECAY_TRANSPOSED{"k_decay_transposed"};
-    const m2::DFBSpecName STATE_UPDATE{"state_update"};
-    const m2::DFBSpecName STATE_TEMPORARY{"state_temporary"};
-    const m2::DFBSpecName FINAL_STATE{"final_state"};
-    const m2::DFBSpecName SCRATCH_ONE{"scratch_one"};
-    const m2::DFBSpecName SCRATCH_TWO{"scratch_two"};
-    const m2::DFBSpecName SCRATCH_THREE{"scratch_three"};
-    const m2::DFBSpecName STATE_THREE{"state_three"};
+    const m2::DFBSpecName q_dfb{"q"};
+    const m2::DFBSpecName k_dfb{"k"};
+    const m2::DFBSpecName v_dfb{"v"};
+    const m2::DFBSpecName gate_dfb{"g"};
+    const m2::DFBSpecName beta_dfb{"beta"};
+    const m2::DFBSpecName eye_dfb{"eye"};
+    const m2::DFBSpecName tril_dfb{"tril"};
+    const m2::DFBSpecName ones_dfb{"ones"};
+    const m2::DFBSpecName state_dfb{"state"};
+    const m2::DFBSpecName decay_dfb{"decay"};
+    const m2::DFBSpecName decay_exp_dfb{"decay_exp"};
+    const m2::DFBSpecName decay_factor_dfb{"decay_factor"};
+    const m2::DFBSpecName lower_mask_dfb{"lower_mask"};
+    const m2::DFBSpecName t_inv_dfb{"t_inv"};
+    const m2::DFBSpecName v_beta_dfb{"v_beta"};
+    const m2::DFBSpecName k_beta_dfb{"k_beta"};
+    const m2::DFBSpecName w_dfb{"w"};
+    const m2::DFBSpecName q_decay_dfb{"q_decay"};
+    const m2::DFBSpecName intra_dfb{"intra"};
+    const m2::DFBSpecName state_two_dfb{"state_two"};
+    const m2::DFBSpecName v_new_dfb{"v_new"};
+    const m2::DFBSpecName output_intermediate_dfb{"output_intermediate"};
+    const m2::DFBSpecName k_decay_transposed_dfb{"k_decay_transposed"};
+    const m2::DFBSpecName state_update_dfb{"state_update"};
+    const m2::DFBSpecName state_temporary_dfb{"state_temporary"};
+    const m2::DFBSpecName final_state_dfb{"final_state"};
+    const m2::DFBSpecName scratch_one_dfb{"scratch_one"};
+    const m2::DFBSpecName scratch_two_dfb{"scratch_two"};
+    const m2::DFBSpecName scratch_three_dfb{"scratch_three"};
+    const m2::DFBSpecName state_three_dfb{"state_three"};
     const m2::TensorParamName Q_TENSOR{"q"};
     const m2::TensorParamName K_TENSOR{"k"};
     const m2::TensorParamName V_TENSOR{"v"};
@@ -166,36 +166,36 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             .data_format_metadata = format};
     };
     m2::Group<m2::DataflowBufferSpec> dfb_specs = {
-        make_dfb(Q, 2 * ck, bf16),
-        make_dfb(K, 2 * ck, bf16),
-        make_dfb(V, 2 * cv, bf16),
-        make_dfb(GATE, 2 * ck, gate_format),
-        make_dfb(BETA, 2 * Ct, fp32),
-        make_dfb(EYE, cc, fp32),
-        make_dfb(TRIL, cc, fp32),
-        make_dfb(ONES, cc, fp32),
-        make_dfb(STATE, kv * 2, fp32),
-        make_dfb(DECAY, ck, fp32),
-        make_dfb(DECAY_EXP, ck, fp32),
-        make_dfb(DECAY_FACTOR, ck, fp32),
-        make_dfb(LOWER_MASK, cc, fp32),
-        make_dfb(T_INV, 2 * cc, output_formats[6]),
-        make_dfb(V_BETA, 2 * cv, output_formats[0]),
-        make_dfb(K_BETA, ck, fp32),
-        make_dfb(W, 2 * ck, output_formats[1]),
-        make_dfb(Q_DECAY, 2 * ck, output_formats[2]),
-        make_dfb(INTRA, 2 * cc, output_formats[3]),
-        make_dfb(STATE_TWO, kv * 2, fp32),
-        make_dfb(V_NEW, 2 * Kt, output_formats[5]),
-        make_dfb(OUTPUT_INTERMEDIATE, std::max(cv, ck), fp32),
-        make_dfb(K_DECAY_TRANSPOSED, 2 * kc, output_formats[4]),
-        make_dfb(STATE_UPDATE, kv, fp32),
-        make_dfb(STATE_TEMPORARY, kv, fp32),
-        make_dfb(FINAL_STATE, kv, fp32),
-        make_dfb(SCRATCH_ONE, scratch, fp32),
-        make_dfb(SCRATCH_TWO, scratch, fp32),
-        make_dfb(SCRATCH_THREE, scratch, fp32),
-        make_dfb(STATE_THREE, kv * 2, fp32),
+        make_dfb(q_dfb, 2 * ck, bf16),
+        make_dfb(k_dfb, 2 * ck, bf16),
+        make_dfb(v_dfb, 2 * cv, bf16),
+        make_dfb(gate_dfb, 2 * ck, gate_format),
+        make_dfb(beta_dfb, 2 * Ct, fp32),
+        make_dfb(eye_dfb, cc, fp32),
+        make_dfb(tril_dfb, cc, fp32),
+        make_dfb(ones_dfb, cc, fp32),
+        make_dfb(state_dfb, kv * 2, fp32),
+        make_dfb(decay_dfb, ck, fp32),
+        make_dfb(decay_exp_dfb, ck, fp32),
+        make_dfb(decay_factor_dfb, ck, fp32),
+        make_dfb(lower_mask_dfb, cc, fp32),
+        make_dfb(t_inv_dfb, 2 * cc, output_formats[6]),
+        make_dfb(v_beta_dfb, 2 * cv, output_formats[0]),
+        make_dfb(k_beta_dfb, ck, fp32),
+        make_dfb(w_dfb, 2 * ck, output_formats[1]),
+        make_dfb(q_decay_dfb, 2 * ck, output_formats[2]),
+        make_dfb(intra_dfb, 2 * cc, output_formats[3]),
+        make_dfb(state_two_dfb, kv * 2, fp32),
+        make_dfb(v_new_dfb, 2 * Kt, output_formats[5]),
+        make_dfb(output_intermediate_dfb, std::max(cv, ck), fp32),
+        make_dfb(k_decay_transposed_dfb, 2 * kc, output_formats[4]),
+        make_dfb(state_update_dfb, kv, fp32),
+        make_dfb(state_temporary_dfb, kv, fp32),
+        make_dfb(final_state_dfb, kv, fp32),
+        make_dfb(scratch_one_dfb, scratch, fp32),
+        make_dfb(scratch_two_dfb, scratch, fp32),
+        make_dfb(scratch_three_dfb, scratch, fp32),
+        make_dfb(state_three_dfb, kv * 2, fp32),
     };
     TT_FATAL(
         prepare_chunk_recurrence_cb_size_bytes(
@@ -216,14 +216,14 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             "reader_prepare_chunk_recurrence.cpp",
         .dfb_bindings =
             {
-                m2::DFBBinding{Q, "q", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{K, "k", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{V, "v", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{GATE, "g", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{BETA, "beta", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{EYE, "eye", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{TRIL, "tril", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{ONES, "ones", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{q_dfb, "q", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{k_dfb, "k", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{v_dfb, "v", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{gate_dfb, "g", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{beta_dfb, "beta", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
             {
@@ -245,13 +245,13 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             "writer_prepare_chunk_recurrence.cpp",
         .dfb_bindings =
             {
-                m2::DFBBinding{V_BETA, "v_beta", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{T_INV, "t_inv", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{W, "w", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{Q_DECAY, "q_decay", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{INTRA, "intra", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{K_DECAY_TRANSPOSED, "k_decay_transposed", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{V_NEW, "v_new", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{v_beta_dfb, "v_beta", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{t_inv_dfb, "t_inv", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{w_dfb, "w", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{q_decay_dfb, "q_decay", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{intra_dfb, "intra", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{k_decay_transposed_dfb, "k_decay_transposed", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{v_new_dfb, "v_new", m2::DFBEndpointType::CONSUMER},
             },
         .tensor_bindings =
             {
@@ -270,36 +270,36 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
 
     auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
     auto& unpack_modes = m2::unpack_modes(compute_hw);
-    unpack_modes[Q] = UnpackMode::UnpackToSrc;
-    unpack_modes[K] = UnpackMode::UnpackToSrc;
-    unpack_modes[V] = UnpackMode::UnpackToSrc;
-    unpack_modes[GATE] = UnpackMode::UnpackToSrc;
-    unpack_modes[BETA] = UnpackMode::UnpackToSrc;
-    unpack_modes[EYE] = UnpackMode::UnpackToSrc;
-    unpack_modes[TRIL] = UnpackMode::UnpackToSrc;
-    unpack_modes[ONES] = UnpackMode::UnpackToSrc;
-    unpack_modes[STATE] = UnpackMode::UnpackToSrc;
-    unpack_modes[DECAY] = UnpackMode::UnpackToSrc;
-    unpack_modes[DECAY_EXP] = UnpackMode::UnpackToSrc;
-    unpack_modes[DECAY_FACTOR] = UnpackMode::UnpackToSrc;
-    unpack_modes[LOWER_MASK] = UnpackMode::UnpackToSrc;
-    unpack_modes[T_INV] = UnpackMode::UnpackToSrc;
-    unpack_modes[V_BETA] = UnpackMode::UnpackToSrc;
-    unpack_modes[K_BETA] = UnpackMode::UnpackToSrc;
-    unpack_modes[W] = UnpackMode::UnpackToSrc;
-    unpack_modes[Q_DECAY] = UnpackMode::UnpackToSrc;
-    unpack_modes[INTRA] = UnpackMode::UnpackToSrc;
-    unpack_modes[STATE_TWO] = UnpackMode::UnpackToSrc;
-    unpack_modes[V_NEW] = UnpackMode::UnpackToSrc;
-    unpack_modes[OUTPUT_INTERMEDIATE] = UnpackMode::UnpackToSrc;
-    unpack_modes[K_DECAY_TRANSPOSED] = UnpackMode::UnpackToSrc;
-    unpack_modes[STATE_UPDATE] = UnpackMode::UnpackToSrc;
-    unpack_modes[STATE_TEMPORARY] = UnpackMode::UnpackToSrc;
-    unpack_modes[FINAL_STATE] = UnpackMode::UnpackToSrc;
-    unpack_modes[SCRATCH_ONE] = UnpackMode::UnpackToSrc;
-    unpack_modes[SCRATCH_TWO] = UnpackMode::UnpackToSrc;
-    unpack_modes[SCRATCH_THREE] = UnpackMode::UnpackToSrc;
-    unpack_modes[STATE_THREE] = UnpackMode::UnpackToSrc;
+    unpack_modes[q_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[k_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[v_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[gate_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[beta_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[eye_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[tril_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[ones_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[state_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[decay_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[decay_exp_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[decay_factor_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[lower_mask_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[t_inv_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[v_beta_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[k_beta_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[w_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[q_decay_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[intra_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[state_two_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[v_new_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[output_intermediate_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[k_decay_transposed_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[state_update_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[state_temporary_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[final_state_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[scratch_one_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[scratch_two_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[scratch_three_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[state_three_dfb] = UnpackMode::UnpackToSrc;
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
         .source =
@@ -307,51 +307,51 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             "prepare_chunk_recurrence.cpp",
         .dfb_bindings =
             {
-                m2::DFBBinding{Q, "q", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{K, "k", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{V, "v", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{GATE, "g", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{BETA, "beta", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{EYE, "eye", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{TRIL, "tril", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{ONES, "ones", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STATE, "state", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STATE, "state", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{DECAY, "decay", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{DECAY, "decay", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{DECAY_EXP, "decay_exp", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{DECAY_EXP, "decay_exp", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{DECAY_FACTOR, "decay_factor", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{DECAY_FACTOR, "decay_factor", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{LOWER_MASK, "lower_mask", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{LOWER_MASK, "lower_mask", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{K_BETA, "k_beta", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{K_BETA, "k_beta", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STATE_TWO, "state_two", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STATE_TWO, "state_two", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{OUTPUT_INTERMEDIATE, "output_intermediate", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{OUTPUT_INTERMEDIATE, "output_intermediate", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STATE_UPDATE, "state_update", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STATE_UPDATE, "state_update", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STATE_TEMPORARY, "state_temporary", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STATE_TEMPORARY, "state_temporary", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{FINAL_STATE, "final_state", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{FINAL_STATE, "final_state", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{SCRATCH_ONE, "scratch_one", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SCRATCH_ONE, "scratch_one", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{SCRATCH_TWO, "scratch_two", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SCRATCH_TWO, "scratch_two", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{SCRATCH_THREE, "scratch_three", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SCRATCH_THREE, "scratch_three", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STATE_THREE, "state_three", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STATE_THREE, "state_three", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{V_BETA, "v_beta", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{T_INV, "t_inv", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{W, "w", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{Q_DECAY, "q_decay", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{INTRA, "intra", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{K_DECAY_TRANSPOSED, "k_decay_transposed", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{V_NEW, "v_new", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{q_dfb, "q", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{k_dfb, "k", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{v_dfb, "v", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{gate_dfb, "g", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{beta_dfb, "beta", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{state_dfb, "state", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{state_dfb, "state", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{decay_dfb, "decay", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{decay_dfb, "decay", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{decay_exp_dfb, "decay_exp", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{decay_exp_dfb, "decay_exp", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{decay_factor_dfb, "decay_factor", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{decay_factor_dfb, "decay_factor", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{lower_mask_dfb, "lower_mask", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{lower_mask_dfb, "lower_mask", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{k_beta_dfb, "k_beta", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{k_beta_dfb, "k_beta", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{state_two_dfb, "state_two", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{state_two_dfb, "state_two", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{output_intermediate_dfb, "output_intermediate", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{output_intermediate_dfb, "output_intermediate", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{state_update_dfb, "state_update", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{state_update_dfb, "state_update", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{state_temporary_dfb, "state_temporary", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{state_temporary_dfb, "state_temporary", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{final_state_dfb, "final_state", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{final_state_dfb, "final_state", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{scratch_one_dfb, "scratch_one", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{scratch_one_dfb, "scratch_one", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{scratch_two_dfb, "scratch_two", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{scratch_two_dfb, "scratch_two", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{scratch_three_dfb, "scratch_three", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{scratch_three_dfb, "scratch_three", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{state_three_dfb, "state_three", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{state_three_dfb, "state_three", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{v_beta_dfb, "v_beta", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{t_inv_dfb, "t_inv", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{w_dfb, "w", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{q_decay_dfb, "q_decay", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{intra_dfb, "intra", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{k_decay_transposed_dfb, "k_decay_transposed", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{v_new_dfb, "v_new", m2::DFBEndpointType::PRODUCER},
             },
         .compile_time_args =
             {{"Ct", Ct},
