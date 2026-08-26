@@ -13,7 +13,8 @@ set -euo pipefail
 SIM_SO="$HOME/sim/qsr/libttsim.so"          # Quasar craq-sim library (soc_descriptor.yaml
                                             # is staged beside it if missing)
 CRAQ_DIR="/localdev/$USER/craq-sim"         # craq-sim clone used to auto-stage SIM_SO
-TIMEOUT_S=1800                              # kill the run after this many seconds
+TIMEOUT_S=300                               # kill the run after this many seconds; sim-safe
+                                            # configs finish in ~15-60s, so a timeout = stall
 # =================================================================================
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
