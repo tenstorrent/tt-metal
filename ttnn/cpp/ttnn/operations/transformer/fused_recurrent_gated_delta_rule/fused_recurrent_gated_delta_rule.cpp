@@ -4,6 +4,7 @@
 #include "fused_recurrent_gated_delta_rule.hpp"
 
 #include <cmath>
+#include <functional>
 #include <tuple>
 #include <vector>
 
@@ -111,10 +112,16 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     decay = reshape_rm(decay, ttnn::Shape({BH * T, 1, 1}));
     beta = reshape_rm(beta, ttnn::Shape({BH * T, 1, 1}));
 
-    // initial_state [B,HV,K,V] -> [BH,K,V] fp32.
+    // Initial state [B,HV,K,V] -> [BH,K,V] fp32 TILE. Always provide (zeros if absent) so the reader
+    // always reads S (it takes the unconditional path; there is no in-kernel zeroing). Traced callers
+    // pass a persistent state buffer (never absent); the zeros() fallback here is eager-only
+    // (device-side fill, uncached), same caveat as chunk_gated_delta_rule.
     std::optional<ttnn::Tensor> s0;
     if (initial_state.has_value()) {
         s0 = ttnn::reshape(as_f32(*initial_state), ttnn::Shape({BH, K, V}));
+    } else {
+        s0 = ttnn::zeros(
+            ttnn::Shape({BH, K, V}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
     }
 
     const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);

@@ -163,6 +163,32 @@ def test_fused_decode_matches_fla_naive(mesh_device, seed):
 @_needs_op
 @torch.no_grad()
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_fused_decode_no_initial_state(mesh_device, seed):
+    """Kernel 1 with NO initial_state: the host composite must materialize a real zeros state buffer.
+
+    The reader kernel reads S unconditionally, so an absent initial_state used to hand the program
+    factory a null buffer (address 0) -> garbage read. Result must match FLA naive run from S=0.
+    """
+    q, k, v, beta, g = make_gdn_inputs(T=1, H=H, Dk=DK, Dv=DV, seed=seed)
+    s0_zero = torch.zeros(1, H, DK, DV, dtype=torch.float32)
+    o_ref, h_ref = _ref_decode(q, k, v, beta, g, s0_zero)
+
+    q_tt, k_tt, v_tt = (_to_dev(mesh_device, x) for x in (q, k, v))
+    beta_tt, g_tt = _to_dev(mesh_device, beta), _to_dev(mesh_device, g)
+    o_tt, h_tt = fused_recurrent_gated_delta_rule_ttnn(
+        q_tt, k_tt, v_tt, beta_tt, g_tt, scale=SCALE, initial_state=None, device=mesh_device
+    )
+    p_o = pcc(_dev0(mesh_device, o_tt), o_ref)
+    p_h = pcc(_dev0(mesh_device, h_tt), h_ref)
+    logger.info(f"[fused decode, no s0] seed={seed} PCC o={p_o:.6f} state={p_h:.6f}")
+    assert p_o > 0.999, f"output PCC {p_o} below 0.999"
+    assert p_h > 0.999, f"state PCC {p_h} below 0.999"
+
+
+@_needs_op
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 def test_fused_decode_perf(mesh_device):
     """Kernel 1 latency: fused op vs the composite baseline, same inputs/dtype. Reports both."""
     _time_op.mesh = mesh_device

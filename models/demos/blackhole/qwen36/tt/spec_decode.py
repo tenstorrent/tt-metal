@@ -347,6 +347,8 @@ class SpeculativeDecoder:
             self._vfy_captured = True
 
         # Seed: consume `first` at position T -> (L_T, H_T); anchor p=T.
+        # MUST stay AFTER capture_verify_trace: the capture's throwaway passes write junk KV at
+        # positions [T, T+K], which would clobber the seed's KV at T if the seed ran first.
         Lp, Hp = self._seed(first, T - 1)
         p = T
         # The base's own next token, confirmed by the anchor logits. It is committed unconditionally

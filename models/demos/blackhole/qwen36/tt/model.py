@@ -1158,9 +1158,41 @@ class Qwen36Model:
         real = torch.tensor(list(draft_tokens), dtype=torch.int32).reshape(1, K)
         token_buf = real if bucket == K else torch.cat([real, torch.zeros(1, bucket - K, dtype=torch.int32)], dim=1)
 
+        # Position-exact KV write, same contract as the traced verify (_forward_verify_bucket_tp's
+        # _vfy_kvpos_buf / _vfy_kvpt_buf) but built eagerly — this path runs once per request, not on
+        # the hot loop. WITHOUT it the masked-bucket prefill fills K/V with the block-aligned
+        # paged_fill_cache, which starts at (chunk_start // BLOCK_SIZE) * BLOCK_SIZE: for a
+        # chunk_start that is not a block multiple the candidate lands chunk_start % BLOCK_SIZE slots
+        # EARLY and overwrites real prompt KV in that block, while the chunked SDPA still reads the
+        # cache absolutely. Only the K REAL rows get a write (the bucket's pad rows must not), mirroring
+        # the traced path's per-candidate loop.
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        kv_pos = ttnn.from_torch(
+            torch.arange(chunk_start, chunk_start + K, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=rep,
+        )
+        kv_pt = ttnn.from_torch(
+            page_table.repeat(K, 1).contiguous(),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=rep,
+        )
         hidden = self._forward_prefill_chunk_masked_tp(
-            token_buf, K, chunk_start, page_table, bucket, gdn_recurrent=gdn_recurrent
+            token_buf,
+            K,
+            chunk_start,
+            page_table,
+            bucket,
+            gdn_recurrent=gdn_recurrent,
+            exact_kv_pos=kv_pos,
+            exact_kv_pt=kv_pt,
         )  # [1,1,bucket,dim/tp]
+        ttnn.deallocate(kv_pos)
+        ttnn.deallocate(kv_pt)
         # Multi-row select rows 0..K-1 via a one-hot matmul (fixed program per bucket, unlike a slice).
         sel = torch.zeros(1, 1, K, bucket, dtype=torch.float32)
         for i in range(K):
@@ -1179,7 +1211,10 @@ class Qwen36Model:
         normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,K,dim]
         logits = self._lm_head(normed)  # [1,1,K,vocab] replicated per device
         ttnn.deallocate(normed)
-        lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+        # _lm_head all-gathers, so the logits are REPLICATED across the TP mesh: read ONE replica
+        # rather than concatenating every rank and throwing all but the first away (the same idiom
+        # process_output_decode uses; ~num_devices x less device->host traffic).
+        lt = ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
         ttnn.deallocate(logits)
         lt = lt.reshape(-1, self.vocab_size)[:K].float()
         return lt, rows
@@ -1469,7 +1504,9 @@ class Qwen36Model:
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(dev)
 
-        lt = ttnn.to_torch(self._vfy_logits_out, mesh_composer=ttnn.ConcatMeshToTensor(dev, dim=0))
+        # Replicated logits (_lm_head all-gathers): one replica is the whole answer. Concatenating
+        # all TP ranks made this readback ~num_devices x larger for nothing, on the hot loop.
+        lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_out)[0])
         lt = lt.reshape(-1, self.vocab_size)[:T].float()
         rows = ttnn.clone(self._vfy_rows_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return lt, rows
@@ -1498,7 +1535,14 @@ class Qwen36Model:
         cur_pos_tt = ttnn.from_torch(torch.tensor([pos], dtype=torch.int32), dtype=ttnn.int32, device=self.device, **mk)
         pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         logits, hidden = self._forward_decode(tok, cos, sin, cur_pos_tt, pt, return_hidden=True)
-        lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+        if self._ondev_argmax:
+            # _forward_decode returned the PRE-gather vocab-sharded logits; the ranks are different
+            # vocab slices, so they really do have to be concatenated to rebuild the full row.
+            lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+        else:
+            # _lm_head all-gathered: the logits are REPLICATED, so read one replica instead of
+            # pulling every rank back only to drop all but the first (process_output_decode's idiom).
+            lt = ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
         ttnn.deallocate(logits)
         lt = lt.reshape(-1)[: self.vocab_size].float()
         return lt, hidden
@@ -2575,11 +2619,19 @@ class Qwen36Model:
         flex_sdpa=True,
         vision_tokens=None,
         gdn_recurrent=False,
+        exact_kv_pos=None,
+        exact_kv_pt=None,
     ):
         """TP (num_devices>1) masked fixed-bucket single-chunk prefill forward.
 
         flex_sdpa=True: flexible chunked SDPA (serving). flex_sdpa=False: host-int path (debug).
-        Fills K/V for real blocks only. Returns hidden [1,1,bucket,dim]."""
+        Fills K/V for real blocks only. Returns hidden [1,1,bucket,dim].
+
+        exact_kv_pos / exact_kv_pt: optional position-exact KV write (spec verify; see
+        forward_prefill_paged). exact_kv_pos is [n] int32 absolute cache slots and exact_kv_pt the
+        matching [n, blocks] page table, both ROW_MAJOR + replicated across the mesh. When BOTH are
+        None (the default, i.e. every ordinary prefill caller) the full-attention layers take the
+        unchanged block-aligned paged_fill_cache path."""
         block_size = get_block_size(self._paged_kv_caches)
         tok = ttnn.from_torch(
             token_buf.to(torch.int32),
@@ -2640,6 +2692,8 @@ class Qwen36Model:
                     chunk_start_idx=chunk_start,
                     chunk_start_idx_tensor=csi_tensor,
                     valid_len=valid_len,  # unused by full attention
+                    exact_kv_pos=exact_kv_pos,
+                    exact_kv_pt=exact_kv_pt,
                 )
             else:
                 x_new = layer.forward(
