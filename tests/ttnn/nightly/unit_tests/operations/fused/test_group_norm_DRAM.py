@@ -446,7 +446,7 @@ def test_group_norm_DRAM_row_major_no_mcast_large_block_ht(device):
         16,
         8,
         8,
-        "legacy",
+        "tile_reduction",
         use_input_mask=True,
         input_layout=ttnn.TILE_LAYOUT,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,

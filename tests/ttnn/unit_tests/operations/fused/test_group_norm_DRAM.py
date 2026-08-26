@@ -21,6 +21,20 @@ DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 NON_TILE_ALIGNED_ATOL = 0.08
 STATISTICS_MODES = ("tile_reduction", "two_pass")
 
+
+def _use_two_pass_statistics(statistics_mode):
+    if statistics_mode not in STATISTICS_MODES:
+        raise ValueError(f"Unknown GroupNorm statistics mode: {statistics_mode!r}")
+    return statistics_mode == "two_pass"
+
+
+def test_group_norm_statistics_mode_validation(expect_error):
+    assert not _use_two_pass_statistics("tile_reduction")
+    assert _use_two_pass_statistics("two_pass")
+    with expect_error(ValueError, "Unknown GroupNorm statistics mode"):
+        _use_two_pass_statistics("legacy")
+
+
 GROUP_NORM_DRAM_SHAPES = [
     (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
     (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
@@ -187,7 +201,7 @@ def run_group_norm_DRAM(
             num_batches=N,
         )
 
-    use_welford = statistics_mode == "two_pass"
+    use_welford = _use_two_pass_statistics(statistics_mode)
 
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
@@ -1015,7 +1029,7 @@ def test_group_norm_interleaved_all_config(
     grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     torch.manual_seed(0)
 
-    use_welford = statistics_mode == "two_pass"
+    use_welford = _use_two_pass_statistics(statistics_mode)
 
     x = torch.rand((N, C, H, W), dtype=torch.float32)
     w = torch.rand((C,), dtype=torch.float32)

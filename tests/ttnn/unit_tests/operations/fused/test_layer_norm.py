@@ -14,6 +14,16 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 pytestmark = pytest.mark.use_module_device
 
 
+@pytest.fixture
+def enabled_program_cache(device):
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    try:
+        yield
+    finally:
+        device.disable_and_clear_program_cache()
+
+
 @dataclass
 class AllCloseThresholds:
     rtol: float
@@ -467,9 +477,8 @@ def test_l1_interleaved(device, use_welford, dtype):
 
 
 @run_for_blackhole("The near-capacity allocation is calibrated for Blackhole L1")
-def test_l1_interleaved_near_capacity(device):
+def test_l1_interleaved_near_capacity(device, enabled_program_cache):
     torch.manual_seed(20260731)
-    device.enable_program_cache()
 
     h, w = 32, 2048
     torch_input = torch.rand((h, w), dtype=torch.float32)
@@ -590,7 +599,7 @@ def test_layer_norm_bfp8_residual_affine_two_pass(device):
 
 
 @run_for_blackhole("Blackhole replays retained residual rows and multicasts affine parameters")
-def test_layer_norm_fp32_residual_affine_replay_program_cache(device):
+def test_layer_norm_fp32_residual_affine_replay_program_cache(device, enabled_program_cache):
     torch.manual_seed(20260824)
     h, w = 1024, 2880
     torch_input = torch.rand((h, w), dtype=torch.float32)
@@ -599,8 +608,6 @@ def test_layer_norm_fp32_residual_affine_replay_program_cache(device):
     residual_tensor = ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device)
     reciprocal = create_recip_tensor(device, w, use_welford=True)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
-    device.enable_program_cache()
-
     first_weight = ttnn.from_torch(torch.rand((w,), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
     first_bias = ttnn.from_torch(torch.rand((w,), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
     ttnn.layer_norm(
