@@ -464,16 +464,21 @@ struct IndexedMeshRoutingFields {
 
     // Packs the action's eth outputs through fwd_dirs<MY_DIR>() into the dense 4-bit dispatch key.
     // LOCAL_DELIVER stays outside the key and is handled after the eth fanout.
+    //
+    // fwd_dirs<MY_DIR>() is {E, W, N, S, Z} with the self direction removed and the order kept, so
+    // slot i is direction i below MY_DIR and direction i+1 above it. The pack is therefore just a
+    // bit-compress: action bits under the self bit stay put, bits over it shift down by one.
+    //
+    // Spelled as a loop this compiled to a test-and-or chain per slot -- 12 instructions and 3
+    // data-dependent branches on the per-packet forward path -- because the compiler would not fold
+    // dirs[slot] to a constant. The closed form is 4 branchless instructions and is exactly
+    // equivalent, self bit included: neither form can observe it, since self is never in fwd_dirs.
     template <eth_chan_directions MY_DIR>
     static constexpr std::uint8_t pack_fwd_key(std::uint8_t action) {
-        constexpr auto dirs = fwd_dirs<MY_DIR>();
-        std::uint8_t key = 0;
-        for (std::uint32_t slot = 0; slot < 4; ++slot) {
-            if (action & action_bit(dirs[slot])) {
-                key = static_cast<std::uint8_t>(key | (1u << slot));
-            }
-        }
-        return key;
+        constexpr unsigned self = static_cast<unsigned>(MY_DIR);
+        constexpr std::uint8_t below = static_cast<std::uint8_t>((1u << self) - 1u);
+        constexpr std::uint8_t above = static_cast<std::uint8_t>(ACTION_ETH_MASK & ~((1u << (self + 1u)) - 1u));
+        return static_cast<std::uint8_t>((action & below) | ((action & above) >> 1u));
     }
 
     // This chip is the mesh's exit when the maps say deliver here but the final mesh is elsewhere.
