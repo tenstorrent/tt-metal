@@ -90,7 +90,17 @@ void kernel_main() {
     constexpr uint32_t kCvReadBytes = 32;
     constexpr uint32_t kCvReadSrcOff = kernel_profiler::SPSC_RING_TAIL_0 * 4u;
     // Idle backoff ceiling (~20 us): collapse on work, creep when idle.
-    constexpr uint32_t kCvIdleGapMax = 27000;
+    // 5 us. Was 20 us, which exceeds the time a lane takes to fill its ring at high production rates, so
+    // the ramp could blind the filler for most of a fill window (measured: workload 806 -> 70 ms at delay
+    // 45). The filler is busy ~22% of a workload, so the probe traffic a wider gap saved was never
+    // contended for.
+    constexpr uint32_t kCvIdleGapMax = 6750;
+    // Per-lane ship trigger, and the point past which the idle gap must stop growing. "Shipped no frame"
+    // is a statement about the TRIGGER, not about the producers, so backing off on it alone puts the filler
+    // to sleep exactly while lanes fill toward it -- and a head only reaches a producer on a ship, so a
+    // late ship is a late head. Both derive from one constant so the two cannot drift apart.
+    constexpr uint32_t kLaneTrigger = kRingWords / 2u;
+    constexpr uint32_t kCvBusyPeak = kLaneTrigger / 2u;
     // ---- HIGH-PRODUCTION MODE: raw span sweeps, entered and left with hysteresis ----
     // When the slice runs hot the CV pass is a wasted serialized round-trip -- the tails it fetches sit
     // inside the span about to be read anyway. HIGH mode reads each core's WHOLE span (control vector +
@@ -265,6 +275,13 @@ void kernel_main() {
     }
 
     static uint32_t head_mirror[kMaxCores * kNumRisc];
+    // PER-CORE SERVICE INTERVAL, as a distribution. The MEAN cannot explain the stalls: at delay 30 it is
+    // 22.6 us against a 47.7 us fill -- 2.1x headroom -- and producers still block 65 k times, so what
+    // blocks them is this distribution's TAIL. Buckets double from 8192 cycles (~6.1 us at 1.35 GHz);
+    // the host converts. Sampled at the head write-back, which IS the moment a ship releases a producer.
+    static uint32_t last_ship[kMaxCores];
+    static uint32_t svc_hist[8];
+    uint32_t svc_max = 0;
     static uint8_t seeded[kMaxCores];
     static uint16_t ship_age[kMaxCores];
     static uint8_t ship_list[kMaxCores];  // CV-first: this sweep's ship set, dense core indices
@@ -276,6 +293,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < kMaxCores; i++) {
         seeded[i] = 0;
         ship_age[i] = 0;
+        last_ship[i] = 0;
+    }
+    for (uint32_t i = 0; i < 8; i++) {
+        svc_hist[i] = 0;
     }
     uint32_t ship_deferred = 0;  // core visits left unstaged by the ship threshold
     uint32_t ship_aged = 0;      // ships forced by kShipMaxAgeSweeps
@@ -303,6 +324,11 @@ void kernel_main() {
     uint64_t c_scan = 0;  // decide-loop cycles alone, for a ns/core figure the host can print
 
     uint64_t c_read = 0;     // bulk span reads: issue + barrier
+    // ISSUE COST, split out from the barrier wait. Programming a cmd buf occupies the DRISC; the bytes then
+    // move on the NIU, overlapped with the previous generation's ship. So the sweep's critical path is issue
+    // time plus whatever wait survives that overlap, and these two say which of them it is.
+    uint64_t c_issue = 0;
+    uint32_t n_gather_rd = 0, n_cv_rd = 0;
     uint64_t c_proc = 0;     // control-vector inspection, prefix + head patch, head write-back
     uint64_t c_reserve = 0;  // socket_reserve_pages -- host credit wait
     uint64_t c_write = 0;    // PCIe write + push + notify
@@ -315,6 +341,14 @@ void kernel_main() {
     uint64_t c_wr_notify = 0;
     uint64_t c_idle = 0;
     uint64_t c_busy = 0;
+    // WINDOW-SCOPED PHASES. Every lifetime percentage is dominated by idle CV polling: a drainer is
+    // resident for seconds while a capture is tens of milliseconds, so a lifetime "pace 63%" is the wait
+    // FOR a workload, not headroom inside one -- and reading it as headroom is wrong in the direction that
+    // matters. Snapshot at the first shipping sweep and again at every later one; the difference is the
+    // phases as they stood while data actually flowed.
+    bool win2_open = false;
+    uint64_t w0_t = 0, w1_t = 0, w0_busy = 0, w1_busy = 0, w0_idle = 0, w1_idle = 0, w0_pace = 0, w1_pace = 0;
+    uint32_t w0_frames = 0, w1_frames = 0, w0_sweeps = 0, w1_sweeps = 0;
     uint32_t sweeps_idle = 0;
     uint32_t max_sweep = 0;
     // The knee is set by the WORST sweep beating ring fill time, and the worst is ~2.5x the mean, so
@@ -815,6 +849,7 @@ void kernel_main() {
                                 kCvReadBytes,
                                 {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src + kCvReadSrcOff},
                                 {});
+                            n_cv_rd++;
                         }
                         noc.async_read_barrier();
                     }
@@ -825,7 +860,7 @@ void kernel_main() {
                     // (worst-sweep write 9.7-11.4 -> 2 us) yet REGRESSED the knee everywhere (delay 50:
                     // 256k -> 900k stalls) -- the extra frames' gather reads cost the sweep more than the
                     // burst did, because the read side, not the PCIe write, is the saturated-sweep wall.
-                    const uint32_t lane_trigger = kernel_profiler::PROFILER_L1_VECTOR_SIZE / 2u;
+                    const uint32_t lane_trigger = kLaneTrigger;
                     // ROTATED start. The scan/ship order is also the service order, and a fixed order
                     // gives the last cores a whole sweep less headroom every sweep -- the same handful
                     // of cores took every producer stall while their slice-mates took none. Wrap by
@@ -938,6 +973,7 @@ void kernel_main() {
                         const uint32_t ring_src = cv_src + (kCtrlWords + r * kRingWords) * 4u;
                         const uint32_t chunk = run <= kRingWords - hm ? run : kRingWords - hm;
                         CoreLocalMem<uint32_t> dst0(slot + off * 4u);
+                        n_gather_rd++;
                         noc.async_read<NocOptions::DEFAULT, kRingWords * 4u>(
                             src,
                             dst0,
@@ -946,6 +982,7 @@ void kernel_main() {
                             {});
                         if (chunk < run) {
                             CoreLocalMem<uint32_t> dst1(slot + (off + chunk) * 4u);
+                            n_gather_rd++;
                             noc.async_read<NocOptions::DEFAULT, kRingWords * 4u>(
                                 src,
                                 dst1,
@@ -979,6 +1016,18 @@ void kernel_main() {
                         // the payload is resident in staging (this generation's read barrier passed), so those
                         // ring slots are free regardless of when the frame reaches the host.
                         const uint64_t t_h0 = get_timestamp();
+                        if (last_ship[c] != 0) {
+                            const uint32_t dt = static_cast<uint32_t>(t_h0) - last_ship[c];
+                            if (dt > svc_max) {
+                                svc_max = dt;
+                            }
+                            uint32_t b = 0;
+                            for (uint32_t q = dt >> 13; q != 0 && b < 7u; q >>= 1) {
+                                b++;
+                            }
+                            svc_hist[b]++;
+                        }
+                        last_ship[c] = static_cast<uint32_t>(t_h0);
                         const uint32_t sc = kHeadScratch + hb_slot * 32u;
                         volatile tt_l1_ptr uint32_t* scp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc);
                         const uint32_t* runs = &slot_runs[sl * kNumRisc];
@@ -1096,6 +1145,18 @@ void kernel_main() {
                         volatile tt_l1_ptr uint32_t* cvw =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
                         const uint64_t t_h0 = get_timestamp();
+                        if (last_ship[c] != 0) {
+                            const uint32_t dt = static_cast<uint32_t>(t_h0) - last_ship[c];
+                            if (dt > svc_max) {
+                                svc_max = dt;
+                            }
+                            uint32_t b = 0;
+                            for (uint32_t q = dt >> 13; q != 0 && b < 7u; q >>= 1) {
+                                b++;
+                            }
+                            svc_hist[b]++;
+                        }
+                        last_ship[c] = static_cast<uint32_t>(t_h0);
                         const uint32_t sc = kHeadScratch + hb_slot * 32u;
                         volatile tt_l1_ptr uint32_t* scp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc);
                         cvw[kernel_profiler::SPSC_RING_HEAD_0 + 0] = m0;
@@ -1184,6 +1245,7 @@ void kernel_main() {
                                     kStageBase + (gen * kGenSlots + i) * kSlotBytes + kPrefix * 4u);
                                 // One ascending read: the tails arrive before the ring bytes they bound, so
                                 // the in-span control vector is this frame's authoritative snapshot.
+                                n_gather_rd++;
                                 noc.async_read<NocOptions::DEFAULT, kSpanWords * 4u>(
                                     src,
                                     dst,
@@ -1213,6 +1275,7 @@ void kernel_main() {
                         noc.async_read_barrier();
                     }
                     const uint64_t t_read_end = get_timestamp();
+                    c_issue += t_issue - t_batch0;
                     c_read += (t_issue - t_batch0) + (t_read_end - t_after_proc);
 
                     pend_base = base_c;
@@ -1237,6 +1300,16 @@ void kernel_main() {
             ws_rsv = static_cast<uint32_t>(c_reserve - s_rsv0);
             ws_wr = static_cast<uint32_t>(c_write - s_wr0);
             ws_bar = static_cast<uint32_t>(c_barrier - s_bar0);
+        }
+        const bool win2_work = frames != frames_at_sweep_start;
+        if (win2_work && !win2_open) {
+            win2_open = true;  // snapshot BEFORE this sweep lands in c_busy
+            w0_t = t_sweep0;
+            w0_busy = c_busy;
+            w0_idle = c_idle;
+            w0_pace = c_pace;
+            w0_frames = frames_at_sweep_start;
+            w0_sweeps = sweeps;
         }
         if (frames == frames_at_sweep_start) {
             sweeps_idle++;
@@ -1302,9 +1375,10 @@ void kernel_main() {
             }
         }
 
-        // Collapse the gap on work, creep toward ~20 us when idle: widening only saves idle probe traffic,
-        // and a producer must never wait on it.
-        if (frames != frames_at_sweep_start) {
+        // Collapse the gap on work, creep toward kCvIdleGapMax when idle: widening only saves idle probe
+        // traffic, and a producer must never wait on it. Live-but-untriggered counts as work here -- see
+        // kCvBusyPeak.
+        if (frames != frames_at_sweep_start || sweep_peak >= kCvBusyPeak) {
             gap = 0;
         } else {
             uint32_t inc = gap >> 1;
@@ -1324,6 +1398,14 @@ void kernel_main() {
                 }
             }
             c_pace += get_timestamp() - t_g0;
+        }
+        if (win2_work) {
+            w1_t = get_timestamp();
+            w1_busy = c_busy;
+            w1_idle = c_idle;
+            w1_pace = c_pace;
+            w1_frames = frames;
+            w1_sweeps = sweeps;
         }
         // The window's LAST sweep must flush, or its zones sit in the ring until the next window, or
         // forever. After the gap, so PACE rides in the same frame as the SWEEP it follows.
@@ -1469,10 +1551,32 @@ void kernel_main() {
     out[137] = static_cast<uint32_t>(c_pace >> 32);
     out[170] = ship_deferred;
     out[171] = ship_aged;
-    out[172] = 0;
-    out[173] = 0;
-    out[174] = 0;
-    out[175] = 0;
+    {
+        const uint64_t wc = win2_open ? w1_t - w0_t : 0u;
+        out[181] = static_cast<uint32_t>(wc & 0xFFFFFFFFu);
+        out[182] = static_cast<uint32_t>(wc >> 32);
+        const uint64_t wb = win2_open ? w1_busy - w0_busy : 0u;
+        out[183] = static_cast<uint32_t>(wb & 0xFFFFFFFFu);
+        out[184] = static_cast<uint32_t>(wb >> 32);
+        const uint64_t wi = win2_open ? w1_idle - w0_idle : 0u;
+        out[185] = static_cast<uint32_t>(wi & 0xFFFFFFFFu);
+        out[186] = static_cast<uint32_t>(wi >> 32);
+        const uint64_t wp = win2_open ? w1_pace - w0_pace : 0u;
+        out[187] = static_cast<uint32_t>(wp & 0xFFFFFFFFu);
+        out[188] = static_cast<uint32_t>(wp >> 32);
+        out[189] = win2_open ? w1_frames - w0_frames : 0u;
+        out[190] = win2_open ? w1_sweeps - w0_sweeps : 0u;
+        out[191] = win2_open ? 1u : 0u;
+        out[192] = num_cores;
+    }
+    out[193] = svc_max;
+    for (uint32_t i = 0; i < 8; i++) {
+        out[194 + i] = svc_hist[i];
+    }
+    out[172] = static_cast<uint32_t>(c_issue & 0xFFFFFFFFu);
+    out[173] = static_cast<uint32_t>(c_issue >> 32);
+    out[174] = n_gather_rd;
+    out[175] = n_cv_rd;
     // ---- NoC FOOTPRINT counters ----
     // TWO BLOCKS, NEVER BLENDED: `life` covers every sweep, `win` the workload window only.
     {
@@ -1511,7 +1615,7 @@ void kernel_main() {
         out[129] = NOC_WORD_BYTES;         // the byte scale, from the header -- host never hardcodes it
     }
     static_assert(
-        kernel_profiler::SPSC_DRAIN_RESULT_WORDS >= 176,
+        kernel_profiler::SPSC_DRAIN_RESULT_WORDS >= 202,
         "the results block must hold the self-profiling, NoC-footprint, stop-drain and histogram counters");
 
     // ================================ INSTRUMENTATION END (results block: every counter the host reads) ====

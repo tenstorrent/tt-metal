@@ -331,7 +331,10 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
             rt = type == PP_ZONE_START ? PerfDebugRawRecType::ZoneStart : PerfDebugRawRecType::ZoneEnd;
         }
         if (type != PP_ZONE_TOTAL) {
-            zone_markers++;
+            // In HALVES: a ZONE_ATOMIC record is a whole zone, a START/END is half of one, and every
+            // consumer of this counter divides by two. Counting records instead halved every atomic-path
+            // zone tally (measured: 27.6 M reported against 55.0 M ZONE_ATOMIC records captured).
+            zone_markers += type == PP_ZONE_ATOMIC ? 2 : 1;
             // PRODUCER-STALL, matched by ELF-resolved NAME via the id table: a producer RISC blocked on
             // a FULL ring. STALL_ONLY mode only -- on a normal run this per-marker probe is redundant
             // (the control plane reads the workers' own L1 stall counters at teardown) and measures ~10%
@@ -453,7 +456,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         if (a.n == 0) {
             return 0;
         }
-        zone_markers += a.n;
+        zone_markers += a.n * 2;  // halves: every record in an atomic block is a whole zone
         order_regressions += a.ts_first < last_ts[lane] ? 1 : 0;
         last_ts[lane] = a.ts_last;
         if (min_ts == 0) {

@@ -145,7 +145,8 @@ int main(int argc, char** argv) {
     // --proddelay, so 0 means MAX RATE (no spin) exactly as it does there. Smaller = higher marker rate.
     // Omitting --delay entirely selects the graduated ~1..100 us wall-clock durations, which is the right
     // default for a representative capture -- graduated is a separate MODE, not a magic --delay value.
-    uint32_t gx = 2, gy = 2, n_iters = 50, zone_cyc = 0;  // small grid + modest iters keep the run quick
+    uint32_t gx = 2, gy = 2, n_iters = 50, zone_cyc = 0;
+    bool bench_mode = false;  // --bench: ZONE_MODE 2, the DeviceZoneScopedN microbench  // small grid + modest iters keep the run quick
     bool knee_mode = false;                               // set by --delay, including --delay 0
     bool clkprobe = false;                                // --clkprobe 1: read wall clocks and exit, no workload
     for (int i = 1; i + 1 < argc; i += 2) {
@@ -159,6 +160,8 @@ int main(int argc, char** argv) {
             gy = v;
         } else if (a == "--iters") {
             n_iters = v;
+        } else if (a == "--bench") {
+            bench_mode = v != 0;
         } else if (a == "--delay") {
             zone_cyc = v;
             knee_mode = true;  // NOT `zone_cyc != 0`: --delay 0 is a real knee point (max rate)
@@ -215,8 +218,9 @@ int main(int argc, char** argv) {
     CoreRange cores(CoreCoord{0, 0}, CoreCoord{gx - 1, gy - 1});
     std::map<std::string, std::string> defs{
         {"N_ITERS", std::to_string(n_iters) + "u"},
-        {"ZONE_MODE", knee_mode ? "1" : "0"},
-        {"ZONE_CYC", std::to_string(zone_cyc) + "u"}};
+        {"ZONE_MODE", bench_mode ? "2" : (knee_mode ? "1" : "0")},
+        {"ZONE_CYC", std::to_string(zone_cyc) + "u"},
+        {"BENCH_ADDR", "0x170000u"}};
     const std::string kdir = "tt_metal/programming_examples/profiler/test_perf_debug_zones/kernels/";
 
     // BRISC (RISCV_0) + NCRISC (RISCV_1): the data-movement zone kernel (tags BR_/NC_).
@@ -259,6 +263,9 @@ int main(int argc, char** argv) {
             zone_ns,
             2000.0 / zone_ns);
     }
+    // Producer-side wall. The receiver's zone window is derived from DECODED markers, so it is useless
+    // whenever a change makes the drainer and the producer disagree about ring geometry; this is not.
+    const auto t_launch = std::chrono::steady_clock::now();
     if (slow_dispatch) {
         // Launch on EVERY device of the mesh, concurrently (no-wait launches, then wait all): a unit mesh
         // degenerates to the old single-device behavior, and a full mesh drives all sockets at once.
@@ -278,7 +285,28 @@ int main(int argc, char** argv) {
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
         distributed::Finish(cq);
     }
-    printf("[perf-debug zones] workload done; closing device.\n");
+    printf(
+        "[perf-debug zones] workload done in %.1f ms; closing device.\n",
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_launch).count());
+    if (bench_mode) {
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        IDevice* d0 = mesh_device->get_devices().front();
+        const CoreCoord wv = d0->virtual_core_from_logical_core(CoreCoord{0, 0}, CoreType::WORKER);
+        const tt_cxy_pair tgt(d0->id(), wv);
+        for (uint32_t slot = 0; slot < 5u; slot++) {
+            uint32_t cyc = 0, zn = 0;
+            cluster.read_reg(&cyc, tgt, 0x170000ULL + slot * 8ULL);
+            cluster.read_reg(&zn, tgt, 0x170000ULL + slot * 8ULL + 4ULL);
+            if (zn != 0) {
+                printf(
+                    "[zonebench] %s: %u zones, %u cycles, %.2f cycles/zone\n",
+                    (const char*[]){"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"}[slot],
+                    zn,
+                    cyc,
+                    static_cast<double>(cyc) / zn);
+            }
+        }
+    }
     mesh_device->close();
     return 0;
 }

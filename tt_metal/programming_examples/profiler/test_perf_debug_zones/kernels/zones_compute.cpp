@@ -81,6 +81,33 @@ static constexpr int kWallClockLowIdx = 0;
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
 #endif
 
+// ZONE_MODE == 2: the DeviceZoneScopedN microbench, same shape as zones_dm.cpp. Slots 2..4 of BENCH_ADDR
+// so all five lanes of a core report side by side.
+#if ZONE_MODE == 2
+void kernel_main() {
+    volatile tt_reg_ptr uint32_t* wc = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+#if defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
+    constexpr uint32_t kSlot = 2;
+#elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1
+    constexpr uint32_t kSlot = 3;
+#else
+    constexpr uint32_t kSlot = 4;
+#endif
+    volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(BENCH_ADDR) + kSlot * 2u;
+    constexpr uint32_t kBurst = 100;
+    uint32_t cycles = 0, zones = 0;
+    for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
+        const uint32_t t0 = wc[kWallClockLowIdx];
+        for (uint32_t i = 0; i < kBurst; i++) {
+            DeviceZoneScopedN(ZTAG "_BENCH");
+        }
+        cycles += (uint32_t)(wc[kWallClockLowIdx] - t0);
+        zones += kBurst;
+    }
+    out[0] = cycles;
+    out[1] = zones;
+}
+#else
 void kernel_main() {
     // Durations span ~1..100 us (typical ~10 us). CYC = us * 2500 (see ZONE calibration note above).
     for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
@@ -96,3 +123,4 @@ void kernel_main() {
         ZONE(ZTAG "_Zone9", 250000u);  // ~100 us
     }
 }
+#endif  // ZONE_MODE == 2

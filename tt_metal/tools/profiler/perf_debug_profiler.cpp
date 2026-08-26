@@ -122,8 +122,15 @@ uint32_t ablate_spin() {
 }
 
 // TT_METAL_PERF_DEBUG_NOC forces which NIU EVERY drainer egresses on (reads take the other); unset =
-// alternate by drainer index, so each PCIe-tile NIU carries three fillers' pushes instead of one carrying
-// all six. The socket's NOC0-derived PCIe encoding is correct on BOTH NoCs -- the PCIe tile lives in
+// NOC 0 for all six.
+//
+// It USED to alternate by drainer index, so each PCIe-tile NIU would carry three fillers' pushes instead
+// of one carrying all six. That reasoning is sound and was measured wrong: NOC 1 egress runs ~2x the
+// service interval of NOC 0 (per-filler, delay 30: 41.0-52.6 us forced to NOC 1 against 20.2-36.5 us
+// forced to NOC 0), so alternating parked three of six fillers on the bad NIU. Those three then owned a
+// contiguous core band and took essentially every producer stall below saturation. Forcing all six to
+// NOC 0 halves stalls across the range (delay 30: 60,963 -> 35,699) even though they now share one NIU.
+// The winning pairing is egress on 0 / reads on 1, which is what kReadNoc derives. The socket's NOC0-derived PCIe encoding is correct on BOTH NoCs -- the PCIe tile lives in
 // translated space, so the coordinate mirroring that applies to worker coords does not apply to it
 // (FINDINGS §N+12).
 int drain_noc_override() {
@@ -1562,7 +1569,7 @@ bool PerfDebugProfiler::boot_device(
                 "tt_metal/tools/profiler/kernels/drisc_profiler_filler.cpp",
                 ctx.drisc_logical[d],
                 DramConfig{
-                    .noc = (drain_noc_override() < 0 ? (d & 1u) != 0 : drain_noc_override() == 1) ? NOC::NOC_1
+                    .noc = (drain_noc_override() < 0 ? false : drain_noc_override() == 1) ? NOC::NOC_1
                                                                                                   : NOC::NOC_0,
                     .compile_args = cargs,
                     .defines = {{"PERF_DEBUG_DRAIN_KERNEL", "1"}}});
@@ -2026,9 +2033,47 @@ void PerfDebugProfiler::stop() {
                         bad);
                 }
             }
+            if (res[193] != 0) {
+                // 8192 cycles is the first bucket's ceiling; each later bucket doubles.
+                std::string h;
+                double lo = 8192.0 / kCycPerUs;
+                for (uint32_t i = 0; i < 8; i++) {
+                    h += fmt::format("{}<{:.0f}us={} ", i == 7 ? ">=" : "", lo, res[194 + i]);
+                    lo *= 2.0;
+                }
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] DRISC service interval per core: max {:.1f} us | {}",
+                    res[193] / kCycPerUs,
+                    h);
+            }
+            if (res[191] != 0) {
+                // The line that answers "is the drainer actually idle while producers stall". Scoped to
+                // first-ship..last-ship, so it excludes the residency the lifetime line is swamped by.
+                const double wcyc = static_cast<double>(res[181]) + 4294967296.0 * res[182];
+                const double wbusy = static_cast<double>(res[183]) + 4294967296.0 * res[184];
+                const double widle = static_cast<double>(res[185]) + 4294967296.0 * res[186];
+                const double wpace = static_cast<double>(res[187]) + 4294967296.0 * res[188];
+                const double wms = wcyc / kCycPerUs / 1000.0;
+                const auto wp = [&](double v) { return wcyc > 0 ? 100.0 * v / wcyc : 0.0; };
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] DRISC WINDOW (data flowing) {:.1f} ms: busy-sweeps {:.1f}% | "
+                    "idle-sweeps {:.1f}% | pace {:.1f}% || {} frames over {} sweeps on {} cores -> a core is "
+                    "shipped every {:.1f} us",
+                    wms,
+                    wp(wbusy),
+                    wp(widle),
+                    wp(wpace),
+                    res[189],
+                    res[190],
+                    res[192],
+                    res[189] != 0 ? (wcyc / kCycPerUs) * res[192] / res[189] : 0.0);
+            }
             log_info(
                 tt::LogMetal,
-                "[perf-debug profiler] DRISC phases of {:.1f} ms: read {:.1f}% | proc {:.1f}% | "
+                "[perf-debug profiler] DRISC LIFETIME phases of {:.1f} ms (residency, NOT the capture -- see "
+                "the WINDOW line): read {:.1f}% | proc {:.1f}% | "
                 "reserve(credit-wait) {:.1f}% | write {:.1f}% | wr-barrier {:.1f}% | pace {:.1f}% | "
                 "unaccounted {:.1f}%",
                 cyc / kCycPerUs / 1000.0,

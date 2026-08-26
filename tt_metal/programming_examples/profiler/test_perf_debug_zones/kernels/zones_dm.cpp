@@ -80,6 +80,42 @@ static constexpr int kWallClockLowIdx = 0;
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
 #endif
 
+// ZONE_MODE == 2: DEDICATED MICROBENCH of DeviceZoneScopedN itself. Times bursts of empty scopes with
+// the wall clock on-device, so nothing host-side, no nop padding and no drain wall is in the number.
+// kBurst * 3 words stays under the 512-word ring so a burst never blocks on ring room; the drainer
+// empties it between bursts, which is also why the burst is timed rather than the whole loop.
+// ZONE_MODE == 2: DEDICATED MICROBENCH of DeviceZoneScopedN. The kernel does NOTHING but enter and
+// leave empty scopes, so the host's launch->done wall divided by the zone count IS the per-zone cost:
+// no nop padding, no point markers, no other work. Reported by the host (DPRINT cannot be used -- it and
+// the profiler are mutually exclusive). Bursts of kBurst keep 3*kBurst words under the 512-word ring so
+// the producer never blocks on ring room; the drainer empties it between bursts.
+// ZONE_MODE == 2: DEDICATED MICROBENCH of DeviceZoneScopedN. The kernel does nothing but enter and leave
+// empty scopes; it times every burst with the wall clock and leaves the totals in L1 for the host to read
+// (DPRINT cannot be used -- it and the profiler are mutually exclusive). kBurst*3 words stays under the
+// 512-word ring so a burst never blocks on ring room, and the drainer empties it between bursts.
+#if ZONE_MODE == 2
+void kernel_main() {
+    volatile tt_reg_ptr uint32_t* wc = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+#if defined(COMPILE_FOR_BRISC)
+    constexpr uint32_t kSlot = 0;
+#else
+    constexpr uint32_t kSlot = 1;
+#endif
+    volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(BENCH_ADDR) + kSlot * 2u;
+    constexpr uint32_t kBurst = 100;
+    uint32_t cycles = 0, zones = 0;
+    for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
+        const uint32_t t0 = wc[kWallClockLowIdx];
+        for (uint32_t i = 0; i < kBurst; i++) {
+            DeviceZoneScopedN(ZTAG "_BENCH");
+        }
+        cycles += (uint32_t)(wc[kWallClockLowIdx] - t0);
+        zones += kBurst;
+    }
+    out[0] = cycles;
+    out[1] = zones;
+}
+#else
 void kernel_main() {
     // Durations span ~1..100 us (typical ~10 us). CYC = us * 2500 (see ZONE calibration note above).
     for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
@@ -102,3 +138,4 @@ void kernel_main() {
         ZONE(ZTAG "_Zone9", 250000u);  // ~100 us
     }
 }
+#endif  // ZONE_MODE == 2
