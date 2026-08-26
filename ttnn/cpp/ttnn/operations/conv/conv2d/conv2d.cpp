@@ -163,7 +163,11 @@ Result conv2d_L1(
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 
+    // mm_conv (1x1, stride 1, no pad) runs as ttnn::linear below; the depthwise flags must not
+    // reshape its block config or bias/weight preparation. has_bias is otherwise accepted by the
+    // depthwise path (the factory folds bias on the last kernel tap).
     const bool conv_is_1d_depthwise =
+        !mm_conv &&
         is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, bias_tensor.has_value());
     const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
         conv_is_1d_depthwise,
@@ -210,7 +214,8 @@ Result conv2d_L1(
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
         coalesce_1d_depthwise_kw_reads,
-        orig_stride);
+        orig_stride,
+        mm_conv);
 
     // Prepare weights and move to device if necessary
     if (!is_device_tensor(weight_tensor)) {
@@ -769,18 +774,25 @@ static uint32_t channel_chunk_count_if_needed(
     const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
         groups, in_channels, out_channels, kernel_size[0], input_height, bias_tensor.has_value());
     const bool shard_is_height =
-        conv_config.shard_layout.has_value() &&
-        conv_config.shard_layout.value() == TensorMemoryLayout::HEIGHT_SHARDED;
-    // Prepared device weights are the 1D-depthwise layout only. is_1d_depthwise_conv is
-    // false when has_bias (grouped layout shares [1,1,H,C] with the depthwise form);
+        conv_config.shard_layout.has_value() && conv_config.shard_layout.value() == TensorMemoryLayout::HEIGHT_SHARDED;
+    // Prepared device weights are the 1D-depthwise layout only. is_device_tensor alone is not
+    // enough: prepared grouped weights share the [1,1,H,C] shape class with the depthwise form.
     // do not infer depthwise from the weight shape.
     const bool weight_is_prepared_depthwise =
         conv_is_1d_depthwise && !weight_is_host && shard_is_height &&
         is_valid_device_conv_weights(weight_tensor, in_channels, out_channels, conv_config.weights_dtype);
+    // Device bias chunks only alongside prepared depthwise weights: that bias is TILE with the
+    // channel range in the last dim (prepare_conv_bias pads to round_up(C, TILE_WIDTH)), so a
+    // TILE_WIDTH-aligned chunk end slices it in TILE exactly like the weights. Any other device
+    // bias (host weights, or grouped-layout weights) is refused: it would need a host round-trip
+    // per chunk.
+    const bool bias_is_chunkable_device_bias =
+        bias_tensor.has_value() && ttnn::is_device_tensor(bias_tensor.value()) && weight_is_prepared_depthwise &&
+        is_valid_device_conv_bias(bias_tensor.value(), out_channels, conv_config.weights_dtype);
     const bool can_chunk_channels =
         groups > 1 && in_channels % groups == 0 && out_channels % groups == 0 &&
         (weight_is_host || weight_is_prepared_depthwise) &&
-        (!bias_tensor.has_value() || !ttnn::is_device_tensor(bias_tensor.value()));
+        (!bias_tensor.has_value() || !ttnn::is_device_tensor(bias_tensor.value()) || bias_is_chunkable_device_bias);
     if (!can_chunk_channels) {
         return 1;
     }
@@ -1144,10 +1156,21 @@ Result conv2d_DRAM(
             std::optional<Tensor> chunk_bias = std::nullopt;
             if (bias_tensor.has_value()) {
                 const auto& bias_shape = bias_tensor.value().logical_shape();
-                chunk_bias = bias_tensor.value().unpad(
-                    tt::tt_metal::Shape({0, 0, 0, out_channels_begin}),
-                    tt::tt_metal::Shape(
-                        {bias_shape[0], bias_shape[1], bias_shape[2], out_channels_begin + chunk_out_channels}));
+                if (chunk_prepared_device_weights) {
+                    // Prepared depthwise bias is TILE with the channel range in the last dim
+                    // ([1, 1, 32, C_padded]); TILE_WIDTH-aligned chunk ends slice it in TILE exactly
+                    // like the weights above, with no host round-trip.
+                    chunk_bias = ttnn::slice(
+                        bias_tensor.value(),
+                        ttsl::SmallVector<uint32_t>{0, 0, 0, out_channels_begin},
+                        ttsl::SmallVector<uint32_t>{1, 1, bias_shape[2], out_channels_begin + chunk_out_channels},
+                        ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+                } else {
+                    chunk_bias = bias_tensor.value().unpad(
+                        tt::tt_metal::Shape({0, 0, 0, out_channels_begin}),
+                        tt::tt_metal::Shape(
+                            {bias_shape[0], bias_shape[1], bias_shape[2], out_channels_begin + chunk_out_channels}));
+                }
             }
             auto chunk_attr = Conv2dSliceAttr(
                 batch_size,

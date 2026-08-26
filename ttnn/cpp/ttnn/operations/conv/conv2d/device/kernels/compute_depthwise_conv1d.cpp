@@ -33,17 +33,21 @@
 // srcB (cfg92) tile descriptor: must match in1 for the mul, and is repopulated from DST for the
 // dest-reuse add. We force srcB back to in1's format every iteration so block-float weights are
 // decoded correctly.
+template <uint32_t in0_block_w, uint32_t block_num_tiles>
 inline void mul_and_accumulate_block(
     DataflowBuffer in0_dfb,
     DataflowBuffer in1_dfb,
     DataflowBuffer scratch_dfb,
     DataflowBuffer out_dfb,
-    uint32_t block_num_tiles,
+    DataflowBuffer bias_dfb,
     uint32_t idx,
-    uint32_t num_taps) {
+    uint32_t num_taps,
+    bool fuse_bias) {
+    static_assert(block_num_tiles % in0_block_w == 0);
     const uint32_t in0_cb_id = in0_dfb.get_id();
     const uint32_t in1_cb_id = in1_dfb.get_id();
     const uint32_t scratch_cb_id = scratch_dfb.get_id();
+    const uint32_t bias_cb_id = bias_dfb.get_id();
     // The last tap writes the finished output to out_dfb; earlier taps write the partial to scratch_dfb.
     const bool is_last_tap = (idx + 1 == num_taps);
     DataflowBuffer dst_dfb = is_last_tap ? out_dfb : scratch_dfb;
@@ -52,6 +56,11 @@ inline void mul_and_accumulate_block(
     for (uint32_t i = 0; i < block_num_tiles; i++) {
         in1_dfb.wait_front(1);
         in0_dfb.wait_front(1);
+        if (fuse_bias && is_last_tap) {
+            // All in0_block_w channel tiles are needed by this block; the bias CB is never popped,
+            // so this single wait covers every tile below.
+            bias_dfb.wait_front(in0_block_w);
+        }
 
         tile_regs_acquire();
         // mul: srcA = in0 (bf16), srcB = in1 (bf8/bf16) -> dst[0]
@@ -66,11 +75,25 @@ inline void mul_and_accumulate_block(
             add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 scratch_cb_id);
             scratch_dfb.wait_front(1);
-            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                scratch_cb_id, 0, 0);
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(scratch_cb_id, 0, 0);
             scratch_dfb.pop_front(1);
+        }
 
-            // Restore srcA to in0's format for the next iteration's mul unpack.
+        if (fuse_bias && is_last_tap) {
+            // Bias fold: dst[0] += bias tile. The depthwise bias tiles are row-replicated at
+            // prepare time (convert_conv_bias_tensor_to_depthwise_tiled_layout), so this plain
+            // elementwise dest-reuse add is the row broadcast and needs no broadcast-mode unpack or
+            // pack-format change — the accumulated value never leaves DST before the pack.
+            // Tile i's channel column is i % in0_block_w: the bias CB holds this core's channel
+            // tiles in order, so that column indexes the bias CB directly.
+            const uint32_t bias_tile_i = i % in0_block_w;
+            reconfig_data_format_srca(bias_cb_id);
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(bias_cb_id);
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(bias_cb_id, bias_tile_i, 0);
+        }
+
+        // Restore srcA to in0's format for the next iteration's mul unpack.
+        if (idx != 0 || (fuse_bias && is_last_tap)) {
             reconfig_data_format_srca(in0_cb_id);
         }
         tile_regs_commit();
@@ -88,8 +111,9 @@ inline void mul_and_accumulate_block(
     }
 }
 
-template <uint32_t in0_block_w, uint32_t kernel_width, uint32_t block_num_tiles>
-inline void mul_and_accumulate_coalesced_block(DataflowBuffer in0_dfb, DataflowBuffer in1_dfb, DataflowBuffer out_dfb) {
+template <uint32_t in0_block_w, uint32_t kernel_width, uint32_t block_num_tiles, bool fuse_bias>
+inline void mul_and_accumulate_coalesced_block(
+    DataflowBuffer in0_dfb, DataflowBuffer in1_dfb, DataflowBuffer out_dfb, DataflowBuffer bias_dfb) {
     static_assert(kernel_width > 1);
     static_assert(in0_block_w % kernel_width == 0);
     static_assert(block_num_tiles % in0_block_w == 0);
@@ -100,9 +124,15 @@ inline void mul_and_accumulate_coalesced_block(DataflowBuffer in0_dfb, DataflowB
     const uint32_t in0_cb_id = in0_dfb.get_id();
     const uint32_t in1_cb_id = in1_dfb.get_id();
     const uint32_t out_cb_id = out_dfb.get_id();
+    const uint32_t bias_cb_id = bias_dfb.get_id();
 
     in0_dfb.wait_front(block_num_tiles);
     in1_dfb.wait_front(block_num_tiles);
+    if constexpr (fuse_bias) {
+        // All in_channels_ntiles channel tiles are needed below; the bias CB is never popped, so a
+        // single wait covers every tile in the loop.
+        bias_dfb.wait_front(in_channels_ntiles);
+    }
 
     for (uint32_t h = 0; h < act_block_h_ntiles; ++h) {
         for (uint32_t c = 0; c < in_channels_ntiles; ++c) {
@@ -116,6 +146,16 @@ inline void mul_and_accumulate_coalesced_block(DataflowBuffer in0_dfb, DataflowB
                     tap * act_block_h_ntiles * in_channels_ntiles + h * in_channels_ntiles + c;
                 mul_init(in0_cb_id, in1_cb_id, tap != 0 ? 1U : 0U, __builtin_LINE());
                 mul_tiles(in0_cb_id, in1_cb_id, act_tile_idx, weight_tile_idx, 0);
+            }
+
+            if constexpr (fuse_bias) {
+                // Same row-replicated elementwise bias fold as the non-coalesced path; see
+                // mul_and_accumulate_block. c is the channel tile column, which indexes the BIAS CB
+                // directly.
+                reconfig_data_format_srca(bias_cb_id);
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(bias_cb_id);
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(bias_cb_id, c, 0);
+                reconfig_data_format_srca(in0_cb_id);
             }
             tile_regs_commit();
 
@@ -146,11 +186,16 @@ void kernel_main() {
     // Read-back scratch for the dest-reuse accumulation. The host points this at out_dfb for a single
     // height block (in-place) or at a dedicated scratch CB for multiple blocks.
     constexpr uint32_t partials_cb_id = get_compile_time_arg_val(11);
+    // Bias fusion: the writer fills the BIAS CB once with row-replicated bias tiles; the last kernel
+    // tap folds them into DST with an elementwise dest-reuse add (see mul_and_accumulate_block).
+    constexpr bool fuse_bias = get_compile_time_arg_val(12) == 1;
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(13);
 
     DataflowBuffer dfb_tilized_in0(tilized_in0_cb_id);
     DataflowBuffer dfb_in1(in1_cb_id);
     DataflowBuffer dfb_out(out_cb_id);
     DataflowBuffer dfb_partials(partials_cb_id);
+    DataflowBuffer dfb_bias(bias_cb_id);
 
     // compute_kernel_hw_startup configures pack for out_dfb, math for in0/in1, and unpack for in0/in1.
     // The pack target never changes (we only ever pack to out_dfb), so no further pack reconfig is
@@ -166,20 +211,21 @@ void kernel_main() {
             compute_kernel_lib::tilize<in0_block_w, in0_cb_id, tilized_in0_cb_id>(in0_block_num_tiles / in0_block_w);
             reconfig_data_format_srca(tilized_in0_cb_id);
             if constexpr (coalesce_kw_reads) {
-                mul_and_accumulate_coalesced_block<in0_block_w, kernel_width, in0_block_num_tiles>(
-                    dfb_tilized_in0, dfb_in1, dfb_out);
+                mul_and_accumulate_coalesced_block<in0_block_w, kernel_width, in0_block_num_tiles, fuse_bias>(
+                    dfb_tilized_in0, dfb_in1, dfb_out, dfb_bias);
             } else {
                 // Accumulate kernel-tap in0_block_w_i of in0_num_blocks_w through dfb_partials, writing
                 // the final tap to dfb_out. The host points dfb_partials at dfb_out for a single height
                 // block (in-place, no extra buffer) or at a dedicated scratch CB for multiple blocks.
-                mul_and_accumulate_block(
+                mul_and_accumulate_block<in0_block_w, in0_block_num_tiles>(
                     dfb_tilized_in0,
                     dfb_in1,
                     dfb_partials,
                     dfb_out,
-                    in0_block_num_tiles,
+                    dfb_bias,
                     in0_block_w_i,
-                    in0_num_blocks_w);
+                    in0_num_blocks_w,
+                    fuse_bias);
             }
         }
     }

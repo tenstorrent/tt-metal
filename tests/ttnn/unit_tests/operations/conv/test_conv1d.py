@@ -1116,8 +1116,9 @@ def _run_conv1d_route(
         packer_l1_acc=True,
     )
     if prepared_weights:
-        # Prepared-device route: prepare the full weight once (has_bias must match the
-        # conv call so the grouped form is not mistaken for the depthwise layout).
+        # Prepared-device route: prepare the full weight (and bias, when used) once with the same
+        # has_bias the conv call will use, so the prepared tensors land in the depthwise layout
+        # this route exercises.
         weight_tt = ttnn.prepare_conv_weights(
             weight_tensor=weight_tt,
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1139,6 +1140,28 @@ def _run_conv1d_route(
             conv_config=conv_config,
             compute_config=compute_config,
         )
+        if bias_tt is not None:
+            # prepare_conv_bias tiles + moves the bias to device itself (like prepare_conv_weights),
+            # so both prepared tensors come back as device tensors ready for the chunk path.
+            bias_tt = ttnn.prepare_conv_bias(
+                bias_tensor=bias_tt,
+                input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                input_layout=ttnn.ROW_MAJOR_LAYOUT,
+                in_channels=C,
+                out_channels=groups,
+                batch_size=1,
+                input_height=1,
+                input_width=T,
+                kernel_size=(1, K),
+                stride=(1, 1),
+                padding=(0, pad),
+                dilation=(1, 1),
+                groups=groups,
+                device=device,
+                input_dtype=ttnn.bfloat16,
+                conv_config=conv_config,
+                compute_config=compute_config,
+            )
     kwargs = dict(
         input_tensor=input_tt,
         weight_tensor=weight_tt,
@@ -1186,10 +1209,14 @@ def _run_conv1d_route(
         # the TILE last-dim slice path chunks on device (96/3=32 and 64/2=32 chunks).
         (96, 4, 12, 3, 96, None, False, True),
         (64, 4, 12, 3, 64, None, False, True),
-        # Prepared grouped device weights with bias do NOT take the depthwise TILE-slice
-        # path (is_1d_depthwise_conv is false with bias); C=32 fits in one call, so this
-        # exercises prepared+bias end-to-end without channel chunking.
-        (32, 4, 12, 3, 32, None, True, True),
+        # Prepared grouped device weights with bias: is_1d_depthwise_conv is now true with bias,
+        # so prepared weights + prepared bias both stay in the depthwise layout and the chunk path
+        # TILE-slices the bias on device like the weights. C=10240 needs the chunks; 96/3 and 64/2
+        # are the TILE_WIDTH-aligned smaller forms.
+        (10240, 4, 12, 3, 10240, None, True, True),
+        (10240, 4, 12, 3, 10240, ttnn.Conv2dL1FullSliceConfig, True, True),
+        (96, 4, 12, 3, 96, None, True, True),
+        (64, 4, 12, 3, 64, None, True, True),
     ],
 )
 def test_conv1d_grouped_dram_channel_chunk_routes(
@@ -1197,9 +1224,9 @@ def test_conv1d_grouped_dram_channel_chunk_routes(
 ):
     """Host-weight grouped conv1d routes: channel-chunk when spatial slicing cannot
     fit, L1_FULL reroute, TILE_WIDTH-aligned chunks, and 1x1 mm_conv must not throw.
-    Prepared-device weights cover both forms: no-bias is the true depthwise TILE-slice
-    chunk path, while prepared+bias runs unchunked at a size that fits (can_chunk_channels
-    refuses device prepared+bias). PCC on C=10240 alone is not blast-radius."""
+    Prepared-device weights cover both bias forms: no-bias and prepared+bias both take the
+    1D-depthwise TILE-slice chunk path, with the bias TILE-sliced on device alongside the
+    weights. PCC on C=10240 alone is not blast-radius."""
     _run_conv1d_route(
         device,
         C=C,
