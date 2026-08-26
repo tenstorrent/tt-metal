@@ -172,10 +172,10 @@ def _encode_prompts_reference(
     indirect=["mesh_device", "device_params"],
 )
 def test_gemma_encoder(*, mesh_device):
+    # _gemma_path falls back to the bare repo id, which from_pretrained resolves cache-then-hub.
+    # Gating an os.path.isdir on it made that fallback dead and skipped before any HF call.
     gemma = _gemma_path()
     ckpt = _ltx_ckpt()
-    if not os.path.isdir(gemma):
-        pytest.skip(f"Gemma not found: {gemma}")
     if not ckpt:
         pytest.skip("LTX checkpoint not found")
 
@@ -258,8 +258,6 @@ def test_prof_gemma_ltx_devicetime(mesh_device, device_params):
     printed GEMMA_ENCODE_HOST_WALL_MS — the gap is host dispatch."""
     gemma = _gemma_path()
     ckpt = _ltx_ckpt()
-    if not os.path.isdir(gemma):
-        pytest.skip(f"Gemma not found: {gemma}")
     if not ckpt:
         pytest.skip("LTX checkpoint not found")
 

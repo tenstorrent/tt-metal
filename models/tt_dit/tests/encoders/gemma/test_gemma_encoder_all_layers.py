@@ -68,9 +68,9 @@ def _gemma_path() -> str:
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
 def test_gemma_layers_individually(*, mesh_device):
+    # _gemma_path falls back to the bare repo id, which from_pretrained resolves cache-then-hub.
+    # Gating an os.path.isdir on it made that fallback dead and skipped before any HF call.
     gemma_path = _gemma_path()
-    if not os.path.isdir(gemma_path):
-        pytest.skip(f"Gemma not found: {gemma_path}")
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
