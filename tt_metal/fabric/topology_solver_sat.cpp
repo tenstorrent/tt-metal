@@ -1751,6 +1751,20 @@ bool topology_sat_search(
 
 // ── topology_sat_search_n — enumerate up to max_solutions with blocking clauses ─────────────────
 
+// Encode the HARD host-group cap into an enumeration solver so EVERY enumerated model occupies at most
+// max_same_rank_groups_used distinct same-rank global groups. Enforced here (not just filtered by the caller)
+// because the enumeration otherwise streams spread-out placements first and the capped ones may never appear within
+// the caller's max_solutions window. Always uses the general at-most-k counter (no all-or-nothing full-packing
+// tightening) so every valid capped placement stays enumerable. No-op when no cap is set.
+inline bool topology_sat_encode_host_group_cap_for_enumeration(
+    TopologySatSolver& solver, const TopologySatConstraintView& constraint_data, const TopologySatHardEncoding& enc) {
+    if (constraint_data.max_same_rank_groups_used == 0) {
+        return true;
+    }
+    return topology_sat_encode_at_most_k_groups(
+        solver, constraint_data, enc, constraint_data.max_same_rank_groups_used, /*full_packing=*/false);
+}
+
 bool topology_sat_search_n(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
@@ -1786,6 +1800,9 @@ bool topology_sat_search_n(
     TopologySatHardEncoding enc;
     if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
         return false;
+    }
+    if (!topology_sat_encode_host_group_cap_for_enumeration(solver, constraint_data, enc)) {
+        return false;  // hard host-group cap is trivially unencodable -> no capped solutions
     }
 
     for (const auto& shape_key : initial_forbidden_shape_keys) {
@@ -1856,6 +1873,9 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
     enc = {};
     if (!topology_sat_encode_hard_constraints(session->solver, graph_data, constraint_data, enc, validation_mode)) {
         return nullptr;
+    }
+    if (!topology_sat_encode_host_group_cap_for_enumeration(session->solver, constraint_data, enc)) {
+        return nullptr;  // hard host-group cap is trivially unencodable -> no capped solutions
     }
     return session;
 }

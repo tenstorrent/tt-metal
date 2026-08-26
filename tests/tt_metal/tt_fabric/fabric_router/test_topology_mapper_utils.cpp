@@ -3522,73 +3522,6 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FourNodesFourHosts_Partia
     }
 }
 
-TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysicalN_EveryEnumeratedSolutionRespectsHostCap) {
-    // The multi-solution enumeration must honor the minimal host-group cap on EVERY solution, not just the single
-    // solve. 4 single-chip logical meshes (no inter-mesh edges, so they may be placed independently) are enumerated
-    // onto 8 single-chip physical meshes grouped 2-per-host across 4 hosts. The cap is
-    // k_min = ceil(4 logical chips / 2 chips-per-host) = 2 hosts, so all 4 meshes must land on exactly 2 hosts.
-    // Without the multi-solution cap enforcement in map_multi_mesh_to_physical_n, the enumeration would also return
-    // placements spread across 3-4 hosts. Cap the enumeration at 10 solutions and check how many hosts each uses.
-    using namespace ::tt::tt_fabric;
-
-    constexpr uint32_t kLogicalMeshes = 4;
-    constexpr uint32_t kPhysicalMeshes = 8;
-    constexpr uint32_t kMeshesPerHost = 2;
-    constexpr size_t kExpectedHosts = 2;  // ceil(4 / 2)
-
-    // Logical: single-node meshes with an empty mesh-level graph (independent placements).
-    LogicalMultiMeshGraph logical;
-    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level;
-    for (uint32_t m = 0; m < kLogicalMeshes; ++m) {
-        const MeshId mesh{m};
-        LogicalAdjacencyMap adj;
-        adj[FabricNodeId(mesh, 0)] = {};
-        logical.mesh_adjacency_graphs_[mesh] = AdjacencyGraph<FabricNodeId>(adj);
-        logical.mesh_exit_node_graphs_[mesh] = AdjacencyGraph<LogicalExitNode>();
-        logical_mesh_level[mesh] = {};
-    }
-    logical.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level);
-
-    // Physical: single-node meshes; every kMeshesPerHost of them share a host.
-    PhysicalMultiMeshGraph physical;
-    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level;
-    TopologyMappingConfig config;
-    const std::vector<tt::tt_metal::AsicID> asics = make_asics(kPhysicalMeshes, 1000);
-    for (uint32_t m = 0; m < kPhysicalMeshes; ++m) {
-        const MeshId mesh{m};
-        PhysicalAdjacencyMap adj;
-        adj[asics[m]] = {};
-        physical.mesh_adjacency_graphs_[mesh] = AdjacencyGraph<tt::tt_metal::AsicID>(adj);
-        physical.mesh_exit_node_graphs_[mesh] = AdjacencyGraph<PhysicalExitNode>();
-        physical_mesh_level[mesh] = {};
-        config.hostname_to_asics["host" + std::to_string(m / kMeshesPerHost)].insert(asics[m]);
-    }
-    physical.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level);
-
-    set_strict_intra_and_inter_mesh(config, {MeshId{0}, MeshId{1}, MeshId{2}, MeshId{3}});
-    config.disable_rank_bindings = true;  // any host-rank assignment is valid
-
-    // Enumerate up to 10 solutions and verify how many hosts each lands on.
-    const auto solutions = map_multi_mesh_to_physical_n(logical, physical, config, /*max_solutions=*/10);
-    ASSERT_FALSE(solutions.empty()) << "expected at least one enumerated solution";
-
-    for (const auto& sol : solutions) {
-        ASSERT_TRUE(sol.success) << sol.error_message;
-        std::set<std::string> hosts;
-        for (const auto& [fabric_node, asic] : sol.fabric_node_to_asic) {
-            for (const auto& [host, host_asics] : config.hostname_to_asics) {
-                if (host_asics.contains(asic)) {
-                    hosts.insert(host);
-                    break;
-                }
-            }
-        }
-        EXPECT_EQ(hosts.size(), kExpectedHosts)
-            << "every enumerated solution must land on the minimal " << kExpectedHosts
-            << " hosts (k_min); this one landed on " << hosts.size();
-    }
-}
-
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FourNodesFourHosts_NoHostRankAssigned) {
     // 8 nodes in a 2x4 torus (2 rows, 4 columns) with wrap-around connections in x and y directions.
     // 4 hosts with 2 ASICs each. All ASIC ranks are UNSET (no host rank assigned).
@@ -4785,6 +4718,51 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_EQ(hosts_spanning_blitz_mapped.size(), 8u) << "Mapped Blitz pipeline: should span exactly 8 hosts";
+}
+
+TEST_F(TopologyMapperUtilsTest, SweepConsumer_SolutionSpansExpectedHosts) {
+    // Sweep consumer / workload: launched once per generate_rank_bindings --all-solutions solution by
+    // sweep_rank_binding_solutions.py (via tt-run --rank-binding <that solution>), so the ambient
+    // PhysicalSystemDescriptor reflects the hosts THAT solution occupies. Assert the solution spans exactly the
+    // expected number of distinct hosts (default 8 for the 32-stage 2x4 ring pipeline on the SC36 subtorus:
+    // 256 chips / 32 chips-per-galaxy = 8 galaxies). This checks that the multi-solution host-cap enforcement holds
+    // on every enumerated solution end to end. Override the expectation via SWEEP_EXPECTED_HOSTS.
+    const char* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run via the sweep / tt-run --mock-cluster-rank-binding";
+    }
+
+    std::size_t expected_hosts = 8;
+    if (const char* env = getenv("SWEEP_EXPECTED_HOSTS"); env != nullptr && env[0] != '\0') {
+        expected_hosts = static_cast<std::size_t>(std::stoul(env));
+    }
+
+    // In the mock each rank is a separate "board", so PhysicalSystemDescriptor reports a per-rank host_name
+    // (e.g. "..._bh-glx-120-d05u02_rank_4.yaml"). Reduce each to its physical galaxy tag ("bh-glx-<aisle>-<node>")
+    // so we count distinct galaxies (hosts) -- matching generate_rank_bindings' num_hosts, not the rank count.
+    auto galaxy_tag = [](const std::string& h) -> std::string {
+        auto pos = h.find("bh-glx-");
+        if (pos == std::string::npos) {
+            return h;  // non-bh-glx mock: fall back to the full host name
+        }
+        auto is_tag_char = [](char c) {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-';
+        };
+        std::size_t end = pos;
+        while (end < h.size() && is_tag_char(h[end])) {
+            ++end;
+        }
+        return h.substr(pos, end - pos);
+    };
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+    std::set<std::string> hosts;
+    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
+        (void)asic_id;
+        hosts.insert(galaxy_tag(desc.host_name));
+    }
+    EXPECT_EQ(hosts.size(), expected_hosts)
+        << "each swept solution must span exactly " << expected_hosts << " distinct hosts; got " << hosts.size();
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_BHGalaxy4x4Z) {
