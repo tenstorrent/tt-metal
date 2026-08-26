@@ -49,6 +49,11 @@ private:
     CoreCoord virtual_program_dispatch_core() const;
     CoreType dispatch_core_type() const;
 
+    void enqueue_prefetch_exec_buffer_nolock(
+        const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
+        const std::vector<SubDeviceId>& sub_device_ids,
+        const MeshBuffer& buffer);
+
     void increment_num_entries_in_completion_queue();
     MeshEvent enqueue_record_event_helper(
         ttsl::Span<const SubDeviceId> sub_device_ids,
@@ -208,13 +213,13 @@ protected:
         const void* src,
         const std::optional<BufferRegion>& region,
         ttsl::Span<const SubDeviceId> sub_device_ids = {},
-        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr,
+        std::shared_ptr<::tt::tt_metal::experimental::PinnedMemory> pinned_memory = nullptr,
         const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr) override;
     void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         void* dst,
-        std::shared_ptr<experimental::PinnedMemory> pinned_memory,
+        std::shared_ptr<::tt::tt_metal::experimental::PinnedMemory> pinned_memory,
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;
@@ -284,6 +289,12 @@ public:
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
+    // Replay an already-resident prefetch exec buffer without entering the mesh-trace lifecycle.
+    void enqueue_prefetch_exec_buffer(
+        const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
+        const std::vector<SubDeviceId>& sub_device_ids,
+        const MeshBuffer& buffer,
+        bool blocking);
     // Main function (event loop) for the Completion Queue Reader
     void read_completion_queue();
     // Helper function - read events from Completion Queue

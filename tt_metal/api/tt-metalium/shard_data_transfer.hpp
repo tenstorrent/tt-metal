@@ -24,8 +24,8 @@ private:
     // TODO: consider making host data const when it's only read from.
     void* host_data_ = nullptr;
     std::optional<BufferRegion> region_;
-    std::shared_ptr<experimental::PinnedMemory> pinned_memory_ = nullptr;
-    friend class experimental::ShardDataTransferHelper;
+    std::shared_ptr<::tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
+    friend class ::tt::tt_metal::experimental::ShardDataTransferHelper;
 
 public:
     explicit ShardDataTransfer(const MeshCoordinate& shard_coord) : shard_coord_(shard_coord) {}

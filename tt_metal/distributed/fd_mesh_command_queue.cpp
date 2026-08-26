@@ -813,7 +813,7 @@ bool FDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     ttsl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<experimental::PinnedMemory> pinned_memory,
+    std::shared_ptr<::tt::tt_metal::experimental::PinnedMemory> pinned_memory,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
@@ -861,7 +861,7 @@ void FDMeshCommandQueue::read_shard_from_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,
     void* dst,
-    std::shared_ptr<experimental::PinnedMemory> pinned_memory,
+    std::shared_ptr<::tt::tt_metal::experimental::PinnedMemory> pinned_memory,
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
@@ -1351,11 +1351,33 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
     auto lock = lock_api_function_();
     in_use_ = true;
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
-    auto descriptor = trace_inst->desc;
-    auto buffer = trace_inst->mesh_buffer;
-    uint32_t num_sub_devices = descriptor->sub_device_ids.size();
+    enqueue_prefetch_exec_buffer_nolock(
+        trace_inst->desc->descriptors, trace_inst->desc->sub_device_ids, *trace_inst->mesh_buffer);
+    if (blocking) {
+        this->finish_nolock();
+    }
+}
+
+void FDMeshCommandQueue::enqueue_prefetch_exec_buffer(
+    const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
+    const std::vector<SubDeviceId>& sub_device_ids,
+    const MeshBuffer& buffer,
+    bool blocking) {
+    auto lock = lock_api_function_();
+    in_use_ = true;
+    enqueue_prefetch_exec_buffer_nolock(worker_descriptors, sub_device_ids, buffer);
+    if (blocking) {
+        this->finish_nolock();
+    }
+}
+
+void FDMeshCommandQueue::enqueue_prefetch_exec_buffer_nolock(
+    const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
+    const std::vector<SubDeviceId>& sub_device_ids,
+    const MeshBuffer& buffer) {
+    const auto num_sub_devices = static_cast<uint32_t>(sub_device_ids.size());
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (auto sub_device_id : descriptor->sub_device_ids) {
+    for (auto sub_device_id : sub_device_ids) {
         auto& sub_device = sub_device_cq_owner[*sub_device_id];
         sub_device.take_ownership(sub_device_id, this->id_);
     }
@@ -1364,34 +1386,31 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
 
     trace_dispatch::TraceDispatchMetadata dispatch_md(
         cmd_sequence_sizeB,
-        descriptor->descriptors,
-        descriptor->sub_device_ids,
-        buffer->page_size(),
-        buffer->num_pages(),
-        buffer->address());
+        worker_descriptors,
+        sub_device_ids,
+        buffer.page_size(),
+        buffer.num_pages(),
+        buffer.address());
 
     for (auto* device : mesh_device_->get_devices()) {
         trace_dispatch::issue_trace_commands(
             mesh_device_, device->sysmem_manager(), dispatch_md, id_, expected_num_workers_completed_, dispatch_core_);
     }
 
-    // Reset the prefetcher cache manager, since trace capture modifies the state on host for subsequent non-trace
-    // programs
+    // The replayed exec buffer bypasses normal host cache tracking, so subsequent program enqueues must start from an
+    // empty host-side view of the prefetcher cache.
     this->reset_prefetcher_cache_manager();
 
     trace_dispatch::update_worker_state_post_trace_execution(
-        trace_inst->desc->descriptors,
+        worker_descriptors,
         cq_shared_state_->worker_launch_message_buffer_state,
         config_buffer_mgr_,
         expected_num_workers_completed_);
-
-    if (blocking) {
-        this->finish_nolock();
-    }
 }
 
 void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) {
-    auto lock = lock_api_function_();
+    // MeshDeviceImpl::begin_mesh_trace holds the device API lock across the command-list
+    // exclusion check and trace setup.
     trace_dispatch::reset_host_dispatch_state_for_trace(
         mesh_device_->num_sub_devices(),
         cq_shared_state_->worker_launch_message_buffer_state,

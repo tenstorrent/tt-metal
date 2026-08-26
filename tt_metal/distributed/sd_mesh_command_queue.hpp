@@ -20,13 +20,13 @@ protected:
         const void* src,
         const std::optional<BufferRegion>& region,
         ttsl::Span<const SubDeviceId> sub_device_ids = {},
-        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr,
+        std::shared_ptr<::tt::tt_metal::experimental::PinnedMemory> pinned_memory = nullptr,
         const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr) override;
     void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         void* dst,
-        std::shared_ptr<experimental::PinnedMemory> pinned_memory,
+        std::shared_ptr<::tt::tt_metal::experimental::PinnedMemory> pinned_memory,
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;

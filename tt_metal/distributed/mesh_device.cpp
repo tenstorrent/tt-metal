@@ -1220,6 +1220,32 @@ void MeshDeviceImpl::validate_sub_device_manager_tracker() const {
     }
 }
 
+void MeshDeviceImpl::acquire_command_list_builder() {
+    auto lock = lock_api();
+    TT_FATAL(
+        sub_device_manager_tracker_->num_traces() == 0,
+        "Cannot create a CommandListBuilder while a trace exists on the MeshDevice");
+    TT_FATAL(num_command_list_builders_ == 0, "Only one CommandListBuilder may exist for a MeshDevice");
+    ++num_command_list_builders_;
+}
+
+void MeshDeviceImpl::release_command_list_builder() {
+    auto lock = lock_api();
+    TT_ASSERT(num_command_list_builders_ > 0);
+    --num_command_list_builders_;
+}
+
+void MeshDeviceImpl::register_command_list() {
+    auto lock = lock_api();
+    ++num_command_lists_;
+}
+
+void MeshDeviceImpl::unregister_command_list() {
+    auto lock = lock_api();
+    TT_ASSERT(num_command_lists_ > 0);
+    --num_command_lists_;
+}
+
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
@@ -1516,6 +1542,7 @@ SystemMemoryManager& MeshDeviceImpl::sysmem_manager() {
 }
 
 void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
+    auto lock = lock_api();
     TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
 
     validate_sub_device_manager_tracker();
@@ -1543,6 +1570,10 @@ MeshTraceId MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id) {
 }
 
 void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
+    auto lock = lock_api();
+    TT_FATAL(
+        num_command_list_builders_ == 0 && num_command_lists_ == 0,
+        "Cannot begin trace capture while a CommandListBuilder or CommandList exists on the MeshDevice");
     TracyTTMetalBeginMeshTrace(this->get_device_ids(), *trace_id);
     TT_FATAL(
         !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
