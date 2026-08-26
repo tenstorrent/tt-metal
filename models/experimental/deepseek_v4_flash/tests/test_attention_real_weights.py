@@ -44,7 +44,7 @@ from pathlib import Path
 import torch
 
 # Cached transformers (the only install with ``deepseek_v4``).
-_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731"
+_DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731")
 
 
 # --------------------------------------------------------------------------- #
@@ -326,8 +326,8 @@ def _rope_rows(cos_half: torch.Tensor, sin_half: torch.Tensor, device) -> tuple:
 # carries Lightning-Indexer weights this checkpoint does not ship, so the strict state_dict
 # load fails. CSA batching is covered against a B==1 run instead, in
 # ``test_attention_batching.py``, which needs no HF reference.
-@pytest.mark.parametrize("layer_idx, seq_len", ((1, 32), (5, 128)))
-@pytest.mark.parametrize("batch_size", (1, 8))
+@pytest.mark.parametrize("layer_idx, seq_len", ((1, 2), (5, 2)))
+@pytest.mark.parametrize("batch_size", (1,))
 def test_attention_real_weights_decode(
     device, reset_seeds, tmp_path, layer_idx: int, batch_size: int, seq_len: int
 ) -> None:

@@ -90,13 +90,14 @@ def _load_weight(
     dtype: ttnn.DataType = ttnn.bfloat16,
     layout: ttnn.Layout = ttnn.TILE_LAYOUT,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    mesh_mapper=None,
 ) -> ttnn.Tensor:
     """``ttnn.as_tensor`` for a (static) weight, with optional disk caching.
 
     Equivalent to ``ttnn.from_torch(...)`` when ``cache_file_name`` is ``None``;
     otherwise the tilized tensor is dumped on first use and loaded back on later
     runs. ``tensor`` may be ``None`` only on a verified cache hit (see
-    :meth:`WeightCache.hit`).
+    :meth:`WeightCache.hit`). ``mesh_mapper`` shards or replicates across a mesh.
     """
     return ttnn.as_tensor(
         tensor,
@@ -105,6 +106,7 @@ def _load_weight(
         device=device,
         memory_config=memory_config,
         cache_file_name=cache_file_name,
+        mesh_mapper=mesh_mapper,
     )
 
 

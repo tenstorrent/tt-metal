@@ -107,28 +107,13 @@ def _reference_build_config(DeepseekV4Config):
 def _reference_main() -> None:
     """Generate the gold-reference bundle. Args: <out_path> [batch] [seq_len]."""
     import importlib.metadata as _md
+    from transformers.models.deepseek_v4 import modeling_deepseek_v4 as M
+    from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
     # The cached transformers 5.8.1 wheel pins ``tokenizers>=0.22``; the box has
     # 0.21.4. The version is only enforced by an import-time check, so spoof it.
     _orig_version = _md.version
     _md.version = lambda name: "0.22.0" if name.lower() == "tokenizers" else _orig_version(name)
-
-    M = DeepseekV4Config = None
-    errors = []
-    for candidate in _cached_transformers_candidates():
-        sys.path.insert(0, candidate)
-        try:
-            from transformers.models.deepseek_v4 import modeling_deepseek_v4 as M
-            from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
-
-            break
-        except Exception as exc:  # this wheel's own deps are unsatisfied; try an older one
-            errors.append(f"{candidate}: {exc}")
-            sys.path.remove(candidate)
-            for mod in [m for m in sys.modules if m == "transformers" or m.startswith("transformers.")]:
-                del sys.modules[mod]
-    if M is None:
-        raise SystemExit("no importable cached transformers with deepseek_v4:\n" + "\n".join(errors))
 
     out_path = sys.argv[1]
     batch = int(sys.argv[2]) if len(sys.argv) > 2 else 1

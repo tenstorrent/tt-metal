@@ -154,12 +154,12 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
         attributes.experts_block_size,
         attributes.num_experts);
 
-    // gate_up weights must be DRAM ND-sharded so that each shard is exactly one core's column
-    // slice (read in a single NoC read by the dataflow kernels). The SwiGLU I dim is spread
-    // over all kNumCores cores -- 32 columns each once I >= 32*kNumCores -- so a shard holds
-    // that core's gate columns plus their paired up columns, and the weight is permuted on the
-    // host into matching per-core [gate | up] blocks. See swiglu_tiles_per_core_for().
-    constexpr uint32_t kNumCores = 64;  // 8x8 compute grid
+    // gate_up weights must be DRAM ND-sharded so that each shard is exactly one I-tile of gate
+    // plus its paired up tile (read in a single NoC read). The SwiGLU I dim is one 32-column
+    // tile per shard, so a shard holds [gate_32 | up_32] and the weight is permuted on the
+    // host into matching per-shard [gate | up] blocks. At I == 2048 that is 64 shards; TP's
+    // smaller local I yields fewer shards, which the 16-core groups still cover 1-for-1.
+    constexpr uint32_t kNumCores = 64;  // DRAM weight shards (8x8); compute uses 96 cores when num_experts == 6
     constexpr uint32_t TILE_DIM = 32;
     const uint32_t i_tiles = attributes.intermediate_size / TILE_DIM;
     const uint32_t swiglu_tiles_per_core = std::max<uint32_t>(1u, i_tiles / kNumCores);
