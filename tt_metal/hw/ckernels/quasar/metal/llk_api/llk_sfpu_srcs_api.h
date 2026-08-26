@@ -26,15 +26,8 @@
 // TODO(#52522): integrate the SFPLOADMACRO fast path (merged on main) into the wrapper. Only
 // per-slice ops are supported for now.
 
-// Allocates and programs one UNP_S buffer descriptor viewing an L1 input as SrcS slices.
-template <ckernel::trisc::BfdResource E = ckernel::trisc::BfdResource::Unp2_Slice0>
-inline void llk_sfpu_srcs_configure_unpack(
-    const ckernel::TensorShape& srcs_shape, const std::uint32_t l1_addr_16B, const DataFormat l1_format) {
-    ckernel::trisc::bfd_alloc_and_program<E>(srcs_shape, l1_addr_16B, static_cast<std::uint32_t>(l1_format));
-}
-
 // Allocates and programs the PACK1 buffer descriptor viewing the L1 output as SrcS slices.
-inline void llk_sfpu_srcs_configure_pack(
+inline void llk_sfpu_srcs_configure_pack_impl(
     const ckernel::TensorShape& srcs_shape,
     const std::uint32_t l1_addr_16B,
     const DataFormat srcs_format,
@@ -45,7 +38,7 @@ inline void llk_sfpu_srcs_configure_pack(
 }
 
 // One SrcS slice = ydim rows x XDIM datums, single face (x=16, y=ydim, z=1).
-inline ckernel::TensorShape llk_sfpu_srcs_slice_shape(const std::uint32_t ydim) {
+inline ckernel::TensorShape llk_sfpu_srcs_slice_shape_impl(const std::uint32_t ydim) {
     return ckernel::make_tensor_shape(
         static_cast<std::uint8_t>(ydim), static_cast<std::uint8_t>(ckernel::trisc::srcs_dims::XDIM), 1, 1);
 }
@@ -75,11 +68,13 @@ inline void llk_sfpu_srcs_unary_init(
     const DataFormat pack_S_dst_format,
     const bool implied_math_format) {
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
-    const ckernel::TensorShape srcs_shape = llk_sfpu_srcs_slice_shape(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
+    const ckernel::TensorShape srcs_shape =
+        llk_sfpu_srcs_slice_shape_impl(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
 
-    llk_sfpu_srcs_configure_unpack(srcs_shape, l1_in_addr_16B, unpack_S_src_format);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(
+        srcs_shape, l1_in_addr_16B, static_cast<std::uint32_t>(unpack_S_src_format));
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
-    llk_sfpu_srcs_configure_pack(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
+    llk_sfpu_srcs_configure_pack_impl(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
 
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::TRISC_ID] = !implied_math_format;
 
@@ -117,14 +112,15 @@ inline void llk_sfpu_srcs_binary_init(
     const DataFormat pack_S_dst_format,
     const bool implied_math_format) {
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
-    const ckernel::TensorShape srcs_shape = llk_sfpu_srcs_slice_shape(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
+    const ckernel::TensorShape srcs_shape =
+        llk_sfpu_srcs_slice_shape_impl(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
 
-    llk_sfpu_srcs_configure_unpack<ckernel::trisc::BfdResource::Unp2_Slice0>(
-        srcs_shape, l1_in0_addr_16B, unpack_S_src_format);
-    llk_sfpu_srcs_configure_unpack<ckernel::trisc::BfdResource::Unp2_Slice1>(
-        srcs_shape, l1_in1_addr_16B, unpack_S_src_format);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(
+        srcs_shape, l1_in0_addr_16B, static_cast<std::uint32_t>(unpack_S_src_format));
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice1>(
+        srcs_shape, l1_in1_addr_16B, static_cast<std::uint32_t>(unpack_S_src_format));
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
-    llk_sfpu_srcs_configure_pack(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
+    llk_sfpu_srcs_configure_pack_impl(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
 
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::TRISC_ID] = !implied_math_format;
 
