@@ -24,8 +24,9 @@ What a case run does
 2. rebuild the captured keyword arguments (memory_config, program_config, dtype,
    scalars, activations);
 3. call the op;
-4. check the output against the captured output spec (shape + dtype) and
-   finiteness, plus a torch golden (PCC) for the ops where a reference is
+4. check every returned tensor against its captured output spec (shape + dtype)
+   and finiteness — a multi-output op such as ``nlp_create_qkv_heads`` has all of
+   Q, K and V checked — plus a torch golden (PCC) for the ops where a reference is
    unambiguous — see ``GOLDEN``.
 
 Fidelity caveats (deliberate, documented, all visible in the generated data)
@@ -615,23 +616,39 @@ def _check_finite(host, case, op_name, index):
 
 
 def _check_output(out, case, mesh_device, op_name):
-    expected = case.get("out")
+    """Check every returned tensor against its captured spec, then its values.
+
+    ``case["outs"]`` holds one spec per tensor the op returned in the capture, in
+    order — multi-output ops (``nlp_create_qkv_heads``: Q, K, V) get all of theirs
+    checked, not just the first. An entry is None when that output was never
+    consumed again in the capture, so its spec was never observed; the entry is
+    still present, which is what makes the output *count* checkable.
+    """
+    expected = case.get("outs") or []
     tensors = list(out) if isinstance(out, (list, tuple)) else [out]
 
-    if expected is not None:
-        got = tensors[0]
-        want_shape = tuple(expected["shape"])
-        assert tuple(got.shape) == want_shape, f"{op_name}: output shape {tuple(got.shape)} != captured {want_shape}"
-        want_dtype = DTYPE[expected["dtype"]]
-        assert got.dtype == want_dtype, f"{op_name}: output dtype {got.dtype} != captured {want_dtype}"
+    if expected:
+        assert len(tensors) == len(
+            expected
+        ), f"{op_name}: op returned {len(tensors)} tensor(s), capture recorded {len(expected)}"
+
+    for i, got in enumerate(tensors):
+        spec = expected[i] if i < len(expected) else None
+        if spec is None:
+            continue
+        want_shape = tuple(spec["shape"])
+        assert (
+            tuple(got.shape) == want_shape
+        ), f"{op_name}: output[{i}] shape {tuple(got.shape)} != captured {want_shape}"
+        want_dtype = DTYPE[spec["dtype"]]
+        assert got.dtype == want_dtype, f"{op_name}: output[{i}] dtype {got.dtype} != captured {want_dtype}"
 
     for i, t in enumerate(tensors):
         _check_finite(from_tt(t, mesh_device), case, op_name, i)
 
 
 def _golden_pcc(case):
-    out = case.get("out")
-    dtypes = [out["dtype"]] if out else []
+    dtypes = [out["dtype"] for out in case.get("outs") or [] if out is not None]
     dtypes += [a["dtype"] for a in case["args"] if a["k"] == "t"]
     return min([_PCC_BY_DTYPE.get(d, _DEFAULT_PCC) for d in dtypes] or [_DEFAULT_PCC])
 

@@ -144,7 +144,9 @@ def check_tensor(spec, where):
     if spec["layout"] not in LAYOUT:
         errors.append(f"{where}: layout {spec['layout']!r} missing from graph_case.LAYOUT")
     if not spec["shape"]:
+        # Everything below indexes the shape (check_memory_config -> shape[-1]).
         errors.append(f"{where}: empty shape")
+        return
     if spec["dtype"] in ("BFLOAT8_B", "BFLOAT4_B") and spec["layout"] != "TILE":
         errors.append(f"{where}: {spec['dtype']} requires TILE layout, capture says {spec['layout']}")
     check_memory_config(spec.get("mem"), where, spec["shape"])
@@ -221,8 +223,9 @@ def main():
                 n_shards += 1 if spec.get("k") == "t" and (spec.get("mem") or {}).get("shard") else 0
             for name, spec in case["kwargs"].items():
                 check_spec(spec, f"{path.name}:{case['id']}:{name}")
-            if case["out"] is not None:
-                check_tensor(case["out"], f"{path.name}:{case['id']}:out")
+            for i, out in enumerate(case["outs"]):
+                if out is not None:
+                    check_tensor(out, f"{path.name}:{case['id']}:out{i}")
 
     for op in sorted(GOLDEN_OPS - ops_seen):
         notes.append(f"graph_case.GOLDEN has a reference for {op}, which this capture never called")

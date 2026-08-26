@@ -89,6 +89,44 @@ _DTYPE_TAG = {
 _MEM_TAG = {"INTERLEAVED": "int", "HEIGHT_SHARDED": "hs", "WIDTH_SHARDED": "ws", "BLOCK_SHARDED": "bs"}
 
 
+# ``ast.literal_eval`` never executes code, but parsing an arbitrarily long or
+# deeply nested repr still costs unbounded memory/recursion. Every literal we
+# actually want out of a capture is a scalar, a small tuple or a short list, so
+# bound the input first and let the caller fall back to keeping the raw text.
+_LITERAL_MAX_LEN = 4096
+_LITERAL_MAX_DEPTH = 8
+_LITERAL_MAX_NODES = 512
+
+
+def safe_literal_eval(text: str):
+    """``ast.literal_eval`` with length, nesting-depth and node-count limits.
+
+    Raises ``ValueError`` when the input exceeds a limit, so callers can treat it
+    the same way they treat a non-literal.
+    """
+    if len(text) > _LITERAL_MAX_LEN:
+        raise ValueError("literal too long")
+
+    # Check bracket nesting on the raw text: ast.parse itself recurses, so the
+    # depth limit has to be enforced before parsing, not on the tree.
+    depth = 0
+    for ch in text:
+        if ch in "([{":
+            depth += 1
+            if depth > _LITERAL_MAX_DEPTH:
+                raise ValueError("literal too deeply nested")
+        elif ch in ")]}":
+            depth -= 1
+
+    tree = ast.parse(text, mode="eval")
+    nodes = 0
+    for _ in ast.walk(tree):
+        nodes += 1
+        if nodes > _LITERAL_MAX_NODES:
+            raise ValueError("literal too large")
+    return ast.literal_eval(tree)
+
+
 def parse_memory_config(text: str):
     m = _MEM_RE.search(text)
     if not m:
@@ -146,7 +184,7 @@ def parse_config(text: str):
             fields[key] = raw == "true"
         else:
             try:
-                fields[key] = ast.literal_eval(raw)
+                fields[key] = safe_literal_eval(raw)
             except (ValueError, SyntaxError):
                 fields[key] = raw
     return {"kind": m.group("kind"), "fields": fields}
@@ -202,7 +240,7 @@ def parse_argument(text: str):
         return {"k": "skip", "repr": re.sub(r" at 0x[0-9a-f]+", "", text)}
 
     try:
-        return {"k": "lit", "v": ast.literal_eval(text)}
+        return {"k": "lit", "v": safe_literal_eval(text)}
     except (ValueError, SyntaxError):
         return {"k": "skip", "repr": text}
 
@@ -326,14 +364,15 @@ def build_cases(capture: Path, verbose=False):
                 kwargs[key] = spec
         args = [spec for _, spec in sorted(args)]
 
+        # One spec per returned tensor, positionally aligned with what the op
+        # returns — nlp_create_qkv_heads records three ids (Q, K, V) and each gets
+        # its own shape/dtype check. An entry is None when that output is never
+        # consumed again in the capture, so its spec was never observed; the entry
+        # is kept anyway so the list length still pins the op's output count.
         out_ids = record.get("output_tensor_ids") or []
-        out = None
-        if out_ids:
-            key = tensor_specs.get(out_ids[0])
-            if key:
-                out = json.loads(key)
+        outs = [json.loads(tensor_specs[tid]) if tensor_specs.get(tid) else None for tid in out_ids]
 
-        case = {"op": op, "args": args, "kwargs": kwargs, "out": out}
+        case = {"op": op, "args": args, "kwargs": kwargs, "outs": outs}
         dedup = canonical({"args": args, "kwargs": kwargs})
         bucket = per_op[op]
         if op not in order:
@@ -374,6 +413,10 @@ def drop_unreconstructible(cases, op):
 # Emission
 # =============================================================================
 
+# Marker line every generated file carries; also how a stale file from a previous
+# capture is recognized as safe to delete (see main()).
+_GENERATED_MARKER = "GENERATED FILE - do not edit by hand."
+
 _HEADER = '''# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -391,9 +434,10 @@ Per-op test: ``{op}`` — every distinct call the model made, as captured.
 
 Each CASES entry is one distinct call: the exact input shapes / dtypes / layouts /
 memory configs, the keyword arguments (memory_config, program_config, scalars) and
-the captured output spec. ``count`` is how many times that exact call occurred in
-the captured run. See ``graph_case.py`` for how a case is materialized and checked,
-and README.md for the fidelity caveats (random inputs, no compute_kernel_config).
+one captured output spec per tensor the op returned. ``count`` is how many times
+that exact call occurred in the captured run. See ``graph_case.py`` for how a case
+is materialized and checked, and README.md for the fidelity caveats (random inputs,
+no compute_kernel_config).
 """
 
 import pytest
@@ -439,7 +483,10 @@ def render_cases(cases) -> str:
         for name, spec in case["kwargs"].items():
             lines.append(f'            "{name}": {_fmt(spec)},')
         lines.append("        },")
-        lines.append(f'        "out": {_fmt(case["out"])},')
+        lines.append('        "outs": [')
+        for spec in case["outs"]:
+            lines.append(f"            {_fmt(spec)},")
+        lines.append("        ],")
         lines.append("    },")
     lines.append("]")
     return "\n".join(lines)
@@ -469,12 +516,9 @@ def _partial_shard(spec):
 
 
 def _undefinable_output(case):
-    """Output has more elements than every input combined, so part of it is untouched."""
-    if case["out"] is None:
-        return False
-    out_elems = math.prod(case["out"]["shape"])
+    """An output has more elements than every input combined, so part of it is untouched."""
     in_elems = sum(math.prod(s["shape"]) for s in _tensor_specs(case))
-    return out_elems > in_elems
+    return any(math.prod(out["shape"]) > in_elems for out in case["outs"] if out is not None)
 
 
 def summarize(op, cases, raw_count, dropped, dropped_kwargs) -> str:
@@ -570,6 +614,18 @@ def main():
         written.append(path)
         note = f"  ({len(dropped)} case(s) not reconstructible)" if dropped else ""
         print(f"  wrote {path.name:<52} {len(cases):>3} cases{note}")
+
+    # An op that the new capture never called (or that lost its last reconstructible
+    # case) would otherwise keep its file from the previous run, leaving the suite a
+    # mix of two captures while claiming to be this one.
+    # Only files this generator wrote are removed (the marker line), so a hand-written
+    # test that happens to live in --out is left alone.
+    generated = {p.resolve() for p in written}
+    for stale in sorted(args.out.glob("test_*.py")):
+        if stale.resolve() in generated or _GENERATED_MARKER not in stale.read_text():
+            continue
+        stale.unlink()
+        print(f"  removed stale {stale.name} (not in this capture)")
 
     for op in sorted(SKIP_OPS & set(raw_counts)):
         print(f"  skipped {op} ({raw_counts[op]} calls) — host-side plumbing, see SKIP_OPS")

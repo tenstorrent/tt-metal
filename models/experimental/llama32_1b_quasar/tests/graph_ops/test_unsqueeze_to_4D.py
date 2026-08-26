@@ -18,9 +18,10 @@ Fidelity notes for this op:
 
 Each CASES entry is one distinct call: the exact input shapes / dtypes / layouts /
 memory configs, the keyword arguments (memory_config, program_config, scalars) and
-the captured output spec. ``count`` is how many times that exact call occurred in
-the captured run. See ``graph_case.py`` for how a case is materialized and checked,
-and README.md for the fidelity caveats (random inputs, no compute_kernel_config).
+one captured output spec per tensor the op returned. ``count`` is how many times
+that exact call occurred in the captured run. See ``graph_case.py`` for how a case
+is materialized and checked, and README.md for the fidelity caveats (random inputs,
+no compute_kernel_config).
 """
 
 import pytest
@@ -45,13 +46,15 @@ CASES = [
             },
         ],
         "kwargs": {},
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 32, 64],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 32, 64],
+            },
+        ],
     },
     {
         "id": "01_32x2048_bf16_int-dram",
@@ -67,13 +70,15 @@ CASES = [
             },
         ],
         "kwargs": {},
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 32, 2048],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 32, 2048],
+            },
+        ],
     },
     {
         "id": "02_32_u32_int-dram",
@@ -89,13 +94,15 @@ CASES = [
             },
         ],
         "kwargs": {},
-        "out": {
-            "dtype": "UINT32",
-            "k": "t",
-            "layout": "ROW_MAJOR",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 1, 32],
-        },
+        "outs": [
+            {
+                "dtype": "UINT32",
+                "k": "t",
+                "layout": "ROW_MAJOR",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 1, 32],
+            },
+        ],
     },
     {
         "id": "03_1024x2048_bf16_int-dram",
@@ -111,13 +118,15 @@ CASES = [
             },
         ],
         "kwargs": {},
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 1024, 2048],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 1024, 2048],
+            },
+        ],
     },
 ]
 

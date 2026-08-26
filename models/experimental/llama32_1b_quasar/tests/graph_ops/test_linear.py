@@ -18,9 +18,10 @@ Fidelity notes for this op:
 
 Each CASES entry is one distinct call: the exact input shapes / dtypes / layouts /
 memory configs, the keyword arguments (memory_config, program_config, scalars) and
-the captured output spec. ``count`` is how many times that exact call occurred in
-the captured run. See ``graph_case.py`` for how a case is materialized and checked,
-and README.md for the fidelity caveats (random inputs, no compute_kernel_config).
+one captured output spec per tensor the op returned. ``count`` is how many times
+that exact call occurred in the captured run. See ``graph_case.py`` for how a case
+is materialized and checked, and README.md for the fidelity caveats (random inputs,
+no compute_kernel_config).
 """
 
 import pytest
@@ -69,17 +70,19 @@ CASES = [
             },
             "memory_config": {"layout": "WIDTH_SHARDED", "buffer": "L1", "shard": None, "k": "mem"},
         },
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {
-                "buffer": "L1",
-                "layout": "WIDTH_SHARDED",
-                "shard": {"grid": [[0, 0, 7, 7]], "orientation": "ROW_MAJOR", "shape": [32, 128]},
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {
+                    "buffer": "L1",
+                    "layout": "WIDTH_SHARDED",
+                    "shard": {"grid": [[0, 0, 7, 7]], "orientation": "ROW_MAJOR", "shape": [32, 128]},
+                },
+                "shape": [1, 1, 32, 8192],
             },
-            "shape": [1, 1, 32, 8192],
-        },
+        ],
     },
     {
         "id": "01_32x2048_bf16_ws-l1",
@@ -118,17 +121,19 @@ CASES = [
             "memory_config": {"layout": "WIDTH_SHARDED", "buffer": "L1", "shard": None, "k": "mem"},
             "dtype": {"k": "dtype", "v": "BFLOAT8_B"},
         },
-        "out": {
-            "dtype": "BFLOAT8_B",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {
-                "buffer": "L1",
-                "layout": "WIDTH_SHARDED",
-                "shard": {"grid": [[0, 0, 7, 3]], "orientation": "ROW_MAJOR", "shape": [32, 256]},
+        "outs": [
+            {
+                "dtype": "BFLOAT8_B",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {
+                    "buffer": "L1",
+                    "layout": "WIDTH_SHARDED",
+                    "shard": {"grid": [[0, 0, 7, 3]], "orientation": "ROW_MAJOR", "shape": [32, 256]},
+                },
+                "shape": [1, 1, 32, 8192],
             },
-            "shape": [1, 1, 32, 8192],
-        },
+        ],
     },
     {
         "id": "02_32x2048_bf16_ws-l1",
@@ -167,17 +172,19 @@ CASES = [
             },
             "dtype": {"k": "dtype", "v": "BFLOAT16"},
         },
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {
-                "buffer": "L1",
-                "layout": "WIDTH_SHARDED",
-                "shard": {"grid": [[0, 0, 7, 3]], "orientation": "ROW_MAJOR", "shape": [32, 96]},
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {
+                    "buffer": "L1",
+                    "layout": "WIDTH_SHARDED",
+                    "shard": {"grid": [[0, 0, 7, 3]], "orientation": "ROW_MAJOR", "shape": [32, 96]},
+                },
+                "shape": [1, 1, 32, 3072],
             },
-            "shape": [1, 1, 32, 3072],
-        },
+        ],
     },
     {
         "id": "03_32x2048_bf16_ws-l1",
@@ -215,17 +222,19 @@ CASES = [
             },
             "memory_config": {"layout": "WIDTH_SHARDED", "buffer": "L1", "shard": None, "k": "mem"},
         },
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {
-                "buffer": "L1",
-                "layout": "WIDTH_SHARDED",
-                "shard": {"grid": [[0, 0, 7, 3]], "orientation": "ROW_MAJOR", "shape": [32, 64]},
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {
+                    "buffer": "L1",
+                    "layout": "WIDTH_SHARDED",
+                    "shard": {"grid": [[0, 0, 7, 3]], "orientation": "ROW_MAJOR", "shape": [32, 64]},
+                },
+                "shape": [1, 1, 32, 2048],
             },
-            "shape": [1, 1, 32, 2048],
-        },
+        ],
     },
     {
         "id": "04_32x8192_bf8_ws-l1",
@@ -265,17 +274,19 @@ CASES = [
             "memory_config": {"layout": "WIDTH_SHARDED", "buffer": "L1", "shard": None, "k": "mem"},
             "core_grid": {"k": "lit", "v": None},
         },
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {
-                "buffer": "L1",
-                "layout": "WIDTH_SHARDED",
-                "shard": {"grid": [[0, 0, 7, 7]], "orientation": "ROW_MAJOR", "shape": [32, 32]},
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {
+                    "buffer": "L1",
+                    "layout": "WIDTH_SHARDED",
+                    "shard": {"grid": [[0, 0, 7, 7]], "orientation": "ROW_MAJOR", "shape": [32, 32]},
+                },
+                "shape": [1, 1, 32, 2048],
             },
-            "shape": [1, 1, 32, 2048],
-        },
+        ],
     },
     {
         "id": "05_1024x2048_bf16_int-dram",
@@ -324,13 +335,15 @@ CASES = [
             },
             "memory_config": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None, "k": "mem"},
         },
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 1024, 8192],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 1024, 8192],
+            },
+        ],
     },
     {
         "id": "06_1024x2048_bf16_int-dram",
@@ -378,13 +391,15 @@ CASES = [
                 "k": "cfg",
             },
         },
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 1024, 2048],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 1024, 2048],
+            },
+        ],
     },
     {
         "id": "07_32x2048_bf16_ws-l1",
@@ -423,17 +438,19 @@ CASES = [
             "memory_config": {"layout": "WIDTH_SHARDED", "buffer": "L1", "shard": None, "k": "mem"},
             "dtype": {"k": "dtype", "v": "BFLOAT8_B"},
         },
-        "out": {
-            "dtype": "BFLOAT8_B",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {
-                "buffer": "L1",
-                "layout": "WIDTH_SHARDED",
-                "shard": {"grid": [[0, 0, 7, 2], [0, 3, 3, 3]], "orientation": "ROW_MAJOR", "shape": [32, 192]},
+        "outs": [
+            {
+                "dtype": "BFLOAT8_B",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {
+                    "buffer": "L1",
+                    "layout": "WIDTH_SHARDED",
+                    "shard": {"grid": [[0, 0, 7, 2], [0, 3, 3, 3]], "orientation": "ROW_MAJOR", "shape": [32, 192]},
+                },
+                "shape": [1, 1, 32, 5376],
             },
-            "shape": [1, 1, 32, 5376],
-        },
+        ],
     },
 ]
 

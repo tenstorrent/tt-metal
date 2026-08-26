@@ -15,9 +15,10 @@ Captured 711 call(s) to this op; 5 distinct signature(s) covering 711 of them.
 
 Each CASES entry is one distinct call: the exact input shapes / dtypes / layouts /
 memory configs, the keyword arguments (memory_config, program_config, scalars) and
-the captured output spec. ``count`` is how many times that exact call occurred in
-the captured run. See ``graph_case.py`` for how a case is materialized and checked,
-and README.md for the fidelity caveats (random inputs, no compute_kernel_config).
+one captured output spec per tensor the op returned. ``count`` is how many times
+that exact call occurred in the captured run. See ``graph_case.py`` for how a case
+is materialized and checked, and README.md for the fidelity caveats (random inputs,
+no compute_kernel_config).
 """
 
 import pytest
@@ -44,13 +45,15 @@ CASES = [
             {"k": "lit", "v": (1, 1, 32, 3072)},
         ],
         "kwargs": {},
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "L1", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 1, 3072],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "L1", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 1, 3072],
+            },
+        ],
     },
     {
         "id": "01_32x2048_bf16_ws-l1",
@@ -71,17 +74,19 @@ CASES = [
             {"k": "lit", "v": (1, 1, 32, 2048)},
         ],
         "kwargs": {},
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {
-                "buffer": "L1",
-                "layout": "WIDTH_SHARDED",
-                "shard": {"grid": [[0, 0, 7, 7]], "orientation": "ROW_MAJOR", "shape": [32, 32]},
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {
+                    "buffer": "L1",
+                    "layout": "WIDTH_SHARDED",
+                    "shard": {"grid": [[0, 0, 7, 7]], "orientation": "ROW_MAJOR", "shape": [32, 32]},
+                },
+                "shape": [1, 1, 32, 2048],
             },
-            "shape": [1, 1, 32, 2048],
-        },
+        ],
     },
     {
         "id": "02_1024x2048_bf16_int-dram",
@@ -98,13 +103,15 @@ CASES = [
             {"k": "lit", "v": [1, 1, 1024, -1]},
         ],
         "kwargs": {},
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 1024, 2048],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 1024, 2048],
+            },
+        ],
     },
     {
         "id": "03_32x1024x64_bf16_int-dram",
@@ -121,13 +128,15 @@ CASES = [
             {"k": "lit", "v": [1, 32, -1, 64]},
         ],
         "kwargs": {},
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 32, 1024, 64],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 32, 1024, 64],
+            },
+        ],
     },
     {
         "id": "04_1024x2048_bf8_int-dram",
@@ -144,13 +153,15 @@ CASES = [
             {"k": "lit", "v": (1, 1, 1024, 2048)},
         ],
         "kwargs": {},
-        "out": {
-            "dtype": "BFLOAT8_B",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 1024, 2048],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT8_B",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 1024, 2048],
+            },
+        ],
     },
 ]
 

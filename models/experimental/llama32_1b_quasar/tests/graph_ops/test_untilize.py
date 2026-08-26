@@ -15,9 +15,10 @@ Captured 21 call(s) to this op; 2 distinct signature(s) covering 21 of them.
 
 Each CASES entry is one distinct call: the exact input shapes / dtypes / layouts /
 memory configs, the keyword arguments (memory_config, program_config, scalars) and
-the captured output spec. ``count`` is how many times that exact call occurred in
-the captured run. See ``graph_case.py`` for how a case is materialized and checked,
-and README.md for the fidelity caveats (random inputs, no compute_kernel_config).
+one captured output spec per tensor the op returned. ``count`` is how many times
+that exact call occurred in the captured run. See ``graph_case.py`` for how a case
+is materialized and checked, and README.md for the fidelity caveats (random inputs,
+no compute_kernel_config).
 """
 
 import pytest
@@ -45,7 +46,9 @@ CASES = [
             "use_multicore": {"k": "lit", "v": True},
             "memory_config": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None, "k": "mem"},
         },
-        "out": None,
+        "outs": [
+            None,
+        ],
     },
     {
         "id": "01_32x128256_bf8_int-dram",
@@ -63,7 +66,9 @@ CASES = [
         "kwargs": {
             "use_multicore": {"k": "lit", "v": True},
         },
-        "out": None,
+        "outs": [
+            None,
+        ],
     },
 ]
 

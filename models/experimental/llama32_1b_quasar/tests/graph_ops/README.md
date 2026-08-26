@@ -80,17 +80,21 @@ and survives regeneration.
                                       "block_h": 1, "block_w": 2, "inplace": 0, ...}, "k": "cfg"},
         ...
     },
-    "out": {"shape": [1, 1, 32, 2048], "dtype": "BFLOAT16", ...},   # recovered output spec
+    "outs": [
+        {"shape": [1, 1, 32, 2048], "dtype": "BFLOAT16", ...},      # one spec per returned tensor
+    ],
 }
 ```
 
 `count` is the useful part when triaging: it tells you which shape actually dominates
 a run, so you can fix the case worth 327 calls before the one worth 2.
 
-The output spec is recovered by tracking `tensor_id` across the whole capture — an
+Each output spec is recovered by tracking `tensor_id` across the whole capture — an
 op's output shows up later as some other op's input, which is what pins down its
-shape and dtype. Cases whose output is never consumed again carry `"out": None` and
-are checked for finiteness only.
+shape and dtype. `outs` holds one entry per tensor the op returned, in order, so a
+multi-output op is fully checked (`nlp_create_qkv_heads` asserts K and V, not just
+Q). An output that is never consumed again carries `None` — its length still pins
+the op's output count, and the tensor itself is checked for finiteness only.
 
 ## Fidelity: what is exact, what is not
 
@@ -104,7 +108,7 @@ Exact, straight from the capture:
   `block_h/block_w/subblock_w` and `legacy_reduction`/`legacy_rsqrt`/`use_welford`,
   SDPA's chunk sizes and `max_cores_per_head_batch`, `MinimalMatmulConfig` blocks);
 - scalar kwargs (`epsilon`, `scale`, `num_heads`, `is_decode_mode`, activations …);
-- the output shape/dtype to assert against.
+- the output shape/dtype of every returned tensor to assert against.
 
 Not recoverable from a capture, and how each is handled:
 

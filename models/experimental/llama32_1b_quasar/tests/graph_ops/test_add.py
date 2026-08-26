@@ -15,9 +15,10 @@ Captured 678 call(s) to this op; 4 distinct signature(s) covering 678 of them.
 
 Each CASES entry is one distinct call: the exact input shapes / dtypes / layouts /
 memory configs, the keyword arguments (memory_config, program_config, scalars) and
-the captured output spec. ``count`` is how many times that exact call occurred in
-the captured run. See ``graph_case.py`` for how a case is materialized and checked,
-and README.md for the fidelity caveats (random inputs, no compute_kernel_config).
+one captured output spec per tensor the op returned. ``count`` is how many times
+that exact call occurred in the captured run. See ``graph_case.py`` for how a case
+is materialized and checked, and README.md for the fidelity caveats (random inputs,
+no compute_kernel_config).
 """
 
 import pytest
@@ -51,13 +52,15 @@ CASES = [
         "kwargs": {
             "memory_config": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None, "k": "mem"},
         },
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 32, 2048],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 32, 2048],
+            },
+        ],
     },
     {
         "id": "01_32x2048_bf16_int-dram",
@@ -87,13 +90,15 @@ CASES = [
             "memory_config": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None, "k": "mem"},
             "dtype": {"k": "dtype", "v": "BFLOAT16"},
         },
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 32, 2048],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 32, 2048],
+            },
+        ],
     },
     {
         "id": "02_1024x2048_bf16_int-dram",
@@ -118,13 +123,15 @@ CASES = [
         "kwargs": {
             "memory_config": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None, "k": "mem"},
         },
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 1024, 2048],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 1024, 2048],
+            },
+        ],
     },
     {
         "id": "03_1024x2048_bf16_int-dram",
@@ -150,13 +157,15 @@ CASES = [
             "memory_config": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None, "k": "mem"},
             "dtype": {"k": "dtype", "v": "BFLOAT16"},
         },
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 1024, 2048],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 1024, 2048],
+            },
+        ],
     },
 ]
 

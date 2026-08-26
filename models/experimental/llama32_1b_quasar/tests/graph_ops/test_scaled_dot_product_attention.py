@@ -18,9 +18,10 @@ Fidelity notes for this op:
 
 Each CASES entry is one distinct call: the exact input shapes / dtypes / layouts /
 memory configs, the keyword arguments (memory_config, program_config, scalars) and
-the captured output spec. ``count`` is how many times that exact call occurred in
-the captured run. See ``graph_case.py`` for how a case is materialized and checked,
-and README.md for the fidelity caveats (random inputs, no compute_kernel_config).
+one captured output spec per tensor the op returned. ``count`` is how many times
+that exact call occurred in the captured run. See ``graph_case.py`` for how a case
+is materialized and checked, and README.md for the fidelity caveats (random inputs,
+no compute_kernel_config).
 """
 
 import pytest
@@ -75,13 +76,15 @@ CASES = [
                 "k": "cfg",
             },
         },
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 32, 1024, 64],
-        },
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 32, 1024, 64],
+            },
+        ],
     },
 ]
 

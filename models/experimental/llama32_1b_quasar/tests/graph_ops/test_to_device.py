@@ -18,9 +18,10 @@ Fidelity notes for this op:
 
 Each CASES entry is one distinct call: the exact input shapes / dtypes / layouts /
 memory configs, the keyword arguments (memory_config, program_config, scalars) and
-the captured output spec. ``count`` is how many times that exact call occurred in
-the captured run. See ``graph_case.py`` for how a case is materialized and checked,
-and README.md for the fidelity caveats (random inputs, no compute_kernel_config).
+one captured output spec per tensor the op returned. ``count`` is how many times
+that exact call occurred in the captured run. See ``graph_case.py`` for how a case
+is materialized and checked, and README.md for the fidelity caveats (random inputs,
+no compute_kernel_config).
 """
 
 import pytest
@@ -47,13 +48,15 @@ CASES = [
         "kwargs": {
             "device": {"k": "device"},
         },
-        "out": {
-            "dtype": "INT32",
-            "k": "t",
-            "layout": "ROW_MAJOR",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 128],
-        },
+        "outs": [
+            {
+                "dtype": "INT32",
+                "k": "t",
+                "layout": "ROW_MAJOR",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 128],
+            },
+        ],
     },
     {
         "id": "01_1_i32_int-dram",
@@ -71,13 +74,15 @@ CASES = [
         "kwargs": {
             "device": {"k": "device"},
         },
-        "out": {
-            "dtype": "INT32",
-            "k": "t",
-            "layout": "ROW_MAJOR",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1],
-        },
+        "outs": [
+            {
+                "dtype": "INT32",
+                "k": "t",
+                "layout": "ROW_MAJOR",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1],
+            },
+        ],
     },
     {
         "id": "02_1x32_u32_int-dram",
@@ -95,13 +100,15 @@ CASES = [
         "kwargs": {
             "device": {"k": "device"},
         },
-        "out": {
-            "dtype": "UINT32",
-            "k": "t",
-            "layout": "ROW_MAJOR",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 1, 1, 32],
-        },
+        "outs": [
+            {
+                "dtype": "UINT32",
+                "k": "t",
+                "layout": "ROW_MAJOR",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 1, 1, 32],
+            },
+        ],
     },
     {
         "id": "03_1x32_u32_int-dram",
@@ -119,13 +126,15 @@ CASES = [
         "kwargs": {
             "device": {"k": "device"},
         },
-        "out": {
-            "dtype": "UINT32",
-            "k": "t",
-            "layout": "ROW_MAJOR",
-            "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
-            "shape": [1, 32],
-        },
+        "outs": [
+            {
+                "dtype": "UINT32",
+                "k": "t",
+                "layout": "ROW_MAJOR",
+                "mem": {"buffer": "DRAM", "layout": "INTERLEAVED", "shard": None},
+                "shape": [1, 32],
+            },
+        ],
     },
 ]
 

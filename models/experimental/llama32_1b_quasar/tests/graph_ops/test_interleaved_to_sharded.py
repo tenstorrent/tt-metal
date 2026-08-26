@@ -15,9 +15,10 @@ Captured 42 call(s) to this op; 2 distinct signature(s) covering 42 of them.
 
 Each CASES entry is one distinct call: the exact input shapes / dtypes / layouts /
 memory configs, the keyword arguments (memory_config, program_config, scalars) and
-the captured output spec. ``count`` is how many times that exact call occurred in
-the captured run. See ``graph_case.py`` for how a case is materialized and checked,
-and README.md for the fidelity caveats (random inputs, no compute_kernel_config).
+one captured output spec per tensor the op returned. ``count`` is how many times
+that exact call occurred in the captured run. See ``graph_case.py`` for how a case
+is materialized and checked, and README.md for the fidelity caveats (random inputs,
+no compute_kernel_config).
 """
 
 import pytest
@@ -48,17 +49,19 @@ CASES = [
             },
         ],
         "kwargs": {},
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {
-                "buffer": "L1",
-                "layout": "HEIGHT_SHARDED",
-                "shard": {"grid": [[0, 0, 0, 0]], "orientation": "ROW_MAJOR", "shape": [32, 64]},
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {
+                    "buffer": "L1",
+                    "layout": "HEIGHT_SHARDED",
+                    "shard": {"grid": [[0, 0, 0, 0]], "orientation": "ROW_MAJOR", "shape": [32, 64]},
+                },
+                "shape": [1, 1, 1, 64],
             },
-            "shape": [1, 1, 1, 64],
-        },
+        ],
     },
     {
         "id": "01_32x2048_bf16_int-dram",
@@ -80,17 +83,19 @@ CASES = [
             },
         ],
         "kwargs": {},
-        "out": {
-            "dtype": "BFLOAT16",
-            "k": "t",
-            "layout": "TILE",
-            "mem": {
-                "buffer": "L1",
-                "layout": "WIDTH_SHARDED",
-                "shard": {"grid": [[0, 0, 7, 3]], "orientation": "ROW_MAJOR", "shape": [32, 64]},
+        "outs": [
+            {
+                "dtype": "BFLOAT16",
+                "k": "t",
+                "layout": "TILE",
+                "mem": {
+                    "buffer": "L1",
+                    "layout": "WIDTH_SHARDED",
+                    "shard": {"grid": [[0, 0, 7, 3]], "orientation": "ROW_MAJOR", "shape": [32, 64]},
+                },
+                "shape": [1, 1, 32, 2048],
             },
-            "shape": [1, 1, 32, 2048],
-        },
+        ],
     },
 ]
 
