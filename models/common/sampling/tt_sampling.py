@@ -672,13 +672,11 @@ class TTSampling(LightweightModule):
 
         Stable top-k (`stable=True`) on EVERY local top-k call would make this pass redundant, but
         stable is not uniformly cheap: multicore-eligible bf16 calls take the fused-key engine
-        (packed [bf16 value | u16 index] words on the plain unstable network -- ~free by design,
-        unmeasured on decode shapes), while the single-core chunks of the multi-step path pay
+        (packed [bf16 value | u16 index] words on the plain unstable network, where otherwise costs
         ~2.5-3x on the SFPU sort stage and the BH topk_large_indices route has no stable mode at
-        all. Redundancy needs ALL routes stable, so sampling opts out (`self._topk_stable` is
-        False) and keeps this host-side pass as the greedy-pick guarantee instead. Removing this
+        all. Sampling keeps the host-side pass as the stable-sort guarantee instead. Removing this
         method, `_greedy_col` and `_greedy_col_dims` in favour of `stable=True` becomes a pure win
-        once the remaining routes grow a cheap stable mode.
+        once the remaining routes implement a performant stable mode.
 
         With stable top-k enabled this pass would be redundant, because candidate position and
         global token id are ordered the same way BY CONSTRUCTION: the gathered buffer is laid out as
