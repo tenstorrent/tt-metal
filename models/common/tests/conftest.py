@@ -278,3 +278,24 @@ def _pick_parent_shape_for_submesh(system_shape: tuple[int, int], requested_shap
         f"{__file__}: Requested submesh {requested_shape} does not fit within system mesh {system_shape} "
         f"(or its rotated view {rotated}) with default offset."
     )
+
+@pytest.fixture(scope="module")
+def skip_on_galaxy_system():
+    """Skip a module whose meshes are 1D-only when the host system is a Galaxy.
+
+    The 1D module suites request shapes like (1, 8), which _allowed_req_shapes_for_system
+    permits on a Galaxy (8, 4) as well as on a T3K (2, 4). They are targeted at the T3K,
+    so on a Galaxy they would consume scarce hardware to re-run LLMBox coverage. Gate is
+    opt-in per module rather than applied in _allowed_req_shapes_for_system, because
+    test_auto_compose.py deliberately exercises 1D shapes on a Galaxy.
+
+    Queried at fixture setup rather than collection time: probing the device while
+    collecting has deadlocked nested-pytest runs before.
+    """
+    try:
+        sys_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())  # type: ignore[attr-defined]
+    except Exception:
+        # Unable to determine the system; let the mesh fixture make the call instead.
+        return
+    if sys_shape[0] * sys_shape[1] > 8:
+        pytest.skip(f"1D module suites are T3K-targeted; system mesh is {sys_shape}")

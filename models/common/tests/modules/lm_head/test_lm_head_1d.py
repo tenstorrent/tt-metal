@@ -25,6 +25,9 @@ from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig
 from models.common.tensor_utils import TILE_SIZE
 from models.common.utility_functions import comp_allclose, comp_pcc
 
+# 1D module suites target the T3K; skip when the host system is a Galaxy.
+pytestmark = pytest.mark.usefixtures("skip_on_galaxy_system")
+
 # ============================================================================
 # Unit Tests - No device required
 # ============================================================================
