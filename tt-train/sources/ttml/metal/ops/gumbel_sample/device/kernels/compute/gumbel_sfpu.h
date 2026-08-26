@@ -174,7 +174,7 @@ inline void _calculate_gumbel_score_(const std::uint32_t inv_temperature_bits) {
  * @brief Initializes the fused Gumbel scoring SFPU operation.
  */
 ALWI void gumbel_score_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>()));
+    MATH(SFPU_UNARY_INIT(unused));
     // AFTER the llk init (so nothing it resets clobbers them), and after the LAST rand_tile of the
     // kernel's DST batch (Wormhole's rand reprograms LREG12/13 -- two of the three Prgm slots -- on
     // every call; nothing else clobbers them, so one init serves every score pass in the batch).
