@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 from collections import defaultdict
 
@@ -242,6 +243,58 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             skip_sequence_lengths=skip_sequence_lengths,
             sampling_parameters_sweeped=sampling_parameters_sweeped,
         )
+
+        # Only models that accept a nonzero ``start_pos`` can ever take the
+        # resumed path, so only they should reserve trace region for it.
+        if enable_trace and self.model_capabilities.get("supports_prefix_caching", False):
+            self._warmup_prefill_resumed_sweep(kv_cache=kv_cache)
+
+    def _warmup_prefill_resumed_sweep(self, kv_cache):
+        """Capture the resumed-prefill ("sp1") traces, batch 1, one per traced length.
+
+        The sweep above never passes ``start_pos``, so it only ever captures the
+        ``sp0`` half of the prefill trace key. A resumed prefill -- prefix caching,
+        or a prompt split across engine steps -- takes the ``sp1`` half, which
+        would otherwise be captured lazily on whichever request happens to resume
+        first, allocating trace region nobody sized for. Reserving them here makes
+        the requirement a function of configuration instead of traffic.
+
+        Mirrors the phase-2 warmup in
+        ``models/demos/llama3_70b_galaxy/tt/generator.py``.
+        """
+        if kv_cache is None or kv_cache[0] is None:
+            # Resumed prefill needs a page table, so there is nothing to capture.
+            return
+        block_size = self._paged_prefill_block_size(kv_cache[0])
+
+        for model_id in range(self.data_parallel):
+            model_args = self.model_args[model_id]
+            for prefill_seq_len in model_args.trace_prefill_supported_seq_lens:
+                if not model_args.can_enable_trace(prefill_seq_len):
+                    continue
+                # The offset a real request will be floored to for this length, so
+                # the captured program config is the one those replays need.
+                q_chunk = self._traced_sdpa_q_chunk_size(prefill_seq_len, model_id) or block_size
+                num_cached = math.lcm(block_size, int(q_chunk))
+                total_seq_len = num_cached + prefill_seq_len
+                if total_seq_len > model_args.max_seq_len:
+                    continue
+
+                num_blocks = num_blocks_in_seq(total_seq_len, block_size)
+                logger.info(
+                    f"Warming up resumed prefill for sequence length: {prefill_seq_len}, " f"num_cached: {num_cached}"
+                )
+                self.prefill_forward_text(
+                    tokens=torch.zeros(1, total_seq_len, dtype=torch.long),
+                    prompt_lens=torch.tensor([total_seq_len], dtype=torch.long),
+                    empty_slots=[0],
+                    page_table=torch.zeros(1, num_blocks, dtype=torch.int32),
+                    start_pos=[num_cached],
+                    kv_cache=kv_cache,
+                    enable_trace=True,
+                    model_id_warmup=model_id,
+                    sampling_params=None,
+                )
 
     def finalize_deferred_traces(self):
         """Record the decode trace that this call deferred.
@@ -948,6 +1001,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         assert len(num_cached_per_user) == len(
             prompt_lens
         ), f"start_pos length {len(num_cached_per_user)} != prompt_lens length {len(prompt_lens)}"
+        if start_pos is not None:
+            num_cached_per_user = self._align_resume_offsets(num_cached_per_user, prompt_lens, kv_cache)
+            # The per-user loop below re-reads the offset from ``start_pos``, so the
+            # aligned list has to replace it: otherwise the padded length computed
+            # here would not match the token slice the kernel receives.
+            start_pos = num_cached_per_user
         for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
             assert 0 <= num_cached < seq_len, f"user {i}: num_cached={num_cached} must be < seq_len={seq_len}"
         prefill_seq_lens = [
@@ -1388,6 +1447,60 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             return output_tokens, reformat_logprobs(output_log_probs, batch_size)
         else:
             return output_tensor
+
+    def _traced_sdpa_q_chunk_size(self, prefill_seq_len, model_id=0):
+        """q_chunk_size a traced prefill of this length is captured with, or None.
+
+        The traced path hands the op a ``chunk_start_idx`` device tensor that is
+        refreshed per replay, so the captured program config cannot be derived
+        from the offset. It is built with ``chunk_start_idx=0`` instead, which is
+        what this reproduces.
+        """
+        get_config = getattr(self.model_args[model_id], "get_attn_sdpa_program_config", None)
+        if get_config is None:
+            return None
+        try:
+            return get_config(Mode.PREFILL, prefill_seq_len, 0, None).q_chunk_size
+        except (AttributeError, TypeError, ValueError):
+            # A model whose program config this signature does not describe.
+            return None
+
+    def _align_resume_offsets(self, num_cached_per_user, prompt_lens, kv_cache):
+        """Floor each resume offset to what the paged ops and the traced SDPA need.
+
+        ``block_size`` covers the page-table slice the chunk's K/V is written
+        through: an offset off that multiple shifts every write by
+        ``chunk_start % block_size`` positions.
+
+        ``q_chunk_size`` covers the SDPA op, which requires ``chunk_start_idx`` to
+        be a multiple of the value its program was built with and answers from the
+        wrong prefix rather than raising when it is not. Under tracing that value
+        is pinned at capture, so it has to be satisfied by the offset.
+
+        Flooring recomputes at most ``alignment - 1`` tokens whose K/V is rewritten
+        identically into the same blocks, so it is semantically a no-op. Mirrors
+        the ``SDPA_CHUNK_ALIGN`` round-down in
+        ``models/demos/llama3_70b_galaxy/tt/generator.py``.
+        """
+        if kv_cache is None or kv_cache[0] is None:
+            # Non-paged prefill: there is no page table to slice.
+            return num_cached_per_user
+        block_size = self._paged_prefill_block_size(kv_cache[0])
+        aligned = []
+        for i, (num_cached, seq_len) in enumerate(zip(num_cached_per_user, prompt_lens)):
+            floored = (int(num_cached) // block_size) * block_size
+            # The pinned q_chunk_size depends on the padded length, which depends on
+            # the offset. Flooring further only lengthens the remaining span, and
+            # the pinned value never decreases with length, so one re-floor settles
+            # it.
+            q_chunk = self._traced_sdpa_q_chunk_size(get_padded_prefill_len(int(seq_len) - floored))
+            if q_chunk and q_chunk > block_size:
+                alignment = math.lcm(block_size, int(q_chunk))
+                floored = (int(num_cached) // alignment) * alignment
+            if floored != num_cached:
+                logger.debug(f"Resume offset alignment: user {i} start_pos {num_cached} -> {floored}")
+            aligned.append(floored)
+        return aligned
 
     def _paged_prefill_block_size(self, kv_cache):
         """Block size for chunked-prefill page-table padding/slicing.
