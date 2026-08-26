@@ -126,6 +126,7 @@ ALWI void reduce_block_max_row(
         icb, icb_scaler, row_start_index, tensor_shape)));
 #else
     UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim, respect_trigger>(icb, icb_scaler, row_start_index)));
+#endif
     MATH((llk_math_reduce_block_max_row<block_ct_dim, is_fp32_dest_acc_en>(idst, tensor_shape)));
 }
 
@@ -210,8 +211,8 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(
     std::uint32_t ocb,
     std::uint32_t block_ct_dim,
     bool respect_trigger = false) {
-    UNPACK(
-        (llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape)));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(
+        block_ct_dim, respect_trigger, tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_minimal_runtime()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
@@ -233,8 +234,8 @@ ALWI void reduce_block_max_row_reinit_short_runtime(
     std::uint32_t ocb,
     std::uint32_t block_ct_dim,
     bool respect_trigger = false) {
-    UNPACK(
-        (llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape)));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(
+        block_ct_dim, respect_trigger, tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_short_runtime<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
@@ -355,6 +356,7 @@ ALWI void reduce_block_max_row_runtime(
 #else
     UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(
         icb, icb_scaler, row_start_index, respect_trigger, overlap_first_half)));
+#endif
     MATH((llk_math_reduce_block_max_row_runtime<is_fp32_dest_acc_en>(idst, tensor_shape)));
 }
 

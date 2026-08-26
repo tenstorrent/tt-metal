@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "llk_bfd_alloc.h"
 #include "llk_unpack_common_api.h"
 #include "experimental/llk_unpack_AB_reduce_runtime_custom.h"
 
@@ -36,8 +37,15 @@ inline void llk_unpack_AB_reduce_block_max_row_init_runtime(
     const ckernel::TensorShape& tensor_shape) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandA_id);
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
+
     _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(
-        block_ct_dim, respect_trigger, operandA_id, operandB_id, tensor_shape);
+        block_ct_dim,
+        respect_trigger,
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+        tensor_shape);
 }
 
 /**
@@ -62,9 +70,6 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     const bool overlap_first_half = false) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    // Use the caller tensor_shape (single source of truth with the math thread); the CB provides only
-    // the physical L1 read pointer below.
-
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
     const std::uint32_t l1_tile_index_a =
@@ -73,11 +78,13 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
 
     WAYPOINT("URBW");
     // block_ct_dim is baked into the MOP by init; the lib ignores this execute-time argument.
+    // The scaler UNPACR1 uses the Unp1 BFD id allocated at init (referenced via bfd_current, not the
+    // DFB id) -- the wrap contract (re-init before re-execute) keeps it valid.
     _llk_unpack_AB_reduce_block_max_row_runtime_(
         0 /*block_ct_dim*/,
         l1_tile_index_a,
         l1_tile_index_b,
-        operandB_id,
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
         tensor_shape,
         respect_trigger,
         overlap_first_half);
