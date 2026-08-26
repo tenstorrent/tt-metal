@@ -56,6 +56,8 @@ def matmul_decode(
     output_dtype: Optional["ttnn.DataType"] = None,
     global_cb=None,
     global_cb_k_blocks: int = 1,
+    all_gather: bool = False,
+    ring_size: int = 1,
 ) -> "OpDescriptor":
     """Create a ``matmul_decode`` op descriptor.
 
@@ -76,9 +78,11 @@ def matmul_decode(
         n_blocks: N-axis fold count for the partial / batched factories.
         output_mem_config: Output memory config override.
         output_dtype: Output dtype (defaults to ``input_tensor_a``'s).
-            global_cb: ``ttnn.GlobalCircularBuffer`` supplying ``input_tensor_b`` from the tensor
-                prefetcher (see ``LinearDecode``'s ``use_prefetcher`` path).
-            global_cb_k_blocks: GCB pages per receiver slab (see ``ttnn.experimental.matmul_decode``).
+        global_cb: ``ttnn.GlobalCircularBuffer`` supplying ``input_tensor_b`` from the tensor
+            prefetcher (see ``LinearDecode``'s ``use_prefetcher`` path).
+        global_cb_k_blocks: GCB pages per receiver slab (see ``ttnn.experimental.matmul_decode``).
+        all_gather: Fuse a fabric all-gather of the local N-shard. ``ring_size`` must match
+            the input mesh when this is set.
 
     Returns:
         OpDescriptor with the matmul_decode program descriptor and IO tensors.
@@ -101,6 +105,8 @@ def matmul_decode(
     if global_cb is not None:
         attrs.global_cb = global_cb
     attrs.global_cb_k_blocks = global_cb_k_blocks
+    attrs.all_gather = all_gather
+    attrs.ring_size = ring_size
 
     tensor_args = _prim.MatmulDecodeInputs(input_tensor_a, input_tensor_b)
 

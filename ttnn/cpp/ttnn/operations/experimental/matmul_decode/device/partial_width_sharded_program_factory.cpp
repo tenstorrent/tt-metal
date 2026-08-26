@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <algorithm>
 #include <vector>
 
 namespace ttnn::operations::experimental::matmul_decode {
@@ -38,7 +39,16 @@ ProgramDescriptor create_descriptor_ring_gather_partial(
 ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    if (operation_attributes.mesh_coords.has_value() &&
+        (!mesh_dispatch_coordinate.has_value() ||
+         std::find(
+             operation_attributes.mesh_coords->begin(),
+             operation_attributes.mesh_coords->end(),
+             *mesh_dispatch_coordinate) == operation_attributes.mesh_coords->end())) {
+        return {};
+    }
     // Non-GCB path uses the ring gather (closed ring; handles arbitrary S/C overlap the same
     // way as the full-width factory). GCB (prefetcher) path stays on the two-hub gather
     // because the reader<->prefetcher handshake is baked into reader_partial_width_sharded.cpp.

@@ -59,6 +59,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         use_prefetcher: bool = False,
         prefetch_buffers: Optional[dict] = None,
         packed_weights=None,
+        tp_size: int = 1,
     ):
         self.config = config
         self.layer_idx = layer_idx
@@ -80,6 +81,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             packed_weights=packed_bundle,
+            tp_size=tp_size,
         )
         self.mlp = DeepSeekV4SparseMoeBlock(
             config,
@@ -92,6 +94,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             packed_weights=packed_bundle,
+            tp_size=tp_size,
         )
         self.input_layernorm = DeepSeekV4RMSNorm(
             weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm"), sharded=True

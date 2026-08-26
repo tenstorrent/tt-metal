@@ -10,15 +10,24 @@ K=V + compressor cache in place, then generation continues one token per step
 (``S = 1``) against that cache. The RoPE tables are produced once for the
 maximum length; each decode step slices the single position row(s) it needs.
 
-All weights live on device in ``bfloat4_b``. The full 43-layer stack does not fit
-a single Blackhole's 32 GB; cap it with ``DEEPSEEK_V4_DECODE_LAYERS=N`` and set
-``DEEPSEEK_V4_CACHE_DIR`` to reuse the converted ttnn weight tiles across runs.
+The test has two deployment variants:
+
+* ``pp8_tp1``: eight single-chip pipeline stages (the existing 8-chip path).
+* ``pp8_tp4``: eight 1x4 tensor-parallel stages on a 32-chip Galaxy. Attention
+  uses head-sharded SDPA, sequential local-group O_A and row-parallel O_B; MoE
+  shards the intermediate dimension and all-reduces its output. The DRISC
+  prefetcher stays on (same as TP1) for every projection that still fits the
+  shared GCB.
+
+All weights live on device in ``bfloat4_b``. Set ``DEEPSEEK_V4_CACHE_DIR`` to
+reuse the converted ttnn weight tiles across runs, and optionally cap the stack
+with ``DEEPSEEK_V4_DECODE_LAYERS=N`` for bring-up.
 
 Run it (ttnn venv)::
 
     DEEPSEEK_V4_DECODE_LAYERS=4 DEEPSEEK_V4_CACHE_DIR=/path/to/cache \\
-    DEEPSEEK_V4_MAX_NEW_TOKENS=16 \\
-    pytest -s models/experimental/deepseek_v4_flash/tests/test_full_model_decode_demo.py
+    DEEPSEEK_V4_MAX_NEW_TOKENS=16 pytest -s \\
+      models/experimental/deepseek_v4_flash/tests/test_full_model_decode_demo.py
 """
 
 from __future__ import annotations
@@ -33,7 +42,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.deepseek_v4_flash.encoding_dsv4 import render_message
+from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages
 from models.experimental.deepseek_v4_flash.tt.common import _region
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
@@ -96,7 +105,20 @@ def _build_rope(config, max_seq: int) -> dict:
     return rope
 
 
-def _build_and_prefill(mesh_device, text: str, prefetcher: contextlib.ExitStack, system_config=None):
+def _first_mesh_copy(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> torch.Tensor:
+    """Read rank zero from a replicated mesh tensor."""
+    copies = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+    return copies[: tensor.shape[0]]
+
+
+def _build_and_prefill(
+    mesh_device,
+    text: str,
+    prefetcher: contextlib.ExitStack,
+    system_config=None,
+    *,
+    tp_size: int = 1,
+):
     """Build the full ttnn model, prepare the static traced-decode buffers, and
     prefill ``text`` one token at a time. Returns the populated state shared by
     the decode demo and the max-perf measurement tests.
@@ -120,8 +142,9 @@ def _build_and_prefill(mesh_device, text: str, prefetcher: contextlib.ExitStack,
     # step (fixed-size in-place caches) instead of the host-bound eager decode.
     traced = os.environ.get("DEEPSEEK_V4_TRACED_DECODE", "1") not in ("0", "", "false", "False")
 
-    prompt = render_message(0, [{"role": "user", "content": text}], "chat")
-    prompt_ids: list[int] = list(tokenizer(prompt)["input_ids"])
+    prompt = encode_messages([{"role": "user", "content": text}], "chat")
+    # ``encode_messages`` includes DeepSeek's required BOS token explicitly.
+    prompt_ids: list[int] = list(tokenizer(prompt, add_special_tokens=False)["input_ids"])
     real_len = len(prompt_ids)
     max_seq = _pad_to_tile(real_len + max_new_tokens)
     # ``DEEPSEEK_V4_MAX_SEQ`` widens the fixed buffers beyond what this run needs, so a
@@ -150,6 +173,8 @@ def _build_and_prefill(mesh_device, text: str, prefetcher: contextlib.ExitStack,
         max_layers=max_layers,
         use_submeshes=True,
         system_config=system_config,
+        use_prefetcher=None,
+        tp_size=tp_size,
     )
     lm_head = Linear(
         _w(loader, "lm_head.weight"),
@@ -186,7 +211,7 @@ def _build_and_prefill(mesh_device, text: str, prefetcher: contextlib.ExitStack,
         else:
             hidden = model.decode(prompt_ids[pos], pos, rope)  # [1, 1, D]
             with _region("LM_HEAD"):
-                logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()
+                logits = _first_mesh_copy(lm_head(hidden), model.last_device).reshape(1, -1).float()
         next_id = int(logits[0].argmax().item())
     logger.info(f"prefill ({real_len} tokens) -> token id {next_id} {tokenizer.decode([next_id])!r}")
 
@@ -203,6 +228,7 @@ def _build_and_prefill(mesh_device, text: str, prefetcher: contextlib.ExitStack,
         "eos_id": config.eos_token_id,
         "next_id": next_id,
         "traced": traced,
+        "tp_size": tp_size,
     }
 
 
@@ -211,23 +237,39 @@ def _build_and_prefill(mesh_device, text: str, prefetcher: contextlib.ExitStack,
 @torch.no_grad()
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "num_command_queues": 2}],
     indirect=["device_params"],
-    ids=["fabric_2d"],
+    ids=["fabric_1d"],
+)
+@pytest.mark.parametrize(
+    "mesh_device,tp_size",
+    [
+        pytest.param(8, 1, id="pp8_tp1_8chip"),
+        pytest.param(32, 4, id="pp8_tp4_32chip"),
+    ],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("text", (_DEFAULT_TEXT,))
-def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
+def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: int) -> None:
     import time
 
     # The prefetcher session spans prefill and generation both, so it is opened inside
     # ``_build_and_prefill`` (once the model exists) against this stack.
     with contextlib.ExitStack() as prefetcher:
-        state = _build_and_prefill(mesh_device, text, prefetcher)
+        state = _build_and_prefill(mesh_device, text, prefetcher, tp_size=tp_size)
         model, lm_head, tokenizer = state["model"], state["lm_head"], state["tokenizer"]
         rope, prompt_ids, real_len = state["rope"], state["prompt_ids"], state["real_len"]
         max_seq, max_new_tokens, eos_id = state["max_seq"], state["max_new_tokens"], state["eos_id"]
         traced, next_id = state["traced"], state["next_id"]
         generated: list[int] = [next_id]
+        assert model.tp_size == tp_size
+        assert model.num_submeshes == 8
+        assert all(layer.self_attn.tp_size == tp_size for layer in model.layers)
+        assert all(layer.mlp.tp_size == tp_size for layer in model.layers)
+        assert all(layer.mlp.experts.tp_size == tp_size for layer in model.layers)
+        logger.info(
+            f"parallelism: {model.num_submeshes} pipeline stages x TP{tp_size} " f"({model.pipeline_devices} chips)"
+        )
 
         # Each step feeds the previously generated token at its absolute position and
         # reads back the single-token logits (no recompute over the prior context).
@@ -248,7 +290,9 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
             else:
                 hidden = model.decode(next_id, pos, rope)  # [1, 1, D]
                 with _region("LM_HEAD"):
-                    logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()  # forces device sync
+                    logits = (
+                        _first_mesh_copy(lm_head(hidden), model.last_device).reshape(1, -1).float()
+                    )  # forces device sync
             next_id = int(logits[0].argmax().item())
             decode_time += time.perf_counter() - t0
             decode_tokens += 1
