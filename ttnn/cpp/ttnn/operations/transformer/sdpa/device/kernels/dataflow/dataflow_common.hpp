@@ -19,7 +19,31 @@
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
-    return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
+    // Guard the divide: with num_readers larger than 512 this would floor to 0 and the
+    // caller's `++count == threshold` would never fire, dropping the barrier entirely.
+    constexpr uint32_t per_reader = (512 / (num_readers ? num_readers : 1));
+    constexpr uint32_t t = (per_reader * (1024 + 128)) / tile_bytes;
+    return t ? t : 1;
+}
+
+// How many cores actually read, for the purpose of sizing the NoC read-ahead budget above.
+//
+// The Q-chunk space is B*NQH*q_num_chunks, pair-distributed when causal
+// (sdpa_program_factory.cpp:391), so the number of cores that receive any work is capped well
+// below the grid: at B=1, NQH=6, q_num_chunks=16 it is 48, not 130. Passing the full grid
+// makes get_barrier_read_threshold() divide the DRAM budget among ~2.7x more readers than
+// exist, and at bf16 tile sizes the result floors to 1 -- one async_read_barrier per tile,
+// i.e. no read pipelining at all on an op that is DRAM-bandwidth-bound.
+//
+// Every input here is already a compile-time constant in the reader, so this needs no new
+// compile-time argument and no change to the (index-fragile) factory arg list.
+template <uint32_t B, uint32_t NQH, uint32_t q_num_chunks, bool is_causal, uint32_t num_cores>
+constexpr uint32_t get_num_active_readers() {
+    constexpr uint32_t total_q_chunks = B * NQH * q_num_chunks;
+    constexpr bool pair_distribute = is_causal && (q_num_chunks % 2 == 0);
+    constexpr uint32_t schedulable = pair_distribute ? (total_q_chunks / 2) : total_q_chunks;
+    constexpr uint32_t active = schedulable < num_cores ? schedulable : num_cores;
+    return active ? active : 1;
 }
 
 inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t tile_bytes, uint32_t offset_bytes = 0) {
@@ -1564,18 +1588,25 @@ void write_block(
     const uint32_t cols,
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
-    const uint32_t barrier_threshold) {
+    const uint32_t barrier_threshold,
+    // Tiles to advance per output row. Defaults to `cols`, i.e. rows are contiguous,
+    // which is the head-major [B, NQH, Sq, DH] layout. Pass NQH*vDHt to scatter this
+    // head's columns into a concat-heads [B, 1, Sq, NQH*DH] output instead, so the
+    // separate nlp_concat_heads pass can be dropped.
+    const uint32_t row_stride = 0) {
     uint32_t barrier_count = 0;
     uint32_t tile_id = out_tile_id;
+    const uint32_t stride = (row_stride == 0) ? cols : row_stride;
 
     CircularBuffer cb(cb_out);
     cb.wait_front(out_chunk_tiles);
 
     uint32_t tile_offset = 0;
     for (uint32_t row = 0; row < rows; ++row) {
+        uint32_t col_tile_id = tile_id;
         for (uint32_t col = 0; col < cols; ++col) {
-            noc.async_write(cb, out_writer, tile_bytes, {.offset_bytes = tile_offset}, {.page_id = tile_id});
-            ++tile_id;
+            noc.async_write(cb, out_writer, tile_bytes, {.offset_bytes = tile_offset}, {.page_id = col_tile_id});
+            ++col_tile_id;
             tile_offset += tile_bytes;
 
             if (++barrier_count == barrier_threshold) {
@@ -1583,6 +1614,7 @@ void write_block(
                 barrier_count = 0;
             }
         }
+        tile_id += stride;
     }
     noc.async_write_barrier();
     cb.pop_front(out_chunk_tiles);
@@ -1605,9 +1637,12 @@ void write_block_row_grouped(
     const uint32_t out_tile_id,
     const uint32_t tile_bytes,
     const uint32_t sbh,
-    const uint32_t barrier_threshold) {
+    const uint32_t barrier_threshold,
+    // See write_block: 0 means contiguous rows (head-major); NQH*vDHt scatters this
+    // head into a concat-heads output.
+    const uint32_t row_stride = 0) {
     constexpr uint32_t default_trid = 0;
-    uint32_t tile_id = out_tile_id;
+    const uint32_t stride = (row_stride == 0) ? cols : row_stride;
     uint32_t barrier_count = 0;
 
     const uint32_t num_full_groups = total_rows / sbh;
@@ -1622,6 +1657,9 @@ void write_block_row_grouped(
         for (uint32_t r = 0; r < rows_this_group; ++r) {
             const uint32_t row = rg * sbh + r;
             if (row < write_rows) {
+                // Absolute row index drives the tile id, so a skipped padding row cannot
+                // desynchronise the mapping the way a running counter would.
+                uint32_t tile_id = out_tile_id + row * stride;
                 for (uint32_t col = 0; col < cols; ++col) {
                     uint32_t tile_offset = (r * cols + col) * tile_bytes;
                     noc.async_write(cb, out_writer, tile_bytes, {.offset_bytes = tile_offset}, {.page_id = tile_id});

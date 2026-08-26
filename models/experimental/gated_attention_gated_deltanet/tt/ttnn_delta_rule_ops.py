@@ -225,19 +225,30 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
         return None
 
 
-def l2_norm_ttnn(x, dim=-1, eps=1e-6):
-    """L2 norm along dim. Last dim: fused rms_norm path (~3 fewer kernels)."""
+def l2_norm_ttnn(x, dim=-1, eps=1e-6, extra_scale=None):
+    """L2 norm along dim. Last dim: fused rms_norm path (~3 fewer kernels).
+
+    extra_scale folds a caller's follow-up scalar multiply into this one. The q path used to do
+    l2_norm(q) (which multiplies by K**-0.5) and then multiply by `scale`, which is itself
+    Dk**-0.5 == K**-0.5 -- two scalar multiplies by the same constant, back to back. Passing it
+    here collapses them into one and drops a rounding step. extra_scale=None is the previous
+    behaviour exactly.
+    """
     # L1 for T<=512; DRAM otherwise
     T = x.shape[1] if len(x.shape) >= 3 else x.shape[0]
     mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
     if dim in (-1, len(x.shape) - 1):
         K = x.shape[-1]
         normed = ttnn.rms_norm(x, epsilon=eps / K)
-        return ttnn.multiply(normed, K**-0.5, memory_config=mc)
+        s = K**-0.5 if extra_scale is None else (K**-0.5) * extra_scale
+        return ttnn.multiply(normed, s, memory_config=mc)
     x_sq = ttnn.multiply(x, x, memory_config=mc)
     norm_sq = ttnn.sum(x_sq, dim=dim, keepdim=True, memory_config=mc)
     inv_norm = ttnn.rsqrt(ttnn.add(norm_sq, eps, memory_config=mc), memory_config=mc)
-    return ttnn.multiply(x, inv_norm, memory_config=mc)
+    out = ttnn.multiply(x, inv_norm, memory_config=mc)
+    if extra_scale is not None:
+        out = ttnn.multiply(out, extra_scale, memory_config=mc)
+    return out
 
 
 def fused_decay_and_write_ttnn(
@@ -405,13 +416,12 @@ def recurrent_gated_delta_rule_decode_ttnn(
         beta = ttnn.typecast(beta, ttnn.float32)
         g = ttnn.typecast(g, ttnn.float32)
 
-    # L2 norm
-    q = l2_norm_ttnn(q, dim=-1)
-    k = l2_norm_ttnn(k, dim=-1)
-
+    # L2 norm. q's scale is folded into the norm's own scalar multiply rather than being a
+    # second op right after it -- both constants are K**-0.5 by default.
     if scale is None:
         scale = K**-0.5
-    q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+    q = l2_norm_ttnn(q, dim=-1, extra_scale=scale)
+    k = l2_norm_ttnn(k, dim=-1)
 
     # Reshape to matmul shapes; caller already TILE_LAYOUT.
     # Decode opt: q_row/k_row in L1 with L1-resident state h.

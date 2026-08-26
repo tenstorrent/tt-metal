@@ -28,6 +28,11 @@ struct SDPAParams {
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
+    // Emit the output already concatenated over heads: [B, 1, Sq, NQH*DH_v] rather than the
+    // default head-major [B, NQH, Sq, DH_v]. Values are bit-identical; only the writer's tile
+    // placement changes. Lets attention callers drop a full nlp_concat_heads round trip
+    // (~8% of the Qwen3.6 gated-attention chain at bfloat8_b). Interleaved non-chunked only.
+    bool fuse_concat_heads = false;
 };
 
 struct SDPAInputs {

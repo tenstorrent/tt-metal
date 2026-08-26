@@ -305,7 +305,7 @@ def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_
     return cos, sin
 
 
-def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
+def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim, out_memory_config=None):
     """x: [1, B, n_heads, HD]; cos/sin: [1, B, 1, rope_dim]; rotates first rope_dim dims.
 
     Fused HF-convention rotate-half via ttnn.experimental.rotary_embedding_hf. The op's native
@@ -316,24 +316,33 @@ def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
     mode (is_decode_mode=False), then transpose back. Partial: only the first rope_dim is rotated;
     the tail passes through.
     """
+    # Intermediates stay in L1: decode tensors here are [1, B, n_heads, rope_dim], tiny even at
+    # B=32, and the caller runs the rest of head-prep L1-resident (attention/tp.py `_L1`). This was
+    # the one DRAM hole in that chain. Memory placement does not change values.
+    #
+    # out_memory_config controls only the RETURNED tensor. Q must land in DRAM -- SDPA-decode
+    # requires Q height-sharded or DRAM-interleaved (sdpa_decode_device_operation.cpp:82-92) -- but
+    # K feeds pad -> paged_update_cache, which has no such requirement, so K can stay L1.
+    _L1 = ttnn.L1_MEMORY_CONFIG
+    _out = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
     hd = x.shape[-1]
     B = batch_size
-    x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, B, n_heads, rope_dim))
-    x_rope_t = ttnn.transpose(x_rope, 1, 2)  # [1, n_heads, B, rope_dim]
+    x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, B, n_heads, rope_dim), memory_config=_L1)
+    x_rope_t = ttnn.transpose(x_rope, 1, 2, memory_config=_L1)  # [1, n_heads, B, rope_dim]
     ttnn.deallocate(x_rope)
     # decode cos/sin [1, B, 1, rope_dim] -> prefill [1, 1, B, rope_dim] (broadcast over heads)
     cos_p = ttnn.reshape(cos_tt, (1, 1, B, rope_dim))
     sin_p = ttnn.reshape(sin_tt, (1, 1, B, rope_dim))
-    roped_t = ttnn.experimental.rotary_embedding_hf(
-        x_rope_t, cos_p, sin_p, is_decode_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    roped_t = ttnn.experimental.rotary_embedding_hf(x_rope_t, cos_p, sin_p, is_decode_mode=False, memory_config=_L1)
     ttnn.deallocate(x_rope_t)
-    roped = ttnn.to_memory_config(ttnn.transpose(roped_t, 1, 2), ttnn.DRAM_MEMORY_CONFIG)
+    # transpose takes memory_config directly -- the old code wrapped it in a to_memory_config copy.
+    roped = ttnn.transpose(roped_t, 1, 2, memory_config=_out if rope_dim == hd else _L1)
     ttnn.deallocate(roped_t)
     if rope_dim == hd:
         return roped
-    x_pass = ttnn.to_memory_config(ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd)), ttnn.DRAM_MEMORY_CONFIG)
-    result = ttnn.concat([roped, x_pass], dim=-1)
+    # ditto for slice: no separate to_memory_config dispatch needed.
+    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd), memory_config=_L1)
+    result = ttnn.concat([roped, x_pass], dim=-1, memory_config=_out)
     ttnn.deallocate(roped)
     ttnn.deallocate(x_pass)
     return result

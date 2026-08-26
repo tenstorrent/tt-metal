@@ -16,6 +16,65 @@ from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rop
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
+def sdpa_core_occupancy(B, n_q_heads, seq_len, q_chunk, num_cores):
+    """Fraction of the core grid that gets any SDPA work, and how many rounds it takes.
+
+    DIAGNOSTIC ONLY -- do not use this to pick q_chunk. See the warning below.
+
+    ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp:391
+    distributes `total_q_chunks = B * NQH * (Sq / q_chunk_size)` across the grid,
+    pair-wise when causal (`global_q_pair_distribute`). Parallelism is therefore
+    capped by that product, independent of how much work each chunk carries.
+
+    Qwen3.6-27B at TP=4 is a bad case: B=1, 6 local Q heads, S=2048, q_chunk=128
+    gives 96 chunks -> 48 pairs -> 48 of ~110 cores busy and 62 idle. Because
+    q_num_chunks derives from the Q length alone and chunked prefill always passes
+    a 2048-token Q, this holds on *every* chunk of a long prefill: the k-loop grows
+    with the prefix while the parallelism stays pinned.
+
+    WARNING -- occupancy is only half the story, and on its own it is a misleading
+    guide. Two competing terms set the optimum:
+
+      * parallelism, which favours a SMALL q_chunk (more chunks -> more cores), and
+      * per-core efficiency, which favours a LARGE q_chunk (softmax amortised over
+        more rows, better QK/PV matmul shapes).
+
+    MEASURED, this model's shape (B=1, 6 Q heads, S=2048, head_dim 256, bf8, ~110
+    cores). Isolated SDPA device-kernel time, 4 reps after warmup:
+
+        q=256          325.1 us    22% occupancy   1.70x slower
+        q=128          191.7 us    44% occupancy   optimum  <- the shipped default
+        q=64, k=128    298.5 us    87% occupancy   1.56x slower
+        q=64, k=64     290.0 us    87% occupancy   1.51x slower
+        q=32, k=128    580.8 us   100% occupancy   3.03x slower
+
+    So 128 is a local optimum and BOTH directions lose. The idle cores are real but
+    not recoverable through this knob: the extra cores you wake up run so much less
+    efficiently that the trade is a net loss, badly so at q=32. An earlier version of
+    this helper picked the smallest chunk that filled the grid; that rule would have
+    selected q=32 and cost a 3x regression on the op this model spends most of its
+    prefill in.
+
+    A peer's Ornith-35B shape (B=1, 16 Q heads, same S and grid) crosses over at 256,
+    where q_chunk=256 beat 64 by 2.9x -- the opposite ranking. Both inherited defaults
+    were already correct for their shapes.
+
+    Conclusion: pick q_chunk by measurement per shape. Use this helper to explain a
+    measured result, never to generate one.
+    """
+    chunks = B * n_q_heads * max(1, seq_len // q_chunk)
+    pairs = max(1, chunks // 2)
+    rounds = -(-pairs // num_cores)  # ceil
+    busy = min(pairs, num_cores)
+    return {
+        "q_chunks": chunks,
+        "pairs": pairs,
+        "cores_busy": busy,
+        "occupancy": busy / num_cores,
+        "rounds": rounds,
+    }
+
+
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     """Shard one full-attention layer's weights across the mesh."""
     if cache_dir is not None:
@@ -419,16 +478,14 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(
-            ttnn.rms_norm(q, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["q_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        k = ttnn.multiply(
-            ttnn.rms_norm(k, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["k_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        # Q/K-norm weight folded into rms_norm rather than a separate multiply. The HF `+1` is
+        # already baked into tw["q_norm"]/["k_norm"] at load (:175-176), so the weight is a plain
+        # multiplicative vector and rms_norm(weight=) applies it in-kernel -- the same model's GDN
+        # code already does this (gdn/tp.py:1110). Saves one binary op per tensor per layer.
+        # PCC, not bit-identical: the fused form keeps the normalized value in the higher-precision
+        # dest register before the weight multiply, so it is if anything more accurate.
+        q = ttnn.rms_norm(q, weight=tw["q_norm"], epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k = ttnn.rms_norm(k, weight=tw["k_norm"], epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG)
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
@@ -447,23 +504,72 @@ class TPAttention:
         # program.cpp "circular buffers ... clash with L1 buffers"). Production serving chunks
         # prefill at <=2048, so this path never sees S>2048 and 256 has no reachable win.)
         ch = min(128 if S >= 2048 else 64, padded)
+        # Full BH grid (13x10 = 130 cores) rather than the old (8, 8) = 64. The chunked
+        # path below already does this; both are bit-identical to 8x8 -- verified in
+        # tests/ttnn/unit_tests/operations/sdpa/test_gated_attention_prefill.py
+        # ::test_sdpa_grid_size_is_bit_identical.
+        # exp_approx_mode=True: the softmax exp is O(S^2) SFPU work and the fast path costs
+        # nothing measurable here -- see ::test_gated_attention_prefill_precision_sweep,
+        # where exact vs approx exp match to ~1e-6 PCC at every fidelity/dtype combination.
+        # SDPA chunk/output tuning is dtype-dependent -- measured on P300, S=2048, 6Q/1KV, hd=256,
+        # device-kernel time for the whole SDPA+gate chain:
+        #
+        #                        bf16     bf8
+        #   k=128, out L1       328.3   227.3
+        #   k=256, out L1       377.9   238.0
+        #   k=256, out DRAM     352.0   218.2   <- bf8 optimum
+        #                        ^ bf16 optimum is k=128/L1
+        #
+        # k_chunk=256 makes Sk_chunk_t=8, which switches on `can_reduce_trigger`
+        # (compute_streaming.hpp:1972 -- false at Sk_chunk_t=4, so the early-reduce overlap path
+        # is dead code at k=128). That helps bf8 SDPA (189.9 -> 178.8) but not bf16 (276.6 ->
+        # 298.0). Its larger CBs also contend with an L1-resident output, so k=256 wants the
+        # output in DRAM: at bf8 the epilogue goes 58.9 -> 39.4 us just from that move.
+        _k_chunk = 256 if self._sdpa_bf8 else ch
+        _attn_mc = ttnn.DRAM_MEMORY_CONFIG if self._sdpa_bf8 else ttnn.L1_MEMORY_CONFIG
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=ch, k_chunk_size=ch
+            compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+            exp_approx_mode=True,
+            q_chunk_size=ch,
+            k_chunk_size=_k_chunk,
         )
+        # fuse_concat_heads: SDPA's writer places tiles straight into concat-heads layout
+        # [1, 1, S, NH*HD], so the separate nlp_concat_heads pass disappears. Values are
+        # bit-identical -- only tile placement changes; see
+        # tests/ttnn/unit_tests/operations/sdpa/test_gated_attention_prefill.py
+        # ::test_sdpa_fused_concat_heads_is_bit_identical.
+        # Measured on P300 at S=2048, 6Q/1KV, head_dim 256: chain 384.0 -> 354.8 us (-7.6%)
+        # in bf16, and 250.3 -> 231.2 us with bfloat8_b. NLPConcatHeads (21-25 us) vanishes
+        # and SDPA itself is unchanged, so the saving is the whole of that op minus ~2 us the
+        # gate multiply gains from its new input layout.
         attn = ttnn.transformer.scaled_dot_product_attention(
-            q8, k8, v8, is_causal=True, scale=self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=sdpa_cfg
+            q8,
+            k8,
+            v8,
+            is_causal=True,
+            scale=self.scale,
+            memory_config=_attn_mc,
+            program_config=sdpa_cfg,
+            fuse_concat_heads=True,
         )
         ttnn.deallocate(q8)
         ttnn.deallocate(k8)
         ttnn.deallocate(v8)
 
-        # Concat heads first, then gate: concat col h*HD+d == gate_flat col h*HD+d, so this is
-        # bit-identical to per-head gating but skips the gate reshape+transpose to head-major.
-        attn = self._concat_heads(attn)
-        # concat(attn)+sigmoid(gate) in L1; gated stays DRAM (feeds the wo matmul_reduce_scatter — an L1
-        # CCL activation risks clashing with its CBs).
+        # Already concat-heads out of SDPA. Column h*HD+d == gate_flat column h*HD+d, the same
+        # identity the old post-concat gating relied on, so the gate below is unchanged.
+        # Sigmoid folded into the multiply as an operand-B activation instead of a standalone
+        # ttnn.sigmoid: one fewer op, and it drops a full [S, NH*HD] L1 temp plus its write and
+        # read-back per attention layer. Bit-identical to sigmoid-then-multiply -- see
+        # tests/ttnn/unit_tests/operations/sdpa/test_gated_attention_prefill.py
+        # ::test_sigmoid_gate_fuses_into_multiply. Same fusion as #50089 on the GDN decay multiply.
+        # gated stays DRAM (feeds the wo matmul_reduce_scatter -- an L1 CCL activation risks
+        # clashing with its CBs).
         gated = ttnn.multiply(
-            attn, ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.DRAM_MEMORY_CONFIG
+            attn,
+            gate_flat,
+            input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
@@ -545,11 +651,17 @@ class TPAttention:
             ttnn.deallocate(vp)
 
         # QK norm — (1+w), matching prefill/HF (the prior "flat" no-+1 decode band-aided the reshape scramble).
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm"], memory_config=_L1)
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm"], memory_config=_L1)
+        # Weight folded into rms_norm -- see forward_prefill. 2 fewer ops per layer per token.
+        q = ttnn.rms_norm(q, weight=tw["q_norm"], epsilon=1e-6, memory_config=_L1)
+        k = ttnn.rms_norm(k, weight=tw["k_norm"], epsilon=1e-6, memory_config=_L1)
 
+        # Q must come back in DRAM: SDPA-decode requires Q height-sharded or DRAM-interleaved
+        # (sdpa_decode_device_operation.cpp:82-92). K only feeds pad -> paged_update_cache, so it
+        # can stay L1 and keep the rest of head-prep L1-resident. Every intermediate inside the
+        # helper is L1 either way; bit-identical, just fewer DRAM round trips and 2 fewer
+        # dispatches per call (the helper's redundant to_memory_config copies are gone).
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
-        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim, out_memory_config=_L1)
 
         # SDPA-decode grid: use the real device grid (11x10=110 cores on P150x4), not a
         # hardcoded 64. cores_per_head = grid_total/B (sdpa_decode_program_factory.cpp), so a
@@ -560,12 +672,46 @@ class TPAttention:
         # SdpaDecodeDeviceOperation duration B=8: 1569.9us -> 1396.2us (-11%); B=1: 220.8us ->
         # 215.5us (-2.4%, no regression). Using the full grid unconditionally since it never hurts
         # and helps significantly at long context, where batched decode is otherwise slowest.
+        # exp_approx_mode=True: the issue reports decode growing 438 -> 724 us as KV goes
+        # 4k -> 128k, and the softmax exp is O(kv_len) of that. SDPA-decode is a different
+        # kernel from prefill (sdpa_flash_decode.cpp), so it was measured separately:
+        # exact and approx exp are BIT-IDENTICAL at kv_len 256 and 1024 --
+        # test_gated_attention_prefill.py::test_gated_attention_decode_exp_approx.
+        # Flash attention subtracts the running max before exp, so the argument is always
+        # <= 0 and the approximation error stays bounded as kv_len grows.
+        # max_cores_per_head_batch: sdpa_decode_program_factory.cpp:194-195 flips the cap from
+        # num_cores_available to SDPAProgramConfig's struct default of 16 the moment ANY program
+        # config is passed -- which this call site does. At B=1/NKV=1 that is 16 cores per head
+        # instead of 64 (the ceiling is 64: MAX_TREE_REDUCTION_ROUNDS=6 in
+        # sdpa_decode_device_operation.hpp:25), i.e. a 4x narrower KV reduction on exactly the
+        # single-user long-context decode that issue #50475 reports growing 438 -> 724 us.
+        #
+        # The cap only binds at small batch (at B=8 the grid is the limiter anyway), which also
+        # explains the measurement recorded below: widening the GRID was flat at B=1 but helped
+        # B=8 by 11% -- the grid was never the B=1 limiter, this cap was.
+        #
+        # BUT the headroom is 16 -> 24, not 16 -> 64. The tree-reduction ceiling is 64
+        # (MAX_TREE_REDUCTION_ROUNDS=6), but L1 binds first at head_dim=256: the per-core
+        # reduction buffers scale with head_dim, and a scan on ttsim (B=1, 6Q/1KV, hd=256) shows
+        #
+        #     kv=512/1024/2048   cap 16 OK   cap 24 OK   cap 32+ L1 OVERFLOW
+        #
+        # (cap 32 asks for ~1.92 MB of statically allocated CBs against a 1.57 MB limit). So the
+        # default of 16 is partly protective, not merely conservative, and this model has less
+        # room here than a head_dim=128 model would. 24 is the measured maximum.
+        #
+        # OFF BY DEFAULT. It changes the reduction-tree depth and so the float reduction order,
+        # and ttsim can confirm correctness but cannot rank it. Turn on only after a hardware
+        # A/B at long KV. QWEN_SDPA_DECODE_WIDE=1.
+        _wide_reduce = os.environ.get("QWEN_SDPA_DECODE_WIDE") == "1"
         _sdpa_grid = self.mesh.compute_with_storage_grid_size()
+        _dec_cfg_kw = {"max_cores_per_head_batch": 24} if _wide_reduce else {}
         sdpa_dec_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(_sdpa_grid.x, _sdpa_grid.y),
-            exp_approx_mode=False,
+            exp_approx_mode=True,
             q_chunk_size=0,
             k_chunk_size=0,
+            **_dec_cfg_kw,
         )
         if use_paged:
             # External paged KV: update at cur_pos, then paged SDPA-decode
@@ -629,7 +775,11 @@ class TPAttention:
             # semaphore buffers at the top of L1. Bound the K-chunk to cap the CB footprint (the paged
             # production path reads bounded blocks, so it keeps the auto config).
             nonpaged_sdpa_cfg = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=128
+                compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=True,
+                q_chunk_size=0,
+                k_chunk_size=128,
+                **_dec_cfg_kw,
             )
             attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
                 q,
@@ -644,7 +794,11 @@ class TPAttention:
             )
             ttnn.deallocate(q)
 
-        gated = ttnn.multiply(attn_out, ttnn.sigmoid(gate, memory_config=_L1), memory_config=_L1)
+        # Sigmoid as an operand-B activation rather than a standalone op (bit-identical; see
+        # test_gated_attention_prefill.py::test_sigmoid_gate_fuses_into_multiply). Decode tensors
+        # are small, so this is one fewer dispatch per attention layer per token rather than a
+        # bandwidth win -- but decode is dispatch-bound, which is where that matters.
+        gated = ttnn.multiply(attn_out, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=_L1)
         ttnn.deallocate(attn_out)
         ttnn.deallocate(gate)
 
@@ -693,16 +847,14 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(
-            ttnn.rms_norm(q, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["q_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        k = ttnn.multiply(
-            ttnn.rms_norm(k, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["k_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        # Q/K-norm weight folded into rms_norm rather than a separate multiply. The HF `+1` is
+        # already baked into tw["q_norm"]/["k_norm"] at load (:175-176), so the weight is a plain
+        # multiplicative vector and rms_norm(weight=) applies it in-kernel -- the same model's GDN
+        # code already does this (gdn/tp.py:1110). Saves one binary op per tensor per layer.
+        # PCC, not bit-identical: the fused form keeps the normalized value in the higher-precision
+        # dest register before the weight multiply, so it is if anything more accurate.
+        q = ttnn.rms_norm(q, weight=tw["q_norm"], epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k = ttnn.rms_norm(k, weight=tw["k_norm"], epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG)
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
@@ -749,11 +901,20 @@ class TPAttention:
             cap = 128 if S >= 2048 else 64  # 128 beats 256
             qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
         # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep)
+        # exp_approx_mode=True: softmax exp is O(S^2) SFPU work on the path the issue calls the
+        # long-context bottleneck, and the fast exp is numerically free here -- exact vs approx
+        # agree to ~1e-6 PCC across every fidelity/dtype combination in
+        # tests/ttnn/unit_tests/operations/sdpa/test_gated_attention_prefill.py
+        # ::test_gated_attention_prefill_precision_sweep.
+        # Same dtype-dependent tuning as forward_prefill -- see the measured table there.
+        # q_chunk must still satisfy chunk_start_idx % q_chunk == 0; k_chunk is unconstrained.
+        _k_chunk = 256 if self._sdpa_bf8 else qk_chunk
+        _attn_mc = ttnn.DRAM_MEMORY_CONFIG if self._sdpa_bf8 else ttnn.L1_MEMORY_CONFIG
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
-            exp_approx_mode=False,
+            exp_approx_mode=True,
             q_chunk_size=qk_chunk,
-            k_chunk_size=qk_chunk,
+            k_chunk_size=_k_chunk,
         )
 
         # Pad page table to cover Q+offset and satisfy stick-size % 32 (extra blocks masked by causality)
@@ -778,9 +939,16 @@ class TPAttention:
                 input_tensor_k=k_paged,
                 input_tensor_v=v_paged,
                 page_table_tensor=sdpa_page_table,
+                # L1 output: the gate multiply below reads this straight from L1 instead of a DRAM
+                # round trip. Same L1 footprint as before -- the old chain already parked this exact
+                # [S, NH*HD] tensor in L1 as nlp_concat_heads' output; SDPA now writes it there
+                # directly. Measured 354.8 -> 345.4 us (bf16) and 231.2 -> 228.2 us (bf8); SDPA itself
+                # also drops (300.6 -> 293.7) since an L1 write is cheaper than a DRAM one.
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
                 compute_kernel_config=self.compute_cfg,
                 program_config=sdpa_cfg,
+                fuse_concat_heads=True,
+                memory_config=_attn_mc,
             )
         else:
             attn = ttnn.transformer.chunked_scaled_dot_product_attention(
@@ -788,20 +956,40 @@ class TPAttention:
                 input_tensor_k=k_paged,
                 input_tensor_v=v_paged,
                 page_table_tensor=sdpa_page_table,
+                # L1 output: the gate multiply below reads this straight from L1 instead of a DRAM
+                # round trip. Same L1 footprint as before -- the old chain already parked this exact
+                # [S, NH*HD] tensor in L1 as nlp_concat_heads' output; SDPA now writes it there
+                # directly. Measured 354.8 -> 345.4 us (bf16) and 231.2 -> 228.2 us (bf8); SDPA itself
+                # also drops (300.6 -> 293.7) since an L1 write is cheaper than a DRAM one.
                 chunk_start_idx=chunk_start_idx,
                 compute_kernel_config=self.compute_cfg,
                 program_config=sdpa_cfg,
+                fuse_concat_heads=True,
+                memory_config=_attn_mc,
             )
         if sdpa_page_table is not page_table:
             ttnn.deallocate(sdpa_page_table)
         ttnn.deallocate(q8)
 
-        # Concat heads first, then gate (flat gate matches concat column order); see forward_prefill.
-        attn = self._concat_heads(attn)
-        # concat(attn)+sigmoid(gate) in L1; gated stays DRAM (feeds the wo matmul_reduce_scatter — an L1
-        # CCL activation risks clashing with its CBs).
+        # SDPA already emitted concat-heads layout (fuse_concat_heads=True above), so the separate
+        # nlp_concat_heads pass is gone. Chunking shifts the output ROW via write_offset while the
+        # fusion remaps the head to a COLUMN range, so the two compose -- verified bit-identical
+        # with a page table and a non-zero chunk_start in
+        # tests/ttnn/unit_tests/operations/sdpa/test_gated_attention_prefill.py
+        # ::test_chunked_sdpa_fused_concat_heads_is_bit_identical.
+        # This is the path vLLM serving runs, so it is where the saving actually lands.
+        # Sigmoid folded into the multiply as an operand-B activation instead of a standalone
+        # ttnn.sigmoid: one fewer op, and it drops a full [S, NH*HD] L1 temp plus its write and
+        # read-back per attention layer. Bit-identical to sigmoid-then-multiply -- see
+        # tests/ttnn/unit_tests/operations/sdpa/test_gated_attention_prefill.py
+        # ::test_sigmoid_gate_fuses_into_multiply. Same fusion as #50089 on the GDN decay multiply.
+        # gated stays DRAM (feeds the wo matmul_reduce_scatter -- an L1 CCL activation risks
+        # clashing with its CBs).
         gated = ttnn.multiply(
-            attn, ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.DRAM_MEMORY_CONFIG
+            attn,
+            gate_flat,
+            input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)

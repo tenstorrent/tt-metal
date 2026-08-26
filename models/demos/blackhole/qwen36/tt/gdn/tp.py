@@ -1059,15 +1059,23 @@ class TPGatedDeltaNet:
         conv = ttnn.silu(conv, memory_config=_L1)
 
         kd = self.key_dim_tp
-        q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd)), (B, Nk, Dk))
-        k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd)), (B, Nk, Dk))
-        v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
+        # These 8 ops used to default to DRAM, taking a full round trip out of and back into an
+        # explicitly L1-resident chain: `conv` above is L1 and the reshapes below put q/k back in
+        # L1 anyway. Memory placement does not change values; this is bit-identical, and it lands
+        # on 48 of 64 layers.
+        q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, kd), memory_config=_L1), (B, Nk, Dk), memory_config=_L1)
+        k = ttnn.reshape(
+            ttnn.slice(conv, (0, 0, kd), (1, B, 2 * kd), memory_config=_L1), (B, Nk, Dk), memory_config=_L1
+        )
+        v = ttnn.reshape(
+            ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp), memory_config=_L1), (B, Nv, Dv), memory_config=_L1
+        )
         ttnn.deallocate(conv)
 
         # GQA expand Q/K Nk→Nv; recurrence L2-norms + scales internally
         rf = Nv // Nk
-        q = ttnn.repeat_interleave(q, rf, dim=1)
-        k = ttnn.repeat_interleave(k, rf, dim=1)
+        q = ttnn.repeat_interleave(q, rf, dim=1, memory_config=_L1)
+        k = ttnn.repeat_interleave(k, rf, dim=1, memory_config=_L1)
         # Decode: hand q/k/v to the recurrent kernel in L1. The kernel typecasts + does a LOCAL
         # l2-norm (no cross-device gather), so placement is output-neutral here (unlike SDPA-q,
         # which hard-requires DRAM, and unlike the residual→DistributedNorm all-gather).
@@ -1106,10 +1114,10 @@ class TPGatedDeltaNet:
         else:
             self.rec_state = new_rec
 
-        out_r = ttnn.reshape(o, (B, Nv, Dv))
+        out_r = ttnn.reshape(o, (B, Nv, Dv), memory_config=_L1)
         out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
         ttnn.deallocate(out_r)
-        out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp))
+        out_f = ttnn.reshape(out_n, (1, B, self.value_dim_tp), memory_config=_L1)
         ttnn.deallocate(out_n)
         gated = _silu_mul(out_f, z, _L1)
         ttnn.deallocate(out_f)

@@ -36,10 +36,10 @@ inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
 // out[Mt,Nt] = A[Mt,Kt] @ (tr ? B[Nt,Kt]^T : B[Kt,Nt]). Inputs must be available.
 void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr) {
     cb_reserve_back(o, Mt * Nt);
-    pack_reconfig_data_format(o);  // mixed bf16/fp32 CBs: set packer to this output's format
-    // matmul_tiles(a,b): in0=a->srcB, in1=b->srcA. The op init only asserts formats, it does not
-    // set them, so reconfig the unpack src formats explicitly (else CBs read at the wrong format).
-    reconfig_data_format(b, a);
+    // No per-call format reconfig: every CB in the SCAN program is Float32 (chunk_gdn_phased_
+    // program_factory.cpp sets df_io = Float32 for the scan and add_cb defaults to Float32), so the
+    // packer and unpacker formats are configured once in kernel_main and never change. The op init
+    // below only asserts formats; it does not set them.
     matmul_init(a, b, tr ? 1 : 0);
     for (uint32_t mi = 0; mi < Mt; mi++) {
         for (uint32_t ni = 0; ni < Nt; ni++) {
@@ -60,8 +60,7 @@ void mm(uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t N
 // out = A (op) B elementwise, n tiles. op: 0 add, 1 sub, 2 mul.
 void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
     cb_reserve_back(o, n);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(a, b);  // binary(a,b): a->srcA, b->srcB
+    // Formats are uniform across the scan's CBs and set once in kernel_main -- see mm().
     if (op == 0) {
         add_init(a, b);
     } else if (op == 1) {
@@ -89,8 +88,7 @@ void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
 // out = A * scalar, n tiles. scalar is the [0,0] element of the single `scal` tile.
 void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
     cb_reserve_back(o, n);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(a, scal);  // bcast(a,scal): a->srcA, scal->srcB
+    // Formats are uniform across the scan's CBs and set once in kernel_main -- see mm().
     mul_bcast_scalar_init(a, scal);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
@@ -118,6 +116,17 @@ void kernel_main() {
     constexpr uint32_t kc = Kt * Ct;
 
     compute_kernel_hw_startup(cb_kd, cb_vbeta, cb_out);
+
+    // Every CB in this program shares one data format (Float32), so the packer/unpacker format
+    // configuration is loop-invariant. Doing it once here rather than on every mm/ew/bcast call
+    // removes 16 unconditional reconfigures per chunk -- the 1-argument reconfig forms always
+    // reprogram, they do not check whether anything changed.
+    //
+    // INVARIANT: if any scan CB ever becomes a different format (e.g. a bf16 `o` returns, which
+    // was tried and reverted for quality -- see the df_io comment in the program factory), these
+    // must move back into the helpers or become the guarded old/new overloads.
+    pack_reconfig_data_format(cb_out);
+    reconfig_data_format(cb_kd, cb_vbeta);
 
     for (uint32_t c = 0; c < NC; c++) {
         // State uses THREE single-producer CBs so no CB is produced by both the reader and
