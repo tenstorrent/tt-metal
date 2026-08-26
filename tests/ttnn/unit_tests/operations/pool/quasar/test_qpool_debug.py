@@ -26,6 +26,8 @@ NOTES:
     shards; check bigger shapes on silicon.
 """
 
+import os
+
 import pytest
 import torch
 
@@ -127,6 +129,19 @@ def test_qpool_debug(mesh_device):
     tensor_height = batch * in_h * in_w
     assert tensor_height % 32 == 0, f"N*H*W={tensor_height} must be a multiple of 32 (height sharding)"
     assert channels % 32 == 0, f"C={channels} must be a multiple of 32 (shard width = tile width)"
+
+    # Guard against the open craq-sim DFB bug: on the SIMULATOR, tensors >= 256 total sticks either
+    # stall the halo program until the runner timeout or silently corrupt the second channel tile
+    # (verified 2026-08-25: 16x16x64 k3p1 stalls, 16x16x64 k2p0 zeroes ch32+, 16x16x32 k2p0 stalls;
+    # every one of these passes EXACTLY on WH silicon). Fail fast here instead of wasting a timeout.
+    SIM_MAX_STICKS = 128
+    if os.environ.get("TT_METAL_SIMULATOR") and tensor_height > SIM_MAX_STICKS:
+        pytest.fail(
+            f"CONFIG hits the open craq-sim DFB bug: N*H*W={tensor_height} sticks > {SIM_MAX_STICKS} "
+            f"(this shape would stall or corrupt IN THE SIM ONLY). Shrink the shape for sim runs, "
+            f"or run this exact config on WH silicon instead: "
+            f"TT_METAL_SLOW_DISPATCH_MODE=1 pytest -q -s {__file__}"
+        )
     if not is_max and (padding[0] or padding[1]):
         print("QPOOL WARNING: avg with padding — torch golden uses count_include_pad=True; prefer PADDING=(0,0)")
 
