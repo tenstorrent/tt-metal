@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Project one profiled MiniMax-H3 transformer block out to a denoise step and a whole video.
-Reads the Tracy ops CSV from `test_performance_minimax_h3.py`, isolates the warm iteration
+Reads the Tracy ops CSV from `test_transformer_minimax_h3.py` (`test_minimax_h3_transformer_block_perf`), isolates the warm iteration
 between the `start`/`stop` signposts, and multiplies out. Not a test; pytest leaves it alone.
 
     python project_block_perf.py 5s=path/to/ops_perf_results_A.csv 15s=.../B.csv

@@ -375,6 +375,76 @@ def build_row_timesteps(
     return torch.unique(row_timesteps, sorted=True, return_inverse=True)
 
 
+# Roles a resident-AdaLN row can take, in canonical slot order. Each maps to one noise level per
+# step, and a row's role never changes across a request -- so, unlike the precomputed path's
+# per-step `torch.unique`, the row->slot map is built once.
+MINIMAX_H3_ADALN_ROLES = ("video", "audio", "condition_video", "condition_audio")
+
+
+def build_slot_routing(layout: MiniMaxH3PackedSequence) -> tuple[torch.Tensor, tuple[str, ...]]:
+    """Fixed per-row AdaLN slot assignment for the resident (non-precomputed) path.
+
+    A row's noise level is fixed by its role -- generated video and text at the video level,
+    generated audio at the audio level, conditioning rows pinned at their augmentation level -- so
+    the row->slot map is constant for the whole request. This is what replaces the precomputed
+    path's per-step ``build_row_timesteps`` + ``torch.unique``, whose deduplicated level count
+    varies step to step (the conditioning floor collides with the video level early in the schedule
+    and separates later) and so cannot be a traced input. Roles with no rows are dropped, so a
+    request carries the minimum fixed slot count: two for ``t2va``, three for ``fl2va`` and four for
+    ``ref2va``.
+
+    Returns ``(row_slot, roles)``: ``row_slot[r]`` is row ``r``'s slot index and ``roles`` names
+    each slot in order, so :func:`slot_levels` builds the matching per-step level vector.
+    """
+    num_cond_video = layout.num_condition_video_rows
+    num_cond_audio = layout.num_condition_audio_rows
+    # Video and audio always carry generated rows; the two conditioning slots exist only when the
+    # layout has rows to fill them.
+    present = {
+        "video": True,
+        "audio": True,
+        "condition_video": num_cond_video > 0,
+        "condition_audio": num_cond_audio > 0,
+    }
+    roles = tuple(role for role in MINIMAX_H3_ADALN_ROLES if present[role])
+    slot = {role: index for index, role in enumerate(roles)}
+
+    # The same row->role assignment `build_row_timesteps` makes, recording the slot index rather
+    # than the level value: default (text + generated video) at the video slot, then override the
+    # conditioning and generated-audio spans.
+    row_slot = torch.full((layout.sequence_length,), slot["video"], dtype=torch.long)
+    if num_cond_video:
+        row_slot[layout.video_indices[:num_cond_video]] = slot["condition_video"]
+    row_slot[layout.audio_indices[num_cond_audio:]] = slot["audio"]
+    if num_cond_audio:
+        row_slot[layout.audio_indices[:num_cond_audio]] = slot["condition_audio"]
+    return row_slot, roles
+
+
+def slot_levels(
+    roles: tuple[str, ...],
+    *,
+    video_timestep: float,
+    audio_timestep: float,
+    condition_video_timestep: float,
+    condition_audio_timestep: float,
+) -> torch.Tensor:
+    """The per-step noise level of each slot, ordered to match :func:`build_slot_routing`'s roles.
+
+    Fixed length (``len(roles)``) for the whole request -- no dedup -- so the modulation table the
+    blocks project from has a constant shape and the step is traceable. Two slots may hold equal
+    levels (the conditioning floor equals the video level early in the schedule); they are kept
+    distinct rather than merged, which is precisely what fixes the shape.
+    """
+    values = {
+        "video": video_timestep,
+        "audio": audio_timestep,
+        "condition_video": condition_video_timestep,
+        "condition_audio": condition_audio_timestep,
+    }
+    return torch.tensor([values[role] for role in roles], dtype=torch.float32)
+
+
 def adaln_indices(token_tags: torch.Tensor, timestep_indices: torch.Tensor) -> torch.Tensor:
     """Row to AdaLN table row.
 
