@@ -494,6 +494,18 @@ KNOBS = {
     # atan2-fresh = named no-fire control (fully inlined, no call
     # boundary; its 27-word residual is the 295t peel-placement class,
     # crossloop-cc-unproven at the face loop — a different member).
+    # MEASURED (laneHC-evidence-20260825, BH p150, off = ON-28 +
+    # lut-select-fp16 = the GU booking legs reproduced EXACTLY
+    # (30651/29845/20771), knob = + crosscall-config-prefix, 3 reps
+    # cycle-identical, paired CRAQ PASS pinned sim 32489dda + device
+    # corr PASS before any perf): KERNEL mean(MATH_ISOLATE) —
+    # geluappx-fresh 30651 -> 28857 (-5.85% knob-causal; vs-hand
+    # +6.25 -> +0.03 = the residual KILLED, hand 28849);
+    # sigmoidlut-fresh 29845 -> 29755 (-0.30%; vs-hand -0.94 -> -1.24
+    # WIN extends); tanhlut-fresh 20771 -> 20666 (-0.51%; vs-hand
+    # +0.56 -> +0.05, hand 20656).  atan2-fresh (ON-28+pressure-park
+    # legs) + hardsigmoid-fresh + tanhderivlut-fresh + geluappx hand
+    # arm: REFUSAL_BYTE_IDENTICAL under the knob (measured controls).
     "crosscall-config-prefix": "-mtt-tensix-optimize-lut-select "
     "-mtt-tensix-optimize-lut-select-fp16 "
     "-mtt-tensix-optimize-crosscall-config-prefix",
