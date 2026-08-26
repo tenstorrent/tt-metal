@@ -12,8 +12,6 @@
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/distributed/types.hpp"
-#include <tt-metalium/program.hpp>
 
 #include <optional>
 #include <variant>
@@ -54,15 +52,6 @@ struct SliceDeviceOperation {
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
-
-    // Cache-hit hook: re-derive ALL per-dispatch state (rt-args + tensor-backed CB addresses) from
-    // create_descriptor and re-apply to the cached program. Supersedes get_dynamic/resolve_bindings.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 SliceDeviceOperation::tensor_return_value_t slice(

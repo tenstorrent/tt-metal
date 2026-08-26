@@ -3,14 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run (from the tt-metal repo root, after an emule build):
-//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Object_Intent_*"
+//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="UnitMeshFixture.Object_Intent_*"
 
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
 
@@ -26,24 +28,25 @@ namespace tt::tt_metal {
 // pass the victim buffer's absolute address as a runtime arg, or it authorizes
 // the very write it is trying to flag. These tests pass only the victim's BYTE
 // OFFSET from the resolved buffer; the victim's address never enters the args.
-TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
+TEST_F(UnitMeshFixture, Object_Intent_Provenance_Violation_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
     // 1. Allocate two distinct buffers sequentially in L1 memory.
     //
     // L1 allocates top-down by default (see Buffer::bottom_up_ in buffer.cpp),
-    // so the first Buffer::create lands at the highest address and the second
+    // so the first MeshBuffer::create lands at the highest address and the second
     // lands immediately below it. Allocate Buffer B first so it occupies the
     // upper slot — Buffer A then sits directly under it with addr_a < addr_b.
     // That arrangement matches the narrative the kernel computes below
     // (overshoot Buffer A upward to stomp Buffer B).
     uint32_t buf_size = 1024;  // 1 KB each
-    auto buffer_b = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
+    distributed::DeviceLocalBufferConfig l1_config{.page_size = buf_size, .buffer_type = BufferType::L1};
+    auto buffer_b = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
+    auto buffer_a = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
 
     uint32_t addr_a = buffer_a->address();
     uint32_t addr_b = buffer_b->address();
@@ -92,7 +95,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
 
     // 3. The sanitizer should catch that the execution sequence breached pointer provenance bounds
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*Object Intent Violation: Attempted to modify memory belonging to an adjacent object context.*");
 }
 
@@ -109,18 +112,19 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_Violation_SanityCheck) {
 // fiber worker pool alive in the parent; a later EXPECT_DEATH fork()s and the
 // child inherits that pool's locked state without its threads, hanging until the
 // watchdog aborts (~124 s). Death-first keeps each fork clean.
-TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
+TEST_F(UnitMeshFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
     // Top-down: first allocated lands highest. Order so addr_a < addr_b < addr_c.
     uint32_t buf_size = 1024;
-    auto buffer_c = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_b = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
+    distributed::DeviceLocalBufferConfig l1_config{.page_size = buf_size, .buffer_type = BufferType::L1};
+    auto buffer_c = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
+    auto buffer_b = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
+    auto buffer_a = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
     uint32_t addr_a = buffer_a->address();
     uint32_t addr_b = buffer_b->address();
     uint32_t addr_c = buffer_c->address();
@@ -158,7 +162,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
     SetRuntimeArgs(program, kernel, logical_core, {addr_a, addr_c - addr_a});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*Object Intent Violation: Attempted to modify memory belonging to an adjacent object context.*");
 }
 
@@ -170,16 +174,17 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NonAdjacent_Violation) {
 // crash and fail. It guards the well-behaved path from being broken by future
 // changes to the resolved-set tracking or snapshot logic. (Placed after the death
 // tests above: see the fork/worker-pool ordering note on the NonAdjacent test.)
-TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
+TEST_F(UnitMeshFixture, Object_Intent_Provenance_NoViolation_Control) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
     uint32_t buf_size = 1024;
-    auto buffer_b = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
+    distributed::DeviceLocalBufferConfig l1_config{.page_size = buf_size, .buffer_type = BufferType::L1};
+    auto buffer_b = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
+    auto buffer_a = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
 
     // Resolve both buffers, write only within bounds of each — the
     // "intended write set" covers every buffer whose bytes change.
@@ -204,7 +209,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
 
     // Must NOT abort. If the sanitizer is over-eager, LaunchProgram will SIGABRT
     // and the test harness will mark this as failed.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 }
 
@@ -217,16 +222,17 @@ TEST_F(MeshDeviceFixture, Object_Intent_Provenance_NoViolation_Control) {
 // even though the kernel never resolved a pointer into it. Guards the exemption
 // from regressing (which would re-introduce false positives on real in-place
 // TT-NN ops).
-TEST_F(MeshDeviceFixture, Object_Intent_IOArg_Exempt_NoViolation) {
+TEST_F(UnitMeshFixture, Object_Intent_IOArg_Exempt_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
     uint32_t buf_size = 1024;
-    auto buffer_b = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
+    distributed::DeviceLocalBufferConfig l1_config{.page_size = buf_size, .buffer_type = BufferType::L1};
+    auto buffer_b = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
+    auto buffer_a = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
     uint32_t addr_a = buffer_a->address();
     uint32_t addr_b = buffer_b->address();
     ASSERT_LT(addr_a, addr_b);
@@ -253,7 +259,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_IOArg_Exempt_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {addr_a, addr_b});
 
     // Must NOT abort — B was handed to the kernel as a runtime arg.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -267,17 +273,19 @@ TEST_F(MeshDeviceFixture, Object_Intent_IOArg_Exempt_NoViolation) {
 // non-empty); it is not modified, so it never flags. If the globally-allocated
 // exemption regresses, the CB backing would be snapshotted, seen modified, and
 // (never resolved) flagged as a violation — this pins that exemption.
-TEST_F(MeshDeviceFixture, Object_Intent_GloballyAllocatedCB_Exempt_NoViolation) {
+TEST_F(UnitMeshFixture, Object_Intent_GloballyAllocatedCB_Exempt_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
     // Non-exempt L1 buffer, left untouched — makes Object Intent active (snapshots_
     // non-empty) without itself changing (so it never flags).
     uint32_t buf_size = 1024;
-    auto buffer_a = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    auto buffer_a = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = buf_size},
+        {.page_size = buf_size, .buffer_type = BufferType::L1},
+        &this->device());
     (void)buffer_a;
 
     // Globally-allocated CB backing — exempt from the Object Intent snapshot.
@@ -286,10 +294,13 @@ TEST_F(MeshDeviceFixture, Object_Intent_GloballyAllocatedCB_Exempt_NoViolation) 
     constexpr uint32_t num_pages = 2;
     // Single-bank backing (bank size == CB total_size), required for a
     // globally-allocated CB.
-    auto backing = Buffer::create(device, num_pages * page_size, num_pages * page_size, BufferType::L1);
+    auto backing = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_pages * page_size},
+        {.page_size = num_pages * page_size, .buffer_type = BufferType::L1},
+        &this->device());
     CircularBufferConfig cb_config = CircularBufferConfig(num_pages * page_size, {{cb_id, tt::DataFormat::Float16_b}})
                                          .set_page_size(cb_id, page_size)
-                                         .set_globally_allocated_address(*backing);
+                                         .set_globally_allocated_address(*backing->get_reference_buffer());
     CreateCircularBuffer(program, logical_core, cb_config);
 
     // Kernel writes into the globally-allocated CB backing WITHOUT resolving it as
@@ -313,7 +324,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_GloballyAllocatedCB_Exempt_NoViolation) 
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort — writing a globally-allocated CB the kernel owns is legitimate.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -328,16 +339,17 @@ TEST_F(MeshDeviceFixture, Object_Intent_GloballyAllocatedCB_Exempt_NoViolation) 
 // gate regressed, per-kernel attribution would run on a multi-kernel core: each
 // kernel would see the OTHER kernel's (unresolved) buffer as modified and abort —
 // or corrupt the shared resolved-log vector via concurrent appends.
-TEST_F(MeshDeviceFixture, Object_Intent_MultiKernel_Core_NoViolation) {
+TEST_F(UnitMeshFixture, Object_Intent_MultiKernel_Core_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
     uint32_t buf_size = 1024;
-    auto buffer_1 = Buffer::create(device, buf_size, buf_size, BufferType::L1);
-    auto buffer_2 = Buffer::create(device, buf_size, buf_size, BufferType::L1);
+    distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
+    distributed::DeviceLocalBufferConfig l1_config{.page_size = buf_size, .buffer_type = BufferType::L1};
+    auto buffer_1 = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
+    auto buffer_2 = distributed::MeshBuffer::create(buffer_config, l1_config, &this->device());
 
     // Two kernels on the same core (RISCV_0 + RISCV_1), each resolving and writing
     // only its own buffer within bounds.
@@ -372,7 +384,7 @@ TEST_F(MeshDeviceFixture, Object_Intent_MultiKernel_Core_NoViolation) {
     SetRuntimeArgs(program, kernel_1, logical_core, {buffer_2->address()});
 
     // Must NOT abort — Object Intent no-ops on multi-kernel cores.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

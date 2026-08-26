@@ -688,7 +688,9 @@ HF_MODEL_NAME = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", [1, 128])
-def test_rmsnorm_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, seq_len: int):
+def test_rmsnorm_1d_vs_reference_from_model_args(
+    ttnn_mesh_device: ttnn.MeshDevice, seq_len: int, monkeypatch: pytest.MonkeyPatch
+):
     """
     Test RMSNorm1D.from_model_args() factory method.
     """
@@ -699,13 +701,14 @@ def test_rmsnorm_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
     torch.manual_seed(seed)
     batch_size = 1
     mode = "decode" if seq_len <= 32 else "prefill"
+    hf_model_name = HF_MODEL_NAME
+    monkeypatch.setenv("HF_MODEL", hf_model_name)
 
     # Create ModelArgs
     model_args = ModelArgs(ttnn_mesh_device, max_batch_size=batch_size, max_seq_len=512, cache_hf=True)
     model_args.n_layers = 1
 
     # Load HF model for reference
-    hf_model_name = HF_MODEL_NAME
     config = AutoConfig.from_pretrained(hf_model_name)
     config.num_hidden_layers = 1
 
@@ -765,12 +768,12 @@ def test_rmsnorm_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
     assert passing, f"RMSNorm1D output does not meet PCC requirement {pcc}: {pcc_message}."
 
 
-def test_rmsnorm_1d_rejects_galaxy():
+def test_rmsnorm_1d_rejects_galaxy(expect_error):
     """Test that RMSNorm1D.from_model_args raises error for Galaxy devices."""
     mock_args = MagicMock()
     mock_args.is_galaxy = True
 
-    with pytest.raises(ValueError, match="cannot be used for Galaxy devices"):
+    with expect_error(ValueError, "cannot be used for Galaxy devices"):
         RMSNorm1D.from_model_args(
             mesh_device=MagicMock(),
             tt_ccl=MagicMock(),

@@ -12,8 +12,8 @@ permissions:
 run-name: Fabric Test on a BH Quad
 
 # Parent workflow: build once, then run the pipeline_reorg matrix via
-# fabric-multihost-exabox-impl.yaml (same pattern as demo-sp-release →
-# demo-sp-multihost-impl). Tests live in
+# fabric-multihost-exabox-impl.yaml (same pattern as models-e2e-tests-impl →
+# models-e2e-tests-multihost-impl). Tests live in
 # tests/pipeline_reorg/fabric_multihost_exabox_tests.yaml.
 jobs:
   check-harbor:
@@ -21,6 +21,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read

@@ -86,7 +86,11 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
         TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
         TTI_SFPSETEXP(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
 
-	// Load a and multiply by 1/gcd(a, b)
+        // Dest SFPLOAD after SFPU compute can hang depending on RISC codegen
+        // in the inlined caller (#52997).
+        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::WAIT_SFPU);
+
+        // Load a and multiply by 1/gcd(a, b)
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, 3, dst_index_in0 * dst_tile_size);
         TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);

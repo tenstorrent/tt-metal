@@ -283,7 +283,11 @@ def run(
         else:
             raise
 
-    result = mesh_tensor_to_torch(result, device if is_mesh_device else None)
+    result = mesh_tensor_to_torch(
+        result,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     # Convert TTNN output back to [N, C, H, W] format for PCC comparison.

@@ -39,9 +39,8 @@ class GLM52Adapter(MLAPrefillAdapter):
     default_gate_mode = "DEVICE_FP32"
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_52_55k_vllm"
 
-    # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL.
-    # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
-    l1_small_size = 768
+    # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
+    l1_small_size = 1152
     routing_use_l1_small_for_semaphores = True
 
     def load_hf_config(self):
@@ -62,14 +61,15 @@ class GLM52Adapter(MLAPrefillAdapter):
           * index 1 — the lightning-indexer's per-user block-cyclic KEY cache (bfp8 TILE, ``index_head_dim``
             wide). GLM-5.2 cross-layer reuse: only ``full`` layers own an indexer and write this cache
             (``shared`` layers reuse a prior full layer's top-k and never write), so it is sized to the
-            FULL-layer count (``num_full_indexer_layers``), not all layers — each full layer writes its
-            compacted rank slot (see ``TtIndexer``), and the merged migration table's index config sizes
-            itself from this tensor's shape. Falls back to ``num_layers`` when there is no ``indexer_types``
-            map (GLM-5.1: every layer is full).
+            FULL-layer count, not all layers — each full layer writes its compacted rank slot (see
+            ``TtIndexer``). Like the KVPE cache it holds THIS pipeline stage only, so its slots are
+            numbered from this stage's first full layer and the migration table needs no extra stride.
+            ``full_indexer_rank`` degenerates to the layer count without an ``indexer_types`` map
+            (GLM-5.1: every layer is full).
 
         The engine owns both, exactly like the dense KVPE cache."""
         import ttnn
-        from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
+        from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
             MlaKvCacheFormat,
             init_kvpe_cache,
@@ -86,7 +86,8 @@ class GLM52Adapter(MLAPrefillAdapter):
             num_kvpe_cache_layers=params.num_layers,
             num_users=params.num_users,
         )
-        num_index_layers = num_full_indexer_layers(hf_config) or params.num_layers
+        first_full = full_indexer_rank(hf_config, params.first_layer_idx)
+        num_index_layers = full_indexer_rank(hf_config, params.first_layer_idx + params.num_layers) - first_full
         index_cache = init_kvpe_cache(
             kvpe_cache_head_dim=hf_config.index_head_dim,
             mesh_device=mesh_device,

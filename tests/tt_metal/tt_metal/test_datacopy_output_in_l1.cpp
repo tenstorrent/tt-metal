@@ -12,16 +12,16 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-TEST_F(MeshDeviceSingleCardFixture, DatacopyOutputInL1) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+TEST_F(UnitMeshFixture, DatacopyOutputInL1) {
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -30,17 +30,15 @@ TEST_F(MeshDeviceSingleCardFixture, DatacopyOutputInL1) {
     uint32_t num_tiles = 32;
     uint32_t buffer_size = single_tile_size * num_tiles;
 
-    InterleavedBufferConfig dram_config{
-        .device = dev, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
 
-    InterleavedBufferConfig l1_config{
-        .device = dev, .size = buffer_size, .page_size = buffer_size, .buffer_type = BufferType::L1};
+    auto src_dram_buffer = distributed::MeshBuffer::create(
+        buffer_config, {.page_size = buffer_size, .buffer_type = BufferType::DRAM}, &this->device());
+    auto dst_l1_buffer = distributed::MeshBuffer::create(
+        buffer_config, {.page_size = buffer_size, .buffer_type = BufferType::L1}, &this->device());
 
-    auto src_dram_buffer = CreateBuffer(dram_config);
-    auto dst_l1_buffer = CreateBuffer(l1_config);
-
-    auto l1_dst_noc_xy = dev->virtual_core_from_logical_core(
-        dst_l1_buffer->allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
+    auto l1_dst_noc_xy = this->device().virtual_core_from_logical_core(
+        this->device().allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 8;
@@ -79,19 +77,22 @@ TEST_F(MeshDeviceSingleCardFixture, DatacopyOutputInL1) {
     // Execute
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    detail::WriteToBuffer(src_dram_buffer, src_vec);
+    slow_dispatch::WriteToBuffer(*src_dram_buffer, src_vec);
 
-    SetRuntimeArgs(program, unary_reader_kernel, core, {src_dram_buffer->address(), 0, num_tiles});
+    SetRuntimeArgs(program, unary_reader_kernel, core, {(std::uint32_t)src_dram_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(
         program,
         unary_writer_kernel,
         core,
-        {dst_l1_buffer->address(), (std::uint32_t)l1_dst_noc_xy.x, (std::uint32_t)l1_dst_noc_xy.y, num_tiles});
+        {(std::uint32_t)dst_l1_buffer->address(),
+         (std::uint32_t)l1_dst_noc_xy.x,
+         (std::uint32_t)l1_dst_noc_xy.y,
+         num_tiles});
 
-    detail::LaunchProgram(dev, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_l1_buffer, result_vec);
+    slow_dispatch::ReadFromBuffer(*dst_l1_buffer, result_vec);
 
     // Validation
     EXPECT_EQ(src_vec, result_vec);
