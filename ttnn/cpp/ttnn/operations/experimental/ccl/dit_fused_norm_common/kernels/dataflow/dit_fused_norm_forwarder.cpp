@@ -3,7 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * Coalescing fabric forwarder for the fused Wan2.2 distributed RMSNorm AG.
+ * Coalescing fabric forwarder for the fused distributed norm stats all-gather.
+ *
+ * Consumers (both must be updated together if the compile-time or runtime arg
+ * layout below changes):
+ *   - ttnn::experimental::prim::DitFusedDistributedRmsnormMeshWorkloadFactory
+ *   - ttnn::experimental::prim::DitFusedDistributedGroupnormMeshWorkloadFactory
+ *
+ * The description below is written in terms of the RMSNorm caller (128 B
+ * sticks, one forwarder per link); GroupNorm uses the same protocol with its
+ * own stick_bytes and a single forwarder.
  *
  * One forwarder core per fabric link (num_forwarders = min(num_links,
  * num_workers)). It owns a contiguous GROUP of worker cores on this chip and
