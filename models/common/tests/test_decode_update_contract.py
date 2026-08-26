@@ -168,6 +168,7 @@ def test_unseeded_decode_reset_loads_fresh_device_seed(monkeypatch):
     manager.max_batch_size = 1
     manager.seeds = [None]
     manager.seed_counters = [4]
+    manager.seed_salts = [0]
     manager.rngs = [random.Random(1)]
     manager._seed_active = False
     manager._reseted = False

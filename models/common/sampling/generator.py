@@ -23,7 +23,20 @@ DEVICE_SEED_MAX = 1_000_000
 _UINT64_MASK = (1 << 64) - 1
 
 
-def _hash_request_seed_to_device_seed(seed: int, counter: int) -> int:
+def _mark_trace_buffers_corruptible(bucket, value):
+    """Acknowledge bucketed trace I/O that another live trace may overwrite."""
+    if bucket is None or value is None:
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _mark_trace_buffers_corruptible(bucket, item)
+        return
+    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
+    if mark_corruptible is not None:
+        mark_corruptible(value)
+
+
+def _hash_request_seed_to_device_seed(seed: int, counter: int, salt: int = 0) -> int:
     """Derive a stable per-token device seed from a request seed.
 
     The device sampling op accepts bounded positive seeds, while vLLM

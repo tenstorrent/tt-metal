@@ -24,6 +24,7 @@ from models.common.sampling import (
     broadcast_sampling_params,
     chunk_sampling_params,
     format_sampling_params,
+    scatter_sampling_params_to_slots,
 )
 from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
 from models.common.warmup import WarmupForwardMixin
@@ -376,8 +377,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             return None
 
         batch_size = page_table.shape[0]
-        # Values do not matter: the trace inputs are refreshed from host on the first real decode step
-        # (reset_batch=True). Only the shapes have to match what decode_forward will supply.
+        # Values do not matter: the first real decode explicitly requests a
+        # full input reload. Only the shapes have to match what
+        # decode_forward will supply.
         tokens = torch.chunk(torch.zeros(batch_size, 1, dtype=torch.int64), self.data_parallel, 0)
         current_pos = torch.chunk(torch.zeros(batch_size, dtype=torch.int64), self.data_parallel, 0)
         chunked_page_table = torch.chunk(page_table, self.data_parallel, 0)
@@ -1583,6 +1585,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         reload_page_table: bool,
         reload_sampling_params: bool,
         reset_sampling_state: bool,
+        skip_trace_precompile: bool = False,
         **kwargs,
     ):
         if self.mode != Mode.DECODE:
@@ -1613,6 +1616,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 **decode_kwargs,
                 reload_inputs=reload_inputs,
                 reload_page_table=reload_page_table,
+                skip_precompile=skip_trace_precompile,
             )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(
@@ -1634,6 +1638,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 enable_trace=enable_trace,
                 reload_sampling_params=reload_sampling_params,
                 reset_sampling_state=reset_sampling_state,
+                skip_precompile=skip_trace_precompile,
             )
         # Host sampling
         if read_from_device:
@@ -1864,6 +1869,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         *,
         reload_inputs: bool,
         reload_page_table: bool,
+        skip_precompile: bool = False,
     ):
         """
         Run decode forward text with tracing
@@ -1933,6 +1939,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         *,
         reload_sampling_params: bool,
         reset_sampling_state: bool,
+        skip_precompile: bool = False,
     ):
         # Keep this entry point independently usable by immediate and
         # separated-sampling callers.
@@ -1989,6 +1996,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 max_seed_slots = sampling_module.seed_manager.max_batch_size
                 start_values = torch.as_tensor(start_pos[i]).reshape(-1).tolist()
                 active_seed_slots = [idx for idx, pos in enumerate(start_values[:max_seed_slots]) if int(pos) >= 0]
+            # A request finishing at the batch tail produces no non-identity
+            # remap, so retire seed state that no longer belongs to a live row.
+            if active_seed_slots is not None:
+                sampling_module.seed_manager.deactivate_slots_except(active_seed_slots)
             # Register each request's explicit seed into the seed manager and
             # tie its RNG counter to the absolute decode position before
             # advancing. Without registration the per-request seed never reaches

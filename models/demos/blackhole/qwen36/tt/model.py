@@ -42,6 +42,7 @@ class Qwen36Model:
         # full input reload. Sampling does not alias the decode token input.
         self._tt_supports_decode_token_feedback = False
         # Reuses the vocab-sharded lm_head as the sampler's shard: needs divisible vocab; 64K = top-k limit.
+        mesh_shape = tuple(int(dim) for dim in mesh_device.shape)
         self._supports_on_device_sampling = (
             mesh_shape in ((1, 4), (1, 8))
             and args.vocab_size % self.num_devices == 0

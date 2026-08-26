@@ -1643,6 +1643,10 @@ class Generator(WarmupForwardMixin):
             active_seed_slots = [
                 idx for idx, pos in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist()) if int(pos) >= 0
             ]
+        # A request finishing at the batch tail produces no non-identity
+        # remap, so retire seed state that no longer belongs to a live row.
+        if active_seed_slots is not None:
+            seed_manager.deactivate_slots_except(active_seed_slots)
 
         if reload_sampling_params and sampling_params is not None:
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
