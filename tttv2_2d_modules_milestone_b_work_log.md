@@ -145,8 +145,15 @@ Ordered by risk. None of these can be closed on this machine.
 5. **Residual placement moved to the norm's own grid.** Attention and MLP decode
    outputs are placed on `RMSNorm2D`'s default two-wide `x=2..3` grid so the
    fused residual norm consumes them without a relocation. The module tests used
-   `x=1..2` for their own outputs; `x=1` owns the fused stats circular buffer, so
-   the norm default is the safer choice, but the combination is unproven.
+   `x=1..2` for their own outputs, so the combination is unproven.
+   *(Corrected by job0/reconcile: the premise that `x=1` owns the fused stats
+   circular buffer is dead. Milestone A defect D1 established the opposite - the
+   stats buffer must sit on the **first core of the norm input shard grid**,
+   which is now `(2, 0)`, because `fused_rms_minimal` creates its stats CB there
+   and binds it to that tensor's L1 address. `RMSNorm2D._require_fused_stats_placement`
+   raises on any other placement. `distributed_norm_stats_memory_config` now
+   derives the origin from the residual placement instead of naming `(1, 0)`, and
+   neither model passes `decode_stats_memcfg` any more.)*
 6. **`semaphore_cores` is one set per mode.** Decode uses the full worker
    envelope, a superset of the norm grid the RMSNorm2D hardware test used. If the
    fused norm rejects it, split the plan rather than moving the norm shards.

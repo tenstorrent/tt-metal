@@ -484,7 +484,6 @@ class GalaxyDecodePlacements:
     """Resolved decode placements shared by every module in one layer."""
 
     residual_memcfg: ttnn.MemoryConfig
-    norm_stats_memcfg: ttnn.MemoryConfig
     attention_input_memcfg: ttnn.MemoryConfig
     attention_qkv_output_memcfg: ttnn.MemoryConfig
     attention_heads_memcfg: ttnn.MemoryConfig
@@ -543,9 +542,16 @@ def distributed_norm_decode_memory_config(geometry: GalaxyDenseGeometry) -> ttnn
     """Return the residual-stream placement, identical to RMSNorm2D's default.
 
     ``RMSNorm2D`` resolves its decode input, residual, and output placement to
-    a two-wide width-sharded grid on ``x=2..3`` because ``x=1`` owns the fused
-    distributed-stats circular buffer. The attention and MLP decode outputs are
-    placed here so the fused residual norm consumes them without a relocation.
+    a two-wide width-sharded grid whose origin is ``x=2``; the canonical
+    column-dispatch Galaxy layout reserves ``x=0..1``. The attention and MLP
+    decode outputs are placed here so the fused residual norm consumes them
+    without a relocation.
+
+    The fused-statistics buffer belongs on the *first core of this grid*, not on
+    a core of its own: ``fused_rms_minimal`` creates its stats circular buffer
+    there and binds it to the stats tensor's L1 address (Milestone A defect D1,
+    enforced by ``RMSNorm2D._require_fused_stats_placement``). Derive it with
+    :func:`distributed_norm_stats_memory_config` rather than naming a core.
 
     The grid keeps four width tiles per norm core, so the shard is always 128
     columns wide and the grid is ``local_dim / 256`` rows tall.
@@ -556,12 +562,26 @@ def distributed_norm_decode_memory_config(geometry: GalaxyDenseGeometry) -> ttnn
     return width_sharded_memory_config(geometry.local_dim, cores)
 
 
-def distributed_norm_stats_memory_config() -> ttnn.MemoryConfig:
-    """Return RMSNorm2D's default distributed-statistics placement on ``x=1``."""
+def distributed_norm_stats_memory_config(residual_memcfg: ttnn.MemoryConfig) -> ttnn.MemoryConfig:
+    """Return the fused-statistics placement implied by a norm-input placement.
 
+    The origin is read off `residual_memcfg` rather than named, because the two
+    are not independent: `fused_rms_minimal` builds its stats circular buffer on
+    the first core of the norm input shard grid and binds it to this tensor's L1
+    address, so any other placement makes the kernel reduce unrelated L1. That
+    was Milestone A defect D1, and `RMSNorm2D._require_fused_stats_placement`
+    rejects a mismatch outright. Deriving it here is what keeps the persistent
+    collective buffer this recipe sizes and the placement `RMSNorm2D` resolves
+    for itself from ever disagreeing.
+    """
+
+    shard_spec = getattr(residual_memcfg, "shard_spec", None)
+    if shard_spec is None:
+        raise ValueError("distributed norm decode input must be L1 width-sharded to place fused statistics")
+    origin = shard_spec.grid.bounding_box().start
     return ttnn.create_sharded_memory_config(
         shape=(1, 1, TILE, TILE * GALAXY_COLUMNS),
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(origin, origin)}),
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
@@ -591,7 +611,6 @@ def resolve_galaxy_decode_placements(geometry: GalaxyDenseGeometry, mesh_device:
 
     return GalaxyDecodePlacements(
         residual_memcfg=distributed_norm_decode_memory_config(geometry),
-        norm_stats_memcfg=distributed_norm_stats_memory_config(),
         # The qualified Attention2D decode recipe consumes an interleaved DRAM
         # activation and reduces with the fused create-QKV-heads collective.
         attention_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,

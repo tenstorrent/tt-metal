@@ -649,7 +649,9 @@ def _norm_config(
         decode_input_memcfg=decode_placements.residual_memcfg,
         decode_residual_memcfg=decode_placements.residual_memcfg,
         decode_output_memcfg=decode_placements.residual_memcfg,
-        decode_stats_memcfg=decode_placements.norm_stats_memcfg,
+        # decode_stats_memcfg is deliberately not passed: RMSNorm2D resolves the
+        # fused-statistics placement from decode_input_memcfg, and only that
+        # placement satisfies its own _require_fused_stats_placement check (D1).
         prefill_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
         prefill_residual_memcfg=ttnn.DRAM_MEMORY_CONFIG,
         prefill_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,

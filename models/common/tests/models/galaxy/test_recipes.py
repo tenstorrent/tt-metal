@@ -42,7 +42,9 @@ def _mesh(shape=GALAXY_MESH_SHAPE, *, devices=32, arch=ttnn.device.Arch.WORMHOLE
     mesh.get_num_devices.return_value = devices
     mesh.arch.return_value = arch
     mesh.dram_grid_size.return_value = SimpleNamespace(x=dram_width, y=1)
-    mesh.compute_with_storage_grid_size.return_value = SimpleNamespace(x=grid[0], y=grid[1])
+    # A real CoreCoord: ttnn.num_cores_to_corerangeset is a pybind11 binding
+    # and will not accept a duck-typed stand-in.
+    mesh.compute_with_storage_grid_size.return_value = ttnn.CoreCoord(grid[0], grid[1])
     return mesh
 
 

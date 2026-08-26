@@ -32,6 +32,7 @@ from models.common.models.galaxy.recipes import (
     GalaxyDecodePlacements,
     GalaxyDenseGeometry,
     core_ranges,
+    distributed_norm_stats_memory_config,
     galaxy_prefill_mode_plan_cores,
     prefetch_sender_cores,
     validate_galaxy_mesh,
@@ -162,7 +163,7 @@ def build_galaxy_decode_collectives(
         persistent_output_specs=(
             _spec(
                 (1, 1, batch, TILE * GALAXY_COLUMNS),
-                placements.norm_stats_memcfg,
+                distributed_norm_stats_memory_config(placements.residual_memcfg),
                 dtype=ttnn.bfloat16,
             ),
         ),

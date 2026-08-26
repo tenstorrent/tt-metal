@@ -13,6 +13,8 @@ import pytest
 import torch
 
 import ttnn
+from models.common.models.galaxy.plans import build_galaxy_decode_collectives
+from models.common.models.galaxy.recipes import resolve_galaxy_decode_placements
 from models.common.models.llama33_70b_galaxy import hf_adaptor
 from models.common.models.llama33_70b_galaxy import model as galaxy_model
 from models.common.models.llama33_70b_galaxy import weight_utils
@@ -29,6 +31,9 @@ from models.common.models.llama33_70b_galaxy.model import (
     parameters_from_hf_config,
     validate_llama33_70b_checkpoint,
 )
+from models.common.modules.lazy_weight import LazyWeight
+from models.common.modules.rmsnorm import rmsnorm_2d
+from models.common.modules.rmsnorm.rmsnorm_2d import RMSNorm2DResidualPolicy, _resolve_2d_config
 
 
 def _hf_config(**overrides):
@@ -88,7 +93,7 @@ def test_checkpoint_contract_accepts_the_exact_product():
         ({"hidden_size": 4096}, "Unexpected Llama-3.3-70B geometry"),
         ({"num_hidden_layers": 32}, "Unexpected Llama-3.3-70B geometry"),
         ({"vocab_size": 32000}, "Unexpected Llama-3.3-70B geometry"),
-        ({"head_dim": 64}, "Unexpected Llama-3.3-70B geometry"),
+        ({"head_dim": 64}, "requires head_dim 128"),
         ({"attention_bias": True}, "bias-free"),
         ({"tie_word_embeddings": True}, "untied LM head"),
     ],
@@ -430,3 +435,75 @@ def test_package_owns_its_graph_and_imports_no_model_named_implementation():
         # The graph is package-owned: only topology-neutral Galaxy machinery is
         # borrowed, never the shared dense-transformer composition.
         assert "galaxy.dense_transformer" not in source
+
+
+# ---------------------------------------------------------------------------
+# Fused-norm statistics placement (Milestone A defect D1)
+# ---------------------------------------------------------------------------
+
+
+def _norm_ccl(mesh):
+    def context(mode):
+        return SimpleNamespace(
+            mesh_device=mesh,
+            mode=mode,
+            worker_sub_device_id=f"{{mode}}-worker",
+            resources=lambda *_args, **_kwargs: None,
+            next_semaphore_handles=lambda *_args, **_kwargs: None,
+            next_barrier_semaphore_handle=lambda *_args, **_kwargs: None,
+        )
+
+    return SimpleNamespace(context=context, mesh_device=mesh)
+
+
+def test_distributed_norm_resolves_its_statistics_onto_the_decode_input_origin(monkeypatch):
+    """The stats shard must sit on the first core of the norm input shard grid.
+
+    `fused_rms_minimal` builds its stats circular buffer on that core and binds
+    it to the stats tensor's L1 address, so any other placement reduces
+    unrelated L1 - Milestone A defect D1, which `RMSNorm2D` now rejects outright
+    via `_require_fused_stats_placement`. This model must therefore not name a
+    stats core of its own; it has to let the module resolve one. The guard is
+    here because a model that disagreed would fail on device at the first fused
+    decode norm of every layer, and nothing else catches it on host.
+    """
+
+    monkeypatch.setattr(rmsnorm_2d, "resolve_lazy_weight", lambda weight, **_: weight)
+    monkeypatch.setattr(ttnn, "ShardTensor2dMesh", lambda *_args, **_kwargs: "shard-2d-mapper")
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda *_args, **_kwargs: "replicate-mapper")
+    mesh = _mesh()
+    params = Llama33_70BGalaxyModelParameters(n_layers=1)
+    geometry = params.geometry()
+    decode_placements = resolve_galaxy_decode_placements(geometry, mesh)
+    ccl = _norm_ccl(mesh)
+
+    config = galaxy_model._norm_config(
+        LazyWeight(source=torch.zeros(params.dim, dtype=torch.bfloat16), device=mesh),
+        mesh_device=mesh,
+        geometry=geometry,
+        precision=LLAMA33_70B_GALAXY_ACCURACY,
+        resources=SimpleNamespace(ccl=ccl),
+        prefetch_contexts=(None, None),
+        decode_placements=decode_placements,
+        eps=params.rms_norm_eps,
+        residual_policy=RMSNorm2DResidualPolicy.FUSED_DECODE,
+    )
+
+    assert config.decode_stats_memcfg is None, "the model must not pin a stats core; RMSNorm2D owns it"
+
+    resolved = _resolve_2d_config(config)
+    input_origin = resolved.decode_input_memcfg.shard_spec.grid.bounding_box().start
+    stats_origin = resolved.decode_stats_memcfg.shard_spec.grid.bounding_box().start
+
+    assert (stats_origin.x, stats_origin.y) == (input_origin.x, input_origin.y)
+
+    # And the persistent buffer the decode plan allocates for that collective is
+    # the tensor `_require_fused_stats_placement` actually inspects, so it has to
+    # land on the same core.
+    stats_plan = next(
+        plan
+        for plan in build_galaxy_decode_collectives(mesh, geometry, decode_placements)
+        if plan.key.operation == "all_gather" and tuple(plan.key.geometry) == (1, 1, geometry.max_batch_size, 32)
+    )
+    buffer_origin = stats_plan.persistent_output_specs[0].memory_config.shard_spec.grid.bounding_box().start
+    assert (buffer_origin.x, buffer_origin.y) == (input_origin.x, input_origin.y)
