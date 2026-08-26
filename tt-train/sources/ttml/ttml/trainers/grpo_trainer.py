@@ -185,9 +185,14 @@ class GRPOConfig:
                 f"grpo_config: 'report_to' must be one of {sorted(_allowed_report_to)} " f"(got {self.report_to!r})."
             )
 
+        if not isinstance(self.num_completions_to_print, int) or isinstance(self.num_completions_to_print, bool):
+            raise TypeError(
+                "grpo_config: 'num_completions_to_print' must be an int, "
+                f"got {type(self.num_completions_to_print).__name__}."
+            )
         if self.num_completions_to_print < 0:
             raise ValueError(
-                f"grpo_config: 'num_completions_to_print' must be >= 0 " f"(got {self.num_completions_to_print})."
+                f"grpo_config: 'num_completions_to_print' must be >= 0 (got {self.num_completions_to_print})."
             )
         if self.log_completions and self.num_completions_to_print == 0:
             logging.warning(
