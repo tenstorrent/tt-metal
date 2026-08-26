@@ -534,6 +534,12 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             collected.tensor_parameter_users[binding.tensor_parameter_name].push_back(&kernel);
         }
 
+        std::unordered_set<std::string> reserved_type_aliases;
+        reserved_type_aliases.reserve(accessor_names.size());
+        for (const auto& binding_name : accessor_names) {
+            reserved_type_aliases.insert(binding_name + "_t");
+        }
+
         std::unordered_set<std::string> group_names;
         for (const auto& group : kernel.advanced_options.tensor_groups) {
             TT_FATAL(
@@ -545,6 +551,12 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 !accessor_names.contains(group.accessor_name),
                 "Kernel '{}' tensor group accessor_name '{}' collides with a TensorBinding accessor_name",
                 kernel.unique_id,
+                group.accessor_name);
+            TT_FATAL(
+                !reserved_type_aliases.contains(group.accessor_name),
+                "Kernel '{}' tensor group accessor_name '{}' collides with generated type alias '{}'",
+                kernel.unique_id,
+                group.accessor_name,
                 group.accessor_name);
             auto [git, ginserted] = group_names.insert(group.accessor_name);
             TT_FATAL(

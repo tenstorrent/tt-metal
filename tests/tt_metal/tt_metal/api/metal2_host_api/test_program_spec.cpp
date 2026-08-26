@@ -4191,6 +4191,22 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorGroupNameCollidesWithBindingFails) {
             ::testing::HasSubstr("collides with a TensorBinding accessor_name")));
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_TensorGroupNameCollidesWithGeneratedTypeAliasFails) {
+    // Codegen emits `using in0_t = TensorBindingToken<...>` for binding "in0". A group named
+    // "in0_t" would emit `constexpr auto in0_t = ...` and fail to compile.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {MakeMinimalTensorParameter("t0")};
+    BindTensorParameterToKernel(spec.kernels[0], "t0", "in0");
+    spec.kernels[0].advanced_options.tensor_groups = {
+        KernelAdvancedOptions::TensorGroup{.accessor_name = "in0_t", .members = {"in0"}},
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("collides with generated type alias 'in0_t'")));
+}
+
 TEST_F(ProgramSpecTestGen1, CPU_TensorGroupDuplicateGroupNamesFails) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.tensor_parameters = {MakeMinimalTensorParameter("t0")};
@@ -4218,6 +4234,36 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorGroupInvalidIdentifierFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("tensor group accessor_name 'has-dash' must be a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_TensorGroupMemberPartitionAffectsKernelHash) {
+    // Same bindings {a, ab, bc, c}; groups differ only by member partition {"a","bc"} vs {"ab","c"}.
+    // Without per-member length delimiting those would hash identically.
+    auto make_spec = [](std::vector<std::string> members) {
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        spec.tensor_parameters = {
+            MakeMinimalTensorParameter("t_a"),
+            MakeMinimalTensorParameter("t_ab"),
+            MakeMinimalTensorParameter("t_bc"),
+            MakeMinimalTensorParameter("t_c"),
+        };
+        BindTensorParameterToKernel(spec.kernels[0], "t_a", "a");
+        BindTensorParameterToKernel(spec.kernels[0], "t_ab", "ab");
+        BindTensorParameterToKernel(spec.kernels[0], "t_bc", "bc");
+        BindTensorParameterToKernel(spec.kernels[0], "t_c", "c");
+        spec.kernels[0].advanced_options.tensor_groups = {
+            KernelAdvancedOptions::TensorGroup{.accessor_name = "inputs", .members = std::move(members)},
+        };
+        return spec;
+    };
+
+    Program prog_left = MakeProgramFromSpec(*mesh_device_, make_spec({"a", "bc"}));
+    Program prog_right = MakeProgramFromSpec(*mesh_device_, make_spec({"ab", "c"}));
+
+    auto hash_left = prog_left.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    auto hash_right = prog_right.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    EXPECT_NE(hash_left, hash_right)
+        << "Tensor groups with different member partitions must not share a JIT cache slot.";
 }
 
 // ----------------------------------------------------------------------------
