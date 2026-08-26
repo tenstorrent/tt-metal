@@ -65,6 +65,20 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     const bool per_brick_mask = per_brick_env != nullptr ? per_brick_env[0] == '1' : chunk_exceeds_stride;
     const uint32_t mask_tiles_per_kv_chunk = per_brick_mask ? query_tile_rows * tiles_per_kv_chunk : tiles_per_kv_chunk;
 
+    // The relative mask table makes every unclamped query brick want the SAME tiles in the same
+    // order, so sizing cb_mask to a whole work item (rather than double-buffering one kv chunk)
+    // makes its pages cycle back to the same addresses every item -- and the reader can then skip
+    // writing them entirely for a run of unclamped bricks -- worth 15.2 s against 15.6 s at 145
+    // frames. (Less than the traffic it removes would suggest: what the op is actually bound by is
+    // the number of score tiles the compute kernel walks. See FINDINGS section 10.)
+    const bool relative_mask_table = config.stride.time() == 1 && config.stride.height() == 1 &&
+                                     config.stride.width() == 1 && tensors.interior_mask.has_value();
+    // Must match `interior_table_supported` in neighborhood_reader.cpp exactly: the reader skips
+    // rewriting the mask on the strength of the pages cycling, which only holds at this size.
+    const bool persistent_mask = relative_mask_table && !per_brick_mask;
+    const uint32_t mask_cb_pages =
+        persistent_mask ? mask_tiles_per_kv_chunk * kv_chunk_count : mask_tiles_per_kv_chunk * 2;
+
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensors.query_tensor.dtype());
     const uint32_t tile_bytes = tt::tile_size(data_format);
     constexpr tt::DataFormat bfloat16_format = tt::DataFormat::Float16_b;
@@ -106,8 +120,7 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // The mask is always bfloat16: the reader writes {0, -inf} bit patterns into it directly.
     // One tile per gather slot, NOT per query row: with one query group per chunk every row
     // shares the window, so the mask broadcasts down the chunk exactly as the reference's does.
-    add_circular_buffer(
-        contract::cb_mask, bfloat16_tile_bytes, mask_tiles_per_kv_chunk * DOUBLE_BUFFERED, bfloat16_format);
+    add_circular_buffer(contract::cb_mask, bfloat16_tile_bytes, mask_cb_pages, bfloat16_format);
     add_circular_buffer(contract::cb_reduce_scalar, bfloat16_tile_bytes, 1, bfloat16_format);
     add_circular_buffer(contract::cb_zero, bfloat16_tile_bytes, 1, bfloat16_format);
     add_circular_buffer(contract::cb_column_identity, bfloat16_tile_bytes, 1, bfloat16_format);
@@ -146,7 +159,7 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // gather_brick_count tiles of L1 (590 KB at a 288-brick gather) next to a mask CB that per-brick
     // mode has already made query_tile_rows times bigger, and the reader would copy all of it in
     // per chunk for nothing.
-    const bool uses_resident_mask = tensors.interior_mask.has_value() && !per_brick_mask;
+    const bool uses_resident_mask = tensors.interior_mask.has_value() && !per_brick_mask && !relative_mask_table;
     if (uses_resident_mask) {
         add_circular_buffer(contract::cb_resident_mask, bfloat16_tile_bytes, plan.gather_brick_count, bfloat16_format);
     }
@@ -168,6 +181,8 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     const char* memset_env = std::getenv("DIFFVAE_NA_MASK_MEMSET_ONLY");
     reader_compile_args[contract::reader_arg::mask_memset_only] =
         (memset_env != nullptr && memset_env[0] == '1') ? 1u : 0u;
+    const char* skip_kv_env = std::getenv("DIFFVAE_NA_SKIP_KV");
+    reader_compile_args[contract::reader_arg::skip_kv] = (skip_kv_env != nullptr && skip_kv_env[0] == '1') ? 1u : 0u;
     reader_compile_args[contract::reader_arg::kv_chunk_count] = kv_chunk_count;
     reader_compile_args[contract::reader_arg::gather_brick_count] = plan.gather_brick_count;
     reader_compile_args[contract::reader_arg::volume_bricks_time] = plan.volume_bricks.time();

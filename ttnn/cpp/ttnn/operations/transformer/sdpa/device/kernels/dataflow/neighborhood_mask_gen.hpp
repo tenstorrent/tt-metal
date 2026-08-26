@@ -176,9 +176,7 @@ inline BrickCoverage classify_brick(
 // A Float16_b tile is four row-major 16x16 faces, so an element at (row, column) is not at
 // row * 32 + column. Getting this wrong yields a mask that is subtly transposed within each
 // quadrant -- correct along the diagonal, wrong everywhere else.
-// Taken BY VALUE and force-inlined: the caller's `extents` is constexpr, so this lets every
-// divide and modulo by a brick extent fold to a shift instead of a runtime division. The
-// divisions are the bulk of this function's cost.
+// Taken BY VALUE and force-inlined so the caller's compile-time extents fold in.
 FORCE_INLINE void fill_mask_tile(
     uint32_t write_address,
     SiteInBrick query_brick_origin,
@@ -186,10 +184,11 @@ FORCE_INLINE void fill_mask_tile(
     kernel_contract::NeighborhoodExtents extents) {
     constexpr uint32_t FACE_HEIGHT = 16;
     constexpr uint32_t FACE_WIDTH = 16;
-    constexpr uint32_t TILE_HEIGHT = 32;
-    constexpr uint32_t TILE_WIDTH = 32;
+    // A 16-bit half of one face row, as bfloat16 pairs packed into words. Indexed by two MASK
+    // bits, low column first, because the low uint16 of a little-endian word is the lower column.
+    constexpr uint32_t PAIR[4] = {0x00000000u, 0x0000FF80u, 0xFF800000u, 0xFF80FF80u};
 
-    volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_address);
+    volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_address);
 
     const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
     const uint32_t stride[3] = {extents.stride.time, extents.stride.height, extents.stride.width};
@@ -207,54 +206,119 @@ FORCE_INLINE void fill_mask_tile(
         snap_extent_on_axis(stride[1], brick[1]),
         snap_extent_on_axis(stride[2], brick[2])};
 
-    // Every key column's position, computed ONCE instead of once per (row, column).
-    uint32_t key_site[3][TILE_WIDTH];
-    bool key_is_ghost[TILE_WIDTH];
-    for (uint32_t column = 0; column < TILE_WIDTH; ++column) {
-        const SiteInBrick offset = site_in_brick_from_index(column, extents.brick_sites);
-        const uint32_t local[3] = {key_base[0] + offset.time, key_base[1] + offset.height, key_base[2] + offset.width};
-        key_is_ghost[column] = local[0] >= resident[0] || local[1] >= resident[1] || local[2] >= resident[2];
-        for (uint32_t axis = 0; axis < 3; ++axis) {
-            key_site[axis][column] = to_global_site(local[axis], shard[axis]);
+    // ---- per AXIS, not per element ----
+    //
+    // Visibility is the AND of three independent range tests, and a brick offset takes only
+    // brick[axis] values per axis -- 2, 8 and 2 for the shipped brick. So the whole 32x32 tile is
+    // decided by brick[0] + brick[1] + brick[2] window resolutions and the same number squared per
+    // axis of range tests -- 12 and 72 there -- against 96 resolutions and 6144 tests for the same
+    // answer element by element.
+    //
+    // What the elementwise version actually cost, though, was not the arithmetic but the 1024
+    // volatile 16-bit stores. This assembles each row as a 32-bit visibility bitmap and writes 512
+    // packed words, the same traffic as a memset. Generating a tile now costs about what copying
+    // one does, which is why bypassing the boundary gate entirely (DIFFVAE_NA_TABLE_ALWAYS, all
+    // bricks served from the table) measures 0.2 s SLOWER rather than faster.
+    uint32_t accept[3][SITES_PER_BRICK_AXIS_MAX];  // accept[axis][query offset] = bitmask over key offsets
+    uint32_t key_present[3] = {0, 0, 0};           // key offsets this device actually holds
+    uint32_t query_ghost[3] = {0, 0, 0};           // query offsets it does not
+    for (uint32_t axis = 0; axis < 3; ++axis) {
+        const uint32_t extent = brick[axis];
+        uint32_t key_global[SITES_PER_BRICK_AXIS_MAX];
+        for (uint32_t offset = 0; offset < extent; ++offset) {
+            const uint32_t local = key_base[axis] + offset;
+            key_global[offset] = to_global_site(local, shard[axis]);
+            if (local < resident[axis]) {
+                key_present[axis] |= 1u << offset;
+            }
+        }
+        for (uint32_t offset = 0; offset < extent; ++offset) {
+            const uint32_t local = query_base[axis] + offset;
+            if (local >= resident[axis]) {
+                query_ghost[axis] |= 1u << offset;
+            }
+            const uint32_t group = to_global_site(local, shard[axis]) / stride[axis];
+            const uint32_t origin = window_origin_on_axis(group, stride[axis], window[axis], volume[axis], snap[axis]);
+            const uint32_t high = origin + window[axis];
+            uint32_t visible = 0;
+            for (uint32_t key_offset = 0; key_offset < extent; ++key_offset) {
+                if (key_global[key_offset] >= origin && key_global[key_offset] < high) {
+                    visible |= 1u << key_offset;
+                }
+            }
+            accept[axis][offset] = visible & key_present[axis];
         }
     }
 
-    for (uint32_t row = 0; row < TILE_HEIGHT; ++row) {
-        const SiteInBrick query_offset = site_in_brick_from_index(row, extents.brick_sites);
-        const uint32_t query_local[3] = {
-            query_base[0] + query_offset.time, query_base[1] + query_offset.height, query_base[2] + query_offset.width};
-
-        // A ghost query's output is discarded, but its row is still softmaxed and an all -inf
-        // row yields NaN, which propagates through the rescale into real accumulators. Leave
-        // ghost rows OPEN rather than fully masked.
-        const bool query_is_ghost =
-            query_local[0] >= resident[0] || query_local[1] >= resident[1] || query_local[2] >= resident[2];
-
-        // The window depends only on the ROW. Resolving it here rather than inside the column
-        // loop removes three divisions per element -- 32x fewer window resolutions per tile.
-        uint32_t window_low[3];
-        uint32_t window_high[3];
-        for (uint32_t axis = 0; axis < 3; ++axis) {
-            const uint32_t global = to_global_site(query_local[axis], shard[axis]);
-            const uint32_t origin =
-                window_origin_on_axis(global / stride[axis], stride[axis], window[axis], volume[axis], snap[axis]);
-            window_low[axis] = origin;
-            window_high[axis] = origin + window[axis];
+    // Sites run time-major inside a brick, so a key offset triple lands at bit
+    // kt * (Bh * Bw) + kh * Bw + kw. Ghost columns are masked whatever the row says.
+    uint32_t all_present = 0;
+    for (uint32_t kt = 0; kt < brick[0]; ++kt) {
+        if ((key_present[0] & (1u << kt)) == 0) {
+            continue;
         }
+        for (uint32_t kh = 0; kh < brick[1]; ++kh) {
+            if ((key_present[1] & (1u << kh)) == 0) {
+                continue;
+            }
+            // `1u << 32` is undefined, and a (1,1,32) brick reaches it.
+            const uint32_t width_bits = brick[2] >= 32 ? 0xFFFFFFFFu : ((1u << brick[2]) - 1u);
+            all_present |= (key_present[2] & width_bits) << (kt * brick[1] * brick[2] + kh * brick[2]);
+        }
+    }
 
-        const uint32_t face_row_base = (row >= FACE_HEIGHT) ? 2u : 0u;
-        const uint32_t row_in_face = row % FACE_HEIGHT;
+    for (uint32_t query_time = 0; query_time < brick[0]; ++query_time) {
+        for (uint32_t query_height = 0; query_height < brick[1]; ++query_height) {
+            // The (height, width) slice repeats for every accepted time offset, so build it once.
+            uint32_t slice[SITES_PER_BRICK_AXIS_MAX];
+            for (uint32_t query_width = 0; query_width < brick[2]; ++query_width) {
+                uint32_t bits = 0;
+                for (uint32_t kh = 0; kh < brick[1]; ++kh) {
+                    if (((accept[1][query_height] >> kh) & 1u) != 0) {
+                        bits |= accept[2][query_width] << (kh * brick[2]);
+                    }
+                }
+                slice[query_width] = bits;
+            }
 
-        for (uint32_t column = 0; column < TILE_WIDTH; ++column) {
-            const bool visible =
-                !key_is_ghost[column] &&
-                (query_is_ghost || (key_site[0][column] >= window_low[0] && key_site[0][column] < window_high[0] &&
-                                    key_site[1][column] >= window_low[1] && key_site[1][column] < window_high[1] &&
-                                    key_site[2][column] >= window_low[2] && key_site[2][column] < window_high[2]));
+            for (uint32_t query_width = 0; query_width < brick[2]; ++query_width) {
+                const uint32_t row = query_time * (brick[1] * brick[2]) + query_height * brick[2] + query_width;
 
-            const uint32_t face = face_row_base + ((column >= FACE_WIDTH) ? 1u : 0u);
-            tile[face * (FACE_HEIGHT * FACE_WIDTH) + row_in_face * FACE_WIDTH + (column % FACE_WIDTH)] =
-                visible ? KEEP_SCORE : MASK_SCORE;
+                // A ghost query's output is discarded, but its row is still softmaxed and an all
+                // -inf row yields NaN, which propagates through the rescale into real
+                // accumulators. Leave ghost rows OPEN rather than fully masked.
+                uint32_t visible;
+                if (((query_ghost[0] >> query_time) | (query_ghost[1] >> query_height) |
+                     (query_ghost[2] >> query_width)) &
+                    1u) {
+                    visible = all_present;
+                } else {
+                    visible = 0;
+                    for (uint32_t kt = 0; kt < brick[0]; ++kt) {
+                        if (((accept[0][query_time] >> kt) & 1u) != 0) {
+                            visible |= slice[query_width] << (kt * brick[1] * brick[2]);
+                        }
+                    }
+                }
+                const uint32_t masked = ~visible;
+
+                // Float16_b tiles are four row-major 16x16 faces, so one tile row is two runs of
+                // 16 -- columns 0-15 in one face, 16-31 in the next. Getting this wrong yields a
+                // mask that is subtly transposed within each quadrant: right on the diagonal,
+                // wrong everywhere else.
+                const uint32_t face_row_base = (row >= FACE_HEIGHT) ? 2u : 0u;
+                const uint32_t row_in_face = row % FACE_HEIGHT;
+                const uint32_t words_per_face = (FACE_HEIGHT * FACE_WIDTH) / 2;
+                const uint32_t words_per_row = FACE_WIDTH / 2;
+                uint32_t out = face_row_base * words_per_face + row_in_face * words_per_row;
+                for (uint32_t word = 0; word < words_per_row; ++word) {
+                    tile[out + word] = PAIR[(masked >> (2u * word)) & 3u];
+                }
+                out = (face_row_base + 1u) * words_per_face + row_in_face * words_per_row;
+                for (uint32_t word = 0; word < words_per_row; ++word) {
+                    tile[out + word] = PAIR[(masked >> (FACE_WIDTH + 2u * word)) & 3u];
+                }
+            }
         }
     }
 }

@@ -114,6 +114,44 @@ FORCE_INLINE uint32_t relative_table_index(
     return index;
 }
 
+// Does gather slot `s` name relative offset `s`, for every slot?
+//
+// It does exactly when the gather origin sits at the LOW end of the relative span on every axis
+// and spans the span's extent, because both are linearised time-major over the same extents. Then
+// no per-slot arithmetic is needed at all -- table page == gather slot -- and, more to the point,
+// the mapping is the same for every such chunk, so the tiles can be written once and reused.
+//
+// It is NOT automatic for an unclamped brick. `build_plan` clamps the gather origin into the local
+// tensor (`max(origin - shard_start, 0)`), and for a brick sitting in this device's HALO the
+// window reaches below local 0, so the origin lands short and the whole mapping shifts. Those
+// bricks are not owned by this device and their output is sliced off, which is why a wrong mask
+// there was harmless -- until reuse let one of them decide the tiles a real brick reads.
+FORCE_INLINE bool gather_is_canonical(
+    const BrickCoordinate& gather_origin_brick,
+    const mask_gen::SiteInBrick& query_origin_site,
+    const contract::AxisExtents& gather_bricks,
+    const contract::NeighborhoodExtents& extents) {
+    const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
+    const uint32_t window[3] = {
+        extents.context_window.time, extents.context_window.height, extents.context_window.width};
+    const uint32_t gather[3] = {gather_bricks.time, gather_bricks.height, gather_bricks.width};
+    const uint32_t origin[3] = {gather_origin_brick.time, gather_origin_brick.height, gather_origin_brick.width};
+    const uint32_t query[3] = {
+        query_origin_site.time / brick[0], query_origin_site.height / brick[1], query_origin_site.width / brick[2]};
+
+    for (uint32_t axis = 0; axis < 3; ++axis) {
+        const int32_t low = relative_span_low(window[axis], brick[axis]);
+        const int32_t high = relative_span_high(window[axis], brick[axis]);
+        if (static_cast<int32_t>(origin[axis]) - static_cast<int32_t>(query[axis]) != low) {
+            return false;
+        }
+        if (gather[axis] != static_cast<uint32_t>(high - low + 1)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Is this query brick far enough from every volume edge that none of its 32 queries clamps? Only
 // then does the relative table describe it; a clamped brick's window sits at 0 or at the high
 // stop and no longer centres on the query, so the kernel still generates those. At most one
@@ -277,6 +315,7 @@ void kernel_main() {
     // DIFFERENT window and a shared mask would attend to the wrong one.
     constexpr uint32_t per_brick_mask = get_compile_time_arg_val(contract::reader_arg::per_brick_mask);
     constexpr uint32_t mask_memset_only = get_compile_time_arg_val(contract::reader_arg::mask_memset_only);
+    constexpr uint32_t skip_kv = get_compile_time_arg_val(contract::reader_arg::skip_kv);
     constexpr uint32_t relative_mask = get_compile_time_arg_val(contract::reader_arg::relative_mask);
     constexpr uint32_t table_always = get_compile_time_arg_val(contract::reader_arg::table_always);
     constexpr auto origin_accessor_args = TensorAccessorArgs<value_accessor_args.next_compile_time_args_offset()>();
@@ -286,6 +325,31 @@ void kernel_main() {
     // a regime -- which is nearly all of them, the interior being one regime -- fetches once.
     uint32_t resident_regime = NO_REGIME;
     CircularBuffer cb_resident_mask(contract::cb_resident_mask);
+
+    // ---- the interior mask, WRITTEN ONCE and then left alone ----
+    //
+    // Every unclamped query brick has the same mask, tile for tile. Its window sits exactly half
+    // a window below it, so the planner's gather origin sits at a CONSTANT brick offset from the
+    // brick (floor((F - half) / B) - F / B, which does not depend on F because F is brick
+    // aligned), and the relative table is keyed on that same difference. So slot -> table page is
+    // one fixed permutation for the whole plan, and the 175 tiles it selects are the entire mask
+    // for ~75% of the bricks at 1080p.
+    //
+    // In persistent_mask mode cb_mask holds a whole work item, so its pages cycle back to the
+    // same addresses every item: once those tiles ARE the table, the next unclamped brick needs
+    // no writes at all. Only leaving an edge shell dirties them, which at 1080p happens a few
+    // dozen times per core against 458 work items.
+    //
+    // Worth 15.2 s against 15.6 s at 145 frames. Less than the 350 KB per work item it saves
+    // would suggest, because what the op is actually bound by is the number of SCORE TILES the
+    // compute kernel walks -- see FINDINGS section 10 -- but it is free and it is real.
+    //
+    // This predicate is ALSO what the program factory sizes cb_mask by, so the two cannot drift:
+    // there is no compile arg for the mode. Adding one is not free either -- the reader's five
+    // TensorAccessorArgs chain off reader_arg::COUNT, and moving it by one ran the last accessor
+    // off the end of the compile-arg vector.
+    const bool interior_table_supported = relative_mask != 0 && has_interior_mask != 0 && per_brick_mask == 0;
+    bool mask_pages_hold_table = false;
 
     uint32_t argument_index = 0;
     const uint32_t query_address = get_arg_val<uint32_t>(argument_index++);
@@ -392,6 +456,18 @@ void kernel_main() {
             (has_interior_mask != 0 && relative_mask == 0) ? chunk_regime(chunk_origin_site, extents) : NO_REGIME;
         const bool use_uploaded_mask = (relative_mask != 0) ? (has_interior_mask != 0) : (regime != NO_REGIME);
 
+        // Resolved ONCE per chunk, not once per slot. It depends only on the query brick, and
+        // asking it per slot put a branch to fill_mask_tile next to the table read in the same
+        // loop body -- the instruction-cache mix the mask loops are split three ways to avoid.
+        // That alone was 32.3 s against 15.6 s at 145 frames, on a gate that admits 75% of bricks
+        // and a plan where only 20% of mask tiles ever generated.
+        const bool use_interior_table =
+            interior_table_supported &&
+            gather_is_canonical(gather_origin_brick, chunk_origin_site, gather_bricks, extents) &&
+            (table_always != 0 || brick_window_is_unclamped(chunk_origin_site, extents));
+        // The pages already hold exactly these tiles, so there is nothing to write.
+        const bool refill_mask = use_interior_table && !mask_pages_hold_table;
+
         uint32_t resident_mask_pointer = 0;
         if (use_uploaded_mask && relative_mask == 0) {
             resident_mask_pointer = cb_resident_mask.get_write_ptr();
@@ -452,7 +528,10 @@ void kernel_main() {
                     key_brick.time * extents.brick_sites.time,
                     key_brick.height * extents.brick_sites.height,
                     key_brick.width * extents.brick_sites.width};
-                coverage[slot] = slot_is_padding
+                // The resident table already holds the right tile for every slot, uniform ones
+                // included, so classifying is 175 divisions per chunk spent on an answer nothing
+                // reads. `coverage` is dead on that path.
+                coverage[slot] = (slot_is_padding || use_interior_table)
                                      ? mask_gen::BrickCoverage::NoneVisible
                                      : mask_gen::classify_brick(chunk_origin_site, key_origins[slot], extents);
 
@@ -463,6 +542,14 @@ void kernel_main() {
                     brick_count,
                     head_count,
                     head_dim_tiles);
+                // DIFFVAE_NA_SKIP_KV: issue no K/V reads at all, leaving whatever the buffers
+                // held. WRONG OUTPUT -- it exists to split the gather's DMA cost from the compute
+                // kernel's, which no other probe here separates, and which decides whether a
+                // bigger query chunk (fewer slots per query, more matmul per slot) can pay.
+                if (skip_kv != 0) {
+                    value_write_pointer += head_dim_tiles * tile_bytes;
+                    continue;
+                }
                 for (uint32_t head_dim_tile = 0; head_dim_tile < head_dim_tiles; ++head_dim_tile) {
                     const uint32_t key_write_pointer =
                         key_base_pointer + (head_dim_tile * tiles_per_kv_chunk + slot) * tile_bytes;
@@ -556,6 +643,41 @@ void kernel_main() {
                 continue;
             }
 
+            // An unclamped brick reads the relative table straight into cb_mask -- but only when
+            // the pages do not already hold it, which after the first such brick in a run they
+            // do. Refills are rare enough that the per-slot page arithmetic and the fallback
+            // below cost nothing, so neither is hoisted or cached.
+            if (use_interior_table) {
+                if (refill_mask) {
+                    for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+                        const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
+                        const uint32_t destination_address = mask_write_pointer + slot * tile_bytes;
+                        if (gather_slot < gather_brick_count) {
+                            // Canonical gather, so the table page IS the slot.
+                            noc.async_read(
+                                interior_mask_reader,
+                                CoreLocalMem<uint32_t>(destination_address),
+                                tile_bytes,
+                                {.page_id = gather_slot},
+                                {});
+                            continue;
+                        }
+                        // A ragged slot past the gather has no keys; mask it out rather than
+                        // leaving whatever the pages held.
+                        volatile tt_l1_ptr uint32_t* destination =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(destination_address);
+                        for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
+                            destination[word] = 0xFF80FF80u;
+                        }
+                    }
+                }
+                noc.async_read_barrier();
+                cb_key.push_back(tiles_per_kv_chunk * head_dim_tiles);
+                cb_value.push_back(tiles_per_kv_chunk * head_dim_tiles);
+                cb_mask.push_back(tiles_per_kv_chunk);
+                continue;
+            }
+
             // Uniform bricks: one word repeated, no window arithmetic at all.
             for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
                 if (coverage[slot] == mask_gen::BrickCoverage::Mixed) {
@@ -569,38 +691,22 @@ void kernel_main() {
                 }
             }
 
-            // Bricks the window boundary cuts through. Interior bricks all share one pattern, so
-            // they read it from DRAM like K or V; only boundary bricks evaluate.
+            // Bricks the window boundary cuts through, on a chunk the resident table does not
+            // describe: either a GNA regime (uploaded, keyed on the chunk's window) or a stride-1
+            // brick whose window clamps at a volume edge, which generates.
             //
-            // Straight from DRAM into cb_mask, NOT via the L1 resident set. Staging the regime in
-            // L1 looks like it saves DRAM traffic, but it forces the per-slot fill to be a
-            // 512-iteration volatile WORD LOOP on the RISC -- NOC refuses a local source and
-            // destination -- and that loop, not the window arithmetic, is what the mask actually
-            // costs: a memset-only build of the same tiles runs the 145-frame decode in 11.0 s
-            // against 34.0 s for copy or generate, which are indistinguishable because both are
-            // dominated by the loop. As an async NOC read it is DMA that overlaps with compute,
-            // exactly like the four K/V tiles already fetched for this slot.
-            if (use_uploaded_mask) {
+            // The relative table is NOT consulted here. It only ever applies to an unclamped
+            // brick, and those took the resident path above -- asking again would put a DRAM read
+            // and fill_mask_tile in one loop body, and that instruction-cache mix is exactly what
+            // made the gated run (32.3 s) cost as much as generating everywhere (34.1 s) when only
+            // 20% of its tiles ever generated.
+            if (use_uploaded_mask && relative_mask == 0) {
                 for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
                     if (coverage[slot] != mask_gen::BrickCoverage::Mixed) {
                         continue;
                     }
                     const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
-                    // One chunk is one brick whenever the relative table is in play, so the chunk
-                    // origin IS the query brick origin here.
-                    uint32_t page = NO_REGIME;
-                    if (relative_mask != 0) {
-                        if (table_always != 0 || brick_window_is_unclamped(chunk_origin_site, extents)) {
-                            page = relative_table_index(chunk_origin_site, key_origins[slot], extents);
-                        }
-                    } else {
-                        page = regime * gather_brick_count + gather_slot;
-                    }
-                    if (page == NO_REGIME) {
-                        mask_gen::fill_mask_tile(
-                            mask_write_pointer + slot * tile_bytes, chunk_origin_site, key_origins[slot], extents);
-                        continue;
-                    }
+                    const uint32_t page = regime * gather_brick_count + gather_slot;
                     noc.async_read(
                         interior_mask_reader,
                         CoreLocalMem<uint32_t>(mask_write_pointer + slot * tile_bytes),
@@ -623,6 +729,10 @@ void kernel_main() {
             cb_value.push_back(tiles_per_kv_chunk * head_dim_tiles);
             cb_mask.push_back(tiles_per_kv_chunk);
         }
+
+        // An edge brick wrote generated tiles over the pages, so the next unclamped one must
+        // put the table back.
+        mask_pages_hold_table = use_interior_table;
 
         cb_gather_origin.push_back(1);
         cb_gather_origin.pop_front(1);

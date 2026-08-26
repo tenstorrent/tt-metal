@@ -444,10 +444,95 @@ def halo_sites(context_window_extent: int, brick_extent: int) -> int:
     return -(-reach // brick_extent) * brick_extent  # ceil, in whole bricks
 
 
+_BRICK_CHOICE_CACHE: dict = {}
+
+
+def _choose_sharded_brick(volume, context_window, stride, width_local, shard_count):
+    """The 32-site brick that makes the GATHER smallest, measured in bricks by the real planner.
+
+    ``neighborhood_choose_brick`` minimises the window union in SITES, and at stride 1 that is the
+    wrong objective: a query brick's score tiles, its K/V reads and its mask tiles are all one per
+    gathered BRICK, and brick alignment inflates that. A stride-1 window origin sits at
+    ``-(window // 2) mod brick`` off a brick boundary on every axis, so the two objectives rank
+    differently -- at 1080p (2,4,4) has the smaller union in sites (2352 against 2592) and the
+    larger gather in bricks (175 against 147).
+
+    Asked of the planner rather than derived, because the count depends on the worst misalignment
+    over every chunk on every shard, which is what ``build_plan`` measures and what a hand formula
+    got wrong for (2,2,8) -- 147 on paper, 196 in the plan.
+
+    Only for stride 1. Where the stride is a whole number of bricks the window origin snaps to a
+    brick boundary, nothing is misaligned and the two objectives agree.
+    """
+    if stride != (1, 1, 1):
+        return tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+
+    key = (volume, context_window, stride, width_local, shard_count)
+    cached = _BRICK_CHOICE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    default = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+    best, best_gather = default, None
+    for brick_time in range(1, SITES_PER_BRICK + 1):
+        for brick_height in range(1, SITES_PER_BRICK + 1):
+            if SITES_PER_BRICK % (brick_time * brick_height):
+                continue
+            brick_width = SITES_PER_BRICK // (brick_time * brick_height)
+            if brick_time * brick_height * brick_width != SITES_PER_BRICK:
+                continue
+            # An ODD brick width gives an odd halo, and the halo exchange then cannot fold its
+            # sticks up to 256 bytes -- `neighbor_pad` hangs at 128. See _halo_exchange.
+            if brick_width % 2:
+                continue
+            brick = (brick_time, brick_height, brick_width)
+            halo = halo_sites(min(context_window[2], volume[2]), brick_width)
+            if halo > width_local:
+                continue
+            resident = (volume[0], volume[1], width_local + 2 * halo)
+            try:
+                plans = [
+                    ttnn.transformer.neighborhood_plan(
+                        volume,
+                        context_window,
+                        stride,
+                        brick,
+                        query_chunk_bricks=_query_chunk_bricks(stride, brick),
+                        shard_extent=resident,
+                        shard_origin=(0, 0, index * width_local - halo),
+                    )
+                    for index in range(shard_count)
+                ]
+            except (ValueError, RuntimeError):
+                continue  # a brick the planner refuses for this geometry
+            if any(plan["gather_brick_count"] != plans[0]["gather_brick_count"] for plan in plans):
+                continue  # one program cannot serve shards that gather differently
+            gather = plans[0]["gather_brick_count"]
+            # Tie-breaks. A smaller halo is less to exchange, brick-permute and drop, and that one
+            # is reasoned. The last is MEASURED and not explained: (2,8,2) and (8,2,2) both gather
+            # 147 at 1080p with the same halo, and the deeper TIME brick runs the kernel at 824 ms
+            # per block against 893 -- 11% better per query brick -- even though it pads time 78 up
+            # to 80 and so carries 2.6% MORE bricks. Guessing a rule from one pair is how the
+            # earlier conclusions in FINDINGS went wrong, so this stays labelled as what it is: a
+            # preference to re-measure if the volume, window or shard count changes.
+            score = (gather, halo, -brick_time)
+            if best_gather is None or score < best_gather:
+                best, best_gather = brick, score
+
+    from loguru import logger
+
+    logger.info(
+        f"[neighborhood] brick {best} gathers {best_gather[0] if best_gather else '?'} bricks "
+        f"(choose_brick would pick {default})"
+    )
+    _BRICK_CHOICE_CACHE[key] = best
+    return best
+
+
 _SHARDED_PLAN_CACHE: dict = {}
 
 
-def _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_count, sp_axis, device):
+def _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_count, sp_axis, device, halo=0):
     """One plan per shard, with the per-device gather tables stacked for a sharded upload.
 
     Every device runs the SAME program, so the plan's shapes -- chunk count, gathered bricks --
@@ -456,7 +541,7 @@ def _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_
     over the mesh so each device reads its own.
     """
     query_chunk_bricks = _query_chunk_bricks(stride, brick)
-    key = (volume, context_window, stride, brick, resident, shard_count, sp_axis, id(device))
+    key = (volume, context_window, stride, brick, resident, shard_count, sp_axis, id(device), halo)
     entry = _SHARDED_PLAN_CACHE.get(key)
     if entry is not None:
         return entry
@@ -635,13 +720,13 @@ def neighborhood_attention_3d_bricked_w_sharded(
     ), f"W {volume[2]} does not split into {shard_count} shards of {width_local}"
 
     context_window = tuple(min(window, extent) for window, extent in zip(kernel_size, volume))
+    stride = configured_stride()
     brick_env = os.environ.get("DIFFVAE_NA_BRICK")
     brick = (
         tuple(int(part) for part in brick_env.split(","))
         if brick_env
-        else tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+        else _choose_sharded_brick(volume, context_window, stride, width_local, shard_count)
     )
-    stride = configured_stride()
     if scale is None:
         scale = head_dim**-0.5
 
@@ -653,7 +738,9 @@ def neighborhood_attention_3d_bricked_w_sharded(
     resident = (time_extent, height_extent, width_local + 2 * halo)
 
     device = query.device()
-    plan = _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_count, sp_axis, device)
+    plan = _cached_sharded_plan(
+        volume, context_window, stride, brick, resident, shard_count, sp_axis, device, halo=halo
+    )
     channels = head_count * head_dim
     bricked_sites = brick_count(resident, brick) * SITES_PER_BRICK
     # DIFFVAE_NA_HALO_LINKS overrides the link count for THIS halo exchange only, leaving every

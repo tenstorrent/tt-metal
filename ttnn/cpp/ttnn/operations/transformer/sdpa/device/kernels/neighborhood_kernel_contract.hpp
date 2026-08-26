@@ -104,6 +104,10 @@ enum : uint32_t {
     // the interior pattern, so the frame is wrong there, but it shows what the gate is costing.
     table_always,
 
+    // DIFFVAE_NA_SKIP_KV: issue no K/V reads at all. Diagnostic with WRONG output; it separates
+    // the gather's cost from the compute kernel's, which is 80 ms of 947 -- see FINDINGS 10.
+    skip_kv,
+
     // The volume and the gather span, measured in bricks -- one brick is one tile row, so
     // these are also tile counts.
     volume_bricks_time,

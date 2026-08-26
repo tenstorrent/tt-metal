@@ -354,3 +354,116 @@ def test_symmetric_halo_shards_match_the_whole_volume(mesh_device):
 
         correlation = pearson(actual_owned, expected_owned)
         assert correlation > 0.99, f"shard {shard_index} at global origin {origin_width}: PCC {correlation:.5f}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    # A negative origin puts local column 0 BELOW the volume, which is what the production halo
+    # does and what the interior gate has to survive: it must still admit the bricks that sit
+    # comfortably inside the global volume, not reject the whole shard.
+    "owned_width",
+    [None, 12],
+    ids=["unsharded", "w_sharded_negative_origin"],
+)
+@pytest.mark.parametrize(
+    # (2,4,4) is what `neighborhood_choose_brick` returns for an 11^3 window; (8,2,2) is what
+    # `_choose_sharded_brick` returns for the 1080p decode, because it gathers 147 bricks rather
+    # than 175. Its W brick of 2 also puts the relative span at 3x7x7 instead of 7x5x5, so it is a
+    # different table, a different slot linearisation and a different halo -- none of which the
+    # (2,4,4) case exercises. It also does not divide the time axis, so it carries ghost bricks.
+    "brick",
+    [None, (8, 2, 2)],
+    ids=["chosen_brick", "brick_822"],
+)
+def test_interior_table_matches_generated_masks(mesh_device, owned_width, brick):
+    """The UPLOADED relative mask table, on a volume large enough to have interior bricks.
+
+    Every other case here passes no ``interior_mask`` at all, on a volume small enough that every
+    brick clamps at an edge -- so the uploaded table is never consulted and the kernel generates
+    every tile. This is the path the 1080p decode spends ~75% of its bricks on, and the one where
+    cb_mask holds a whole work item so those tiles are written once and then reused; getting the
+    slot -> table page permutation wrong shows up here and nowhere else.
+
+    Volume (16, 24, 24) with an 11^3 window is the smallest shape that has genuine interior
+    bricks on all three axes -- at (12, 16, 16) the time axis has none, since a brick-aligned
+    origin cannot land on the single unclamped time site.
+    """
+    from models.tt_dit.layers.neighborhood_attention import _build_relative_masks, halo_sites
+
+    torch.manual_seed(0)
+    volume, context_window, stride = (16, 24, 24), (11, 11, 11), (1, 1, 1)
+    head_count, head_dim = 2, 64
+    if brick is None:
+        brick = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+
+    site_count = volume[0] * volume[1] * volume[2]
+    query, key, value = (torch.randn(1, site_count, head_count, head_dim) for _ in range(3))
+    expected = neighborhood_attention_3d(
+        query, key, value, volume=volume, context_window=context_window, stride=stride, brick=brick, scale=1.0
+    ).reshape(1, *volume, head_count, head_dim)
+    volume_form = [tensor.reshape(1, *volume, head_count, head_dim) for tensor in (query, key, value)]
+
+    interior_mask = ttnn.from_torch(
+        _build_relative_masks(context_window, brick),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+    )
+
+    halo = 0 if owned_width is None else halo_sites(context_window[2], brick[2])
+    owned = volume[2] if owned_width is None else owned_width
+    resident = (volume[0], volume[1], owned + 2 * halo)
+    resident_sites = resident[0] * resident[1] * resident[2]
+    table = bricked_index_table(resident, brick)
+
+    for shard_index in range(volume[2] // owned):
+        origin_width = shard_index * owned - halo  # NEGATIVE for shard 0 when sharded
+        plan = ttnn.transformer.neighborhood_plan(
+            volume,
+            context_window,
+            stride,
+            brick,
+            shard_extent=resident,
+            shard_origin=(0, 0, origin_width),
+        )
+
+        def upload(tensor):
+            window = torch.zeros(1, *resident, head_count, head_dim)
+            for local in range(resident[2]):
+                source = origin_width + local
+                if 0 <= source < volume[2]:
+                    window[:, :, :, local] = tensor[:, :, :, source]
+            bricked = to_bricked(window.reshape(1, resident_sites, head_count, head_dim), table).contiguous()
+            bricked = bricked.reshape(1, 1, bricked.shape[1], head_count * head_dim)
+            return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+        origin_table = torch.tensor(plan["gather_origin_table"], dtype=torch.uint32).reshape(
+            1, 1, plan["chunk_count"], plan["gather_origin_columns"]
+        )
+        actual_device = ttnn.transformer.neighborhood_scaled_dot_product_attention(
+            *(upload(tensor) for tensor in volume_form),
+            ttnn.from_torch(origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device),
+            interior_mask=interior_mask,
+            volume=volume,
+            context_window=context_window,
+            stride=stride,
+            brick=brick,
+            query_chunk_bricks=_query_chunk_bricks(stride, brick),
+            shard_extent=resident,
+            shard_origin=(0, 0, origin_width),
+            head_count=head_count,
+            scale=1.0,
+            tiles_per_kv_chunk=min(plan["gather_brick_count"], 8),
+        )
+
+        bricked_out = ttnn.to_torch(actual_device).float().reshape(1, -1, head_count, head_dim)
+        present = table >= 0
+        resident_out = torch.zeros(1, resident_sites, head_count, head_dim)
+        resident_out[:, table[present]] = bricked_out[:, present]
+        resident_out = resident_out.reshape(1, *resident, head_count, head_dim)
+
+        # Compare the owned band: halo columns sit outside this shard's slice of the volume.
+        actual_owned = resident_out[:, :, :, halo : halo + owned]
+        expected_owned = expected[:, :, :, shard_index * owned : shard_index * owned + owned]
+        correlation = pearson(actual_owned, expected_owned)
+        assert correlation > 0.99, f"shard {shard_index} at origin {origin_width}: PCC {correlation:.5f}"
