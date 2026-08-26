@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 /*
@@ -69,7 +70,19 @@ sfpi_inline void _ema_store_current_input_()
  * alpha and beta parameters. It takes the previous EMA value from LREG4 for all 32 columns.
  * The output is stored in the LREG0-3 registers.
  */
-sfpi_inline void _compute_ema_math_()
+// Replay-buffer slot for the math body below, and its exact instruction count:
+//   2 SFPTRANSP + 8 SFPMAD + 1 SFPMOV = 11
+// Blackhole needs no SFPNOPs between the chained SFPMADs (Wormhole does), so the body is
+// 11 instructions here against 19 in the Wormhole copy. The length MUST equal the instructions
+// actually emitted by _compute_ema_math_body_(), or the replay buffer misaligns and the
+// kernel silently executes the wrong sequence. Update both together.
+//
+// Slot 0 is used. Other Blackhole SFPU kernels that record into slot 0 (where, welfords,
+// reduce_custom) must not be interleaved with EMA on the assumption that slot 0 survives.
+constexpr std::uint32_t EMA_MATH_REPLAY_SLOT = 0;
+constexpr std::uint32_t EMA_MATH_REPLAY_LEN  = 11;
+
+sfpi_inline void _compute_ema_math_body_()
 {
     // Transpose the input data to the correct order
     TTI_SFPTRANSP(0, 0, 0, 0);
@@ -120,6 +133,50 @@ sfpi_inline void _compute_ema_math_()
 }
 
 /**
+ * @brief Record the math body on the first block of a tile, replay it on the other seven.
+ *
+ * _compute_ema_math_body_() takes no template parameters, so all 8 blocks in a tile emit
+ * byte-identical instructions -- only the surrounding loads and stores differ, through
+ * compile-time dst offsets. That makes the body a clean record-once/replay candidate, and
+ * collapses 8 x 11 inlined instructions to 11 + 7.
+ *
+ * The arithmetic is untouched: same eight SFPMADs, same registers, same order, same two
+ * SFPTRANSPs. Results are bit-identical by construction, and the alpha sweep in
+ * tests/python_tests/test_sfpu_ema_alpha_sweep.py confirms it rather than assuming it --
+ * 1000 alphas, 2048000 outputs, zero differing against the inlined kernel.
+ *
+ * @note This is a code-size optimisation on Blackhole, NOT a cycle optimisation. Measured
+ *       on p100a: TEXT_SIZE 2691 -> 2415 (-276 B, -10.3 %), MATH_ISOLATE 246.09 -> 247.15
+ *       cycles/tile (+1.06, +0.43 %). Do not copy the Wormhole rationale over: there the
+ *       same transform is worth -22.7 % cycles, because that kernel is bound by the rate
+ *       the TRISC pushes TTI instructions into Tensix and its body carries 8 SFPNOPs.
+ *
+ *       Blackhole needs no SFPNOPs, and this kernel is not issue-bound here. Recording
+ *       drops the per-tile math instruction count from 88 (8 x 11 inlined) to 19 (1 record
+ *       + 11 body + 7 replay) -- 69 fewer instructions, exactly the 276 B of text -- and
+ *       buys back zero cycles. The residual +1.06 is about one instruction per tile, i.e.
+ *       the record instruction itself. The kernel is bound by the serial dependency chain
+ *       through the eight SFPMADs (each consumes the previous one's result), which replay
+ *       does not shorten. Anything that would speed this kernel up on Blackhole has to
+ *       break that chain, not reduce the instruction count.
+ */
+template <bool RECORD>
+sfpi_inline void _compute_ema_math_()
+{
+    if constexpr (RECORD)
+    {
+        // lltt::Exec so the first block both records and executes; the recorded copy is
+        // what the remaining seven replay.
+        lltt::record<lltt::Exec>(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN);
+        _compute_ema_math_body_();
+    }
+    else
+    {
+        lltt::replay(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN);
+    }
+}
+
+/**
  * @brief Processes a single EMA block (load inputs, compute EMA, store results).
  *
  * @tparam I Row group index (0-1)
@@ -128,11 +185,11 @@ sfpi_inline void _compute_ema_math_()
  * This is a helper function that performs all three steps for a single block:
  * load inputs, compute EMA, and store results.
  */
-template <std::uint32_t I, std::uint32_t J>
+template <std::uint32_t I, std::uint32_t J, bool RECORD = false>
 sfpi_inline void _process_ema_block_()
 {
     _ema_load_current_input_<I, J>();
-    _compute_ema_math_();
+    _compute_ema_math_<RECORD>();
     _ema_store_current_input_<I, J>();
 }
 
@@ -190,7 +247,7 @@ sfpi_inline void _calculate_ema_tile_()
     // To finish the entire tile, we need to repeat this process 8 times.
 
     // Process the first block (4 rows of 32 columns)
-    _process_ema_block_<0, 0>();
+    _process_ema_block_<0, 0, /* RECORD */ true>();
 
     // Repeat this 7 more times to process the remaining blocks
     _process_ema_block_<0, 1>();
