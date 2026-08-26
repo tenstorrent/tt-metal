@@ -382,6 +382,26 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
 
     T = token_ids.shape[1]
+    # Fully-batched GDN verify: verify cost is flat in K, which is what makes K >= 6 pay off at all.
+    # Validated lossless + deterministic (test_spec_lossless.py, test_spec_determinism.py).
+    os.environ.setdefault("QWEN36_GDN_FULL_BATCH", "1")
+    # Draft width. Acceptance saturates with context: at ISL 128 a wide draft still lands (~5.6/10),
+    # so K=10 wins (61 tok/s); by 8k acceptance is 2.37 at BOTH K=6 and K=10, so the narrower draft
+    # wins on drafter cost alone (31.9 vs 27.8 tok/s). Threshold at the 4k prompt bucket.
+    # QWEN36_SPEC_DRAFT_LEN, when set, overrides this (draft_len=None defers to the env in
+    # SpeculativeDecoder, whose own library default stays 3).
+    draft_len = None if os.environ.get("QWEN36_SPEC_DRAFT_LEN") else (10 if T <= 4096 else 6)
+    # Past 128k the batched reseed's B=K+1 in-projection drifts enough bf16 near-ties to cost
+    # ~0.3 accepted drafts/iter (256k: 19.7 vs 20.9 tok/s), while its dispatch saving (~2ms/iter)
+    # no longer covers that. Eager reseed keeps spec >= plain at every ISL.
+    if T > 131072:
+        os.environ.setdefault("QWEN36_SPEC_EAGER_RESEED", "1")
+    logger.info(
+        f"[TP SPEC] T={T} -> K={draft_len if draft_len is not None else os.environ['QWEN36_SPEC_DRAFT_LEN']}"
+        f"{'' if draft_len is not None else ' (QWEN36_SPEC_DRAFT_LEN)'}, "
+        f"QWEN36_GDN_FULL_BATCH={os.environ['QWEN36_GDN_FULL_BATCH']}, "
+        f"reseed={'eager' if os.environ.get('QWEN36_SPEC_EAGER_RESEED') == '1' else 'batched'}"
+    )
     num_blocks = ((num_blocks + 31) // 32) * 32
     profiler = BenchmarkProfiler()
     profiler.start("run")
@@ -398,13 +418,13 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
     signpost("compile_decode")
     profiler.start("compile_decode")
-    SpeculativeDecoder(model, page_table).generate(prompt_ids, min(6, max_generated_tokens))
+    SpeculativeDecoder(model, page_table, draft_len=draft_len).generate(prompt_ids, min(6, max_generated_tokens))
     profiler.end("compile_decode")
     model.free_kv_caches()
 
     # Timed run. generate() records dec.prefill_time (TTFT) and dec.decode_time (spec loop) internally.
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
-    dec = SpeculativeDecoder(model, page_table)
+    dec = SpeculativeDecoder(model, page_table, draft_len=draft_len)
     signpost("inference_prefill")
     profiler.start("inference_prefill")
     generated = dec.generate(prompt_ids, max_generated_tokens)

@@ -3471,23 +3471,35 @@ class Qwen36Model:
     def _allocate_mtp_kv_cache(self, kv_cache_shape, dtype, batch_size, replicate):
         """Allocate + bind the MTP drafter's own paged KV cache (one full-attention layer).
 
-        Separate from the base caches (own page table); shape matches a base attention layer.
+        Separate from the base caches (own page table); shape matches a base attention layer
+        except for ONE EXTRA BLOCK at the end.
+
+        That extra block is the speculative decode batched reseed's scratch: its padding rows point
+        their whole page-table row at block ``num_blocks`` so their (discarded) KV write lands
+        somewhere harmless. Giving it a block of its own — instead of borrowing the sequence's last
+        one — is what lets a sequence use the full ``num_blocks x block_size`` span, which the 256k
+        demo case needs (262016 prompt + 100 new vs 4096 x 64 = 262144). The page tables stay
+        ``num_blocks`` wide and identity, so no real sequence can ever reach the scratch block; only
+        the reseed names it explicitly. Cost is one block of K and one of V (64 x 1 x 256 bf16).
+
         No-op when the model has no MTP head. Fixed address + _stable_state for decode-trace reuse.
         """
         if self.mtp is None:
             return
 
+        mtp_cache_shape = [kv_cache_shape[0] + 1, *kv_cache_shape[1:]]
+
         def _mk():
             if replicate:
                 return ttnn.as_tensor(
-                    torch.zeros(kv_cache_shape, dtype=torch.bfloat16),
+                    torch.zeros(mtp_cache_shape, dtype=torch.bfloat16),
                     device=self.device,
                     dtype=dtype,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
                 )
-            return ttnn.zeros(kv_cache_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+            return ttnn.zeros(mtp_cache_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
 
         mtp_k, mtp_v = _mk(), _mk()
         self.mtp.attention.set_paged_kv_cache(mtp_k, mtp_v)

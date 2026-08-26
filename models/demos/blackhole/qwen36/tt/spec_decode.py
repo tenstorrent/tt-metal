@@ -86,8 +86,12 @@ class SpeculativeDecoder:
         self._vfy_captured = False
         # QWEN36_SPEC_EAGER_RESEED=1: keep the per-slot reseed loop (A/B escape hatch).
         self._batched_reseed = not bool(int(os.environ.get("QWEN36_SPEC_EAGER_RESEED", "0")))
-        # Last page-table entry = the batched reseed's scratch block (its padding rows' KV sink).
-        self._reseed_scratch_block = int(page_table_torch[0, -1])
+        # The batched reseed's scratch block (its padding rows' KV sink) is the EXTRA block the MTP
+        # cache carries past the page table's span — _allocate_mtp_kv_cache allocates num_blocks + 1.
+        # It must not be one of the sequence's own blocks: stealing the last one caps the sequence at
+        # (nb - 1) * block_size, which the 256k demo case overruns by 36 tokens. The page table stays
+        # nb wide and identity, so nothing but the pad rows below ever names this block.
+        self._reseed_scratch_block = int(page_table_torch.shape[-1])
         self._reseed_block_size = 0  # filled in generate(), once the KV caches exist
         self.total_drafted = 0
         self.total_accepted = 0  # accepted DRAFT tokens (excludes the mandatory correction/bonus)
@@ -249,7 +253,7 @@ class SpeculativeDecoder:
             ttnn.deallocate(h_next)
             self.mtp_extra_steps += 1
 
-    def _reseed_mtp_batched(self, slot0, vhidden, tokens):
+    def _reseed_mtp_batched(self, slot0, vhidden, tokens, scratch_only=False):
         """``_reseed_mtp`` as ONE fixed-shape drafter forward over all T = K+1 verify rows.
 
         The per-slot loop above is m sequential decode forwards (~2.7 ms each, m ~ 6 at K=10). The
@@ -265,15 +269,18 @@ class SpeculativeDecoder:
         dedicated scratch block, so their KV write lands there and never touches the sequence, and
         their position is 0 so their (discarded) SDPA read is one slot deep instead of full-context.
         ``vhidden`` supplies their hidden rows unchanged — junk in, junk to the scratch block.
+
+        ``scratch_only=True`` makes EVERY row padding (the warmup below): same shapes, same program,
+        no real slot touched.
         """
-        m = len(tokens)
-        if m == 0:
+        m = 0 if scratch_only else len(tokens)
+        if m == 0 and not scratch_only:
             return
         T = vhidden.shape[-2]
         assert m <= T, f"reseed {m} slots into a {T}-row batch"
         mesh, rep = self.mesh, ttnn.ReplicateTensorToMesh(self.mesh)
         tok = torch.zeros(T, 1, dtype=torch.int32)
-        tok[:m, 0] = torch.tensor([int(t) for t in tokens], dtype=torch.int32)
+        tok[:m, 0] = torch.tensor([int(t) for t in tokens[:m]], dtype=torch.int32)
         pos = torch.zeros(T, dtype=torch.int32)
         pos[:m] = torch.arange(slot0, slot0 + m, dtype=torch.int32)
         pt = self.page_table.repeat(T, 1).contiguous()
@@ -306,7 +313,9 @@ class SpeculativeDecoder:
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self._reseed_mtp_batched(self._reseed_scratch_block * self._reseed_block_size, z, [0] * T)
+        # scratch_only: all T rows are padding, so they name the scratch block directly. (The scratch
+        # block sits PAST the page table's span, so there is no position that reaches it by lookup.)
+        self._reseed_mtp_batched(0, z, [], scratch_only=True)
         self.mtp_extra_steps -= 1  # warmup is not a loop cost
         ttnn.synchronize_device(self.mesh)
         ttnn.deallocate(z)
@@ -511,9 +520,16 @@ class SpeculativeDecoder:
         if self._batched_reseed:
             self._reseed_block_size = self.mtp.attention.paged_k.shape[-2]
             nb = self.page_table.shape[-1]
-            assert T + max_new_tokens < (nb - 1) * self._reseed_block_size, (
-                f"no spare KV block for the batched reseed's scratch: {nb} blocks x "
-                f"{self._reseed_block_size} must exceed the {T + max_new_tokens}-token sequence by one block"
+            # The reseed scratch is its own block PAST the page table (the MTP cache is nb + 1
+            # blocks), so the sequence gets the whole page table: it only has to fit in nb blocks,
+            # the same bound the base KV cache imposes.
+            assert T + max_new_tokens <= nb * self._reseed_block_size, (
+                f"sequence does not fit the paged KV: {nb} blocks x {self._reseed_block_size} "
+                f"cannot hold {T} prompt + {max_new_tokens} generated tokens"
+            )
+            assert self.mtp.attention.paged_k.shape[0] > self._reseed_scratch_block, (
+                f"MTP KV cache has {self.mtp.attention.paged_k.shape[0]} blocks; the batched reseed's "
+                f"scratch block {self._reseed_scratch_block} needs one more than the page table's {nb}"
             )
             self._reseed_warmup(self.K + 1, Hp.shape[-1], Hp.dtype)
 
