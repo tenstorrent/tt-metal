@@ -1017,11 +1017,8 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "tt-training-models",
                           "wan2-2",
-                          "deepseek_v3",
-                          "tinyllama_1_1b_ddp32_shakespeare",
-                          "llama_8b_tp8_ddp4_shakespeare"
+                          "deepseek_v3"
                         ],
                         "type": "string"
                       },
@@ -1427,8 +1424,7 @@ jobs:
                         "enum": [
                           "all",
                           "tteager",
-                          "trace stress",
-                          "deepseek-modules"
+                          "trace stress"
                         ],
                         "type": "string"
                       },
@@ -1650,7 +1646,6 @@ jobs:
                         "enum": [
                           "all",
                           "dits",
-                          "deepseek",
                           "tttv2 modules",
                           "qwen3_vl"
                         ],
@@ -1728,7 +1723,7 @@ jobs:
                           "ltx-2.3-fast-t2v",
                           "ltx-2.3-pro-i2v",
                           "ltx-2.3-fast-i2v",
-                          "deepseek-v3",
+                          "deepseek-v3-tg",
                           "deepseek-v3-b1",
                           "z-image-turbo",
                           "resnet50"
@@ -1815,6 +1810,7 @@ jobs:
                           "qwen3.6-27b",
                           "gpt-oss-120b",
                           "minimax-m3",
+                          "deepseek-v3",
                           "whisper",
                           "gemma-4-12b",
                           "gemma-4-26b-a4b",
@@ -2132,7 +2128,10 @@ jobs:
                           "efficientdet-d0",
                           "mobilenetv3",
                           "ssd512",
-                          "yunet"
+                          "yunet",
+                          "[tt-train] tinyllama_1_1b_ddp32",
+                          "[tt-train] qwen3_1_7b_ddp32",
+                          "[tt-train] tiny_deepseek_v3_ddp32"
                         ],
                         "type": "string"
                       },
@@ -2164,7 +2163,8 @@ jobs:
                           "bh_p150b_civ2 (P150 CIv2)",
                           "bh_p300 (P300)",
                           "bh_quietbox_2 (BH QB2)",
-                          "bh_galaxy (BH Galaxy)"
+                          "bh_galaxy (BH Galaxy)",
+                          "bh_sc1 (BH SC1)"
                         ],
                         "type": "string"
                       }
