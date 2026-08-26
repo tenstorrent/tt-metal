@@ -4,6 +4,7 @@
 
 #include "move_device_operation_types.hpp"
 #include "move_overlap_program_factory.hpp"
+#include "ttnn/kernel_lib/host/mcast_host.hpp"
 
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
@@ -12,7 +13,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tilize_utils.hpp>
@@ -71,7 +71,7 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     using namespace tt::constants;
 
     const Tensor& input = tensor_args.input_tensor;
-    const Tensor& output = tensor_return_value;
+    Tensor& output = tensor_return_value;
 
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const bool tilized = input.layout() == Layout::TILE;
@@ -79,7 +79,7 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
 
     const uint32_t num_pages =
         tilized ? (output.physical_volume() / TILE_HW) : (output.physical_volume() / output.padded_shape()[-1]);
-    const tt::tt_metal::IDevice* device = output.device();
+    tt::tt_metal::IDevice* device = output.device();
     const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
@@ -107,14 +107,33 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
         }}},
     });
 
-    // Semaphore used by the controller core to coordinate multicast.
-    const uint32_t semaphore_id = 0;
+    // The worker-arrival counter remains operation-owned. Separate helper semaphores carry the
+    // controller's one-shot release signal to each disjoint worker rectangle.
+    const uint32_t return_semaphore_id = 0;
     desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = semaphore_id,
+        .id = return_semaphore_id,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = all_cores,
         .initial_value = 0,
     });
+
+    const CoreCoord logical_controller = CoreCoord{0, 0};
+    std::vector<CoreRange> logical_multicast_regions = get_multicast_regions(all_cores, logical_controller);
+    const uint32_t num_multicast_regions = logical_multicast_regions.size();
+    logical_multicast_regions.resize(3, CoreRange(logical_controller, logical_controller));
+
+    std::vector<ttnn::kernel_lib::host::Mcast2D> release_mcasts;
+    release_mcasts.reserve(3);
+    for (uint32_t region = 0; region < 3; ++region) {
+        release_mcasts.emplace_back(
+            device,
+            CoreRangeSet(logical_multicast_regions[region]),
+            logical_controller,
+            ttnn::kernel_lib::host::McastConfig{.handshake = false, .base_sem_id = region + 1});
+        for (const auto& semaphore : release_mcasts.back().owned_semaphores()) {
+            desc.semaphores.push_back(semaphore);
+        }
+    }
 
     std::vector<uint32_t> compile_time_args = {cb_index};
     if (!tilized) {
@@ -122,6 +141,11 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     }
     TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
     TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
+    compile_time_args.push_back(return_semaphore_id);
+    compile_time_args.push_back(num_cores - 1);
+    for (const auto& mcast : release_mcasts) {
+        mcast.append_compile_time_args_to(compile_time_args);
+    }
 
     const std::string kernel_path =
         tilized
@@ -136,23 +160,6 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     reader_desc.compile_time_args = std::move(compile_time_args);
     reader_desc.config = DataMovementConfigDescriptor{};
 
-    const CoreCoord logical_controller = CoreCoord{0, 0};
-    const CoreCoord noc_controller = device->worker_core_from_logical_core(logical_controller);
-    std::vector<CoreRange> logical_multicast_regions = get_multicast_regions(all_cores, logical_controller);
-
-    std::vector<CoreRange> noc_multicast_regions;
-    noc_multicast_regions.reserve(logical_multicast_regions.size());
-    for (const auto& logical_cr : logical_multicast_regions) {
-        const CoreRange noc_cr(
-            device->worker_core_from_logical_core(logical_cr.start_coord),
-            device->worker_core_from_logical_core(logical_cr.end_coord));
-        noc_multicast_regions.push_back(noc_cr);
-    }
-
-    const CoreRange range_0_noc = noc_multicast_regions[0];
-    const CoreRange range_1_noc = noc_multicast_regions[1];
-    const bool do_third_multicast = (noc_multicast_regions.size() == 3);
-
     for (uint32_t i = 0, pages_handled_per_core = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_pages_per_core = 0;
@@ -164,38 +171,30 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
             TT_THROW("Core not in specified core ranges");
         }
 
-        const bool is_controller = (i == 0);
+        uint32_t release_region = 3;  // Controller sentinel: it sends every active wire.
+        if (i != 0) {
+            for (uint32_t region = 0; region < num_multicast_regions; ++region) {
+                if (logical_multicast_regions[region].contains(core)) {
+                    release_region = region;
+                    break;
+                }
+            }
+            TT_FATAL(release_region < num_multicast_regions, "Move worker is outside every release rectangle");
+        }
         // Buffer* entries register BufferBindings for src/dst addresses (positions 0/1);
         // the framework patches them on cache hits without rebuilding the descriptor.
         KernelDescriptor::RTArgList runtime_args;
-        runtime_args.reserve(tilized ? 25 : 26);
+        runtime_args.reserve(tilized ? 17 : 18);
         runtime_args.push_back(src_buffer);
         runtime_args.push_back(dst_buffer);
         runtime_args.push_back(pages_handled_per_core);
         runtime_args.push_back(num_pages_per_core);
-        runtime_args.push_back(semaphore_id);
-        runtime_args.push_back(static_cast<uint32_t>(noc_controller.x));
-        runtime_args.push_back(static_cast<uint32_t>(noc_controller.y));
-        runtime_args.push_back(num_cores - 1);  // control_value
-        runtime_args.push_back(static_cast<uint32_t>(is_controller));
-        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.start_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.start_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.end_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(range_0_noc.end_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(logical_multicast_regions[0].size()));
-        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.start_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.start_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.end_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(range_1_noc.end_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(logical_multicast_regions[1].size()));
-        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().start_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().start_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().end_coord.x));
-        runtime_args.push_back(static_cast<uint32_t>(noc_multicast_regions.back().end_coord.y));
-        runtime_args.push_back(static_cast<uint32_t>(logical_multicast_regions.back().size()));
-        runtime_args.push_back(static_cast<uint32_t>(do_third_multicast));
+        runtime_args.push_back(release_region);
         if (!tilized) {
             runtime_args.push_back(aligned_page_size);
+        }
+        for (const auto& mcast : release_mcasts) {
+            mcast.append_runtime_args_to(runtime_args, core);
         }
         reader_desc.emplace_runtime_args(core, runtime_args);
         pages_handled_per_core += num_pages_per_core;

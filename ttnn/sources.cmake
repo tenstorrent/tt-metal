@@ -60,7 +60,6 @@ set(TTNN_CORE_SRCS
 
 set(TTNNCPP_SRCS
     # FIXME: Move these out to appropriate sub targets
-    cpp/ttnn/kernel_lib/host/mcast_host.cpp
     cpp/ttnn/operations/compute_throttle_utils.cpp
     cpp/ttnn/operations/trace.cpp
     cpp/ttnn/graph/capture_program_config_registry.cpp

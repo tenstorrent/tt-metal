@@ -9,39 +9,29 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t dst_addr = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
     uint32_t num_pages = get_arg_val<uint32_t>(3);
-    uint32_t semaphore_arg = get_arg_val<uint32_t>(4);
-    uint32_t controller_noc_x = get_arg_val<uint32_t>(5);
-    uint32_t controller_noc_y = get_arg_val<uint32_t>(6);
-    uint32_t control_value = get_arg_val<uint32_t>(7);
-    bool is_controller = get_arg_val<uint32_t>(8) == 1;
-    uint32_t range_0_start_noc_x = get_arg_val<uint32_t>(9);
-    uint32_t range_0_start_noc_y = get_arg_val<uint32_t>(10);
-    uint32_t range_0_end_noc_x = get_arg_val<uint32_t>(11);
-    uint32_t range_0_end_noc_y = get_arg_val<uint32_t>(12);
-    uint32_t range_0_size = get_arg_val<uint32_t>(13);
-    uint32_t range_1_start_noc_x = get_arg_val<uint32_t>(14);
-    uint32_t range_1_start_noc_y = get_arg_val<uint32_t>(15);
-    uint32_t range_1_end_noc_x = get_arg_val<uint32_t>(16);
-    uint32_t range_1_end_noc_y = get_arg_val<uint32_t>(17);
-    uint32_t range_1_size = get_arg_val<uint32_t>(18);
-    uint32_t range_2_start_noc_x = get_arg_val<uint32_t>(19);
-    uint32_t range_2_start_noc_y = get_arg_val<uint32_t>(20);
-    uint32_t range_2_end_noc_x = get_arg_val<uint32_t>(21);
-    uint32_t range_2_end_noc_y = get_arg_val<uint32_t>(22);
-    uint32_t range_2_size = get_arg_val<uint32_t>(23);
-    bool do_third_multicast = get_arg_val<uint32_t>(24) == 1;
-    uint32_t aligned_page_size = get_arg_val<uint32_t>(25);
+    uint32_t release_region = get_arg_val<uint32_t>(4);
+    uint32_t aligned_page_size = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t dfb_id = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr uint32_t return_sem_idx = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
+    constexpr uint32_t num_workers = get_compile_time_arg_val(dst_args.next_compile_time_args_offset() + 1);
+    constexpr dataflow_kernel_lib::McastArgs<dst_args.next_compile_time_args_offset() + 2, 6> release0_args;
+    constexpr dataflow_kernel_lib::
+        McastArgs<release0_args.next_compile_time_args_offset(), release0_args.next_runtime_args_offset()>
+            release1_args;
+    constexpr dataflow_kernel_lib::
+        McastArgs<release1_args.next_compile_time_args_offset(), release1_args.next_runtime_args_offset()>
+            release2_args;
 
     Noc noc;
     DataflowBuffer dfb(dfb_id);
@@ -49,10 +39,7 @@ void kernel_main() {
     const auto src_addrgen = TensorAccessor(src_args, src_addr);
     const auto dst_addrgen = TensorAccessor(dst_args, dst_addr);
 
-    // if controller core then this local address will be incremented by remote cores,
-    // otherwise controller core will set this to signal that write to dst can be done once controller core sees
-    // control_value locally
-    Semaphore<> sem(semaphore_arg);
+    Semaphore<> return_sem(return_sem_idx);
 
     // read a ublock of tiles from src to CB
     dfb.reserve_back(num_pages);
@@ -65,23 +52,28 @@ void kernel_main() {
     }
     dfb.push_back(num_pages);
 
-    if (is_controller) {
-        sem.wait(control_value);
-
-        // signal to cores that write to dst can begin
-        sem.set_multicast<NocOptions::DEFAULT>(
-            noc, range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, range_0_size);
-        sem.set_multicast<NocOptions::DEFAULT>(
-            noc, range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, range_1_size);
-        if (do_third_multicast) {
-            sem.set_multicast<NocOptions::DEFAULT>(
-                noc, range_2_start_noc_x, range_2_start_noc_y, range_2_end_noc_x, range_2_end_noc_y, range_2_size);
+    if (release_region == 3) {
+        return_sem.wait(num_workers);
+        if constexpr (release0_args.active) {
+            release0_args.sender(noc).send_signal();
+        }
+        if constexpr (release1_args.active) {
+            release1_args.sender(noc).send_signal();
+        }
+        if constexpr (release2_args.active) {
+            release2_args.sender(noc).send_signal();
         }
     } else {
-        // increment controller core semaphore
-        sem.up(noc, controller_noc_x, controller_noc_y, 1);
-        // wait for controller to signal write
-        sem.wait(control_value);
+        if (release_region == 0) {
+            return_sem.up(noc, release0_args.sender_x(), release0_args.sender_y(), 1);
+            release0_args.receiver(noc).receive_signal();
+        } else if (release_region == 1) {
+            return_sem.up(noc, release1_args.sender_x(), release1_args.sender_y(), 1);
+            release1_args.receiver(noc).receive_signal();
+        } else {
+            return_sem.up(noc, release2_args.sender_x(), release2_args.sender_y(), 1);
+            release2_args.receiver(noc).receive_signal();
+        }
     }
 
     dfb.wait_front(num_pages);

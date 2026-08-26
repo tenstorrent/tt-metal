@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -15,6 +16,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::prim::sharded_layernorm_helpers {
@@ -112,6 +114,47 @@ struct KernelLayout {
         const GridParams& grid, const WorkerDistribution& workers, const CoreRanges& core_ranges);
 };
 
+// Host/kernel wire for distributed LayerNorm readiness and statistics broadcasts.
+class DistributedLayerNormMcast {
+public:
+    DistributedLayerNormMcast(
+        IDevice* device,
+        const CoreRangeSet& grid,
+        CoreCoord global_sender,
+        bool is_post_allgather,
+        bool mcast_1d,
+        bool row_wise,
+        bool use_two_stage_reduce,
+        NOC noc,
+        uint32_t data_ready_sem_id,
+        uint32_t consumer_ready_sem_id);
+
+    std::vector<uint32_t> compile_time_args() const;
+    std::vector<uint32_t> runtime_args(const CoreCoord& core) const;
+    template <typename Args>
+    void append_compile_time_args_to(Args& destination) const {
+        std::visit(
+            [&destination](const auto& channel) { channel.append_compile_time_args_to(destination); },
+            channels_.front());
+    }
+    template <typename Args>
+    void append_runtime_args_to(Args& destination, const CoreCoord& core) const {
+        std::visit(
+            [&destination, &core](const auto& channel) { channel.append_runtime_args_to(destination, core); },
+            channel(core));
+    }
+    uint32_t ack_count() const;
+
+private:
+    using Channel = std::variant<ttnn::kernel_lib::host::Mcast1D, ttnn::kernel_lib::host::Mcast2D>;
+
+    const Channel& channel(const CoreCoord& core) const;
+    std::vector<Channel> channels_;
+    CoreRange bbox_{{0, 0}, {0, 0}};
+    bool per_line_ = false;
+    bool row_wise_ = false;
+};
+
 //////////////////////////////////////////////////////////////////////////////
 // Kernel paths, defines, and compile-time args helpers
 //////////////////////////////////////////////////////////////////////////////
@@ -205,6 +248,7 @@ struct CompileTimeArgsContext {
     const GridParams* grid = nullptr;
     const WorkerDistribution* workers = nullptr;
     const CoreRanges* core_ranges = nullptr;
+    const DistributedLayerNormMcast* distributed_mcast = nullptr;
 
     // Block dimensions
     uint32_t block_ht = 0;
@@ -249,6 +293,12 @@ struct CompileTimeArgsContext {
     uint32_t tile_width = 32;
 };
 
+enum class ReaderKernelVariant {
+    PreAllGather,
+    PostAllGather,
+    Sharded,
+};
+
 // Result of building compile-time args
 struct CompileTimeArgs {
     std::vector<uint32_t> reader_sender;
@@ -259,7 +309,7 @@ struct CompileTimeArgs {
     std::vector<uint32_t> compute_all_to_all;
     std::vector<uint32_t> compute_not_all_to_all;
 
-    static CompileTimeArgs build(const CompileTimeArgsContext& ctx);
+    static CompileTimeArgs build(const CompileTimeArgsContext& ctx, ReaderKernelVariant reader_variant);
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -427,6 +477,7 @@ struct RuntimeArgsContext {
     const GridParams& grid;
     const WorkerDistribution& workers;
     const CoreRanges& core_ranges;
+    const DistributedLayerNormMcast* distributed_mcast = nullptr;
 
     // NOC coordinates for multicast
     std::vector<uint32_t> mcast_noc_x;

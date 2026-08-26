@@ -19,6 +19,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -637,6 +638,28 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = k_mcast_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
 
+    const ttnn::kernel_lib::host::McastConfig k_mcast_config{
+        .noc = tt::tt_metal::NOC::NOC_0, .handshake = false, .sem_ids = std::vector<uint32_t>{k_mcast_semaphore_id}};
+    std::vector<ttnn::kernel_lib::host::Mcast1D> k_mcasts;
+    if (use_col_major_group_indexing) {
+        TT_FATAL(grid_size.y % q_heads_parallel_factor == 0, "K multicast groups must fill complete columns");
+        for (uint32_t y = 0; y < grid_size.y; y += q_heads_parallel_factor) {
+            k_mcasts.emplace_back(
+                device,
+                CoreRangeSet(CoreRange({0, y}, {grid_size.x - 1, y + q_heads_parallel_factor - 1})),
+                ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
+                /*starting_sender_index=*/0,
+                k_mcast_config);
+        }
+    } else {
+        k_mcasts.emplace_back(
+            device,
+            CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+            ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
+            /*starting_sender_index=*/0,
+            k_mcast_config);
+    }
+
     // If q is sharded, directly read in q_chunk_size_bytes if q is row major or tilized but with full tiles
     // If q is tilized and want to use tiny tiles, this is ignored since we need to skip bottom half of tiles
     const uint32_t q_chunk_size_bytes =
@@ -677,12 +700,15 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         full_tile.get_tile_size(q_df),
         sliding_window_size,
         original_block_size,
-        k_mcast_semaphore_id,
-        static_cast<uint32_t>(q_locally_available),
-        static_cast<uint32_t>(use_col_major_group_indexing),  // use_k_mcast
-        Bmask,
-        capacity_t,
     };
+    reader_compile_time_args_common.insert(
+        reader_compile_time_args_common.end(),
+        {
+            static_cast<uint32_t>(q_locally_available),
+            static_cast<uint32_t>(use_col_major_group_indexing),  // use_k_mcast
+            Bmask,
+            capacity_t,
+        });
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args_common);
@@ -696,6 +722,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     } else {
         tt_metal::TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(reader_compile_time_args_common);
     }
+    k_mcasts.front().append_compile_time_args_to(reader_compile_time_args_common);
 
     std::vector<uint32_t> writer_compile_time_args_common = {
         B,
@@ -820,13 +847,6 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         .math_approx_mode = math_approx_mode,
     };
 
-    // ========== Buffer Bindings for Runtime Args ==========
-    // Every buffer address is passed as a Buffer* so it is auto-registered as a BufferBinding and
-    // re-patched on the fast cache-hit path (apply_resolved_bindings) instead of being baked as a
-    // raw uint32 that goes stale.  Optional buffers pass a nullptr Buffer* when absent, which
-    // emplace_runtime_args() emits as 0u with no binding — keeping the arg slot stable without
-    // invalidating the fast path.  cur_pos_buffer / page_table_buffer are already the right
-    // nullptr-when-absent Buffer* pointers computed above.
     Buffer* attn_mask_buffer = use_attention_mask ? attn_mask.value().buffer() : nullptr;
     Buffer* attention_sink_buffer = use_attention_sink ? attention_sink.value().buffer() : nullptr;
 
@@ -834,26 +854,17 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
         bool do_k_mcast = false;
-        uint32_t mcast_x = 0, mcast_y0 = 0, mcast_y1 = 0, num_dests = 0;
         uint32_t cur_batch = 0, cur_head = 0, core_num_in_reduce = 0, core_num_in_output = 0;
         if (use_col_major_group_indexing) {
-            uint32_t group_idx = i / num_cores_per_head;          // row-major group index
-            uint32_t group_row = group_idx / num_group_rows;      // which row of groups (0 to grid_size.y-1)
-            uint32_t group_col = group_idx % num_group_rows;      // which column of groups
-            cur_batch = group_col * num_group_cols + group_row;   // column-major: batches go down columns first
-            cur_head = 0;                                         // single KV head when using this indexing
+            uint32_t group_idx = i / num_cores_per_head;         // row-major group index
+            uint32_t group_row = group_idx / num_group_rows;     // which row of groups (0 to grid_size.y-1)
+            uint32_t group_col = group_idx % num_group_rows;     // which column of groups
+            cur_batch = group_col * num_group_cols + group_row;  // column-major: batches go down columns first
+            cur_head = 0;                                        // single KV head when using this indexing
             core_num_in_reduce =
                 i % num_cores_per_head;               // position within the reduction group (0 to num_cores_per_head-1)
             core_num_in_output = core_num_in_reduce;  // same as reduce for single head
             do_k_mcast = (core.y % q_heads_parallel_factor == 0);
-            num_dests = q_heads_parallel_factor - 1;
-            if (do_k_mcast && num_dests > 0) {
-                auto phys_start = device->worker_core_from_logical_core(CoreCoord{core.x, core.y + 1});
-                auto phys_end = device->worker_core_from_logical_core(CoreCoord{core.x, core.y + num_dests});
-                mcast_x = phys_start.x;
-                mcast_y0 = phys_start.y;
-                mcast_y1 = phys_end.y;
-            }
         } else {
             cur_head = (i % num_cores_per_batch) / num_cores_per_head;
             cur_batch = i / num_cores_per_batch;
@@ -886,12 +897,6 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         log_debug(tt::LogOp, "tree_params.send_at_round: {}", tree_params.send_at_round);
         log_debug(tt::LogOp, "tree_params.num_children: {}", tree_params.num_children);
         log_debug(tt::LogOp, "tree_params.my_active_rounds: {}", tree_params.my_active_rounds);
-        log_debug(tt::LogOp, "do_k_mcast: {}", do_k_mcast);
-        log_debug(tt::LogOp, "mcast_x: {}", mcast_x);
-        log_debug(tt::LogOp, "mcast_y0: {}", mcast_y0);
-        log_debug(tt::LogOp, "mcast_y1: {}", mcast_y1);
-        log_debug(tt::LogOp, "num_dests: {}", num_dests);
-
         // Calculate base index for this reduction group's cores in the physical coordinate arrays
         // reduction_group_core_xs/ys are populated in row-major order (by linear index i)
         // So we use 'i' directly to find the start of this core's reduction group
@@ -903,18 +908,6 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             reduction_group_base_idx = (cur_batch * num_cores_per_batch) + (cur_head * num_cores_per_head);
         }
         log_debug(tt::LogOp, "reduction_group_base_idx: {}", reduction_group_base_idx);
-        // reader runtime args
-        // All buffer addresses (mandatory q/k/v and optional pos/page_table/attn_mask/sink) are
-        // passed as Buffer* so every one is re-patched on the fast cache-hit path.  An earlier
-        // revision bound only the mandatory buffers and left the optional addresses as raw uint32;
-        // that triggered the fast path (which skips create_descriptor()) while leaving the optional
-        // addresses stale — test_sdpa_decode_paged_attention exposed this.  Binding ALL of them
-        // keeps every address live.  The remaining scalar args (cur_pos, core/head assignment, tree
-        // params) are all functions of hashed attributes, so none can go stale on a hit: when
-        // cur_pos comes from cur_pos_tensor the scalar is a constant UINT32_MAX and the position is
-        // read on-device; when it comes from the cur_pos vector that vector is hashed, so a new
-        // position is a cache miss that rebuilds the descriptor.  An absent optional passes a
-        // nullptr Buffer* (emitted as 0u, no binding).
         KernelDescriptor::RTArgList reader_rt_args;
         reader_rt_args.push_back(q_buffer);
         reader_rt_args.push_back(k_buffer);
@@ -932,12 +925,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         reader_rt_args.push_back(core_num_in_output);
         reader_rt_args.push_back(cur_pos);
         reader_rt_args.push_back(static_cast<uint32_t>(do_k_mcast));
-        reader_rt_args.push_back(mcast_x);
-        reader_rt_args.push_back(mcast_y0);
-        reader_rt_args.push_back(mcast_y1);
-        reader_rt_args.push_back(num_dests);
+        const uint32_t mcast_index = use_col_major_group_indexing ? core.y / q_heads_parallel_factor : 0;
         reader_rt_args.append(output_core_physical_xs);
         reader_rt_args.append(output_core_physical_ys);
+        k_mcasts[mcast_index].append_runtime_args_to(reader_rt_args, core);
 
         // writer runtime args (do_reduce is NOT included — writer doesn't use it)
         // The output address is passed as Buffer* (BufferBinding) so it is re-patched on the fast
@@ -1007,8 +998,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             log_debug(tt::LogOp, "Setting core {} to idle", core);
 
             // Reader runtime args
-            // Base args (20): includes K-mcast args [do_k_mcast, mcast_x, mcast_y0, mcast_y1, num_dests]
-            KernelDescriptor::CoreRuntimeArgs reader_rt_args(20, 0);
+            // Operation prefix, followed by an inactive opaque K-multicast tail.
+            const auto k_mcast_runtime_arg_count = k_mcasts.front().runtime_args(CoreCoord{0, 0}).size();
+            KernelDescriptor::CoreRuntimeArgs reader_rt_args(16 + 2 * num_output_cores + k_mcast_runtime_arg_count, 0);
 
             // Writer runtime args - need to match the size with tree reduction params
             // Base args (10) + tree params (6) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords

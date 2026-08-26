@@ -18,6 +18,8 @@ namespace dataflow_kernel_lib {
 // SenderPipe
 // =============================================================================
 
+// Semaphore storage is initialized by the host: consumer_ready starts at 0 and data_ready at INVALID.
+// Do not reinitialize it here, because receivers may have already incremented consumer_ready.
 template <
     uint8_t NOC_ID,
     uint32_t DATA_READY_SEM_ID,
@@ -28,17 +30,7 @@ template <
 SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
     SenderPipe(const Noc& noc, const McastRect<NOC_ID>& dest, uint32_t consumer_ack_count) :
     noc_(noc), dest_(dest), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {
-    // Catch a NoC mismatch early (only meaningful under --dev): the precomputed routing corners and
-    // my_x/my_y are baked for NOC_ID, so a `noc` running a different NoC would mcast to the wrong
-    // corners / mis-test containment.
     ASSERT(noc_.get_noc_id() == NOC_ID);
-    // `consumer_ready` is NOT kernel-initialized: remote receivers increment it with no
-    // happens-before relative to this ctor, so a ctor set(0) would clobber an early ack and hang.
-    // Its initial 0 comes from host `CreateSemaphore(..., 0)`.
-    //
-    // `data_ready` is NOT initialized here either. send() asserts VALID locally right before it
-    // broadcasts the flag (signal_ready_), so a ctor set would be redundant; leaving the cell at its
-    // host-init INVALID keeps the resting state clean for a rotating core that also receives on it.
     // Whether this sender's own core lies in the receiver rect is fixed at construction (my coords
     // and the rect are both constant), so compute it ONCE here rather than per send().
     in_rect_ = my_x[NOC_ID] >= dest_.xlo() && my_x[NOC_ID] <= dest_.xhi() && my_y[NOC_ID] >= dest_.ylo() &&
@@ -69,14 +61,12 @@ FORCE_INLINE void
 SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::send(
     uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
     // Degenerate: no receiver cores. If the sender is in its own box and lands a copy elsewhere, do
-    // a local copy (a loopback to just self may hang); else nothing. Same aliasing test as the
-    // loopback mode below: src == dst means the copy is already in place.
+    // a local copy (a loopback to just self may hang); else nothing.
     if (degenerate_) {
         if (in_rect_ && src_l1 != dst_l1) {
             local_copy_(src_l1, dst_l1, size);
-            // Same guard the loopback fence applies, for the same reason: the sender never calls
-            // receive() on itself, so nothing else proves the copy landed before a same-core consumer
-            // observes the caller's publication. ACKED, not merely SENT.
+            // The sender does not call receive() on itself, so ensure the local copy lands before
+            // send() returns and the data can be consumed.
             noc_.async_write_barrier();
         }
         return;
@@ -95,12 +85,13 @@ SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA
     const uint32_t mcast_dests = loopback ? num_dests_incl_ : num_dests_excl_;
     send_data_(src_l1, dst_l1, size, loopback, mcast_dests);
     signal_ready_(loopback, mcast_dests);  // the signal rides the same mode as the data
-    // The post-signal fence also provides source L1 protection.
+    // The default post-signal fence is also the source-L1 lifetime guard. CallerManaged may omit the
+    // remote-only SENT wait, but cannot omit completion required by loopback, rotating-Flag reset, or
+    // Counter atomic acknowledgement semantics.
     fence_<SOURCE_GUARD>(loopback);
-    // Rotating sender: put our own flag cell back to INVALID now that the broadcast is flushed (the
-    // fence above proved the cell is done as the set_multicast source). Otherwise this core's next
-    // RECEIVER turn would wait(VALID) on the stale VALID we just left and return before the new
-    // sender's data lands. Flag signal only — the Counter path is monotone, never reset.
+    // A rotating sender receives on this same flag cell in another round. Clear the local multicast
+    // source after the fence proves it is no longer in use, or that later receive() can consume this
+    // core's own stale value instead of waiting for the next sender.
     if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
         data_ready_.set(INVALID);
     }
@@ -129,9 +120,6 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
     }
     signal_ready_(/*loopback=*/false, num_dests_excl_, value);
     fence_<SourceL1Guard::Guard>(/*loopback=*/false);
-    // A rotating sender receives on this same flag cell in another round. Clear the local multicast
-    // source after the fence proves it is no longer in use, or that later receive_signal() can consume
-    // this core's own stale value instead of waiting for the next sender.
     if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
         data_ready_.set(INVALID);
     }
@@ -206,8 +194,8 @@ SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA
     // A real sender loopback always needs ACKED completion: this protects the locally published
     // destination as well as the source lifetime, independent of SOURCE_GUARD.
     if (loopback) {
-        // The sender never calls receive() on itself, so it has no data-ready wait that proves its
-        // destination arrived before a same-core consumer observes the caller's publication.
+        // The sender does not call receive() on itself, so ensure the loopback copy lands before
+        // send() returns and the data can be consumed.
         noc_.async_write_barrier();
     } else if constexpr (
         SOURCE_GUARD == SourceL1Guard::Guard || (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag)) {
@@ -231,9 +219,7 @@ template <
     bool ROTATING_SENDER>
 void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
     local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
-    // PRECONDITION: src_l1 != dst_l1 (send() owns that test, so it can pair the copy with its fence).
-    // Issued on the write channel so it settles under the caller's / the pipe's own write accounting;
-    // the completion wait belongs to send().
+    ASSERT(src_l1 != dst_l1);
     UnicastEndpoint dst_ep;
     const uint32_t mx = my_x[NOC_ID];
     const uint32_t my = my_y[NOC_ID];
@@ -272,19 +258,18 @@ template <
     uint32_t NUM_SENDERS>
 void ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::receive(
     uint32_t round) {
-    ASSERT(round < NUM_SENDERS);  // (--dev only) the round must index a stored sender coord pair
-    const uint32_t sender_x = coords_[2 * round + 0];
-    const uint32_t sender_y = coords_[2 * round + 1];
+    const uint32_t sender_index = round % NUM_SENDERS;
+    const uint32_t sender_x = coords_[2 * sender_index + 0];
+    const uint32_t sender_y = coords_[2 * sender_index + 1];
     if constexpr (PRE_HANDSHAKE) {
         // tell the sender "my dest is free / I am ready" (remote atomic inc on its counter)
         consumer_ready_.up(noc_, sender_x, sender_y, 1);
     }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
-        data_ready_.wait_min(++signals_seen_);
+        data_ready_.wait_min(++round_);
     } else {
         data_ready_.wait(VALID);
         data_ready_.set(INVALID);  // clear this round's flag; next receive()'s ack follows
-        ++signals_seen_;           // unused by the Flag wait; kept in step so either path can follow
     }
 }
 
@@ -295,15 +280,14 @@ template <
     DataReadySignal DATA_READY_SIGNAL,
     uint32_t NUM_SENDERS>
 uint32_t ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::
-    receive_signal(uint32_t round) {
-    ASSERT(round < NUM_SENDERS);  // (--dev only) the round must index a stored sender coord pair
+    receive_signal() {
     if constexpr (PRE_HANDSHAKE) {
-        // tell the round-th sender "I am ready" (remote atomic inc on its counter)
-        consumer_ready_.up(noc_, coords_[2 * round + 0], coords_[2 * round + 1], 1);
+        const uint32_t sender_index = round_ % NUM_SENDERS;
+        consumer_ready_.up(noc_, coords_[2 * sender_index + 0], coords_[2 * sender_index + 1], 1);
     }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
-        data_ready_.wait_min(++signals_seen_);
-        return signals_seen_;
+        data_ready_.wait_min(++round_);
+        return round_;
     } else {
         // Flag control signals may carry any non-zero value. Capture it before the single clear so
         // the caller can distinguish the ordinary VALID doorbell from a typed control state.
@@ -314,7 +298,7 @@ uint32_t ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, D
 #endif
         const uint32_t value = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_addr);
         data_ready_.set(INVALID);
-        ++signals_seen_;
+        ++round_;
         return value;
     }
 }

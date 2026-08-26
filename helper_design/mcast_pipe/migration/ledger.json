@@ -1,0 +1,3212 @@
+{
+  "helper": "mcast_pipe",
+  "helper_header": "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp",
+  "api_version_define": "MCAST_PIPE_API_VERSION",
+  "current_api_version_at_bootstrap": 4,
+  "bootstrapped": "2026-06-19",
+  "source_of_truth_note": "Current v14 status carries 31 migrated kernels and 27 migrated host bindings on the tagged self-describing CT wire: seven words when present and one word when absent. The 2026-08-23 feedback pass made RT_BASE the only McastArgs runtime-base source, placed runtime-sized and genuinely optional compile-time operation tails after their opaque helper blocks, closed the Conv terminal-drain, source-lifetime, role-naming, and ACK-population review, and made every migrated-kernel offset chain object-qualified while reserving aliases for nested pipe types, without changing the static API or wire; detailed evidence is in migration_feedback_tracker.md. The inherited v13 pass verified append-style host emission, intrinsic optionality, and directly nameable mixed-role pipe types across the existing migrated fleet. Tier 2 source anchors include Interleaved GroupNorm 40e209daad9, SDPA-decode f760425fe06, Argmax 5aaaf5b5aa5, and Move overlap a25603ae2c0; Group-attention Matmul, Conv3D, and post-allgather LayerNorm are anchored by 6e8eb763885, a290ce20281, and 6cc49825476. DeepSeek B1 sampling is anchored by 2840fc28361. After the 2026-08-14 rebase, Sharded LayerNorm pre-allgather is anchored by production migration commit e58c66ef531 after builder-split prerequisite d0c459f8358. TopK final readiness is anchored by 4cf2edb7e75. The earlier fully end-to-end migrations are anchored by Conv2d single-sender rectangle aff48ae35a2, fixed-line a5009c349b4, width-sharded activation c3f5e53a19a, Matmul in1 bcf1c9d5b5e, GroupNorm v2 402a063d4c9, and Sort single-row control 46a781123f1. Historical pre-rebase and v8/v9 commits and results remain in dated logs.",
+  "latest_validation": {
+    "date": "2026-08-23",
+    "api_version": 14,
+    "scope": "MCAST-005 through MCAST-007 argument-tail and object-qualified offset rules plus completed Conv migration-feedback audit",
+    "evidence": "migration_feedback_tracker.md",
+    "result": "release host build passed; host helper gtests 36/36; helper device suite 80/80 under --dev; source audit 33/33; sequential focused Matmul, width/height/block Conv2D, Conv3D, tiled/row-major Move, sharded/interleaved legacy and Welford GroupNorm, and pre/post-allgather LayerNorm operation gates passed",
+    "inventory_effect": "31 migrated kernels and 27 migrated host bindings stamped v14; the 2026-08-23 documentation reconciliation later added four deferred TT-Train inventory rows without changing validation or rollout status"
+  },
+  "inventory_contract": "Single source of truth: entries[].kernel/op_family/role/tag/inventory_note are the durable call-site inventory; status/version/commit/validation/flags are mutable rollout state. The former census.txt contained 91 paths when it was merged here on 2026-08-14; the approved plan reconciliation added 13 receiver/call-site companions on 2026-08-16, and the repository-wide recall sweep added four TT-Train production kernel faces on 2026-08-23. Where historical text has stale role, tag, status, or note wording, this ledger's audited value wins.",
+  "inventory_method": "Recall-converged block inventory grouped by op_family. Discovery covered raw and object API spellings plus full op-family directory sweeps; pure receiver halves with only Semaphore::set/up/wait remain intentional entries even when they contain no multicast token.",
+  "inventory_group_notes": {
+    "quasar (experimental metal 2.0 port)": "Deferred as a group during the 2026-06-27 reconcile because the port was actively churning. Entries duplicate production matmul/conv/move patterns and add no hazard coverage; several _metal2 forks carried live #47797 hang-debug scaffolding, including one unresolved activation-multicast deadlock. Per-entry tags record the intrinsic target after the port stabilizes and debug code is removed."
+  },
+  "host_bindings": [
+    {
+      "id": "weights-mcast:conv2d-sharded:single-sender-rect",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
+      "dispatch": "height-sharded/default 1D writer pair with weights multicast enabled",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp"
+      ],
+      "migration_unit": "conv2d-weights-single-sender-rect",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "aff48ae35a2a970a27d215d61f214aa9180a5f09",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact CONV-HEIGHT compile-focused --dev node: passed; sender JIT 7585446677319138702, receiver JIT 15099792235267128693",
+        "CONV-HEIGHT: 49 passed, 16 expected skips",
+        "test_conv_dram: 14 passed",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "flags": [
+        "tier:1",
+        "fully-end-to-end"
+      ]
+    },
+    {
+      "id": "weights-mcast:conv2d-sharded:fixed-line",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
+      "dispatch": "block-sharded non-depthwise row/column fixed-line weights multicast",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp"
+      ],
+      "migration_unit": "conv2d-weights-fixed-line",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a5009c349b4cebe03f9249f380c9f3a682795858",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact PerColumn and PerRow CONV-BLOCK --dev nodes: passed",
+        "CONV-BLOCK: 49 passed, 16 expected skips",
+        "test_conv_dram: 14 passed",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "flags": [
+        "tier:2",
+        "fully-end-to-end"
+      ]
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-2d:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "legacy 2D matmul create path, both transpose_mcast values",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp"
+      ],
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "RECHECK CLEARED 2026-08-03 (verify-only, no rewrite) at tree state eb05b3929a3",
+        "build_metal.sh: passed (already current \u2014 _ttnn.so postdated both churned factories, nothing recompiled)",
+        "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
+        "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "medium",
+      "last_verified": "2026-08-05",
+      "flags": [
+        "tier:3",
+        "fully-end-to-end",
+        "legacy-runtime-coverage-gap"
+      ],
+      "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-2d:descriptor",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "descriptor 2D matmul create path, both transpose_mcast values",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp"
+      ],
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact 2D transpose_mcast=false/true --dev nodes: passed; sender JIT 4616781822959825899, receiver JIT 4167676435791909128",
+        "MM-IN1-ALL/MM-IN1-RECEIVER-2D: 302 passed, 188 expected skips, 490 selected",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "RECHECK CLEARED 2026-08-03 (verify-only, no rewrite) at tree state eb05b3929a3",
+        "build_metal.sh: passed (already current \u2014 _ttnn.so postdated both churned factories, nothing recompiled)",
+        "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
+        "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "flags": [
+        "tier:3",
+        "fully-end-to-end"
+      ],
+      "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-1d:mcast-in1:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy 1D matmul path with gather_in0=false and mcast_in0=false",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp"
+      ],
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "RECHECK CLEARED 2026-08-03 (verify-only, no rewrite) at tree state eb05b3929a3",
+        "build_metal.sh: passed (already current \u2014 _ttnn.so postdated both churned factories, nothing recompiled)",
+        "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
+        "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "medium",
+      "last_verified": "2026-08-05",
+      "flags": [
+        "tier:3",
+        "fully-end-to-end",
+        "legacy-runtime-coverage-gap"
+      ],
+      "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-1d:mcast-in1:descriptor",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor 1D matmul path with gather_in0=false and mcast_in0=false",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp"
+      ],
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact 1D mcast-in1 non-zero-subdevice --dev node: passed; sender JIT 10580236968838213332, receiver JIT 6510408673418518324",
+        "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "RECHECK CLEARED 2026-08-03 (verify-only, no rewrite) at tree state eb05b3929a3",
+        "build_metal.sh: passed (already current \u2014 _ttnn.so postdated both churned factories, nothing recompiled)",
+        "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
+        "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "flags": [
+        "tier:3",
+        "fully-end-to-end"
+      ],
+      "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
+    },
+    {
+      "id": "groupnorm-v2:sharded:legacy:mcast",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=false and use_mcast=true",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp"
+      ],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact legacy 8x4 --dev node: passed; sender JIT 665208170585676730, receiver JIT 4997071892188578060",
+        "GN-SHARDED-PARAMETERIZED legacy: 108 passed, 2 expected skips",
+        "fixed/default routing: 19 passed, 6 expected skips",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; GroupNormMcastGeometry synthetic zero/one/two-edge coverage passed 3/3; legacy +0.248% versus baseline passed the 1.5% gate"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "flags": [
+        "tier:4",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire"
+      ]
+    },
+    {
+      "id": "groupnorm-v2:sharded:legacy:degenerate",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=false and use_mcast=false",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp"
+      ],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "GN-SHARDED-PARAMETERIZED legacy: 108 passed, 2 expected skips",
+        "fixed/default routing: 19 passed, 6 expected skips",
+        "McastHostFixture degenerate cases: passed",
+        "test_mcast_pipe.py including test_f3_degenerate: 68 passed",
+        "coverage gap: no mapped device operation test reaches the GroupNorm v2 use_mcast=false binding",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; GroupNormMcastGeometry synthetic zero/one/two-edge coverage passed 3/3; legacy +0.248% versus baseline passed the 1.5% gate"
+      ],
+      "coverage_confidence": "medium",
+      "last_verified": "2026-08-05",
+      "flags": [
+        "tier:4",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire",
+        "degenerate-sender-only",
+        "degenerate-runtime-coverage-gap"
+      ]
+    },
+    {
+      "id": "groupnorm-v2:sharded:welford:mcast",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=true and use_mcast=true",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp"
+      ],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact Welford 8x4 --dev node: passed; sender JIT 12485185751240554029, receiver JIT 14565098489008052769",
+        "GN-SHARDED-PARAMETERIZED Welford: 108 passed, 2 expected skips",
+        "fixed/default routing: 19 passed, 6 expected skips",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; GroupNormMcastGeometry synthetic zero/one/two-edge coverage passed 3/3; Welford -0.485% versus baseline passed the 1.5% gate"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "flags": [
+        "tier:4",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire"
+      ]
+    },
+    {
+      "id": "groupnorm-v2:sharded:welford:degenerate",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=true and use_mcast=false",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp"
+      ],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "GN-SHARDED-PARAMETERIZED Welford: 108 passed, 2 expected skips",
+        "fixed/default routing: 19 passed, 6 expected skips",
+        "McastHostFixture degenerate cases: passed",
+        "test_mcast_pipe.py including test_f3_degenerate: 68 passed",
+        "coverage gap: no mapped device operation test reaches the GroupNorm v2 use_mcast=false binding",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; GroupNormMcastGeometry synthetic zero/one/two-edge coverage passed 3/3; Welford -0.485% versus baseline passed the 1.5% gate"
+      ],
+      "coverage_confidence": "medium",
+      "last_verified": "2026-08-05",
+      "flags": [
+        "tier:4",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire",
+        "degenerate-sender-only",
+        "degenerate-runtime-coverage-gap"
+      ]
+    },
+    {
+      "id": "groupnorm-interleaved:legacy:mcast",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_mcast_program_factory.cpp",
+      "dispatch": "interleaved input with multicast enabled and use_welford=false",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_gn.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_gn.cpp"
+      ],
+      "migration_unit": "groupnorm-interleaved-mcast-host",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "40e209daad9",
+      "validation_set": [
+        "build_metal.sh: passed; exact fresh-compile legacy route passed",
+        "DRAM valid 181 passed; general 345 passed; nightly 203 passed",
+        "helper host 34 passed; helper device 80 passed; source audit 19 passed",
+        "matched performance +1.271% versus raw"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2.12", "fully-end-to-end", "fixed-three-rectangle-wire"]
+    },
+    {
+      "id": "groupnorm-interleaved:welford:mcast",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_mcast_program_factory.cpp",
+      "dispatch": "interleaved input with multicast enabled and use_welford=true",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_gn.cpp"
+      ],
+      "migration_unit": "groupnorm-interleaved-mcast-host",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "40e209daad9",
+      "validation_set": [
+        "build_metal.sh: passed; exact fresh-compile Welford route passed",
+        "DRAM valid 181 passed; general 345 passed; nightly 203 passed",
+        "helper host 34 passed; helper device 80 passed; source audit 19 passed",
+        "matched performance -0.318% versus raw"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2.12", "fully-end-to-end", "fixed-three-rectangle-wire"]
+    },
+    {
+      "id": "groupnorm-interleaved:no-mcast",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_no_mcast_program_factory.cpp",
+      "dispatch": "interleaved sender-only zero/one-core groups for either legacy or Welford",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_gn.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp"
+      ],
+      "migration_unit": "groupnorm-interleaved-mcast-host",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "40e209daad9",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "general and nightly GroupNorm inventories cover fixed/default routing and program cache",
+        "source audit confirms inactive singleton helper blocks preserve the shared ABI"
+      ],
+      "coverage_confidence": "medium",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2.12", "inactive-helper-wire", "shared-cache-abi"]
+    },
+    {
+      "id": "sdpa-decode:read-k-fixed-column-star",
+      "factory": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp",
+      "dispatch": "replicated-Q single-device MLA decode with q_heads_parallel_factor greater than one",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
+      ],
+      "migration_unit": "sdpa-decode-read-k-star",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "f760425fe06",
+      "validation_set": [
+        "build_metal.sh: passed; fresh-JIT q-factor-4 replicated-Q route passed with 0/16 cache hits",
+        "unit SDPA 11 passed / 1 grid skip; flexible geometry 10 passed; unit MLA 2 passed; replicated-Q stress 4 passed",
+        "nightly SDPA 75 passed / 13 expected skips; cache 10 passed; nightly MLA 40 passed; sink 18 existing Blackhole skips",
+        "source audit 20 passed; all three production files independently satisfy additions below deletions",
+        "matched 800 MHz Tracy: q-factor 4 -1.20%, q-factor 2 -0.69%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2.13", "fully-end-to-end", "fresh-jit-verified", "fixed-column-star"]
+    },
+    {
+      "id": "argmax:multicore-two-rectangle-control",
+      "factory": "ttnn/cpp/ttnn/operations/reduction/argmax/device/argmax_multi_core_program_factory.cpp",
+      "dispatch": "ROW_MAJOR last-dimension and reduce-all multicore Argmax, including two sub-core rectangles",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp"
+      ],
+      "migration_unit": "argmax-multicore-control",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "5aaaf5b5aa5",
+      "validation_set": [
+        "build_metal.sh: passed; fresh-JIT two-rectangle reduce-all passed under Watcher with 0/19 hits",
+        "unit Argmax 69 passed; explicit two-rectangle last-dim and reduce-all cache routes passed",
+        "nightly Argmax 16 passed / 8 declared skips; source audit 21 passed",
+        "production LOC: factory 49/61 and kernel 25/40 additions/deletions",
+        "matched 800 MHz Tracy: [64,128] -0.28%; multi-round two-rectangle +0.30%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2.14", "fully-end-to-end", "fresh-jit-verified", "two-control-wires"]
+    },
+    {
+      "id": "move:overlap-three-rectangle-control",
+      "factory": "ttnn/cpp/ttnn/operations/data_movement/move/device/move_overlap_program_factory.cpp",
+      "dispatch": "MULTI_CORE_OVERLAP for TILE and ROW_MAJOR interleaved L1 input",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp"
+      ],
+      "migration_unit": "move-overlap-control",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a25603ae2c0",
+      "validation_set": [
+        "build_metal.sh: passed; fresh-JIT TILE and ROW_MAJOR overlap routes passed under Watcher with 0/19 hits each",
+        "complete test_move.py inventory: 136 passed / 128 intentional non-L1 skips, including program cache",
+        "helper guards: McastHostFixture 34 passed; device helper suite 80 passed under Watcher; source audit 22 passed",
+        "production LOC additions/deletions: TILE kernel 30/40, ROW_MAJOR kernel 31/41, factory 46/47",
+        "matched 800 MHz Tracy: TILE -0.47%; ROW_MAJOR -0.02%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2.15", "fully-end-to-end", "fresh-jit-verified", "three-control-wires"]
+    },
+    {
+      "id": "sort:single-row-multi-core:control",
+      "factory": "ttnn/cpp/ttnn/operations/data_movement/sort/device/sort_program_factory.cpp",
+      "dispatch": "single-row multicore DRAM factory selected when Wt exceeds the hybrid full-grid capacity",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp"
+      ],
+      "migration_unit": "sort-single-row-control",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "46a781123f1aaf89350044bffb0b6841d6e631dd",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact test_sort_long_tensor[shape=[1, 524288]-dim=-1-descending=False] under --dev from a fresh isolated JIT cache: passed; coordinator, reader, and writer artifacts confirmed",
+        "test_sort_multi_row_multi_core_no_deadlock: 2 passed (descending false and true)",
+        "test_sort_long_tensor: 7 passed",
+        "test_mcast_pipe.py: 72 passed, including four control-only Counter cases",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "API v10 Gate 5: handshaked row-start plus no-handshake sub-stage Pipes; build, helper 77/77, Sort long 7/7, deadlock 2/2, and 1.5% performance gate passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "flags": [
+        "tier:5",
+        "fully-end-to-end",
+        "counter-signal-only",
+        "helper-neutral-writer-companion"
+      ]
+    },
+    {
+      "id": "activation-mcast:conv2d-width-sharded:rotating-rect",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.cpp",
+      "dispatch": "width-sharded Conv2D activation multicast when skip_activation_mcast is false",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp"
+      ],
+      "migration_unit": "conv2d-activation-width-sharded",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "c3f5e53a19a8179cda08436d8964860a32005fbe",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact BF16/BF16 filter-3 tile-output test_conv_features node under --dev from fresh isolated cache: passed at PCC 0.999956503; activation_reader_width_sharded JIT artifact confirmed",
+        "CONV-WIDTH test_conv_features: 48 passed, 16 expected row-major+bfloat8 skips",
+        "CONV-WIDTH test_conv_dram_config: 1 passed at PCC 0.998234911; activation_reader_width_sharded JIT artifact confirmed",
+        "test_mcast_pipe.py: 72 passed after production integration",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "flags": [
+        "tier:6",
+        "atomic-unit:conv2d-activation-width-sharded",
+        "fully-end-to-end",
+        "rotating-sender",
+        "loopback-completion-verified"
+      ]
+    },
+    {
+      "id": "topk:multicore:final-readiness",
+      "factory": "ttnn/cpp/ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.cpp",
+      "dispatch": "multicore TopK final coordinator and local workers",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp"
+      ],
+      "migration_unit": "topk-multicore-final-readiness",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "4cf2edb7e75272c69d782e70c0c0d1131460b477",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact W=8192,k=50 BFLOAT16_B node under --dev from fresh isolated cache: passed; reader_final_topk and writer_local_topk JIT artifacts confirmed",
+        "TOPK-MULTICORE: 14 passed, 12 expected BFLOAT8_B pad xfails, 26 selected",
+        "McastHostFixture: 25 passed",
+        "test_mcast_pipe.py: 77 passed",
+        "exact-node profile: TopK device kernel duration 238281 ns; no operation-matched pre-migration bakeoff exists, so per-kernel delta is not comparable"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:2", "atomic-unit:topk-multicore-final-readiness", "fully-end-to-end", "counter-signal-only"]
+    },
+    {
+      "id": "layernorm:sharded:distributed-reduce",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp",
+      "dispatch": "is_pre_all_gather || is_post_all_gather; variant-specific reader arguments and helper topology from the shared builder",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp"
+      ],
+      "migration_unit": "layernorm-sharded-distributed-reduce",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "6cc49825476de78c4a86f3aada72c175ddffe095",
+      "validation_set": [
+        "separate builder-split prerequisite 4ef7e9a57a6: build passed; LN-PRE-ALLGATHER 126 passed; LN-POST-ALLGATHER 136 passed; LN-SHARDED 208 passed",
+        "build_metal.sh: passed",
+        "exact post-allgather LayerNorm node under --dev and --no-precompile from a fresh isolated cache: passed with 0/47 hits; sender and receiver JIT artifacts confirmed",
+        "LN-PRE-ALLGATHER: 126 passed",
+        "LN-POST-ALLGATHER: 136 passed",
+        "LN-SHARDED: 208 passed",
+        "McastHostFixture: 34 passed, including offset dense post-allgather and per-row outside-sender geometry",
+        "test_mcast_pipe.py: 80 passed; source audit before and after write-back: 18 passed",
+        "800 MHz LayerNorm median of three run medians: raw 4009 ns vs migrated 3880 ns (-3.2%)",
+        "800 MHz RMSNorm median of three run medians: raw 4020 ns vs migrated 3617.5 ns (-10.0%)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2", "atomic-unit:layernorm-sharded-distributed-reduce", "fully-end-to-end", "builder-split-prerequisite:d0c459f8358"]
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-1d:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy interleaved mcast_in0 path",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["MM-IN0-INTERLEAVED"],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:4", "source-integrated", "apply-verification-pending"]
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-1d:descriptor",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor interleaved mcast_in0 path",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["MM-IN0-INTERLEAVED"],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:4", "source-integrated", "apply-verification-pending"]
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-2d:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "legacy interleaved in0 path",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["MM-IN0-INTERLEAVED"],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:4", "source-integrated", "apply-verification-pending"]
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-2d:descriptor",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "descriptor interleaved in0 path",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": ["MM-IN0-INTERLEAVED"],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:4", "source-integrated", "apply-verification-pending"]
+    },
+    {
+      "id": "matmul-in0-mcast:sparse-1d:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp",
+      "dispatch": "sparse Matmul MCAST_IN0 path",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "MM-SPARSE-IN0",
+        "compile-focused without-nnz case passed under --dev from an empty cache; sender 14177997899853619887, receiver 18131090411884538285"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "flags": ["tier:4", "source-integrated", "apply-verification-pending", "fresh-jit-verified"]
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-1d:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy mcast_in0 path with block-sharded input A and rotating shard senders",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a1c9c1f68bc32a7497f0a22e224b16f20ecd0217",
+      "validation_set": [
+        "MM-BLOCK-SHARDED-HYBRID included in current 302 passed / 188 expected skips mapped Matmul run",
+        "exact transpose_mcast=True, in0_sharded=True --dev node passed from a 0/24-hit cache with the hybrid reader artifact",
+        "inherited matched 800 MHz medians: SDXL +0.643%, transposed -0.045%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["fully-end-to-end"]
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-1d:descriptor",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor mcast_in0 path with block-sharded input A and rotating shard senders",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a1c9c1f68bc32a7497f0a22e224b16f20ecd0217",
+      "validation_set": [
+        "MM-BLOCK-SHARDED-HYBRID included in current 302 passed / 188 expected skips mapped Matmul run",
+        "exact transpose_mcast=True, in0_sharded=True --dev node passed from a 0/24-hit cache with the hybrid reader artifact",
+        "inherited matched 800 MHz medians: SDXL +0.643%, transposed -0.045%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["fully-end-to-end"]
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-2d:legacy",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "legacy 2D path with block-sharded input A and rotating shard senders",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a1c9c1f68bc32a7497f0a22e224b16f20ecd0217",
+      "validation_set": [
+        "MM-BLOCK-SHARDED-HYBRID included in current 302 passed / 188 expected skips mapped Matmul run",
+        "exact transpose_mcast=True, in0_sharded=True --dev node passed from a 0/24-hit cache with the hybrid reader artifact",
+        "inherited matched 800 MHz medians: SDXL +0.643%, transposed -0.045%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["fully-end-to-end"]
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-2d:descriptor",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "descriptor 2D path with block-sharded input A and rotating shard senders",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
+      ],
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a1c9c1f68bc32a7497f0a22e224b16f20ecd0217",
+      "validation_set": [
+        "MM-BLOCK-SHARDED-HYBRID included in current 302 passed / 188 expected skips mapped Matmul run",
+        "exact transpose_mcast=True, in0_sharded=True --dev node passed from a 0/24-hit cache with the hybrid reader artifact",
+        "inherited matched 800 MHz medians: SDXL +0.643%, transposed -0.045%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["fully-end-to-end"]
+    },
+    {
+      "id": "deepseek-b1-sampling:single-device-loop-barrier",
+      "factory": "models/demos/deepseek_v3_b1/micro_ops/sampling/op.py",
+      "dispatch": "single-device _op_single_device_topk path, including k=1 argmax and k=32 top-k",
+      "kernels": [
+        "models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp"
+      ],
+      "migration_unit": "deepseek-b1-sampling-loop-barrier",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "2840fc2836177691fdc72d0d0f7ad93a72451694",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "cold --dev 101-core argmax: passed with 0/523 JIT hits",
+        "mapped single-device suite: 4 argmax passed; 3 top-k retained their pre-existing Blackhole selection-mismatch skips; warm JIT 533/533 hits",
+        "temporarily unskipped top-k test_1 completed 100 internal iterations and selected index 85 before the known p_scores mismatch; raw baseline reproduced the exact p_indices, p_scores, and assertion signature",
+        "matched Tracy device-kernel durations: argmax raw 18789 ns vs migrated 18836 ns (+0.25%); top-k raw 1558235 ns vs migrated 1557464 ns (-0.05%)",
+        "test_mcast_pipe_source_audit.py: 17 passed"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:1", "fully-end-to-end", "known-blackhole-selection-mismatch"]
+    },
+    {
+      "id": "group-attn-matmul:rotating-reader",
+      "factory": "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/group_attn_matmul_program_factory.cpp",
+      "dispatch": "all group-attention Matmul paths; rotating first-32 logical sender cores with per-core ACK counts",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp"
+      ],
+      "migration_unit": "group-attn-matmul-rotating-mcast",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "6e8eb7638855ffc03948b34236b9219102215b49",
+      "validation_set": [
+        "exact q16 fully-sharded ROW_MAJOR --dev node passed with fresh helper JIT artifacts",
+        "complete group_attn_matmul inventory: 322 passed / 132 expected skips (96 optional-preallocated sharded-output exclusions; 36 remaining duplicate COL_MAJOR interleaved-input cases); 351/351 warm JIT hits",
+        "post-restore exact normal q16 node passed; helper/device suite 80/80, source audit 17/17, McastHostFixture 32/32",
+        "matched 800 MHz q16 and q48 Tracy gates improved -32.20% and -27.31% respectively"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2", "fully-end-to-end", "fresh-jit-verified"]
+    },
+    {
+      "id": "conv3d:weight-share-mcast",
+      "factory": "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp",
+      "dispatch": "WeightShareMode::Mcast group strips; fixed sender with active and passive receivers",
+      "kernels": [
+        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp"
+      ],
+      "migration_unit": "conv3d-weight-sharing-mcast",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a290ce202811f6867a0c18e1ebcb19285369881c",
+      "validation_set": [
+        "fresh-JIT exact Mcast writer route passed with PCC 0.9999914190473849 and CT variant Mcast/NOC1 proof",
+        "focused shape sweep 12/12; complete unit file 27 passed / 1 pre-existing skip",
+        "complete nightly file 1606 passed / 5 expected skips / 2 pre-existing width-sharded page-alignment xfails",
+        "helper guards: McastHostFixture 32/32, device suite under Watcher 80/80, source audit 18/18 with Conv3D fixed-ABI guard",
+        "matched 800 MHz Tracy: non-grouped -0.815%, grouped -0.298%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "flags": ["tier:2", "fully-end-to-end", "fresh-jit-verified", "chain-path-out-of-scope"]
+    }
+  ],
+  "entries": [
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+      "op_family": "matmul",
+      "role": "sender",
+      "tag": "refactor-high",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "MM-IN0-INTERLEAVED audit; see log/reader_bmm_tile_layout_in0_sender_padding.md"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-07-29",
+      "inventory_note": "Source integrated with API-v11 typed Flag control values; apply verification and ledger write-back remain pending.",
+      "flags": [
+        "source-integrated",
+        "apply-verification-pending"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+      "op_family": "matmul",
+      "role": "receiver",
+      "tag": "refactor-high",
+      "status": "pending",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "MM-IN0-INTERLEAVED audit; see log/reader_bmm_tile_layout_in0_receiver.md"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-07-29",
+      "inventory_note": "Source integrated with API-v11 typed Flag control values; apply verification and ledger write-back remain pending.",
+      "flags": [
+        "source-integrated",
+        "apply-verification-pending"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact 1D mcast-in1 non-zero-subdevice --dev node: passed; sender JIT 10580236968838213332, receiver JIT 6510408673418518324",
+        "exact 2D transpose_mcast=false/true --dev nodes: passed; sender JIT 4616781822959825899, receiver JIT 4167676435791909128",
+        "MM-IN1-ALL: 302 passed, 188 expected skips, 490 selected",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "RECHECK CLEARED 2026-08-03 (verify-only, no rewrite) at tree state eb05b3929a3",
+        "build_metal.sh: passed (already current \u2014 _ttnn.so postdated both churned factories, nothing recompiled)",
+        "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
+        "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "API v11 verified from the original v10 self-describing wire migration; explicit active receiver acknowledgement count handles rectangles containing inactive cores. | RECHECK RESOLVED 2026-08-16: complete mapped verification passed. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) remains valid.",
+      "flags": [],
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+      "op_family": "matmul",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact 1D mcast-in1 non-zero-subdevice --dev node: passed; sender JIT 10580236968838213332, receiver JIT 6510408673418518324",
+        "exact 2D transpose_mcast=false/true --dev nodes: passed; sender JIT 4616781822959825899, receiver JIT 4167676435791909128",
+        "MM-IN1-ALL/MM-IN1-RECEIVER-2D: 302 passed, 188 expected skips, 490 selected",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "RECHECK CLEARED 2026-08-03 (verify-only, no rewrite) at tree state eb05b3929a3",
+        "build_metal.sh: passed (already current \u2014 _ttnn.so postdated both churned factories, nothing recompiled)",
+        "exact compile-focused 2D node test_matmul_2d_multiple_output_blocks_per_core[transpose_mcast=False-num_out_block_w=1-num_out_block_h=1-out_sharded=False-in0_sharded=False-grid_size=(8, 4)-has_bias=False-n=1024-k=512-m=512-b=1] under run_safe_pytest.sh --dev: PASSED, no watcher/assert trips; both kernels JIT-built at current state under NEW cache root tt-metal-cache12312614508320308860 \u2014 sender 6509650342639884602, receiver 4791675444625965894 + 5078604005037224472 (old-root hashes are not comparable across the rebase)",
+        "MM-IN1-ALL re-run in 4 chunks (halt mode, -x per chunk): 128 -> 56p/72s, 96 -> 46p/50s, 96 -> 46p/50s, 170 -> 154p/16s = 302 passed, 188 expected skips, 490 selected \u2014 EXACT baseline match",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "API v11 verified from the original v10 self-describing wire migration; all in1 and optional bias multicast semaphore operations are pipe-owned. | RECHECK RESOLVED 2026-08-16: complete mapped verification passed. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) remains valid.",
+      "flags": [],
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "verified_at_commit": "eb05b3929a3ec95681be73f8f846845610cb8c36"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_dram_sharded.py::test_matmul_in1_dram_sharded_with_program_cache",
+        "2026-08-16 API-v11 architecture audit: runtime ACK override resolves the historical count split, but normal sender-only requires forced EXCLUDE and SKIP_MCAST sender+compute requires signal-only INCLUDE; neither operation is public in v11",
+        "2026-08-16 Claude architecture review: DEFER; no production edits and no API expansion authorized"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-08-16",
+      "inventory_note": "P2 worker-type-dispatched (3 runtime core types) | DEFER-DESIGN-GAP at API v11: runtime consumer_ack_count now resolves the old fan-out/ACK split. Remaining blockers are explicit multicast self-mode: type1 normal must EXCLUDE an in-rectangle sender even when src_l1 != dst_l1, while type2 SKIP_MCAST must signal INCLUDE-source without sending data. v11 send() infers INCLUDE and couples data+signal; send_signal() always EXCLUDE. Smallest proposed extension is a default-preserving AUTO/INCLUDE/EXCLUDE self-mode, but API expansion is separately gated and not authorized.",
+      "flags": [
+        "tier:2b",
+        "design-gap",
+        "api-v11-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a1c9c1f68bc32a7497f0a22e224b16f20ecd0217",
+      "validation_set": [
+        "MM-BLOCK-SHARDED-HYBRID exact isolation; migrated PCC 0.981998/0.983415, baseline passed",
+        "2026-08-16 MM-BLOCK-SHARDED-HYBRID included in mapped Matmul run: 302 passed / 188 expected skips",
+        "2026-08-16 exact transpose_mcast=True, in0_sharded=True --dev node passed from a 0/24-hit cache; hybrid reader artifact confirmed",
+        "inherited matched 800 MHz medians: SDXL +0.643%, transposed -0.045%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "Migrated at API v11 with independent rotating senders and restored receiver geometry; correctness and inherited matched performance gates passed.",
+      "flags": ["fully-end-to-end"]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "6e8eb7638855ffc03948b34236b9219102215b49",
+      "validation_set": [
+        "./build_metal.sh: passed after host/factory migration and again after raw-baseline restoration",
+        "exact q16 fully-sharded ROW_MAJOR --dev node passed with fresh helper JIT artifacts",
+        "complete group_attn_matmul inventory: 322 passed / 132 expected skips (96 optional-preallocated sharded-output exclusions; 36 remaining duplicate COL_MAJOR interleaved-input cases); 351/351 warm JIT hits",
+        "post-restore exact normal q16 node passed; helper/device suite 80/80, source audit 17/17, McastHostFixture 32/32",
+        "800 MHz matched Tracy q16 median of three run medians: raw 57846.5 ns vs migrated 39219.5 ns (-32.20%)",
+        "800 MHz matched Tracy q48 median of three run medians: raw 405652 ns vs migrated 294888 ns (-27.31%)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "Migrated at API v11 as an independent rotating Mcast2D over the fixed dense receiver rectangle. The host now supplies helper compile-time semaphore IDs and runtime sender coordinates; only the per-core divergent ACK count remains operation-owned. The historical per-round post-flag barrier was redundant because the helper flushes the remote flag before reset and barriers local loopback writes; one final write barrier preserves last-send completion.",
+      "flags": [
+        "tier:2",
+        "fully-end-to-end",
+        "fresh-jit-verified"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
+      "op_family": "matmul",
+      "role": "sender",
+      "tag": "defer",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "P4 flag-only collective barrier, no data half",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp",
+      "op_family": "matmul",
+      "role": "n/a",
+      "tag": "defer",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "P5 ring unicast, no multicast",
+      "flags": []
+    },
+    {
+      "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "NO pytest - metal_example_matmul_multicore_reuse_mcast binary only"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "didactic P1 (raw API) | DEFER-COVERAGE: NO pytest - metal_example_matmul_multicore_reuse_mcast binary only",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "NO pytest - binary only"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "didactic, 2 independent Pipes | DEFER-COVERAGE: NO pytest - binary only",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "NO pytest - binary only"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "didactic, 2 independent Pipes | DEFER-COVERAGE: NO pytest - binary only",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "conv",
+      "role": "sender",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "aff48ae35a2a970a27d215d61f214aa9180a5f09",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact CONV-HEIGHT compile-focused --dev node: passed; JIT 7585446677319138702",
+        "CONV-HEIGHT: 49 passed, 16 expected skips",
+        "test_conv_dram: 14 passed",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "Fully end-to-end at v10. Host Mcast2D owns the full-rectangle geometry and CT/RT wire while num_active remains total_active_num_cores-1; McastArgs decodes the sender face. Weights and optional-bias handshakes are pipe-owned.",
+      "flags": [
+        "tier:1",
+        "fully-end-to-end"
+      ],
+      "migration_unit": "conv2d-weights-single-sender-rect"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "conv",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "aff48ae35a2a970a27d215d61f214aa9180a5f09",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact CONV-HEIGHT compile-focused --dev node: passed; JIT 15099792235267128693",
+        "CONV-HEIGHT: 49 passed, 16 expected skips",
+        "test_conv_dram: 14 passed",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "Fully end-to-end at v10. Host Mcast2D emits the receiver sender-coordinate RT block and McastArgs decodes the receiver face; weights and bias receive handshakes are pipe-owned.",
+      "flags": [
+        "tier:1",
+        "fully-end-to-end"
+      ],
+      "migration_unit": "conv2d-weights-single-sender-rect"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "conv",
+      "role": "sender",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a5009c349b4cebe03f9249f380c9f3a682795858",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact PerColumn and PerRow CONV-BLOCK --dev nodes: passed",
+        "CONV-BLOCK: 49 passed, 16 expected skips",
+        "test_conv_dram: 14 passed",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "Fully end-to-end at v10. Host Mcast1D owns PerRow/PerColumn fixed-line geometry and the CT/RT wire over the dense zero-anchored output grid; McastArgs decodes the sender face. Weights and bias send handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
+      "flags": [
+        "tier:2",
+        "fully-end-to-end"
+      ],
+      "migration_unit": "conv2d-weights-fixed-line"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "conv",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a5009c349b4cebe03f9249f380c9f3a682795858",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact PerColumn and PerRow CONV-BLOCK --dev nodes: passed",
+        "CONV-BLOCK: 49 passed, 16 expected skips",
+        "test_conv_dram: 14 passed",
+        "McastHostFixture: 19 passed",
+        "test_mcast_pipe.py: 68 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "Fully end-to-end at v10. Host Mcast1D emits each receiver's fixed sender coordinate for both PerRow and PerColumn topologies, and McastArgs decodes the receiver face. Weights and bias receive handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
+      "flags": [
+        "tier:2",
+        "fully-end-to-end"
+      ],
+      "migration_unit": "conv2d-weights-fixed-line"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp",
+      "op_family": "conv",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "c3f5e53a19a8179cda08436d8964860a32005fbe",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact BF16/BF16 filter-3 tile-output node under --dev from fresh isolated cache: passed at PCC 0.999956503; activation_reader_width_sharded JIT artifact confirmed",
+        "CONV-WIDTH test_conv_features: 48 passed, 16 expected row-major+bfloat8 skips",
+        "CONV-WIDTH test_conv_dram_config: 1 passed at PCC 0.998234911; activation_reader_width_sharded JIT artifact confirmed",
+        "test_mcast_pipe.py: 72 passed after production integration",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "Fully end-to-end at v10. Host Mcast2D emits one rotating full-rectangle wire with adopted factory semaphores and the divergent active ACK count. Kernel McastArgs owns both sender and receiver faces; the current SenderPipe ACK-fences real loopback completion before resetting its local Flag cell.",
+      "flags": [
+        "tier:6",
+        "atomic-unit:conv2d-activation-width-sharded",
+        "fully-end-to-end",
+        "rotating-sender",
+        "loopback-completion-verified"
+      ],
+      "migration_unit": "conv2d-activation-width-sharded",
+      "note": "API-v9 Mcast2D/McastArgs port removes the raw multicast, semaphore, and X/Y lookup wire. consumer_ack_count=max(input_num_cores,output_num_cores)-1 remains distinct from the full-rectangle fan-out."
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp",
+      "op_family": "conv",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (BLOCK_SHARDED 32x32 3x3)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "inventory_note": "all 3 F3 sub-cases; CHUNKED send > NOC_MAX_BURST_SIZE | DEFER-DESIGN-GAP (R4): mcast_block_chunked is a producer-overlapped STREAMING chunked send (wait_front per growing tile count interleaved with per-burst mcast). v7 send() handles only fully-ready blocks (auto-chunks a ready region); cannot express the per-burst wait_front streaming. R4 explicitly deferred this round (proposed_helpers.md). Out of scope.",
+      "flags": [
+        "tier:2b",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp",
+      "op_family": "conv",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a290ce202811f6867a0c18e1ebcb19285369881c",
+      "validation_set": [
+        "./build_metal.sh: passed",
+        "fresh-JIT exact k333_s111_g1_zeros_c64_c64 passed with PCC 0.9999914190473849 and Mcast/NOC1 writer compile proof",
+        "focused shape sweep: 12 passed",
+        "tests/ttnn/unit_tests/operations/conv/test_conv3d.py: 27 passed / 1 pre-existing Blackhole skip",
+        "tests/ttnn/nightly/unit_tests/operations/conv/test_conv3d.py: 1606 passed / 5 expected skips / 2 pre-existing width-sharded page-alignment xfails",
+        "McastHostFixture 32/32; test_mcast_pipe.py 80/80 under Watcher; source audit 18/18 with Conv3D fixed-ABI guard",
+        "800 MHz matched Tracy non-grouped median of three run medians: raw 14977 ns vs migrated 14855 ns (-0.815%)",
+        "800 MHz matched Tracy grouped median of three run medians: raw 70343 ns vs migrated 70133.5 ns (-0.298%)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "Only WeightShareMode::Mcast migrated at API v11. Each group strip is an independent fixed-sender Mcast2D; active and passive receiver roles use the helper, while Chain unicast forwarding and Disabled/local loading remain unchanged and out of helper scope. The host asserts complete weight-CB rectangle allocation and identical helper CT words across strips; all modes retain one unconditional four-word helper RT block.",
+      "flags": [
+        "tier:2",
+        "fully-end-to-end",
+        "fresh-jit-verified",
+        "chain-path-out-of-scope"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "6cc49825476de78c4a86f3aada72c175ddffe095",
+      "validation_set": [
+        "./build_metal.sh: passed",
+        "fresh-cache exact --dev/--no-precompile post-allgather LayerNorm node passed with 0/47 JIT hits and sender/receiver artifacts",
+        "LN-POST-ALLGATHER: 136 passed; LN-PRE-ALLGATHER: 126 passed; LN-SHARDED: 208 passed",
+        "McastHostFixture: 34 passed; test_mcast_pipe.py: 80 passed; source audit before and after write-back: 18 passed",
+        "all five production files independently satisfy additions < deletions",
+        "800 MHz LayerNorm raw 4009 ns vs migrated 3880 ns (-3.2%); RMSNorm raw 4020 ns vs migrated 3617.5 ns (-10.0%)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API-v11 migration. The mcast_1d path uses dense Mcast2D loopback. Each non-mcast-1D line uses an outside-sender Mcast2D for the remote rectangle plus an operation-owned local CB21-to-CB15 copy, so helper loopback inference needs no new knob. The dense rectangle owns CB/semaphore state even on inactive ragged cells. Current operation tests exercise mcast_1d only; non-mcast-1D is limited by the pre-existing one-core stats-tensor contract, while its outside-sender topology is covered by the host fixture.",
+      "flags": [
+        "tier:2",
+        "fully-end-to-end",
+        "fresh-jit-verified",
+        "operation-coverage-limit:non-mcast-1d-stats"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "6cc49825476de78c4a86f3aada72c175ddffe095",
+      "validation_set": [
+        "./build_metal.sh: passed",
+        "fresh-cache exact --dev/--no-precompile post-allgather LayerNorm node passed with sender/receiver artifacts",
+        "LN-POST-ALLGATHER: 136 passed; LN-PRE-ALLGATHER: 126 passed; LN-SHARDED: 208 passed",
+        "McastHostFixture: 34 passed; test_mcast_pipe.py: 80 passed; source audit before and after write-back: 18 passed"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API-v11 receiver half of the post-allgather protocol pair. It consumes the helper-generated wire and uses ReceiverPipe::receive; the sender twin is migrated in the same production commit.",
+      "flags": [
+        "tier:2",
+        "fully-end-to-end",
+        "fresh-jit-verified"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "fe1a863d2a13c3ae270b559d50e70222a9f53df1",
+      "validation_set": [
+        "GN legacy inventory: 108 passed, 2 expected skips",
+        "fixed/default-routing GN nodes: 19 passed, 6 expected skips",
+        "fresh sender and receiver JIT paths verified",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; synthetic zero/one/two-edge splitter coverage passed 3/3; legacy +0.248% versus baseline passed the 1.5% gate"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "API v11 verified from the original v10 migration. The raw acknowledgement gate remains before remote L1 reads; all data/flag multicasts use no-handshake SenderPipes. Mapped inventories validate the host-generated rectangle partition.",
+      "flags": [
+        "tier:2a"
+      ],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "fa1bc6df27750df0f627eb3d5743b72c0a8d22db",
+      "validation_set": [
+        "GN legacy inventory: 124 passed, 8 expected skips",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; synthetic zero/one/two-edge splitter coverage passed 3/3; legacy +0.248% versus baseline passed the 1.5% gate"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "API v11 verified from the original v10 migration; every readiness-counter and data-ready-flag operation is pipe-owned.",
+      "flags": [],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "e58c66ef53167a05703190700f884107da0bddc4",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact fresh-cache 8x4 BFLOAT8_B RMSNorm node under --dev: passed; sender JIT artifact confirmed",
+        "LN-PRE-ALLGATHER: 126 passed; LN-POST-ALLGATHER: 136 passed; LN-SHARDED: 208 passed",
+        "McastHostFixture: 28 passed; test_mcast_pipe.py: 77 passed"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "inventory_note": "API v11 verified from the fully end-to-end v10 migration: handshaked Flag signal-only sender uses whole-grid Mcast2D or per-line Mcast1D; gather reads and final write barrier remain operation-owned.",
+      "flags": [
+        "acked-signal-only",
+        "fully-end-to-end",
+        "atomic-unit:layernorm-sharded-pre-allgather"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "e58c66ef53167a05703190700f884107da0bddc4",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact fresh-cache 8x4 BFLOAT8_B RMSNorm node under --dev: passed; receiver JIT artifacts confirmed",
+        "LN-PRE-ALLGATHER: 126 passed; LN-POST-ALLGATHER: 136 passed; LN-SHARDED: 208 passed",
+        "McastHostFixture: 28 passed; test_mcast_pipe.py: 77 passed"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "inventory_note": "API v11 verified from the fully end-to-end v10 migration: handshaked Flag signal-only receiver uses receive_signal; two-stage line coordinators use the sender face. Gather reads, second-stage semaphore, and final atomic barrier remain operation-owned.",
+      "flags": [
+        "acked-signal-only",
+        "fully-end-to-end",
+        "atomic-unit:layernorm-sharded-pre-allgather"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "40e209daad9",
+      "validation_set": [
+        "Release build and exact fresh-compile interleaved Welford node: passed",
+        "complete DRAM valid inventory: 181 passed; complete general inventory: 345 passed; nightly: 203 passed",
+        "McastHostFixture: 34 passed; helper device under Watcher: 80 passed; source audit: 19 passed",
+        "matched real-time performance: 103191.783 ns versus 103521.069 ns raw (-0.318%)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API-v11 interleaved Welford sender. One operation-owned aggregate ACK precedes three mid/first/last helper data sends; gather reads remain operation-owned.",
+      "flags": [
+        "tier:2.12",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "fe1a863d2a13c3ae270b559d50e70222a9f53df1",
+      "validation_set": [
+        "GN Welford inventory: 108 passed, 2 expected skips",
+        "fixed/default-routing GN nodes: 19 passed, 6 expected skips",
+        "fresh sender and receiver JIT paths verified",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; synthetic zero/one/two-edge splitter coverage passed 3/3; Welford -0.485% versus baseline passed the 1.5% gate"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "API v11 verified from the original v10 migration. The raw acknowledgement gate remains before remote L1 reads; the persistent no-handshake middle SenderPipe owns data/flag send. Optional rectangles partition num_mcast_cores-1.",
+      "flags": [
+        "tier:2a"
+      ],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_gn.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "40e209daad9",
+      "validation_set": [
+        "Release build and exact fresh-compile interleaved Welford node: passed",
+        "complete DRAM valid inventory: 181 passed; complete general inventory: 345 passed; nightly: 203 passed",
+        "McastHostFixture: 34 passed; helper device under Watcher: 80 passed; source audit: 19 passed",
+        "matched real-time performance: 103191.783 ns versus 103521.069 ns raw (-0.318%)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API-v11 interleaved Welford receiver. The selected middle helper pipe owns readiness acknowledgement, Flag wait/reset, and data arrival ordering.",
+      "flags": [
+        "tier:2.12",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "fa1bc6df27750df0f627eb3d5743b72c0a8d22db",
+      "validation_set": [
+        "GN Welford inventory: 116 passed, 8 expected skips",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "Gate 6: mapped production geometry is zero-edge; synthetic zero/one/two-edge splitter coverage passed 3/3; Welford -0.485% versus baseline passed the 1.5% gate"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "API v11 verified from the original v10 migration; every readiness-counter and data-ready-flag operation is pipe-owned.",
+      "flags": [],
+      "migration_unit": "groupnorm-sharded-v2-mcast-host"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "LN-SHARDED audit; partial migration reverted before full promotion"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-07-29",
+      "inventory_note": "V9 PORT BLOCKED: protocol needs acknowledged signal-only plus one-gate/multi-block streaming on reused semaphore state; target-baseline implementation preserved.",
+      "flags": [
+        "design-gap",
+        "v9-port-blocked",
+        "acked-signal-only",
+        "one-gate-multi-block",
+        "exact-baseline-restored"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "LN-SHARDED audit; partial migration reverted before full promotion"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-07-29",
+      "inventory_note": "V9 PORT BLOCKED: shared flag/counter two-phase protocol cannot be represented by one fixed-mode pipe; target-baseline implementation preserved.",
+      "flags": [
+        "design-gap",
+        "v9-port-blocked",
+        "one-gate-multi-block",
+        "mixed-signal-mode",
+        "exact-baseline-restored"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_gn.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "40e209daad9",
+      "validation_set": [
+        "Release build and exact fresh-compile interleaved legacy node: passed",
+        "complete DRAM valid inventory: 181 passed; complete general inventory: 345 passed; nightly: 203 passed",
+        "McastHostFixture: 34 passed; helper device under Watcher: 80 passed; source audit: 19 passed",
+        "matched real-time performance: 75115.544 ns versus 74173.140 ns raw (+1.271%)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API-v11 interleaved legacy sender. One aggregate ACK gates three mid/first/last early-go signals, followed later by three data sends; gather tails remain operation-owned.",
+      "flags": [
+        "tier:2.12",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire",
+        "two-phase-go-and-data"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_gn.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "40e209daad9",
+      "validation_set": [
+        "Release build and exact fresh-compile interleaved legacy node: passed",
+        "complete DRAM valid inventory: 181 passed; complete general inventory: 345 passed; nightly: 203 passed",
+        "McastHostFixture: 34 passed; helper device under Watcher: 80 passed; source audit: 19 passed",
+        "matched real-time performance: 75115.544 ns versus 74173.140 ns raw (+1.271%)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API-v11 interleaved legacy receiver. It preserves the operation-owned aggregate readiness ACK, then uses helper receive_signal for go and receive for data.",
+      "flags": [
+        "tier:2.12",
+        "fully-end-to-end",
+        "fixed-three-rectangle-wire",
+        "two-phase-go-and-data"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp",
+      "op_family": "transformer + sdpa",
+      "role": "both",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "ChainLink abstraction (existing two-sided helper); flush + linked=true companion",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
+      "op_family": "transformer + sdpa",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_noncausal (b1 nh8 nkv1 s2048 d128)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "inventory_note": "DEFERRED: CHAIN/relay topology (helper design gap). Forward path uses cross-id relay_multicast(valid_sem -> receiver_sem, src!=dst); each link is simultaneously receiver+sender. STAR SenderPipe asserts src==dst, structurally cannot relay. = chain_link.hpp reference pattern, T2 CHAIN=GAP.",
+      "flags": [
+        "tier:2c",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp",
+      "op_family": "transformer + sdpa",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        ">=4 devices (test_exp_ring_joint_sdpa.py)"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "open-coded chain-link + ring sync (ring part oos) | DEFER-COVERAGE: >=4 devices (test_exp_ring_joint_sdpa.py)",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp",
+      "op_family": "transformer + sdpa",
+      "role": "both",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "f760425fe06",
+      "validation_set": [
+        "fresh-JIT replicated-Q q-factor-4 route passed with 0/16 hits and both including reader/writer sources",
+        "unit SDPA 11 passed / 1 grid skip; flexible geometry 10 passed; unit MLA 2 passed; replicated-Q stress 4 passed",
+        "nightly SDPA 75 passed / 13 expected skips; cache 10 passed; nightly MLA 40 passed; sink 18 existing Blackhole skips",
+        "source audit 20 passed; matched q-factor-4 and q-factor-2 performance improved -1.20% and -0.69%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "MIGRATED: the factory materializes one fixed API-v11 Mcast2D per replicated-Q sharing group, so recipient count is host-known per wire. The shared binary keeps only its operation-owned runtime sender-role scalar and chooses send versus receive on the same opaque helper argument block. Ordinary non-multicast routes receive an inactive singleton block. The proven Blackhole sender write barrier and receiver atomic barrier remain.",
+      "flags": [
+        "tier:2.13",
+        "fully-end-to-end",
+        "fixed-column-star"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/device/kernels/dataflow/worker_writer.cpp",
+      "op_family": "transformer + sdpa",
+      "role": "sender",
+      "tag": "oos",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "fabric cross-chip data; only degenerate sem-rect-mcast local",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "4cf2edb7e75272c69d782e70c0c0d1131460b477",
+      "migration_unit": "topk-multicore-final-readiness",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact fresh-cache W=8192,k=50 BFLOAT16_B node under --dev: passed; reader_final_topk JIT artifact confirmed",
+        "TOPK-MULTICORE: 14 passed, 12 expected BFLOAT8_B pad xfails, 26 selected",
+        "McastHostFixture: 25 passed",
+        "test_mcast_pipe.py: 77 passed"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "inventory_note": "API v11 verified from the fully end-to-end v10 migration: sender-side no-handshake Counter readiness uses an adopted, host-zeroed semaphore; the arrival counter remains operation-owned.",
+      "flags": [
+        "race-free-no-handshake-init",
+        "fully-end-to-end",
+        "atomic-unit:topk-multicore-final-readiness"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "4cf2edb7e75272c69d782e70c0c0d1131460b477",
+      "migration_unit": "topk-multicore-final-readiness",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "exact fresh-cache W=8192,k=50 BFLOAT16_B node under --dev: passed; writer_local_topk JIT artifact confirmed",
+        "TOPK-MULTICORE: 14 passed, 12 expected BFLOAT8_B pad xfails, 26 selected",
+        "McastHostFixture: 25 passed",
+        "test_mcast_pipe.py: 77 passed"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-06",
+      "inventory_note": "API v11 verified from the fully end-to-end v10 migration: receiver-side no-handshake Counter readiness is helper-owned; value/index unicast and the arrival counter remain operation-owned.",
+      "flags": [
+        "race-free-no-handshake-init",
+        "fully-end-to-end",
+        "atomic-unit:topk-multicore-final-readiness"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "5aaaf5b5aa5",
+      "validation_set": [
+        "fresh-JIT two-rectangle reduce-all passed under Watcher with 0/19 hits",
+        "unit Argmax 69 passed; explicit two-rectangle last-dim and reduce-all cache routes passed",
+        "nightly Argmax 16 passed / 8 declared skips; source audit 21 passed",
+        "matched [64,128] and multi-round two-rectangle performance: -0.28% and +0.30%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "MIGRATED: two fixed no-handshake Counter control wires adopt the existing start semaphore and preserve monotone reduce-all readiness. Rectangle 0 contains and excludes the reducer; rectangle 1 uses the reducer as a separate sender. The disjoint wires share no receiver cells. Result unicasts and the operation-owned worker-arrival counter remain independent.",
+      "flags": [
+        "tier:2.14",
+        "fully-end-to-end",
+        "two-control-wires"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "46a781123f1aaf89350044bffb0b6841d6e631dd",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "test_sort_long_tensor: 7 passed; exact [1,524288] --dev case confirmed coordinator/reader/writer JIT paths from a fresh isolated cache",
+        "test_sort_multi_row_multi_core_no_deadlock: 2 passed",
+        "test_mcast_pipe.py: 72 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "API v10 Gate 5: build, helper 77/77, Sort long 7/7, deadlock 2/2, and 1.5% performance gate passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "API v11 verified from the v10 migration: handshaked row-start Counter SenderPipe and separate no-handshake sub-stage Counter SenderPipe. Helper owns readiness; writer-done remains an independent operation counter.",
+      "flags": [
+        "tier:5",
+        "atomic-unit:sort-single-row-control",
+        "fully-end-to-end"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "46a781123f1aaf89350044bffb0b6841d6e631dd",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "test_sort_long_tensor: 7 passed; exact [1,524288] --dev case confirmed coordinator/reader/writer JIT paths from a fresh isolated cache",
+        "test_sort_multi_row_multi_core_no_deadlock: 2 passed",
+        "test_mcast_pipe.py: 72 passed",
+        "API v10 Gate 4: self-describing six-word CT wire; focused fresh-JIT case and complete mapped family inventory passed on 2026-08-05",
+        "API v10 Gate 5: build, helper 77/77, Sort long 7/7, deadlock 2/2, and 1.5% performance gate passed on 2026-08-05"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-05",
+      "inventory_note": "API v11 verified from the v10 migration: handshaked row-start Counter ReceiverPipe acknowledges readiness before waiting; a separate no-handshake Counter ReceiverPipe handles sub-stage events. The raw reader-ready semaphore is gone.",
+      "flags": [
+        "tier:5",
+        "atomic-unit:sort-single-row-control",
+        "fully-end-to-end"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "build_metal.sh: passed",
+        "test_sort_long_tensor: 7 passed; exact [1,524288] --dev case confirmed writer JIT path from a fresh isolated cache",
+        "test_sort_multi_row_multi_core_no_deadlock: 2 passed"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-03",
+      "inventory_note": "Helper-neutral companion in the migrated sort-single-row-control atomic unit: retains the explicit writer-done Semaphore::up return leg and received coupled dead-runtime-argument cleanup, but is not a Pipe caller and remains deferred as a standalone helper candidate.",
+      "flags": [
+        "tier:5",
+        "helper-neutral",
+        "atomic-unit:sort-single-row-control"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a25603ae2c0",
+      "validation_set": [
+        "fresh-JIT TILE overlap passed under Watcher with 0/19 hits",
+        "complete Move inventory 136 passed / 128 intentional skips, including cache",
+        "source audit 22 passed; helper host/device guards 34/80 passed",
+        "matched TILE performance -0.47%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "MIGRATED: the operation-owned worker return counter remains separate. Three fixed no-handshake Flag wires release the disjoint worker rectangles; an absent third rectangle uses an inactive controller singleton. Controller and worker roles share one binary through the runtime region selector, while each helper block remains an opaque fixed ABI.",
+      "flags": [
+        "tier:2.15",
+        "fully-end-to-end",
+        "three-control-wires"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "a25603ae2c0",
+      "validation_set": [
+        "fresh-JIT ROW_MAJOR overlap passed under Watcher with 0/19 hits",
+        "complete Move inventory 136 passed / 128 intentional skips, including cache",
+        "source audit 22 passed; helper host/device guards 34/80 passed",
+        "matched ROW_MAJOR performance -0.02%"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "MIGRATED ROW_MAJOR twin: same three fixed release wires and independent operation return counter as the tiled path; the aligned-page data path remains unchanged.",
+      "flags": [
+        "tier:2.15",
+        "fully-end-to-end",
+        "three-control-wires"
+      ]
+    },
+    {
+      "kernel": "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/coordinator_kernel.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "didactic single-shot sender (raw API); cleanest reference",
+      "flags": []
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/unified_kernels/mcast.hpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "both",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "EXISTING two-sided Pipe (deepseek_b1_ops::Mcast); init/op/teardown; strongest API-shape evidence",
+      "flags": []
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/unified_kernels/dataflow_utils.hpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "n/a",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "preprogram-state primitive layer",
+      "flags": []
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/unified_kernels/flash_mla.hpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "models/demos/deepseek_v3_b1/.../test_flash_mla.py"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "inventory_note": "DEFER-DESIGN-GAP: num_mcast_dests is a RUNTIME arg (ReaderArgs/WriterArgs structs, lines 141/178; used at 348/356/363 etc.), but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param -> runtime recipient/ack count inexpressible (same gap as gn_v2/welford/conv3d). Plus the K-chunk mcast is only one of two per-chunk-loop branches alternating with a preprogram-state TRID-pipelined sharded read (noc_async_read_one_packet_with_state, ncrisc_brisc_sync double-buffer), gated by BRISC_MCAST_LOOPS; receiver pre-handshake uses unicast_atomic_inc_with_state (preprogram-state). Needs helper change (out of scope).",
+      "flags": [
+        "tier:2d",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/unified_kernels/kv_cache_update.hpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "models/demos/deepseek_v3_b1/.../test_kv_cache_branch.py::test_kv_cache_branch"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "inventory_note": "DEFER-DESIGN-GAP: preprogram-state mcast (noc_async_write_multicast_preprogram_all_state / multicast_write_with_state / _issue_txn set-state+issue-txn split, shared-cmd-buf branch). v7 SenderPipe.send() issues a single async_write_multicast per call with no set-state path; migrating would drop the preprogram-state perf optimization that is the whole point of these unified_kernels. proposed_helpers.md explicitly defers this (no mcast set-state in object API; future). Out of scope.",
+      "flags": [
+        "tier:2d",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 14,
+      "commit": "2840fc2836177691fdc72d0d0f7ad93a72451694",
+      "validation_set": [
+        "build_metal.sh: passed",
+        "models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py::test_sampling_argmax_single_device_101_cores: 4 passed on 11x10 Blackhole; cold --dev and warm program-cache/JIT paths passed",
+        "test_sampling_topk_single_device[test_1]: 100 internal iterations completed under migrated and raw implementations with identical pre-existing Blackhole p_scores failure signature",
+        "matched Tracy device-kernel durations: argmax +0.25%; top-k -0.05%",
+        "test_mcast_pipe_source_audit.py: 17 passed"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-08-16",
+      "inventory_note": "API v11 fixed-sender, no-handshake Flag control pipe over the dense 11x10 bounding rectangle; helper-owned semaphore is initialized on all 110 landed cells while kernels remain restricted to the sparse 101 active cores. The operation-owned global semaphore remains separate. Mesh mode is unchanged. The former 64-core coverage gap is closed on Blackhole.",
+      "flags": [
+        "tier:1",
+        "known-blackhole-selection-mismatch"
+      ],
+      "migration_unit": "deepseek-b1-sampling-loop-barrier"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/reader_combine.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "min mesh 2x2 - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "data + COUNTER inc_multicast | DEFER-COVERAGE: min mesh 2x2 - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/dm1.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/.../experimental/test_moe_mm.py::test_moe_mm (dispatch_row, single device)"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "inventory_note": "one_packet mcast collector->7 cores (num_dests=7 is compile-time, expressible) | DEFER-COVERAGE: test_moe_mm unconditionally pytest.skip()s on wormhole_b0 AND blackhole (issue #44858: stable nightly moe_mm failures). This is a single WH b0 chip, so the test cannot exercise dm1.cpp here -> no runnable validation. (Migration also non-trivial: the collector group-mask mcast at lines 367-373 shares partial_semaphore with the sender->collector reduce-inc phases and multiple manual resets; a SenderPipe ctor set(VALID) would corrupt that multiplexed counter. But the binding blocker is coverage.)",
+      "flags": [
+        "tier:2d",
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_sender_reader.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "mesh (rms_test.py) - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "INCLUDE_SRC loopback + barrier | DEFER-COVERAGE: mesh (rms_test.py) - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "mesh - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "INCLUDE_SRC loopback | DEFER-COVERAGE: mesh - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/worker_receiver.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "ring_size>1 - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "INCLUDE_SRC partner | DEFER-COVERAGE: ring_size>1 - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_reader.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "4x8 mesh - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "value-carrying flag (token counts in sem word) | DEFER-COVERAGE: 4x8 mesh - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "4x8 mesh - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "value-carrying flag | DEFER-COVERAGE: 4x8 mesh - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_reader.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/.../experimental/test_moe_compute_single_card.py::test_moe_compute_single_card_gpt_oss (1x1 mesh)"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "inventory_note": "DEFER-DESIGN-GAP: co-compiled with tilize_writer (same value-carrying-flag family). Its own data broadcasts (per-expert counts, total_chunks) target MULTIPLE distinct rectangles (tilize / matmul / all-worker bounding boxes) with RUNTIME num_dests (tilize_bounding_box_num_cores-1, matmul_bounding_box_num_cores, all_worker_cores_bounding_box_num_cores-1, lines 795-857). v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is compile-time + single rect per Pipe; runtime multi-rect counts inexpressible (same gap as gn_v2). Companion to the writer's value-carrying flag. Needs helper change (out of scope). [coverage note: WH single-card test also requires grid>=7x10 (70 cores); a 64-core n150 8x8 grid would pytest.skip.]",
+      "flags": [
+        "tier:2d",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/.../experimental/test_moe_compute_single_card.py::test_moe_compute_single_card_gpt_oss"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "inventory_note": "DEFER-DESIGN-GAP: VALUE-CARRYING FLAG. matmul_chunk_ready_semaphore broadcasts a MONOTONE running value via noc_semaphore_set(addr,set_value)+set_multicast (set_value=1 then set_value++ per chunk, lines 408/694-702); receivers noc_semaphore_wait(addr,value). matmul_chunk_available broadcasts an ACCUMULATED runtime value (wait_value += num_matmul_cores then set_multicast, lines 513-524). Neither maps to v7 Flag (fixed VALID/INVALID) nor Counter (inc+1/wait_min). Plus multiple distinct mcast rects with RUNTIME num_dests (num_matmul_cores etc.). Two design gaps (arbitrary-value set_multicast + runtime count). Needs helper change (out of scope).",
+      "flags": [
+        "tier:2d",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/reader.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "galaxy (test_selective_combine_6U.py) - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "flag-only sync | DEFER-COVERAGE: galaxy (test_selective_combine_6U.py) - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "galaxy - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "flag-only sync | DEFER-COVERAGE: galaxy - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/llama_all_gather_concat_writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "TG/mesh - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "flag-only | DEFER-COVERAGE: TG/mesh - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/kernels/all_to_all_sender_writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "bh_1d_mesh - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "INCLUDE_SRC loopback (intra-chip leg); fabric leg oos | DEFER-COVERAGE: bh_1d_mesh - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "route audit: test_single_routed_expert.py, test_routed_expert_bias.py, and test_swigluoai_routed_expert.py exist; stopped before execution at the API-v11 design gate"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": "2026-08-16",
+      "inventory_note": "Tier 2.16a: in0, in1-down, and activated single-payload channels fit API v11, but the active phase-1 in1 protocol links gate then up under one receiver-ready handshake and one final valid signal. SenderPipe exposes no data-only stage; two send() calls change ACK/signal semantics. No unrelated second family shares the exact invariant, so the extension generality gate fails.",
+      "flags": [
+        "design-gap",
+        "tier:2.16a"
+      ]
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_h2d_writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "H2D Python service and C++ worker-sync routes require Blackhole Galaxy/UBB and skip on the current single-chip P100a"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": "2026-08-16",
+      "inventory_note": "Tier 2.16b; current-tree replacement for persistent_h2d_receiver.cpp. data_ready_sem_addr is a runtime GlobalSemaphore L1 address rather than a service-program semaphore id and API-v11 SenderPipe cannot bind it. Independently, metadata and the worker signal straddle a DRAM barrier plus PCIe completion publication, while send() fuses data and signal. The H2D/D2H twins are one socket subsystem and do not pass the unrelated-family extension gate.",
+      "flags": [
+        "design-gap",
+        "coverage-gap",
+        "global-semaphore-address",
+        "data-signal-ordering",
+        "tier:2.16b"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "defer",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "flag-only collective barrier; ring/CCL twin of matmul reader_bmm_tile_layout_in1_ring_all_gather (P4 defer)",
+      "flags": []
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_d2h_reader.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "D2H Python service and C++ worker-sync routes require Blackhole Galaxy/UBB and skip on the current single-chip P100a"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": "2026-08-16",
+      "inventory_note": "Tier 2.16c; current-tree replacement for persistent_d2h_sender.cpp. A no-handshake Counter send_signal otherwise matches exactly, but its runtime GlobalSemaphore L1 target transfer_done_sem_addr cannot be bound by API-v11 SenderPipe. The following atomic barrier and local write-ack counter stay operation-owned. The H2D/D2H twins are one socket subsystem and do not pass the unrelated-family extension gate.",
+      "flags": [
+        "design-gap",
+        "coverage-gap",
+        "global-semaphore-address",
+        "tier:2.16c"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/core/tensor/kernels/persistent_d2d_receiver.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "intra-chip data write_multicast (F1 barrier) + inc_multicast data_ready (F2-counter) to worker grid; fabric cross-chip data leg oos | DEFER-COVERAGE: D2DStream test (test_d2d_stream_service_multiprocess.py) requires Galaxy 2-process multi-mesh; unverifiable on single device",
+      "flags": [
+        "coverage-gap"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/core/tensor/kernels/persistent_d2d_sender.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "inventory_note": "one intra-chip inc_multicast(consumed_sem) to sender worker grid (F2-counter, master-only); fabric bulk + lane-to-lane shared-L1 counters oos | DEFER-COVERAGE: D2DStream test (test_d2d_stream_service_multiprocess.py) requires Galaxy 2-process multi-mesh; unverifiable on single device",
+      "flags": [
+        "coverage-gap"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/reader_indexer_score.cpp",
+      "op_family": "transformer + sdpa",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "per-direction rotating chain-link STAR: relay_multicast of write-once valid_sem cross-id into recv_sem (INV12), linked=true data + unlinked relay (F4); GAP=CHAIN the helper cannot express yet",
+      "flags": [
+        "design-gap"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/examples/lab_multicast/kernels/dataflow/mcast_sender.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "didactic example (raw API, ttnn/examples): pre-handshake counter wait+reset, data mcast, local=VALID + set_multicast flag (F2-flag), flush+barrier; previously-missed (existed pre-rebase)",
+      "flags": [],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "P2 3-runtime-core-types; object API; dup of production in0_sender_dram_sharded",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "canonical P1 sender twin; legacy-binding sibling of _metal2 (coexist)",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "metal2 fork of P1 sender; body identical, host-binding only; live DPRINT debug",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "P3 rotating-role STAR (H12); dup of production",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "metal2 fork of P3; [DEBUG #47797] hang-localization scaffolding",
+      "flags": [
+        "quasar-metal2-port",
+        "hang:#47797"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "defer",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "P4 flag-only collective barrier, no data half; dup of production defer",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "two P1 sender blocks (in1+bias); dup of production clean",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "metal2 fork; body identical",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/activation_reader_width_sharded.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "INCLUDE_SRC loopback + F2-MIXED + barrier; dup of production refactor",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/activation_reader_width_sharded_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "metal2 fork; same F2-MIXED blocker",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "all-3-F3 + chunked send (R4); dup of production refactor",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "defer",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "metal2 fork w/ UNRESOLVED #47797 act-mcast deadlock on the exact handshake + live debug",
+      "flags": [
+        "quasar-metal2-port",
+        "hang:#47797"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "canonical weights sender twin",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "metal2 fork; live conv2d layer3-hang DPRINT",
+      "flags": [
+        "quasar-metal2-port",
+        "hang:#47797"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "canonical weights sender twin",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "metal2 fork; watcher ring-buffer deadlock markers",
+      "flags": [
+        "quasar-metal2-port",
+        "hang:#47797"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "multi-rect flag-only go-mcast + R-to-S counter; dup of production refactor",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "RM/stick twin of above",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/reader_full_width_sharded.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "refactor-high",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py"
+      ],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "Tier 3 unit 18: full-width two-hub gather/broadcast. Two hubs multicast disjoint regions into the same destination CB and each increments one shared count-of-two completion semaphore. Prototype composition of two no-pre-handshake Counter pipes before deciding whether the helper single-sender-per-receiver invariant requires deferral.",
+      "flags": [
+        "two-hub-shared-destination",
+        "prototype-required"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/reader_partial_width_sharded.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "refactor-high",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_decode.py"
+      ],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "Tier 3 unit 18: partial-width byte-identical twin of the full-width two-hub gather/broadcast. Two hubs multicast disjoint regions into the same destination CB and each increments one shared count-of-two completion semaphore. Prototype composition before a final disposition.",
+      "flags": [
+        "two-hub-shared-destination",
+        "prototype-required"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
+      "op_family": "matmul",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D5 programming-example scope deferral. Textbook receiver back-halves for both operands; atomic companion of the already-inventoried reuse-mcast example sender/mixed kernels.",
+      "flags": [],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/inbound_kernel.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "receiver",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D5 didactic receiver companion of coordinator_kernel.cpp: clear local flag, increment coordinator readiness counter, wait for VALID, then publish the received CB tile.",
+      "flags": [],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/examples/lab_multicast/kernels/dataflow/mcast_receiver.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "receiver",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D5 didactic receiver companion of lab mcast_sender.cpp; repeated clear/ready-increment/VALID-wait receive loop.",
+      "flags": [],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "refactor-high",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Quasar scope deferral. Receiver twin mirrors the current production in0 receiver's refactor-high verdict, including the batch-valid wait_min/mailbox branch.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "refactor-high",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Metal2 receiver replacement for the Quasar in0 path; mirrors the current production in0 receiver's refactor-high verdict and retains the Quasar mailbox caveat.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Quasar scope deferral. Canonical in1 receiver back-half paired with the inventoried sender/writer kernel; output writer logic remains operation-owned.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Metal2 replacement for the canonical in1 receiver/writer path; multicast receive protocol matches the non-Metal2 twin.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Quasar scope deferral. Canonical 1D Conv weights/bias receiver companion of the inventoried sender twin.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Metal2 replacement for the canonical 1D Conv weights/bias receiver; protocol matches the non-Metal2 twin.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Quasar scope deferral. Canonical 2D Conv weights/bias receiver companion of the inventoried sender twin.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "D4 Metal2 replacement for the canonical 2D Conv weights/bias receiver; protocol matches the non-Metal2 twin.",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/frobenius_normalize/device/kernels/dataflow/reader_frobenius_normalize.cpp",
+      "op_family": "tt-train",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tt-train/tests/ops/frobenius_normalize_test.cpp"
+      ],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "Origin/non-origin variants share one kernel: the origin gathers partials, loopback-multicasts the normalization scalar and a level flag to the dense active-core bounding box, while non-origin cores wait on that flag. Migration requires a TT-Train-to-TTNN kernel-helper dependency decision and preservation of the operation-owned reduction phase.",
+      "flags": [
+        "repository-recall-addition",
+        "tt-train-dependency-boundary",
+        "gather-then-broadcast"
+      ],
+      "added_by_reconcile": "2026-08-23"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_sender.cpp",
+      "op_family": "tt-train",
+      "role": "hybrid",
+      "tag": "refactor-high",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tt-train/tests/ops/k_split_gram_matmul_op_test.cpp"
+      ],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "Bidirectional row/column sender with independent upper/lower multicast rectangles, four semaphore pairs, repeated CB-wrap sends, and a loopback lower path whose sender also consumes the receive flag. Treat sender plus both receiver binaries and the factory as one atomic protocol unit.",
+      "flags": [
+        "repository-recall-addition",
+        "tt-train-dependency-boundary",
+        "multi-channel",
+        "loopback-role-mix"
+      ],
+      "added_by_reconcile": "2026-08-23"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_receiver.cpp",
+      "op_family": "tt-train",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tt-train/tests/ops/k_split_gram_matmul_op_test.cpp"
+      ],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "Pure receiver companion for k_split_gram_matmul. It clears the data-ready level, increments the selected sender's ready counter, waits VALID, and publishes each received block; optional reduction receive remains operation-owned.",
+      "flags": [
+        "repository-recall-addition",
+        "tt-train-dependency-boundary",
+        "atomic-unit:k-split-gram-matmul"
+      ],
+      "added_by_reconcile": "2026-08-23"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_receiver_writer.cpp",
+      "op_family": "tt-train",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tt-train/tests/ops/k_split_gram_matmul_op_test.cpp"
+      ],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "Receiver/writer companion for k_split_gram_matmul. The multicast receive handshake matches mcast_receiver.cpp; partner reduction and DRAM/mirror writes are independent operation phases that must stay outside the pipe.",
+      "flags": [
+        "repository-recall-addition",
+        "tt-train-dependency-boundary",
+        "atomic-unit:k-split-gram-matmul"
+      ],
+      "added_by_reconcile": "2026-08-23"
+    }
+  ],
+  "last_apply_verification": {
+    "date": "2026-08-16",
+    "api_version": 11,
+    "result": "PASS",
+    "verified_existing_migrated_kernels": 17,
+    "verified_existing_migrated_host_bindings": 14,
+    "cleared_needs_recheck": 12,
+    "migrated_units": ["matmul-in0-mcast-block-sharded"],
+    "retained_pending_units": ["matmul-in0-mcast-interleaved"],
+    "validation": "build passed; exact route probes and complete mapped inventories passed; helper device 80/80, source audit 17/17, host fixture 32/32",
+    "claude_review": "PASS: v11 fleet stamp and Tier 0.2 write-back permitted; Tier 0.1 remains pending without separately authorized historical matched baseline"
+  },
+  "reconciled": "2026-08-23",
+  "current_api_version": 14,
+  "baseline_ref": "origin/llk_helper_library @ dc9282be7d5e9d5a4b9137c1bf327de8d923e18e",
+  "reconcile_history": [
+    {
+      "date": "2026-08-03",
+      "report": "archive/reconciliation/reconcile_2026-08-03.md",
+      "base_from": "54d8dfb7bef (llk_helper_library, divergent line)",
+      "base_to": "4a1d6a97ca9 (llk_helper_library)",
+      "prerebase_branch": "backup/mcast-migration-prerebase-20260803",
+      "api_version": "9 (unchanged \u2014 tree moved, helper API did not)",
+      "buckets": {
+        "unchanged": 89,
+        "added": 0,
+        "removed": 1,
+        "renamed": 0,
+        "clobbered": 0,
+        "rebase_touched": 2
+      },
+      "removed_entries": [
+        {
+          "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/reader_dispatch.cpp",
+          "prior_status": "deferred",
+          "prior_tag": "refactor",
+          "reason": "deleted upstream by af00262e51d (#48694); rename ruled out \u2014 successors carry no intra-chip mcast (unicast fan-out + fabric mcast only). Its inventory note was already stale at the old base. F2-counter coverage retained by reader_combine.cpp + 5 others."
+        }
+      ],
+      "needs_recheck": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "matmul-in1-mcast:reuse-1d:mcast-in1:descriptor",
+        "matmul-in1-mcast:reuse-1d:mcast-in1:legacy",
+        "matmul-in1-mcast:reuse-2d:descriptor",
+        "matmul-in1-mcast:reuse-2d:legacy"
+      ],
+      "commit_hashes_remapped": 20,
+      "recall_sweep": "123 hits on the primitive_contracts recognition family; 71 census; 52 non-census, ALL pre-existing at the old base => 0 rebase-introduced call sites. Scope exclusions: 8 substrate/impl headers, 40 tests/tt_metal test kernels (not an op-family per intent.md), 2 host factories (host_bindings scope), 2 conv_reader_common.hpp (declaration-only: McastRect + McastDst alias).",
+      "needs_recheck_outcome": "CLEARED 2026-08-03 by apply-dm-helper --mode=halt verify-only at eb05b3929a3: MM-IN1-ALL 302 passed / 188 expected skips / 490 selected (exact baseline match), McastHostFixture 19 passed, test_mcast_pipe.py 68 passed, exact --dev 2D compile node PASSED. No rewrite performed. Pre-existing legacy-runtime-coverage-gap on the two legacy bindings is UNCHANGED (legacy constructors have build coverage only)."
+    },
+    {
+      "date": "2026-08-03",
+      "report": "archive/reconciliation/reconcile_2026-08-03-sort.md",
+      "base_from": "74a3e672551 (last reconciled rollout state)",
+      "base_to": "7337302b564 (sort migration)",
+      "api_version": "9 (unchanged)",
+      "buckets": {
+        "unchanged": 88,
+        "added": 0,
+        "removed": 0,
+        "renamed": 0,
+        "migrated": 2,
+        "helper_neutral": 1
+      },
+      "host_bindings_added": [
+        "sort:single-row-multi-core:control"
+      ],
+      "recall_sweep": "All 91 ledger kernel paths exist. Diff recall from 74a3e672551 through 7337302b564 introduced no raw multicast primitive callsites; it added the expected McastArgs/send_signal/receive_signal helper calls in the two sort Pipe faces. The writer remains helper-neutral.",
+      "needs_recheck": [],
+      "validation": "Host build passed; exact fresh-cache --dev sort node passed with all three JIT artifacts; Ht=2 deadlock regression 2/2; test_sort_long_tensor 7/7; helper suite 72/72."
+    },
+    {
+      "date": "2026-08-03",
+      "report": "archive/reconciliation/reconcile_2026-08-03-conv-width.md",
+      "base_from": "e712d3ab4bb (approved Tier-6 plan)",
+      "base_to": "fe866a1d0c4 (width-sharded Conv migration)",
+      "api_version": "9 (unchanged)",
+      "buckets": {
+        "unchanged": 90,
+        "added": 0,
+        "removed": 0,
+        "renamed": 0,
+        "migrated": 1,
+        "helper_neutral": 0
+      },
+      "host_bindings_migrated": [
+        "activation-mcast:conv2d-width-sharded:rotating-rect"
+      ],
+      "recall_sweep": "All 91 ledger kernel paths exist and exactly match census.txt. All 13 migrated rows retain mcast_pipe.hpp and McastArgs. Diff recall from e712d3ab4bb through fe866a1d0c4 introduced no raw multicast primitive callsite; it removed the expected raw activation multicast block and added Mcast2D/McastArgs helper use. The Conv directory recognition sweep found no uncensused production invocation; conv_reader_common.hpp remains declaration-only.",
+      "needs_recheck": [],
+      "validation": "Host build passed; exact fresh-cache --dev width-sharded node passed at PCC 0.999956503 with activation_reader_width_sharded JIT evidence; test_conv_features WIDTH_SHARDED 48 passed / 16 expected skips; test_conv_dram_config WIDTH_SHARDED 1 passed at PCC 0.998234911 with JIT evidence; helper suite 72/72."
+    },
+    {
+      "date": "2026-08-14",
+      "report": "archive/reconciliation/reconcile_2026-08-14.md",
+      "base_from": "fae7eb9ed6f (last census/ledger write-back)",
+      "base_to": "9686814ea22 (current branch HEAD)",
+      "api_version": "ledger 10; helper header 11; Tier-0 apply follow-up required",
+      "buckets": {
+        "unchanged": 88,
+        "added": 0,
+        "removed": 0,
+        "renamed": 0,
+        "clobbered": 0,
+        "rebase_touched": 3
+      },
+      "retagged_pending": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp"
+      ],
+      "needs_recheck": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp"
+      ],
+      "source_integrated_pending": [
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp"
+      ],
+      "host_bindings_source_integrated_pending": [
+        "matmul-in0-mcast:reuse-1d:legacy",
+        "matmul-in0-mcast:reuse-1d:descriptor",
+        "matmul-in0-mcast:reuse-2d:legacy",
+        "matmul-in0-mcast:reuse-2d:descriptor",
+        "matmul-in0-mcast:sparse-1d:legacy"
+      ],
+      "recall_sweep": "All 91 ledger kernel paths exist and exactly match census.txt. The primitive recognition-family path set changed by zero additions since fae7eb9ed6f; one raw-pattern hit disappeared because the block-sharded Matmul kernel now uses mcast_pipe. No source file was added or renamed. The four source-integrated pending kernels were already census entries.",
+      "follow_up": "When the user resumes migration, run apply-dm-helper: Tier-0 validate/stamp the v10 fleet at API v11; verify-only the three needs_recheck kernels; then verify and write back the four source-integrated pending kernels and their ten mapped required host bindings."
+    },
+    {
+      "date": "2026-08-14",
+      "report": "changelog.md (Round 29)",
+      "base_from": "95d01474cb0 (pre-rollback helper-design handoff)",
+      "base_to": "9d870bf2da9 (send_from_cb feature chain reverted)",
+      "api_version": "helper 11; ledger 10 (unchanged)",
+      "buckets": {
+        "reverted_commits": 4,
+        "restored_deferred": 1,
+        "removed_host_bindings": 1,
+        "cleared_needs_recheck": 1
+      },
+      "restored_deferred": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp"
+      ],
+      "removed_host_bindings": [
+        "activation-mcast:conv2d-block-sharded:rotating-lines"
+      ],
+      "cleared_needs_recheck": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp"
+      ],
+      "source_equivalence": "The five affected source files are byte-identical to f3361f57596^.",
+      "validation": "./build_metal.sh passed; exact block-sharded Conv --dev node passed; CONV-BLOCK and CONV-WIDTH feature inventories each passed 48 with 16 expected skips; test_mcast_pipe.py passed 80/80 under --dev; McastHostFixture passed 32/32."
+    },
+    {
+      "date": "2026-08-14",
+      "report": "archive/reconciliation/reconcile_2026-08-14-rebase-dc9282.md",
+      "base_from": "4a1d6a97ca9bd4efabd0ad6115fcb30538851c90 (prior llk_helper_library baseline)",
+      "base_to": "dc9282be7d5e9d5a4b9137c1bf327de8d923e18e (fetched llk_helper_library baseline)",
+      "prerebase_branch": "backup/mcast-migration-prerebase-20260814-40692d1",
+      "prerebase_head": "40692d1e9ee4beb2a2db4196e1718407bf254bc4",
+      "rebased_head": "91bf395736241f7b62941c19383028e4f53da2ad",
+      "api_version": "ledger 10; helper header 11 (unchanged)",
+      "buckets": {
+        "unchanged": 79,
+        "added": 0,
+        "removed": 0,
+        "renamed": 0,
+        "clobbered": 0,
+        "rebase_touched": 12
+      },
+      "needs_recheck": [
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp"
+      ],
+      "recall_sweep": "The exact primitive-contract recognition-family path delta from pre-rebase HEAD 40692d1e9ee to rebased HEAD 91bf3957362 contained nine new raw-hit paths. Source inspection classified all nine as generic unicast/fabric synchronization, a flush-only shared helper, or a generated example barrier rather than intra-chip multicast-pipe blocks; therefore zero candidates were added. Seven raw-hit paths disappeared, none inventoried. All 91 ledger paths exist.",
+      "commit_hash_references_remapped": 31,
+      "commit_hash_map": {
+        "acd84d7f3fc30f9744101883b3ada5a5dc8da652": "fa1bc6df27750df0f627eb3d5743b72c0a8d22db",
+        "59e75d6fc3a9264ba96bb43416e103811ba194e4": "fe1a863d2a13c3ae270b559d50e70222a9f53df1",
+        "991b5b6b6386a90726d15007002fe1f5a77d8487": "aff48ae35a2a970a27d215d61f214aa9180a5f09",
+        "51dfb1f1ed61045ed10dc679269960b6d2ccac9e": "a5009c349b4cebe03f9249f380c9f3a682795858",
+        "aeeb28ff007807c71b1f60842cca85e5c41efa7f": "bcf1c9d5b5ee7b0daf73ce707e7ff57ca0b67b56",
+        "bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0": "402a063d4c99d0e27f6885304ad39b15cdd5f779",
+        "7337302b5649b7cd169764cd95c0b0343e88950d": "46a781123f1aaf89350044bffb0b6841d6e631dd",
+        "fe866a1d0c4c32b78aae8a76e875c0da109f51c8": "c3f5e53a19a8179cda08436d8964860a32005fbe",
+        "b5c99d43fd5cd33bd3a9f20c2da90b9c8bb42516": "4cf2edb7e75272c69d782e70c0c0d1131460b477",
+        "4acd98259b6d069bee043383eb457164d9205626": "e58c66ef53167a05703190700f884107da0bddc4"
+      },
+      "approval": "The user explicitly requested a fully automated rebase and authorized autonomous conflict and reconciliation decisions, replacing the normal human mutation gates; decisions are archived in rebase_decisions_2026-08-14-dc9282.md.",
+      "validation": "Reconciliation itself was static. The enclosing rebase workflow completed ./build_metal.sh, Sort focused/expanded tests, mcast_pipe helper and source-audit suites, McastHostFixture, and focused Matmul, TopK, GroupNorm Welford, and LayerNorm pre-allgather probes successfully.",
+      "follow_up": "Run apply-dm-helper verify-only against the 12 needs_recheck kernels with their complete mapped inventories; retain the three existing pending and 71 deferred rows unchanged."
+    },
+    {
+      "date": "2026-08-16",
+      "report": "archive/reconciliation/reconcile_2026-08-16-plan-inventory.md",
+      "base_from": "db246d49b89978d436d944d57f0ba326ef698416 (approved plan head)",
+      "base_to": "830190c9721 (plan/tracker materialized; production source unchanged)",
+      "api_version": "ledger 10; helper header 11 (unchanged)",
+      "buckets": {
+        "unchanged": 91,
+        "added": 13,
+        "removed": 0,
+        "renamed": 0,
+        "clobbered": 0,
+        "rebase_touched": 0
+      },
+      "added_entries": [
+        "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/reader_full_width_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/reader_partial_width_sharded.cpp",
+        "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
+        "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/inbound_kernel.cpp",
+        "ttnn/examples/lab_multicast/kernels/dataflow/mcast_receiver.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_metal2.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding_metal2.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_metal2.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks_metal2.cpp"
+      ],
+      "support_only": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp",
+        "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/conv_reader_common.hpp"
+      ],
+      "host_bindings": "Regenerated factory companion map is archived in the report. Deferred factories were not added to host_bindings, whose established schema contains only migrated or source-integrated pending bindings.",
+      "approval": "The user approved helper_design/mcast_pipe/plan.md and requested unattended execution. The audit exactly matched Appendix B, with no unapproved removed, renamed, clobbered, or additional candidate row.",
+      "claude_review": "REVISE then incorporated: controlled-vocabulary family names, prototype-gated refactor-high tags, production-twin truth for Quasar in0 receivers, existing annotation-family reuse, and report-only deferred host mappings.",
+      "follow_up": "Run the approved Tier 0, Tier 1 unit 6, and Tier 2 units 7-9 apply scope. Verify-only the 12 needs_recheck kernels before Tier-0 write-back."
+    },
+    {
+      "date": "2026-08-23",
+      "report": "archive/reconciliation/reconcile_2026-08-23-document-audit.md",
+      "base_from": "dc9282be7d5e9d5a4b9137c1bf327de8d923e18e (recorded rollout baseline)",
+      "base_to": "613b8d017c7 (document-audit starting HEAD)",
+      "api_version": "14 (unchanged)",
+      "buckets": {
+        "unchanged": 104,
+        "added": 4,
+        "removed": 0,
+        "renamed": 0,
+        "clobbered": 0,
+        "rebase_touched": 0
+      },
+      "added_entries": [
+        "tt-train/sources/ttml/metal/ops/frobenius_normalize/device/kernels/dataflow/reader_frobenius_normalize.cpp",
+        "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_sender.cpp",
+        "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_receiver.cpp",
+        "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_receiver_writer.cpp"
+      ],
+      "support_only": [
+        "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+      ],
+      "host_bindings": "The two TT-Train factories are discovery-only mappings in test_map.json. The ledger host_bindings convention remains migrated or source-integrated pending bindings only.",
+      "approval": "The user approved the exact reconciliation and archival cleanup proposal on 2026-08-23.",
+      "validation": "Static reconciliation only: all recorded paths exist; all migrated kernels retain helper use; JSON, Markdown links, inventory counts, and exact multicast-specific recall were checked. No production migration, build, or device test was performed."
+    }
+  ]
+}

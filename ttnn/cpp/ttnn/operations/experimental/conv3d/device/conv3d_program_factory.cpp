@@ -12,6 +12,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 #include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
@@ -45,6 +46,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
     const auto& output_tensor = tensor_return_value;
+    auto* device = input_tensor.device();
 
     // Extract config from operation_attributes
     const auto& config = operation_attributes.config;
@@ -182,7 +184,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             .page_size = padded_patch_size_bytes,
         }}},
     });
-
     uint32_t cb_vol2col_tiled_id = next_cb_index++;
     desc.cbs.push_back(CBDescriptor{
         .total_size = out_subblock_h * matmul_K_t * tile_size,
@@ -204,6 +205,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             .page_size = tile_size,
         }}},
     });
+    TT_FATAL(
+        desc.cbs.back().core_ranges == CoreRangeSet(core_grid),
+        "Conv3D weight multicast requires an identical weight CB allocation on every rectangle core");
 
     // Use fp32 partials whenever we have multiple C_in blocks and fp32 dest is enabled.
     // This eliminates bf16 truncation between C_in block partial sums.
@@ -658,6 +662,16 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         .initial_value = INVALID,
     });
 
+    const auto writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    const ttnn::kernel_lib::host::McastConfig weights_mcast_config{
+        .noc = writer_noc,
+        .sem_ids = std::vector<uint32_t>{weights_mcast_receiver_sem_id, weights_mcast_sender_sem_id}};
+    const CoreRange weights_mcast_template_rect = weight_share_mode == WeightShareMode::Mcast
+                                                      ? CoreRange({0, 0}, {grid_size.x - 1, mcast_rows_per_group - 1})
+                                                      : CoreRange({0, 0}, {0, 0});
+    const ttnn::kernel_lib::host::Mcast2D weights_mcast_template(
+        device, CoreRangeSet(weights_mcast_template_rect), CoreCoord{0, 0}, weights_mcast_config);
+
     // Trid-ring depth for gather_rows_to_shard.  Per-shape autotune (see
     // conv3d_trid_pipeline_findings.md).  Cutoff constants live in
     // kernels/conv3d_gather_tuning.hpp so the kernel-side per-call fast-path stays
@@ -875,6 +889,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
         .append_to(writer_compile_time_args);
+    weights_mcast_template.append_compile_time_args_to(writer_compile_time_args);
+    const auto weights_mcast_compile_time_args = weights_mcast_template.compile_time_args();
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp";
@@ -909,22 +925,20 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         uint32_t h_out_start = 0, h_out_end = 0;
         uint32_t w_out_start = 0, w_out_end = 0;
         WeightShareRole weight_share_role = WeightShareRole::Local;
-        // Where this core receives weights from: chain predecessor (chain roles) or mcast sender
-        // (mcast receiver/passive). McastSender carries its own coord for uniform runtime args.
+        // Chain predecessor coordinates. Unused for other roles.
         uint32_t weight_src_noc_x = 0, weight_src_noc_y = 0;
         // Chain forwarding target (chain injector/middle). Unused for other roles.
         uint32_t chain_succ_noc_x = 0, chain_succ_noc_y = 0;
-        // Mcast bbox in physical NoC coords (already swapped for NOC_1). Sender role only.
-        uint32_t mcast_bbox_start_x = 0, mcast_bbox_start_y = 0;
-        uint32_t mcast_bbox_end_x = 0, mcast_bbox_end_y = 0;
-        uint32_t mcast_num_dests = 0;
         // Iterations for passive participation: matches active receivers' loop count.
         uint32_t mcast_num_iters = 0;
     };
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
-    auto* device = input_tensor.device();
     std::vector<CoreWork> core_work(num_cores);
+    std::vector<ttnn::kernel_lib::host::Mcast2D> weights_mcasts;
+    if (weight_share_mode == WeightShareMode::Mcast) {
+        weights_mcasts.reserve(num_groups);
+    }
 
     auto compute_block_ranges = [&](CoreWork& cw) {
         cw.c_in_block_start = cw.c_in_idx * c_in_per_core;
@@ -1008,18 +1022,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             }
         }
     } else if (weight_share_mode == WeightShareMode::Mcast) {
-        // Row-strip placement: each (c_in_idx, c_out_idx) group occupies `mcast_rows_per_group`
-        // contiguous rows of the worker grid. The default row-major core_id assignment above
-        // doesn't match this layout, so reassign every CoreWork from the rectangle.
-        //
-        // Sender column staggering (SDPA-style): for each group we pick the sender slot inside
-        // the bbox whose physical column is furthest from the columns already chosen by
-        // previous groups' senders. This spreads DRAM weight reads (and ack convergence)
-        // across columns / DRAM channels instead of stacking every sender on column 0. The
-        // chosen slot still runs compute as a normal mcast member (role 4 = sender + work).
+        // Lay out each group as a row strip and stagger senders across physical columns.
         const uint32_t rows_per_group = mcast_rows_per_group;
-        const uint32_t bbox_num_cores = grid_size.x * rows_per_group;
-        const auto writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
         const uint32_t hw_par = h_out_parallel_factor * w_out_parallel_factor;
 
         // Reset assignments before re-laying out.
@@ -1077,21 +1081,24 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             const uint32_t bbox_y_end_log = bbox_y_start_log + rows_per_group - 1;
             const uint32_t bbox_x_end_log = grid_size.x - 1;
 
-            auto bbox_start_phys = device->worker_core_from_logical_core(CoreCoord{0, bbox_y_start_log});
-            auto bbox_end_phys = device->worker_core_from_logical_core(CoreCoord{bbox_x_end_log, bbox_y_end_log});
-            // Conv2d-style swap so the multicast hardware sees the rect in NOC_1's orientation.
-            if (writer_noc == tt::tt_metal::NOC::NOC_1) {
-                std::swap(bbox_start_phys, bbox_end_phys);
-            }
-
             const uint32_t sender_within_idx = pick_sender_within_idx(bbox_y_start_log);
             const uint32_t sender_x_log = sender_within_idx % grid_size.x;
             const uint32_t sender_y_log = bbox_y_start_log + sender_within_idx / grid_size.x;
             const auto sender_phys = device->worker_core_from_logical_core(CoreCoord{sender_x_log, sender_y_log});
             used_sender_phys_xs.push_back((uint32_t)sender_phys.x);
 
-            // Sender is inside the bbox; EXCLUDE_SRC mcast → num_dests = bbox_cores - 1.
-            const uint32_t num_receivers = bbox_num_cores - 1;
+            const CoreRangeSet group_rect(
+                CoreRange(CoreCoord{0, bbox_y_start_log}, CoreCoord{bbox_x_end_log, bbox_y_end_log}));
+            weights_mcasts.emplace_back(
+                device, group_rect, CoreCoord{sender_x_log, sender_y_log}, weights_mcast_config);
+            const auto& weights_mcast = weights_mcasts.back();
+            TT_FATAL(
+                weights_mcast.has_receivers() && weights_mcast.num_receivers(CoreCoord{sender_x_log, sender_y_log}) > 0,
+                "Conv3D multicast group {} must contain at least one receiver",
+                gid);
+            TT_FATAL(
+                weights_mcast.compile_time_args() == weights_mcast_compile_time_args,
+                "Conv3D multicast groups must share one compile-time helper configuration");
 
             for (uint32_t y_off = 0; y_off < rows_per_group; ++y_off) {
                 for (uint32_t x = 0; x < grid_size.x; ++x) {
@@ -1099,6 +1106,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                     const uint32_t within_idx = y_off * grid_size.x + x;
                     const uint32_t target_core_id = y * grid_size.x + x;
                     CoreWork& cw = core_work[target_core_id];
+                    cw.mcast_group_id = gid;
 
                     const bool is_sender_slot = within_idx == sender_within_idx;
 
@@ -1115,15 +1123,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                     } else {
                         cw.weight_share_role = WeightShareRole::McastPassive;
                     }
-                    // Receivers/passives source weights from the sender. Sender carries its own
-                    // coord for uniform runtime args; writer.cpp ignores it for McastSender.
-                    cw.weight_src_noc_x = (uint32_t)sender_phys.x;
-                    cw.weight_src_noc_y = (uint32_t)sender_phys.y;
-                    cw.mcast_bbox_start_x = (uint32_t)bbox_start_phys.x;
-                    cw.mcast_bbox_start_y = (uint32_t)bbox_start_phys.y;
-                    cw.mcast_bbox_end_x = (uint32_t)bbox_end_phys.x;
-                    cw.mcast_bbox_end_y = (uint32_t)bbox_end_phys.y;
-                    cw.mcast_num_dests = num_receivers;
                     cw.mcast_num_iters = mcast_iters;
                 }
             }
@@ -1131,7 +1130,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             log_debug(
                 tt::LogOp,
                 "Mcast group {} (c_in={}, c_out={}): bbox logical(0,{})..({},{}); "
-                "phys swapped({},{})..({},{}); sender logical({},{}) phys_x={} within_idx={}; "
+                "sender logical({},{}) phys_x={} within_idx={}; "
                 "num_receivers={}, mcast_iters={}",
                 gid,
                 c_in_idx,
@@ -1139,15 +1138,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 bbox_y_start_log,
                 bbox_x_end_log,
                 bbox_y_end_log,
-                bbox_start_phys.x,
-                bbox_start_phys.y,
-                bbox_end_phys.x,
-                bbox_end_phys.y,
                 sender_x_log,
                 sender_y_log,
                 sender_phys.x,
                 sender_within_idx,
-                num_receivers,
+                weights_mcast.num_receivers(CoreCoord{sender_x_log, sender_y_log}),
                 mcast_iters);
         }
     }
@@ -1258,7 +1253,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // Writer pos[0..2] are the output, weight, and bias buffer addresses. nullptr bias becomes
         // an embedded 0 so the kernel-side address is still well-defined.
         KernelDescriptor::RTArgList writer_args;
-        writer_args.reserve(26 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
+        writer_args.reserve(25 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
         writer_args.push_back(out_buffer);
         writer_args.push_back(weight_buffer);
         if (bias_buffer != nullptr) {
@@ -1282,13 +1277,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         writer_args.push_back(cw.weight_src_noc_y);
         writer_args.push_back(cw.chain_succ_noc_x);
         writer_args.push_back(cw.chain_succ_noc_y);
-        writer_args.push_back(cw.mcast_bbox_start_x);
-        writer_args.push_back(cw.mcast_bbox_start_y);
-        writer_args.push_back(cw.mcast_bbox_end_x);
-        writer_args.push_back(cw.mcast_bbox_end_y);
-        writer_args.push_back(cw.mcast_num_dests);
         writer_args.push_back(cw.mcast_num_iters);
         writer_args.push_back(num_workers);
+
+        const auto& weights_mcast =
+            weight_share_mode == WeightShareMode::Mcast ? weights_mcasts.at(cw.mcast_group_id) : weights_mcast_template;
+        weights_mcast.append_runtime_args_to(writer_args, core);
 
         if (num_workers > 0) {
             writer_args.push_back(reducer_core_physical_xs[group_id]);

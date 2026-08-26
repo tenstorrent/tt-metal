@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 from loguru import logger
 import ttnn
 
 from models.common.utility_functions import is_wormhole_b0
-import ttnn
 from models.common.utility_functions import (
     comp_pcc,
 )
@@ -153,3 +154,13 @@ def test_move_op_with_program_cache(dtype, device):
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     assert device.num_program_cache_entries() == 2
+
+
+@pytest.mark.parametrize("layout", (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), ids=("perf_tile", "perf_rm"))
+def test_move_overlap_mcast_perf(layout, device):
+    if not os.getenv("TT_MOVE_MCAST_PERF"):
+        pytest.skip("Set TT_MOVE_MCAST_PERF=1 for migration profiling")
+
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    for _ in range(25):
+        run_move_op(0, [1, 3, 320, 384], layout, ttnn.bfloat16, mem_config, mem_config, device)

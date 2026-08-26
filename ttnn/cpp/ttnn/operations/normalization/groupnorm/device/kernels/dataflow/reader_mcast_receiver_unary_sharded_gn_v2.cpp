@@ -10,22 +10,20 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 // split REDUCE across cores
 void kernel_main() {
-    constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_sender_semaphore_id = get_compile_time_arg_val(1);
+    constexpr uint32_t num_batch_group = get_compile_time_arg_val(0);
 
-    constexpr uint32_t num_batch_group = get_compile_time_arg_val(2);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(1);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(2);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(3);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(4);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(5);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(3);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(4);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(5);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(6);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(7);
-
-    const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(1);
+    constexpr uint32_t operation_ct_args_end = 6;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0> mid_mcast_args;
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;
@@ -36,14 +34,14 @@ void kernel_main() {
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_repack(dfb_repack_id);
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
     DataflowBuffer dfb_out0(dfb_out0_id);
+
+    auto reduce_pipe = mid_mcast_args.receiver(noc);
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
@@ -70,10 +68,8 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_batch_group; ++i) {
         for (uint32_t j = 0; j < 2; ++j) {
             dfb_ex_partial.wait_front(1);
-            reduce_sender_sem.set(INVALID);
             dfb_ex_global.reserve_back(1);
-            reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
-            reduce_sender_sem.wait(VALID);
+            reduce_pipe.receive();
             dfb_ex_global.push_back(1);
             dfb_ex_partial.pop_front(1);
         }

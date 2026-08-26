@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 struct RemoteCoord {
     uint32_t x;
@@ -29,6 +30,7 @@ void kernel_main() {
     constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(11);
     constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(12);
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
+    constexpr uint32_t reduce_second_stage_sem_id = get_compile_time_arg_val(14);
     constexpr bool rms_norm = get_compile_time_arg_val(15) == 1;
 
     const bool is_last_all_to_all_worker = get_arg_val<uint32_t>(0);
@@ -39,6 +41,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_remote_noc_x = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(5));
     volatile tt_l1_ptr uint32_t* in0_remote_noc_y = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_x));
 
+    constexpr uint32_t operation_ct_args_end = 17;
+    constexpr uint32_t operation_rt_args_end = get_named_compile_time_arg_val("mcast_operation_rt_args");
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end> reduce_mcast_args;
+
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
 
     constexpr uint32_t dfb_ex_partial2 = tt::CBIndex::c_11;
@@ -46,9 +52,7 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_external2 = tt::CBIndex::c_13;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(14));
+    Semaphore<> reduce_second_stage_sem(reduce_second_stage_sem_id);
     UnicastEndpoint remote_ep;
 
     DataflowBuffer dfb_ex_partial2_obj(dfb_ex_partial2);
@@ -132,9 +136,19 @@ void kernel_main() {
 
         dfb_partial_obj.wait_front(num_tiles_per_partial_result * block_h);
 
-        reduce_sender_sem.set(INVALID);
-        reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1);
-        reduce_sender_sem.wait(VALID);
+        if constexpr (use_two_stage_reduce) {
+            const bool is_line_sender = row_major ? start_x == 0 : start_y == 0;
+            if (is_line_sender) {
+                auto reduce_pipe = reduce_mcast_args.sender(noc);
+                reduce_pipe.send_signal();
+            } else {
+                auto reduce_pipe = reduce_mcast_args.receiver(noc);
+                reduce_pipe.receive_signal();
+            }
+        } else {
+            auto reduce_pipe = reduce_mcast_args.receiver(noc);
+            reduce_pipe.receive_signal();
+        }
 
         if constexpr (is_all_to_all_worker) {
             uint32_t l1_read_addr_ex_par = dfb_partial_obj.get_read_ptr();

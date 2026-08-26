@@ -12,6 +12,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "groupnorm_reader_rm.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     // clang-format off
@@ -64,9 +65,6 @@ void kernel_main() {
     //
     //      // clang-format on
 
-    constexpr uint32_t reduce_receiver_semaphore_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
-    constexpr uint32_t reduce_sender_semaphore_id = get_named_compile_time_arg_val("reduce_sender_semaphore_id");
-
     constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
 
@@ -92,7 +90,6 @@ void kernel_main() {
     constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
-    // 19 and 20 are used in welford version but unused in this version
     constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
@@ -109,8 +106,8 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
     const uint32_t out_start_id = get_arg_val<uint32_t>(3);
     uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
-    const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(5);
-    const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(6);
+
+    constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), 5> mid_mcast_args;
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;    // E[x] partial reduce
     constexpr uint32_t dfb_ex2_partial_id = tt::CBIndex::c_21;  // E[x] partial reduce
@@ -130,8 +127,8 @@ void kernel_main() {
 #endif
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
+    Semaphore<> reduce_receiver_sem(mid_mcast_args.consumer_ready);
+    auto reduce_pipe = mid_mcast_args.receiver(noc);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex2_partial(dfb_ex2_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
@@ -179,7 +176,6 @@ void kernel_main() {
 
     index_b_offset = 0;
 
-    // Start Batch Loop:
     for (uint32_t b = 0; b < num_batches; ++b) {
         index_g_offset = 0;
         row_offset = num_cols_per_group;
@@ -242,7 +238,6 @@ void kernel_main() {
 #endif
                     if (cur_read_iteration == 0 || cur_read_iteration == 1) {
                         //Section for waiting for local reduce to be pushed to a dfb_ex_partial
-                        reduce_sender_sem.set(INVALID);
                         if (cur_read_iteration == 0) {
                             //Wait for local avg calculation
                             dfb_ex_partial.wait_front(1);
@@ -250,9 +245,8 @@ void kernel_main() {
                             //Wait for local variance calculation
                             dfb_ex2_partial.wait_front(1);
                         }
-                        reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
-
-                        reduce_sender_sem.wait(VALID);
+                        reduce_receiver_sem.up(noc, mid_mcast_args.sender_x(), mid_mcast_args.sender_y(), 1);
+                        reduce_pipe.receive_signal();
                         if (cur_read_iteration == 0) {
                             dfb_ex_partial.pop_front(1);
                         } else {
@@ -306,14 +300,13 @@ void kernel_main() {
                 }
 
                 if (cur_read_iteration == 0 || cur_read_iteration == 1) {
-                    reduce_sender_sem.set(INVALID);
                     if (cur_read_iteration == 0) {
                         dfb_ex_global.reserve_back(1);
-                        reduce_sender_sem.wait(VALID);
+                        reduce_pipe.receive();
                         dfb_ex_global.push_back(1);
                     } else if (cur_read_iteration == 1) {
                         dfb_ex2_global.reserve_back(1);
-                        reduce_sender_sem.wait(VALID);
+                        reduce_pipe.receive();
                         dfb_ex2_global.push_back(1);
                     }
                 }

@@ -12,6 +12,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #include <vector>
 #include "../../../../sdpa/device/kernels/dataflow/dataflow_common.hpp"
 /******************************************************************************
@@ -156,13 +157,16 @@ void fill_tile_partial_sliding_window(
 
         for (uint32_t face_row_idx = 0; face_row_idx < num_rows_in_face; face_row_idx++) {
             // Fill uint32 pairs from start to fill_end_pos_in_uint32_face
-            for (uint32_t uint32_face_col_idx = 0; uint32_face_col_idx < fill_end_pos_in_uint32_face; uint32_face_col_idx++) {
-                uint32_ptr[uint32_face_idx + (uint32_face_col_idx + num_cols_in_uint32_face * face_row_idx)] = partial_val;
+            for (uint32_t uint32_face_col_idx = 0; uint32_face_col_idx < fill_end_pos_in_uint32_face;
+                 uint32_face_col_idx++) {
+                uint32_ptr[uint32_face_idx + (uint32_face_col_idx + num_cols_in_uint32_face * face_row_idx)] =
+                    partial_val;
             }
 
             // Handle the odd position if fill_end_pos_in_face is odd
             if (is_odd_end_pos && fill_end_pos_in_face > 0) {
-                uint16_ptr[uint16_face_idx + ((fill_end_pos_in_face - 1) + num_cols_in_face * face_row_idx)] = datum_val;
+                uint16_ptr[uint16_face_idx + ((fill_end_pos_in_face - 1) + num_cols_in_face * face_row_idx)] =
+                    datum_val;
             }
         }
     }
@@ -591,16 +595,6 @@ void read_q(
     }
 }
 
-// Multicast parameters for K streaming (vertical multicast along y, same x)
-struct KMcastParams {
-    bool do_mcast;          // true = sender, false = receiver
-    uint32_t mcast_x;       // x coordinate for multicast (fixed for vertical)
-    uint32_t mcast_y0;      // y start for multicast range
-    uint32_t mcast_y1;      // y end for multicast range
-    uint32_t num_dests;     // number of multicast destinations
-    uint32_t mcast_sem_id;  // semaphore ID for synchronization (Semaphore<> takes this)
-};
-
 template <
     uint32_t cb_k_in,
     uint32_t DHt,
@@ -611,7 +605,8 @@ template <
     bool is_page_table_sharded,
     bool use_mcast,
     uint32_t capacity_t,
-    typename KReaderType>
+    typename KReaderType,
+    typename KMcastArgsType>
 uint32_t read_k(
     uint32_t k_chunk_tiles,
     uint32_t cur_head,
@@ -621,7 +616,8 @@ uint32_t read_k(
     volatile tt_l1_ptr uint16_t* page_table_ptr_u16,
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
     uint32_t& barrier_count,
-    const KMcastParams& mcast_params = {}) {
+    bool do_mcast,
+    const KMcastArgsType& mcast_args) {
     Noc noc;
     CircularBuffer cb_k(cb_k_in);
     cb_k.reserve_back(k_chunk_tiles);
@@ -630,7 +626,7 @@ uint32_t read_k(
     barrier_count = 0;
 
     if constexpr (use_mcast) {
-        if (mcast_params.do_mcast) {
+        if (do_mcast) {
             for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
                 uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
                 uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
@@ -663,39 +659,15 @@ uint32_t read_k(
                 }
             }
             noc.async_read_barrier();
-            // Multicast the full K^T chunk to all receiver cores at once
-            noc.async_write_multicast(
-                CoreLocalMem<uint32_t>(k_write_ptr),
-                MulticastEndpoint{},
-                k_chunk_tiles * k_tile_bytes,
-                mcast_params.num_dests,
-                {},
-                {.noc_x_start = mcast_params.mcast_x,
-                 .noc_y_start = mcast_params.mcast_y0,
-                 .noc_x_end = mcast_params.mcast_x,
-                 .noc_y_end = mcast_params.mcast_y1,
-                 .addr = k_write_ptr},
-                false);
-            // Ensure data multicast is complete before signaling
-            noc.async_write_barrier();
-            // Signal all receivers that the full K^T chunk is ready
-            constexpr uint32_t VALID = 1;
-            Semaphore<> mcast_sem(mcast_params.mcast_sem_id);
-            mcast_sem.set(VALID);
-            mcast_sem.set_multicast(
-                noc,
-                mcast_params.mcast_x,
-                mcast_params.mcast_y0,
-                mcast_params.mcast_x,
-                mcast_params.mcast_y1,
-                mcast_params.num_dests);
+            auto k_pipe = mcast_args.sender(noc);
+            k_pipe.template send<dataflow_kernel_lib::SourceL1Guard::CallerManaged>(
+                k_write_ptr, k_write_ptr, k_chunk_tiles * k_tile_bytes);
             cb_k.push_back(k_chunk_tiles);
+            // Preserve the Blackhole post-signal completion point before this CB slot can be reused.
             noc.async_write_barrier();
         } else {
-            // Wait for single signal that the full K^T chunk is ready
-            Semaphore<> mcast_sem(mcast_params.mcast_sem_id);
-            mcast_sem.wait(1);
-            mcast_sem.set(0);
+            auto k_pipe = mcast_args.receiver(noc);
+            k_pipe.receive();
             noc.async_atomic_barrier();
             cb_k.push_back(k_chunk_tiles);
         }

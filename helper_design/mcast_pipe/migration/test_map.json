@@ -1,0 +1,983 @@
+{
+  "_comment": "Coverage and dispatch map for the current production tree. Inventory definitions are durable; status-like fields in entries preserve historical coverage context and are not rollout state. Use ledger.json for current status. Execution results and JIT evidence are maintained in per-unit logs and migration_feedback_tracker.md.",
+  "helper_version": 14,
+  "baseline": "dc9282be7d5e9d5a4b9137c1bf327de8d923e18e",
+  "machine": "single-chip Blackhole p100a",
+  "updated": "2026-08-23",
+  "mapping_rules": [
+    "Run one compile-focused parameter before the complete mapped inventory.",
+    "A passing operation test counts as kernel coverage only when JIT evidence identifies the named kernel path.",
+    "Run operation tests sequentially through scripts/run_safe_pytest.sh.",
+    "Record skips and xfails separately; do not count them as passes.",
+    "Revalidate discovery-only routes after test or factory routing changes."
+  ],
+  "host_bindings": [
+    {
+      "id": "weights-mcast:conv2d-sharded:single-sender-rect",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
+      "dispatch": "height-sharded/default 1D writer pair with weights multicast enabled",
+      "migration_unit": "conv2d-weights-single-sender-rect",
+      "inventory": [
+        "CONV-HEIGHT",
+        "test_conv_dram"
+      ],
+      "coverage": "complete with exact sender and receiver JIT evidence"
+    },
+    {
+      "id": "weights-mcast:conv2d-sharded:fixed-line",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
+      "dispatch": "block-sharded non-depthwise row/column fixed-line weights multicast",
+      "migration_unit": "conv2d-weights-fixed-line",
+      "inventory": [
+        "CONV-BLOCK",
+        "test_conv_dram"
+      ],
+      "coverage": "complete with exact sender and receiver JIT evidence; explicitly recheck both row and column routes"
+    },
+    {
+      "id": "weights-mcast:conv2d-sharded:skip",
+      "classification": "not_applicable",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
+      "dispatch": "skip_weights_mcast=true",
+      "result": "SKIP_MCAST removes the device protocol; no receiver or weights semaphore binding exists"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-2d:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "legacy 2D create path, both transpose_mcast values",
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "inventory": [
+        "MM-IN1-ALL",
+        "MM-IN1-RECEIVER-2D"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-2d:descriptor",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "descriptor 2D create path, both transpose_mcast values",
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "inventory": [
+        "MM-IN1-ALL",
+        "MM-IN1-RECEIVER-2D"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-1d:mcast-in1:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy path with gather_in0=false and mcast_in0=false",
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "inventory": [
+        "MM-IN1-ALL"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-1d:mcast-in1:descriptor",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor path with gather_in0=false and mcast_in0=false",
+      "migration_unit": "matmul-in1-mcast-padding-host",
+      "inventory": [
+        "MM-IN1-ALL"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-1d:mcast-in0:legacy",
+      "classification": "not_applicable",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy path with gather_in0=false and mcast_in0=true",
+      "result": "sender source is compiled with SKIP_MCAST and no in1 receiver exists"
+    },
+    {
+      "id": "matmul-in1-mcast:reuse-1d:mcast-in0:descriptor",
+      "classification": "not_applicable",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor path with gather_in0=false and mcast_in0=true",
+      "result": "sender source is compiled with SKIP_MCAST and no in1 receiver exists"
+    },
+    {
+      "id": "matmul-in1-mcast:sparse-1d:mcast-in0:legacy",
+      "classification": "not_applicable",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp",
+      "dispatch": "sparse MCAST_IN0 path",
+      "result": "sender source is compiled with SKIP_MCAST and no in1 receiver exists"
+    },
+    {
+      "id": "groupnorm-v2:sharded:legacy:mcast",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=false and use_mcast=true",
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "inventory": [
+        "GN-SHARDED-PARAMETERIZED legacy"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "groupnorm-v2:sharded:legacy:degenerate",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=false and use_mcast=false",
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "inventory": [
+        "McastHostFixture degenerate cases",
+        "test_mcast_pipe.py::test_f3_degenerate"
+      ],
+      "coverage": "helper-wire coverage only; no mapped device operation test reaches the GroupNorm v2 sender-only binding"
+    },
+    {
+      "id": "groupnorm-v2:sharded:welford:mcast",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=true and use_mcast=true",
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "inventory": [
+        "GN-SHARDED-PARAMETERIZED Welford"
+      ],
+      "coverage": "complete"
+    },
+    {
+      "id": "groupnorm-v2:sharded:welford:degenerate",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_sharded_program_factory.cpp",
+      "dispatch": "use_welford=true and use_mcast=false",
+      "migration_unit": "groupnorm-sharded-v2-mcast-host",
+      "inventory": [
+        "McastHostFixture degenerate cases",
+        "test_mcast_pipe.py::test_f3_degenerate"
+      ],
+      "coverage": "helper-wire coverage only; no mapped device operation test reaches the GroupNorm v2 sender-only binding"
+    },
+    {
+      "id": "groupnorm-interleaved:legacy:mcast",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_mcast_program_factory.cpp",
+      "dispatch": "interleaved input with multicast enabled and use_welford=false",
+      "migration_unit": "groupnorm-interleaved-mcast-host",
+      "inventory": ["GN-INTERLEAVED-DRAM", "GN-GENERAL", "GN-NIGHTLY", "GN-INTERLEAVED-RT-LEGACY"],
+      "coverage": "complete with exact non-v2 sender/receiver JIT and matched performance"
+    },
+    {
+      "id": "groupnorm-interleaved:welford:mcast",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_mcast_program_factory.cpp",
+      "dispatch": "interleaved input with multicast enabled and use_welford=true",
+      "migration_unit": "groupnorm-interleaved-mcast-host",
+      "inventory": ["GN-INTERLEAVED-DRAM", "GN-GENERAL", "GN-NIGHTLY", "GN-INTERLEAVED-RT-WELFORD"],
+      "coverage": "complete with exact non-v2 sender/receiver JIT and matched performance"
+    },
+    {
+      "id": "groupnorm-interleaved:no-mcast",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_no_mcast_program_factory.cpp",
+      "dispatch": "interleaved sender-only zero/one-core groups for either algorithm",
+      "migration_unit": "groupnorm-interleaved-mcast-host",
+      "inventory": ["GN-GENERAL", "GN-NIGHTLY", "source-audit inactive helper ABI"],
+      "coverage": "operation guards plus direct source audit of the inactive three-wire ABI"
+    },
+    {
+      "id": "sdpa-decode:read-k-fixed-column-star",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp",
+      "dispatch": "replicated-Q single-device MLA decode with q_heads_parallel_factor greater than one",
+      "migration_unit": "sdpa-decode-read-k-star",
+      "inventory": [
+        "SDPA-DECODE-UNIT",
+        "SDPA-DECODE-FLEXIBLE-GEOMETRY",
+        "SDPA-DECODE-NIGHTLY",
+        "SDPA-DECODE-CACHE",
+        "MLA-DECODE-UNIT",
+        "MLA-DECODE-NIGHTLY",
+        "MLA-DECODE-REPLICATED-Q"
+      ],
+      "coverage": "complete with fresh-JIT q-factor-4 proof, q-factor-2 guard, every including single-device route, and matched performance"
+    },
+    {
+      "id": "argmax:multicore-two-rectangle-control",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/reduction/argmax/device/argmax_multi_core_program_factory.cpp",
+      "dispatch": "ROW_MAJOR last-dimension or reduce-all multicore Argmax",
+      "migration_unit": "argmax-multicore-control",
+      "inventory": ["ARGMAX-UNIT", "ARGMAX-TWO-RECTANGLE-CACHE", "ARGMAX-NIGHTLY"],
+      "coverage": "complete with fresh-JIT two-rectangle reduce-all, full dtype/shape/dimension unit matrix, cache reuse, and two matched performance cases"
+    },
+    {
+      "id": "move:overlap-three-rectangle-control",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/data_movement/move/device/move_overlap_program_factory.cpp",
+      "dispatch": "MULTI_CORE_OVERLAP for TILE and ROW_MAJOR interleaved L1 input",
+      "migration_unit": "move-overlap-control",
+      "inventory": ["MOVE-OVERLAP"],
+      "coverage": "complete with fresh-JIT TILE and ROW_MAJOR routes, full dtype/shape/layout/cache inventory, helper guards, and two matched performance cases"
+    },
+    {
+      "id": "activation-mcast:conv2d-width-sharded:rotating-rect",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.cpp",
+      "dispatch": "width-sharded Conv2D activation multicast when skip_activation_mcast is false",
+      "migration_unit": "conv2d-activation-width-sharded",
+      "inventory": [
+        "CONV-WIDTH"
+      ],
+      "coverage": "complete with exact fresh-cache activation_reader_width_sharded JIT evidence"
+    },
+    {
+      "id": "sort:single-row-multi-core:control",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/data_movement/sort/device/sort_program_factory.cpp",
+      "dispatch": "single-row multicore DRAM route selected when Wt exceeds total_cores * 128",
+      "migration_unit": "sort-single-row-control",
+      "inventory": [
+        "SORT-SINGLE-ROW-CONTROL"
+      ],
+      "coverage": "complete with exact fresh-cache coordinator, reader, and writer JIT evidence"
+    },
+    {
+      "id": "topk:multicore:final-readiness",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.cpp",
+      "dispatch": "multicore TopK final coordinator and local workers",
+      "migration_unit": "topk-multicore-final-readiness",
+      "inventory": ["TOPK-MULTICORE"],
+      "coverage": "high; exact fresh-cache sender/receiver JIT evidence on 2026-08-06 and complete mapped inventory (14 passed, 12 expected BFLOAT8_B pad xfails)"
+    },
+    {
+      "id": "layernorm:sharded:distributed-reduce",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.cpp",
+      "dispatch": "is_pre_all_gather || is_post_all_gather; kernel paths, helper topology, and reader arguments supplied by sharded_layernorm_factory_helpers.cpp",
+      "migration_unit": "layernorm-sharded-distributed-reduce",
+      "inventory": ["LN-PRE-ALLGATHER", "LN-POST-ALLGATHER", "LN-SHARDED"],
+      "coverage": "high; exact fresh-cache post sender/receiver JIT evidence on 2026-08-16; LN-PRE-ALLGATHER 126 passed, LN-POST-ALLGATHER 136 passed, LN-SHARDED 208 passed; outside-sender non-mcast-1D geometry host-tested"
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-1d:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy interleaved in0 path with mcast_in0=true and in0_block_sharded=false",
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "inventory": ["MM-IN0-INTERLEAVED"],
+      "coverage": "high"
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-1d:descriptor",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor interleaved in0 path with mcast_in0=true and in0_block_sharded=false",
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "inventory": ["MM-IN0-INTERLEAVED"],
+      "coverage": "high"
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-2d:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "legacy interleaved in0 path with in0_block_sharded=false",
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "inventory": ["MM-IN0-INTERLEAVED"],
+      "coverage": "high"
+    },
+    {
+      "id": "matmul-in0-mcast:reuse-2d:descriptor",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "descriptor interleaved in0 path with in0_block_sharded=false",
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "inventory": ["MM-IN0-INTERLEAVED"],
+      "coverage": "high"
+    },
+    {
+      "id": "matmul-in0-mcast:sparse-1d:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp",
+      "dispatch": "sparse Matmul MCAST_IN0 path",
+      "migration_unit": "matmul-in0-mcast-interleaved",
+      "inventory": ["MM-SPARSE-IN0"],
+      "coverage": "device-verified from an empty isolated cache; sender hash 14177997899853619887 and receiver hash 18131090411884538285"
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-1d:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "legacy mcast_in0 path with block-sharded input A and rotating shard senders",
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "inventory": ["MM-BLOCK-SHARDED-HYBRID"],
+      "coverage": "complete; exact 0/24-hit JIT proof, mapped correctness, and inherited matched performance passed 2026-08-16"
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-1d:descriptor",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+      "dispatch": "descriptor mcast_in0 path with block-sharded input A and rotating shard senders",
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "inventory": ["MM-BLOCK-SHARDED-HYBRID"],
+      "coverage": "complete; exact 0/24-hit JIT proof, mapped correctness, and inherited matched performance passed 2026-08-16"
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-2d:legacy",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "legacy 2D path with block-sharded input A and rotating shard senders",
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "inventory": ["MM-BLOCK-SHARDED-HYBRID"],
+      "coverage": "complete; exact 0/24-hit JIT proof, mapped correctness, and inherited matched performance passed 2026-08-16"
+    },
+    {
+      "id": "matmul-in0-mcast:block-sharded:reuse-2d:descriptor",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp",
+      "dispatch": "descriptor 2D path with block-sharded input A and rotating shard senders",
+      "migration_unit": "matmul-in0-mcast-block-sharded",
+      "inventory": ["MM-BLOCK-SHARDED-HYBRID"],
+      "coverage": "complete; exact 0/24-hit JIT proof, mapped correctness, and inherited matched performance passed 2026-08-16"
+    },
+    {
+      "id": "group-attn-matmul:rotating-reader",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/group_attn_matmul_program_factory.cpp",
+      "dispatch": "all group-attention Matmul paths with rotating sender identity",
+      "migration_unit": "group-attn-matmul-rotating-mcast",
+      "inventory": ["GROUP-ATTN-MATMUL"],
+      "coverage": "complete; exact fresh-cache helper JIT proof, 322 passed / 132 expected skips, and matched q16/q48 performance gates passed 2026-08-16"
+    },
+    {
+      "id": "conv3d:weight-share-mcast",
+      "classification": "required",
+      "factory": "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp",
+      "dispatch": "WeightShareMode::Mcast group strips with sender, active receiver, and passive receiver roles",
+      "migration_unit": "conv3d-weight-sharing-mcast",
+      "inventory": ["CONV3D-WEIGHT-MCAST"],
+      "coverage": "complete; exact fresh-cache writer proof, focused and complete correctness, and matched grouped/non-grouped performance passed 2026-08-16"
+    },
+    {
+      "id": "deepseek-b1-sampling:single-device-loop-barrier",
+      "classification": "required",
+      "factory": "models/demos/deepseek_v3_b1/micro_ops/sampling/op.py",
+      "dispatch": "single-device sampling barrier in argmax and top-k modes",
+      "migration_unit": "deepseek-b1-sampling-loop-barrier",
+      "inventory": ["DEEPSEEK-B1-SAMPLING"],
+      "coverage": "device-verified on Blackhole on 2026-08-16; top-k retains its unchanged pre-existing selection mismatch"
+    },
+    {
+      "id": "tt-train:frobenius-normalize:gather-broadcast",
+      "classification": "discovery_only",
+      "factory": "tt-train/sources/ttml/metal/ops/frobenius_normalize/device/frobenius_normalize_program_factory.cpp",
+      "dispatch": "multicore Frobenius normalization with origin gather and dense loopback broadcast",
+      "inventory": ["TT-TRAIN-FROBENIUS-NORMALIZE"],
+      "coverage": "unverified by this static reconciliation; C++ operation test mapped"
+    },
+    {
+      "id": "tt-train:k-split-gram-matmul:row-column-mcast",
+      "classification": "discovery_only",
+      "factory": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/k_split_gram_matmul_program_factory.cpp",
+      "dispatch": "row and column sender/receiver binaries used by K-split Gram Matmul",
+      "inventory": ["TT-TRAIN-K-SPLIT-GRAM-MATMUL"],
+      "coverage": "unverified by this static reconciliation; C++ operation test mapped"
+    }
+  ],
+  "inventory_definitions": {
+    "MM-IN0-INTERLEAVED": {
+      "path": "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
+      "tests": [
+        "test_matmul_1d_multiple_output_blocks_per_core: mcast_in0=True and in0_sharded=False",
+        "test_matmul_2d_multiple_output_blocks_per_core: in0_sharded=False",
+        "test_matmul_1d_tiny_tile",
+        "test_matmul_2d_tiny_tile",
+        "test_linear_fused_non_broadcast_bias_1d_mcast_tiny_tile",
+        "test_linear_fused_non_broadcast_bias_2d_mcast_tiny_tile",
+        "test_linear_fused_non_broadcast_bias_2d_mesh_multiple_blocks",
+        "test_padded_1d_matmul: has_program_config=True",
+        "test_padded_2d_matmul",
+        "test_matmul_with_transpose_and_configs: 1D/2D mcast program configs",
+        "test_matmul_padding: 1D/2D mcast program configs",
+        "test_matmul_on_subdevice_1d_mcast",
+        "test_matmul_on_subdevice_1d_mcast_full_grid",
+        "test_matmul_compute_output_specs_with_allowed_worker_cores: mcast program-config cases"
+      ]
+    },
+    "MM-SPARSE-IN0": {
+      "path": "tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py",
+      "compile_focused": "test_sparse_matmul_without_nnz[core_grid=(4, 4)-in1_dtype=DataType.BFLOAT8_B-tile_w=32-tile_h=16-num_batches=(1, 4)-num_experts=8-mkn=(16, 128, 512)] under --dev from an empty isolated TT_METAL_CACHE",
+      "tests": [
+        "test_sparse_matmul_with_nnz",
+        "test_sparse_matmul_without_nnz",
+        "test_batched_sparse_matmul_with_nnz",
+        "test_batched_sparse_matmul_without_nnz",
+        "test_sparse_matmul_inputA_with_nnz",
+        "test_sparse_matmul_inputA_without_nnz"
+      ],
+      "excluded": "argument-validation tests do not launch the tracked sparse kernels",
+      "verification": "2026-08-06 compile-focused case passed with 0/29 JIT hits; cache contained sender hash 14177997899853619887 and receiver hash 18131090411884538285"
+    },
+    "MM-IN1-ALL": {
+      "path": "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
+      "includes": [
+        "MM-IN0-INTERLEAVED"
+      ],
+      "additional_tests": [
+        "test_sharded_matmul: all 1D/2D mcast IDs",
+        "test_matmul_in0_in1_bias_sharded",
+        "test_sharded_matmul_with_multiple_out_block_values",
+        "test_matmul_block_sharded_input_with_padding",
+        "test_matmul_height_sharded_input_with_padding",
+        "test_matmul_activation_with_sharded_input",
+        "test_matmul_2d_nd_sharded_in1"
+      ]
+    },
+    "MM-IN1-RECEIVER-2D": {
+      "path": "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
+      "tests": [
+        "test_matmul_2d_multiple_output_blocks_per_core",
+        "test_matmul_2d_tiny_tile",
+        "test_linear_fused_non_broadcast_bias_2d_mcast_tiny_tile",
+        "test_linear_fused_non_broadcast_bias_2d_mesh_multiple_blocks",
+        "test_padded_2d_matmul",
+        "test_sharded_matmul: mcast_2d, mcast_2d_transposed, and mcast_2d_shard_width_gt_1 IDs",
+        "test_matmul_with_transpose_and_configs: 2D mcast program configs",
+        "test_matmul_in0_in1_bias_sharded: 2D mcast cases",
+        "test_sharded_matmul_with_multiple_out_block_values",
+        "test_matmul_padding: 2D mcast cases",
+        "test_matmul_block_sharded_input_with_padding",
+        "test_matmul_activation_with_sharded_input",
+        "test_matmul_compute_output_specs_with_allowed_worker_cores: 2D mcast cases",
+        "test_matmul_2d_nd_sharded_in1"
+      ]
+    },
+    "MM-BLOCK-SHARDED-HYBRID": {
+      "path": "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
+      "tests": [
+        "test_matmul_2d_multiple_output_blocks_per_core: transpose_mcast=True and in0_sharded=True",
+        "test_matmul_1d_multiple_output_blocks_per_core: in0_sharded=True when supported",
+        "test_sharded_matmul: 2D mcast IDs with sharded input",
+        "test_matmul_in0_in1_bias_sharded",
+        "test_matmul_block_sharded_input_with_padding",
+        "test_matmul_activation_with_sharded_input",
+        "test_matmul_2d_nd_sharded_in1"
+      ]
+    },
+    "CONV-HEIGHT": {
+      "path": "tests/ttnn/unit_tests/operations/conv/test_conv2d.py",
+      "tests": [
+        "test_conv_features: (16,16,256,256,HEIGHT_SHARDED,{act_block_h:32})",
+        "test_conv_dram_config: matching HEIGHT_SHARDED case",
+        "test_conv_dram: credit only when JIT routing selects the 1D mcast path"
+      ]
+    },
+    "CONV-BLOCK": {
+      "path": "tests/ttnn/unit_tests/operations/conv/test_conv2d.py",
+      "tests": [
+        "test_conv_features: (128,128,32,32,BLOCK_SHARDED,None)",
+        "test_conv_dram_config: matching BLOCK_SHARDED case",
+        "test_conv_dram: credit only when JIT routing selects the 2D mcast path"
+      ]
+    },
+    "CONV-WIDTH": {
+      "path": "tests/ttnn/unit_tests/operations/conv/test_conv2d.py",
+      "tests": [
+        "test_conv_features: (353,384,8,8,WIDTH_SHARDED,None)",
+        "test_conv_dram_config: matching WIDTH_SHARDED case",
+        "test_conv_dram: credit only when JIT routing selects activation_reader_width_sharded.cpp"
+      ]
+    },
+    "LN-PRE-ALLGATHER": {
+      "path": "tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py",
+      "tests": [
+        "test_pre_allgather_layernorm",
+        "test_pre_allgather_layernorm_1d_reduce",
+        "test_simulated_distributed_layernorm",
+        "test_simulated_distributed_norm_multi_core_non_tile_aligned_width",
+        "test_simulated_distributed_norm_two_stage_reduce_non_tile_aligned_width",
+        "test_simulated_distributed_norm_pre_all_gather_non_tile_aligned_width"
+      ]
+    },
+    "LN-POST-ALLGATHER": {
+      "path": "tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py",
+      "tests": [
+        "test_post_allgather_layernorm",
+        "test_simulated_distributed_layernorm",
+        "test_simulated_distributed_norm_multi_core_non_tile_aligned_width",
+        "test_simulated_distributed_norm_two_stage_reduce_non_tile_aligned_width"
+      ],
+      "known_non_running": [
+        "test_simulated_distributed_norm_tile_aligned_width: xfail(run=False), issue #48661",
+        "test_simulated_distributed_norm_non_tile_aligned_width: xfail(run=False), issue #48661"
+      ],
+      "coverage_limit": "The current operation inventory exercises mcast_1d only. The non-mcast-1D branch requires one stats source per sender line, but the existing operation contract validates a stats tensor sharded on exactly one core; its outside-sender wire geometry is covered by McastHostFixture."
+    },
+    "LN-SHARDED": {
+      "path": "tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py",
+      "tests": [
+        "test_layer_norm_sharded_single_stage",
+        "test_layer_norm_sharded_two_stage",
+        "test_layer_norm_sharded_with_residual",
+        "test_layer_norm_sharded_with_weight_and_bias",
+        "test_layer_norm_sharded_with_weight_and_bias_row_major",
+        "test_layer_norm_sharded_with_weight_and_bias_and_residual",
+        "test_layer_norm_sharded_padded",
+        "test_layer_norm_sharded_width_default_config",
+        "test_layer_norm_sharded_2d_with_grid_offset",
+        "test_layer_norm_sharded_1d_mcast_with_grid_offset",
+        "test_layer_norm_sharded_uneven_multicore_logical_width",
+        "test_layer_norm_sharded_uneven_multicore_logical_width_row_major",
+        "test_layer_norm_sharded_uneven_multicore_logical_width_two_stage"
+      ]
+    },
+    "GN-INTERLEAVED-DRAM": {
+      "path": "tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py",
+      "tests": ["complete file; legacy and all Welford modes"],
+      "result": "181 valid passed, 5 architecture skips; one unrelated strict XPASS in the deliberate garbage-padding negative probe"
+    },
+    "GN-GENERAL": {
+      "path": "tests/ttnn/unit_tests/operations/fused/test_group_norm.py",
+      "tests": ["complete file, including fixed/default routing, dtype, cache, and no-mcast guards"],
+      "result": "345 passed, 10 expected skips"
+    },
+    "GN-NIGHTLY": {
+      "path": "tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py",
+      "tests": ["complete file"],
+      "result": "203 passed, 6 expected skips"
+    },
+    "GN-INTERLEAVED-RT-LEGACY": {
+      "path": "tests/ttnn/perf_tests/operations/mcast/test_mcast_migration_realtime_perf.py",
+      "tests": ["test_groupnorm_interleaved_mcast_realtime_perf[groupnorm_legacy]"],
+      "result": "exact non-v2 sender/receiver sources asserted; three-run median +1.271% versus raw"
+    },
+    "GN-INTERLEAVED-RT-WELFORD": {
+      "path": "tests/ttnn/perf_tests/operations/mcast/test_mcast_migration_realtime_perf.py",
+      "tests": ["test_groupnorm_interleaved_mcast_realtime_perf[groupnorm_welford]"],
+      "result": "exact non-v2 sender/receiver sources asserted; three-run median -0.318% versus raw"
+    },
+    "GN-SHARDED-PARAMETERIZED": {
+      "path": "tests/ttnn/unit_tests/operations/fused/test_group_norm.py",
+      "tests": [
+        "test_group_norm_with_height_sharded",
+        "test_group_norm_with_block_sharded_v2_8x4_grid",
+        "test_group_norm_with_offset_shard_grid",
+        "test_group_norm_with_block_sharded_v2_8x8_grid",
+        "test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout",
+        "test_sdxl_base_group_norm",
+        "test_sdxl_group_norm_reverse_inplace",
+        "test_group_norm_optional_weight_bias"
+      ],
+      "fixed_or_default_routing_tests": [
+        "test_sdxl_base_group_norm_bh: legacy only",
+        "test_sdxl_base_group_norm_negative_mask",
+        "test_group_norm_compute_config",
+        "test_group_norm_oft",
+        "test_group_norm_no_input_mask",
+        "test_group_norm_dram_grid_size: Welford"
+      ],
+      "selection": "Run use_welford=False for legacy and use_welford=True for Welford, plus applicable fixed/default-routing nodes."
+    },
+    "TOPK-MULTICORE": {
+      "path": "tests/ttnn/unit_tests/operations/reduce/test_topk.py",
+      "tests": [
+        "test_topk: all supported dtype/sort/direction/sub-core-grid combinations for W=8192,k=50; W=16384,k=32; W=8192,k=6",
+        "test_topk_sub_core_grids: W=16384,k=32 and all pass_indices_tensor variants",
+        "test_topk_bfloat8_with_inf: W=16384,k=32"
+      ],
+      "excluded": "test_topk_large_2d_shapes and dtype-error tests do not launch the tracked multicore kernels."
+    },
+    "SORT-SINGLE-ROW-CONTROL": {
+      "path": "tests/ttnn/unit_tests/operations/data_movement/test_sort.py",
+      "compile_focused": "test_sort_long_tensor[shape=[1, 524288]-dim=-1-descending=False] under --dev from a fresh isolated JIT cache; coordinator, reader, and writer artifacts required",
+      "tests": [
+        "test_sort_long_tensor: complete inventory",
+        "test_sort_multi_row_multi_core_no_deadlock: descending False and True"
+      ],
+      "result": "7 long-tensor cases passed; 2 Ht=2 deadlock cases passed"
+    },
+    "MOVE-OVERLAP": {
+      "path": "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py",
+      "compile_focused": "shape1 BFLOAT16 L1-to-L1 overlap under --dev from separate empty TT_METAL_CACHE roots for TILE and ROW_MAJOR; each exact kernel must report 0/19 hits",
+      "tests": [
+        "complete file with --run-all for all overlap/non-overlap shape, dtype, layout, and memory-config cases",
+        "test_move_op_with_program_cache for every mapped dtype",
+        "environment-gated 25-operation TILE and ROW_MAJOR matched profiling routes"
+      ],
+      "expected_nonpasses": {"non-L1 input configurations": 128},
+      "result": "136 passed / 128 intentional skips; matched TILE -0.47%, ROW_MAJOR -0.02%"
+    },
+    "GROUP-ATTN-MATMUL": {
+      "path": "tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py",
+      "compile_focused": "test_group_attn_matmul_with_program_cache_exhaustive q16 fully-sharded ROW_MAJOR node under --dev from a fresh isolated JIT cache; helper-based rotating reader artifact required",
+      "tests": [
+        "every collected test whose node contains group_attn_matmul, including exhaustive, sharded, dtype, and program-cache routes"
+      ],
+      "expected_skips": {
+        "optional-preallocated output with sharded output": 96,
+        "remaining duplicate COL_MAJOR cases with both inputs interleaved": 36
+      },
+      "result": "322 passed, 132 expected skips, 299 deselected; warm JIT 351/351"
+    },
+    "CONV3D-WEIGHT-MCAST": {
+      "paths": [
+        "tests/ttnn/unit_tests/operations/conv/test_conv3d.py",
+        "tests/ttnn/nightly/unit_tests/operations/conv/test_conv3d.py"
+      ],
+      "compile_focused": "k333_s111_g1_zeros_c64_c64 from an empty isolated TT_METAL_CACHE; writer artifact must encode WeightShareMode::Mcast and NOC1",
+      "tests": [
+        "focused 12-shape sweep spanning grouped/non-grouped routes and padding/stride variants",
+        "complete unit file",
+        "complete nightly file"
+      ],
+      "expected_nonpasses": {
+        "unit Blackhole skip": 1,
+        "nightly expected skips": 5,
+        "nightly pre-existing width-sharded page-alignment xfails": 2
+      },
+      "result": "focused 12 passed; unit 27 passed / 1 skip; nightly 1606 passed / 5 skips / 2 xfails"
+    },
+    "DEEPSEEK-B1-SAMPLING": {
+      "path": "models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py",
+      "tests": [
+        "test_sampling_argmax_single_device_101_cores",
+        "test_sampling_topk_single_device"
+      ],
+      "result": "four 101-core argmax nodes passed through cold and warm JIT paths; top-k completed the migrated barrier and reproduced the raw implementation's pre-existing Blackhole p_scores failure"
+    },
+    "TT-TRAIN-FROBENIUS-NORMALIZE": {
+      "path": "tt-train/tests/ops/frobenius_normalize_test.cpp",
+      "tests": ["complete FrobeniusNormalize operation test binary"],
+      "verification": "discovery-only; no build or device execution in the documentation reconciliation"
+    },
+    "TT-TRAIN-K-SPLIT-GRAM-MATMUL": {
+      "path": "tt-train/tests/ops/k_split_gram_matmul_op_test.cpp",
+      "tests": ["complete KSplitGramMatmul operation test binary"],
+      "verification": "discovery-only; confirm all sender, receiver, and receiver-writer variants before any migration"
+    }
+  },
+  "additional_candidate_routes": [
+    {
+      "candidate": "reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
+      "confidence": "discovery-only",
+      "route": "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_dram_sharded.py; confirm the exact JIT path"
+    },
+    {
+      "candidate": "sdpa reader_interleaved.cpp",
+      "confidence": "device-verified historical route",
+      "route": "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py::test_sdpa_noncausal"
+    },
+    {
+      "candidate": "deepseek sampling_kernel.cpp",
+      "confidence": "device-verified 2026-08-16",
+      "route": "models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py::{test_sampling_argmax_single_device_101_cores,test_sampling_topk_single_device}; top-k test_1 must be compared with the unchanged raw Blackhole failure signature while issue skip remains"
+    },
+    {
+      "candidate": "deepseek kv_cache_update.hpp and flash_mla.hpp",
+      "confidence": "discovery-only",
+      "route": "Use the DeepSeek v3 b1 kv-cache and flash-MLA unit tests; confirm the including JIT kernel because these are headers"
+    },
+    {
+      "candidate": "deepseek_prefill unified_routed_expert_ffn_reader.cpp",
+      "confidence": "route-audited; execution not required after API-v11 design-gate deferral",
+      "route": "tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/{test_single_routed_expert.py,test_routed_expert_bias.py,test_swigluoai_routed_expert.py}; the prior multi-device-only ledger note was stale"
+    },
+    {
+      "candidate": "experimental moe_gate_mm dm1.cpp",
+      "confidence": "discovery-only",
+      "route": "tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_mm.py::test_moe_mm; confirm the full JIT path because dm1 is not unique"
+    },
+    {
+      "candidate": "ccl moe_compute tilize_reader.cpp and tilize_writer.cpp",
+      "confidence": "discovery-only",
+      "route": "tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_compute_single_card.py::test_moe_compute_single_card_gpt_oss"
+    },
+    {
+      "candidate": "TT-Train Frobenius normalization and K-split Gram Matmul multicast families",
+      "confidence": "source-verified inventory; execution not performed",
+      "route": "tt-train/tests/ops/{frobenius_normalize_test.cpp,k_split_gram_matmul_op_test.cpp}"
+    }
+  ],
+  "known_coverage_gaps": [
+    "Ring/joint SDPA and ring-all-gather matmul routes require multiple devices.",
+    "Most CCL candidates require a mesh or Galaxy system; single-card moe_compute is the documented exception.",
+    "The persistent H2D/D2H service Python modules and C++ worker-sync tests require Blackhole Galaxy/UBB; their exact worker GlobalSemaphore routes skip on the current single-chip Blackhole P100a.",
+    "The matmul reuse-mcast and contributed multicast programming-example kernels are exercised by binaries, not pytest.",
+    "The newly inventoried TT-Train families use C++ operation tests and were not built or run during this static documentation reconciliation."
+  ],
+  "entries": [
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+      "status": "pending",
+      "inventory": "MM-IN0-INTERLEAVED + MM-SPARSE-IN0",
+      "coverage": "high; sparse route device-verified",
+      "result": "API-007 accepted; sparse route passed from empty cache with sender hash 14177997899853619887"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+      "status": "pending",
+      "inventory": "MM-IN0-INTERLEAVED + MM-SPARSE-IN0",
+      "coverage": "high; sparse route device-verified",
+      "result": "API-007 accepted; sparse route passed from empty cache with receiver hash 18131090411884538285"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+      "status": "migrated",
+      "inventory": "MM-IN1-ALL",
+      "coverage": "complete",
+      "result": "302 passed, 188 expected skips"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+      "status": "migrated",
+      "inventory": "MM-IN1-RECEIVER-2D plus MM-IN1-ALL shared cases",
+      "coverage": "complete",
+      "result": "302 passed, 188 expected skips in shared complete run; exact receiver JIT evidence"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+      "status": "migrated",
+      "inventory": "MM-BLOCK-SHARDED-HYBRID",
+      "coverage": "complete",
+      "result": "API v11 write-back 2026-08-16; exact 0/24-hit JIT proof passed; mapped inventory included in 302 passed / 188 expected skips; inherited matched medians +0.643% and -0.045%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "status": "migrated",
+      "inventory": "CONV-HEIGHT",
+      "coverage": "complete",
+      "result": "49 passed, 16 expected skips; 14 shared DRAM regressions; fresh isolated-cache JIT sender path"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "status": "migrated",
+      "inventory": "CONV-HEIGHT",
+      "coverage": "complete",
+      "result": "49 passed, 16 expected skips; 14 shared DRAM regressions; JIT 2407920035465003760"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "status": "migrated",
+      "inventory": "CONV-BLOCK",
+      "coverage": "complete",
+      "result": "49 passed, 16 expected skips; 14 shared DRAM regressions; JIT 15303758245318226173"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "status": "migrated",
+      "inventory": "CONV-BLOCK",
+      "coverage": "complete",
+      "result": "49 passed, 16 expected skips; 14 shared DRAM regressions; JIT 16874227300215685254"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp",
+      "status": "migrated",
+      "inventory": "CONV-WIDTH",
+      "coverage": "complete with exact fresh-cache and DRAM-route JIT evidence",
+      "result": "exact BF16/BF16 filter-3 tile-output case passed at PCC 0.999956503; full feature inventory 48 passed, 16 expected skips; DRAM-config route 1 passed at PCC 0.998234911; prior pre-loopback-fix numerical regression resolved"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp",
+      "status": "migrated",
+      "inventory": "LN-POST-ALLGATHER",
+      "coverage": "complete mapped mcast_1d inventory plus host coverage for outside-sender non-mcast-1D geometry",
+      "result": "API-v11 migrated at 6cc49825476; fresh exact JIT passed; post 136, pre 126, and plain sharded 208 passed; LayerNorm and RMSNorm performance improved 3.2% and 10.0%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp",
+      "status": "migrated",
+      "inventory": "LN-POST-ALLGATHER",
+      "coverage": "paired sender/receiver migration with exact fresh-cache artifact",
+      "result": "API-v11 migrated with sender at 6cc49825476; complete mapped inventories and helper guards passed"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_gn.cpp",
+      "status": "migrated",
+      "inventory": "GN-INTERLEAVED-DRAM plus general/nightly/cache guards and matched legacy benchmark",
+      "coverage": "complete with exact non-v2 sender/receiver JIT evidence",
+      "result": "API-v11 at 40e209daad9; 181 valid DRAM, 345 general, and 203 nightly passed; matched performance +1.271%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_gn.cpp",
+      "status": "migrated",
+      "inventory": "GN-INTERLEAVED-DRAM plus general/nightly/cache guards and matched legacy benchmark",
+      "coverage": "complete with exact non-v2 sender/receiver JIT evidence",
+      "result": "API-v11 paired legacy receiver at 40e209daad9; all correctness and +2% performance gates passed"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp",
+      "status": "migrated",
+      "inventory": "GN-INTERLEAVED-DRAM plus general/nightly/cache guards and matched Welford benchmark",
+      "coverage": "complete with exact non-v2 sender/receiver JIT evidence",
+      "result": "API-v11 at 40e209daad9; 181 valid DRAM, 345 general, and 203 nightly passed; matched performance -0.318%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_gn.cpp",
+      "status": "migrated",
+      "inventory": "GN-INTERLEAVED-DRAM plus general/nightly/cache guards and matched Welford benchmark",
+      "coverage": "complete with exact non-v2 sender/receiver JIT evidence",
+      "result": "API-v11 paired Welford receiver at 40e209daad9; all correctness and +2% performance gates passed"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp",
+      "status": "migrated",
+      "inventory": "GN-SHARDED-PARAMETERIZED legacy plus fixed/default-routing nodes",
+      "coverage": "complete",
+      "result": "108 passed, 2 expected skips; shared fixed/default routing nodes 19 passed, 6 expected skips; fresh JIT path"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp",
+      "status": "migrated",
+      "inventory": "GN-SHARDED-PARAMETERIZED legacy plus fixed/default-routing nodes",
+      "coverage": "complete",
+      "result": "124 passed, 8 expected skips"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
+      "status": "migrated",
+      "inventory": "LN-PRE-ALLGATHER plus LN-POST-ALLGATHER and LN-SHARDED guards",
+      "coverage": "high; exact fresh-cache JIT artifact and complete mapped inventories",
+      "result": "v10 migrated after separate builder-split prerequisite; 126 pre, 136 post, and 208 plain sharded cases passed"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp",
+      "status": "migrated",
+      "inventory": "LN-PRE-ALLGATHER plus LN-POST-ALLGATHER and LN-SHARDED guards",
+      "coverage": "high; exact fresh-cache JIT artifacts and complete mapped inventories",
+      "result": "v10 migrated after separate builder-split prerequisite; whole-grid and two-stage row/column geometries passed"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp",
+      "status": "migrated",
+      "inventory": "GN-SHARDED-PARAMETERIZED Welford plus fixed/default-routing nodes",
+      "coverage": "complete",
+      "result": "108 passed, 2 expected skips; shared fixed/default routing nodes 19 passed, 6 expected skips; fresh JIT path"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp",
+      "status": "migrated",
+      "inventory": "GN-SHARDED-PARAMETERIZED Welford plus fixed/default-routing nodes",
+      "coverage": "complete",
+      "result": "116 passed, 8 expected skips"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp",
+      "status": "deferred",
+      "inventory": "LN-SHARDED",
+      "coverage": "audited",
+      "result": "partial migration reverted; acknowledged signal-only and one-gate/multi-block gaps"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp",
+      "status": "deferred",
+      "inventory": "LN-SHARDED",
+      "coverage": "audited",
+      "result": "partial migration reverted; mixed flag/counter phase gap"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp",
+      "status": "migrated",
+      "inventory": "TOPK-MULTICORE",
+      "coverage": "high; exact fresh-cache JIT artifact and complete mapped inventory",
+      "result": "v10 migrated; exact node passed and TOPK-MULTICORE passed 14 with 12 expected BFLOAT8_B pad xfails"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp",
+      "status": "migrated",
+      "inventory": "TOPK-MULTICORE",
+      "coverage": "high; exact fresh-cache JIT artifact and complete mapped inventory",
+      "result": "v10 migrated; exact node passed and TOPK-MULTICORE passed 14 with 12 expected BFLOAT8_B pad xfails"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp",
+      "status": "migrated",
+      "inventory": "GROUP-ATTN-MATMUL",
+      "coverage": "high; exact fresh-cache helper JIT proof, complete group-attention inventory, and two matched performance routes",
+      "result": "API v11 migrated; exact --dev passed, complete inventory 322 passed / 132 expected skips, q16 -32.20%, q48 -27.31%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp",
+      "status": "migrated",
+      "inventory": "CONV3D-WEIGHT-MCAST",
+      "coverage": "high; exact fresh-cache Mcast/NOC1 writer proof, focused and complete Conv3D inventories, and two matched performance routes",
+      "result": "API v11 migrated; focused 12 passed, unit 27 passed / 1 skip, nightly 1606 passed / 5 skips / 2 xfails, non-grouped -0.815%, grouped -0.298%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp",
+      "status": "migrated",
+      "inventory": "SDPA-DECODE single-device unit, nightly, cache, flexible-geometry, MLA, and replicated-Q routes",
+      "coverage": "high; fresh-JIT q-factor-4 route, q-factor-2 route, all shared-header consumers, and two matched performance cases",
+      "result": "API v11 at f760425fe06; mapped executable inventories passed, source audit 20/20, q-factor 4 -1.20%, q-factor 2 -0.69%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+      "status": "migrated",
+      "inventory": "ARGMAX ROW_MAJOR multicore unit, two-rectangle cache, and reduce-all routes",
+      "coverage": "high; fresh-JIT two-rectangle reduce-all, full unit matrix, and two matched performance cases",
+      "result": "API v11 at 5aaaf5b5aa5; unit 69/69, nightly 16 passed / 8 skips, [64,128] -0.28%, two-rectangle +0.30%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp",
+      "status": "migrated",
+      "inventory": "MOVE-OVERLAP TILE",
+      "coverage": "high; fresh-JIT 0/19-hit route, complete Move inventory, program cache, and matched performance",
+      "result": "API v11 at a25603ae2c0; full inventory 136 passed / 128 intentional skips; TILE -0.47%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp",
+      "status": "migrated",
+      "inventory": "MOVE-OVERLAP ROW_MAJOR",
+      "coverage": "high; fresh-JIT 0/19-hit route, complete Move inventory, program cache, and matched performance",
+      "result": "API v11 at a25603ae2c0; full inventory 136 passed / 128 intentional skips; ROW_MAJOR -0.02%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp",
+      "status": "migrated",
+      "inventory": "SORT-SINGLE-ROW-CONTROL",
+      "coverage": "complete with exact fresh-cache coordinator/reader/writer JIT evidence",
+      "result": "API v14 ledger stamp; 7 long-tensor cases and 2 multi-row deadlock cases passed"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp",
+      "status": "migrated",
+      "inventory": "SORT-SINGLE-ROW-CONTROL",
+      "coverage": "complete with exact fresh-cache coordinator/reader/writer JIT evidence",
+      "result": "API v14 ledger stamp; 7 long-tensor cases and 2 multi-row deadlock cases passed"
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
+      "status": "migrated",
+      "inventory": "DEEPSEEK-B1-SAMPLING",
+      "coverage": "device-verified on single-chip Blackhole",
+      "result": "API v14 ledger stamp; four 101-core argmax nodes passed, and the top-k barrier completed with the unchanged raw failure signature"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/frobenius_normalize/device/kernels/dataflow/reader_frobenius_normalize.cpp",
+      "status": "deferred",
+      "inventory": "TT-TRAIN-FROBENIUS-NORMALIZE",
+      "coverage": "discovery-only",
+      "result": "Added by repository-wide recall; migration and TT-Train dependency decision not authorized"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_sender.cpp",
+      "status": "deferred",
+      "inventory": "TT-TRAIN-K-SPLIT-GRAM-MATMUL",
+      "coverage": "discovery-only",
+      "result": "Added by repository-wide recall; sender and both receiver companions form one atomic protocol unit"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_receiver.cpp",
+      "status": "deferred",
+      "inventory": "TT-TRAIN-K-SPLIT-GRAM-MATMUL",
+      "coverage": "discovery-only",
+      "result": "Pure receiver companion added by factory traversal"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_receiver_writer.cpp",
+      "status": "deferred",
+      "inventory": "TT-TRAIN-K-SPLIT-GRAM-MATMUL",
+      "coverage": "discovery-only",
+      "result": "Receiver/writer companion added by factory traversal"
+    }
+  ],
+  "baseline_note": "Baseline moved by the fully automated 2026-08-14 rebase from 4a1d6a97ca9bd4efabd0ad6115fcb30538851c90 to dc9282be7d5e9d5a4b9137c1bf327de8d923e18e. The API-independent inventory map is retained; the 12 migrated kernels touched by the move carry needs_recheck in ledger.json. Focused post-rebase probes passed on single-chip Blackhole p100a; complete mapped verification remains an apply-dm-helper follow-up."
+}

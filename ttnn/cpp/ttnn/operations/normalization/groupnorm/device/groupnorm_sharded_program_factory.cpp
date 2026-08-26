@@ -15,6 +15,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 #include "ttnn/operations/math.hpp"
 
 using uint32_t = std::uint32_t;
@@ -472,6 +473,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // Mcast args - semaphore IDs assigned sequentially in descriptor.semaphores
     constexpr uint32_t reduce_sender_semaphore_id = 0;
     constexpr uint32_t reduce_receiver_semaphore_id = 1;
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = reduce_sender_semaphore_id,
         .core_type = tt::CoreType::WORKER,
@@ -482,6 +485,49 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         .core_type = tt::CoreType::WORKER,
         .core_ranges = all_cores,
         .initial_value = 0});
+
+    // GroupNorm's logical multicast group may wrap across the shard-grid boundary. Represent its
+    // middle/first/last rectangular partition with three fixed host-helper blocks. An absent edge
+    // rectangle is a sender-only rectangle; SenderPipe's degenerate in-place send is a no-op. This
+    // keeps rectangle optionality in each core's RT geometry while giving every kernel one fixed
+    // 3 * McastArgs wire.
+    auto make_group_mcasts = [&](const std::vector<CoreCoord>& group) {
+        std::vector<CoreCoord> mcast_group_first;
+        std::vector<CoreCoord> mcast_group_mid(group);
+        std::vector<CoreCoord> mcast_group_last;
+        if (!is_rectangle_grid(group)) {
+            auto mutable_group = group;
+            split_and_form_rectangle_grids(mutable_group, mcast_group_first, mcast_group_mid, mcast_group_last);
+        }
+
+        const CoreCoord sender = group.front();
+        auto rectangle_or_sender = [&](const std::vector<CoreCoord>& rectangle) {
+            if (rectangle.empty()) {
+                return CoreRangeSet(CoreRange(sender, sender));
+            }
+            CoreCoord start = rectangle.front();
+            CoreCoord end = rectangle.front();
+            for (const auto& core : rectangle) {
+                start.x = std::min(start.x, core.x);
+                start.y = std::min(start.y, core.y);
+                end.x = std::max(end.x, core.x);
+                end.y = std::max(end.y, core.y);
+            }
+            return CoreRangeSet(CoreRange(start, end));
+        };
+
+        std::vector<ttnn::kernel_lib::host::Mcast2D> mcasts;
+        mcasts.reserve(3);
+        const auto config = ttnn::kernel_lib::host::McastConfig{
+            .noc = reader_noc,
+            .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id, reduce_receiver_semaphore_id}};
+        mcasts.emplace_back(device, rectangle_or_sender(mcast_group_mid), sender, config);
+        mcasts.emplace_back(device, rectangle_or_sender(mcast_group_first), sender, config);
+        mcasts.emplace_back(device, rectangle_or_sender(mcast_group_last), sender, config);
+        return mcasts;
+    };
+    const auto representative_group_mcasts = make_group_mcasts(mcast_groups.front());
+
     // reader defines
     std::map<std::string, std::string> reader_mcast_sender_defines;
     std::map<std::string, std::string> reader_mcast_receiver_defines;
@@ -506,40 +552,46 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         reader_mcast_receiver_defines["UNTILIZE_OUT"] = "1";
     }
     // reader compile time args
-    std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
-        reduce_receiver_semaphore_id,
-        reduce_sender_semaphore_id,
-        num_cores_per_mcast_group,
-        num_batches_per_core * (use_welford ? 1 : num_groups_per_core),
-        per_core_Nt,
-        per_core_N_bytes_padded,
-        per_core_Nt * tile_width * datum_size_bytes,
-        datum_size_bytes,
-        per_core_Mt,
-        tile_height};
+    std::vector<uint32_t> reader_mcast_sender_compile_time_args;
+    std::vector<uint32_t> reader_mcast_receiver_compile_time_args;
+    reader_mcast_sender_compile_time_args.insert(
+        reader_mcast_sender_compile_time_args.end(),
+        {
+            num_cores_per_mcast_group,
+            num_batches_per_core * (use_welford ? 1 : num_groups_per_core),
+            per_core_Nt,
+            per_core_N_bytes_padded,
+            per_core_Nt * tile_width * datum_size_bytes,
+            datum_size_bytes,
+            per_core_Mt,
+            tile_height,
+        });
     if (use_welford) {
         reader_mcast_sender_compile_time_args.push_back(block_ht * block_wt);
         reader_mcast_sender_compile_time_args.push_back(num_groups_per_core);
         reader_mcast_sender_compile_time_args.push_back(tile_width);
         reader_mcast_sender_compile_time_args.push_back(static_cast<uint32_t>(stats_is_fp32));
     }
-    std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
-        reduce_receiver_semaphore_id,
-        reduce_sender_semaphore_id,
-        num_batches_per_core * (use_welford ? 1 : num_groups_per_core),
-        per_core_Nt,
-        per_core_N_bytes_padded,
-        per_core_Nt * tile_width * datum_size_bytes,
-        per_core_Mt,
-        tile_height};
+    reader_mcast_receiver_compile_time_args.insert(
+        reader_mcast_receiver_compile_time_args.end(),
+        {
+            num_batches_per_core * (use_welford ? 1 : num_groups_per_core),
+            per_core_Nt,
+            per_core_N_bytes_padded,
+            per_core_Nt * tile_width * datum_size_bytes,
+            per_core_Mt,
+            tile_height,
+        });
     if (use_welford) {
         reader_mcast_receiver_compile_time_args.push_back(block_ht * block_wt);
         reader_mcast_receiver_compile_time_args.push_back(num_groups_per_core);
         reader_mcast_receiver_compile_time_args.push_back(tile_width);
         reader_mcast_receiver_compile_time_args.push_back(static_cast<uint32_t>(stats_is_fp32));
     }
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    for (const auto& mcast : representative_group_mcasts) {
+        mcast.append_compile_time_args_to(reader_mcast_sender_compile_time_args, /*pre_handshake_override=*/false);
+        mcast.append_compile_time_args_to(reader_mcast_receiver_compile_time_args, /*pre_handshake_override=*/true);
+    }
 
     // reader sender kernel
     KernelDescriptor reader_mcast_sender_desc;
@@ -1200,116 +1252,33 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     log_debug(tt::LogOp, "num_cores_per_batch: {}", num_cores_per_batch);
     log_debug(tt::LogOp, "num_cores_per_group: {}", num_cores_per_group);
 
-    for (auto group : mcast_groups) {
-        bool rectangle_grid = is_rectangle_grid(group);
+    for (const auto& group : mcast_groups) {
+        const auto group_mcasts = make_group_mcasts(group);
 
         for (size_t j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
+            std::vector<uint32_t> reader_mcast_args;
 
             if (j == 0) {  // mcast sender
-                // get the bounding box for the mcast
-                std::vector<CoreCoord> mcast_group_first;
-                std::vector<CoreCoord> mcast_group_mid(group);
-                std::vector<CoreCoord> mcast_group_last;
-                if (!rectangle_grid) {
-                    split_and_form_rectangle_grids(group, mcast_group_first, mcast_group_mid, mcast_group_last);
-                }
-
-                CoreCoord mcast_start = device->worker_core_from_logical_core(mcast_group_mid.front());
-                CoreCoord mcast_end = device->worker_core_from_logical_core(mcast_group_mid.back());
-
-                if (reader_noc == NOC::NOC_1) {
-                    std::swap(mcast_start, mcast_end);
-                }
-                std::vector<uint32_t> mcast_sender_args;
-                mcast_sender_args.reserve(17 + group.size() * 2);
-                mcast_sender_args.push_back(static_cast<uint32_t>(!mcast_group_first.empty()));
-                mcast_sender_args.push_back(static_cast<uint32_t>(!mcast_group_last.empty()));
-                mcast_sender_args.push_back(mcast_start.x);
-                mcast_sender_args.push_back(mcast_start.y);
-                mcast_sender_args.push_back(mcast_end.x);
-                mcast_sender_args.push_back(mcast_end.y);
-                if (!mcast_group_first.empty()) {
-                    mcast_sender_args.push_back(mcast_group_mid.size());
-                    log_debug(tt::LogOp, "mcast mid group size: {}", mcast_group_mid.size());
-                } else {
-                    mcast_sender_args.push_back(mcast_group_mid.size() - 1);  // mcast w/o itself
-                    log_debug(tt::LogOp, "mcast mid group size: {}", mcast_group_mid.size() - 1);
-                }
-
-                log_debug(
-                    tt::LogOp,
-                    "mcast mid group start coord: {} {} end coord: {} {}",
-                    mcast_start.x,
-                    mcast_start.y,
-                    mcast_end.x,
-                    mcast_end.y);
-
-                if (!mcast_group_first.empty()) {
-                    CoreCoord mcast_first_start = device->worker_core_from_logical_core(mcast_group_first.front());
-                    CoreCoord mcast_first_end = device->worker_core_from_logical_core(mcast_group_first.back());
-
-                    if (reader_noc == NOC::NOC_1) {
-                        std::swap(mcast_start, mcast_end);
-                    }
-                    mcast_sender_args.push_back(mcast_first_start.x);
-                    mcast_sender_args.push_back(mcast_first_start.y);
-                    mcast_sender_args.push_back(mcast_first_end.x);
-                    mcast_sender_args.push_back(mcast_first_end.y);
-                    mcast_sender_args.push_back(mcast_group_first.size() - 1);  // mcast w/0 itself
-
-                    log_debug(
-                        tt::LogOp,
-                        "mcast first group start coord: {} {} end coord: {} {}",
-                        mcast_first_start.x,
-                        mcast_first_start.y,
-                        mcast_first_end.x,
-                        mcast_first_end.y);
-                    log_debug(tt::LogOp, "mcast first group size: {}", mcast_group_first.size() - 1);
-                }
-                if (!mcast_group_last.empty()) {
-                    CoreCoord mcast_last_start = device->worker_core_from_logical_core(mcast_group_last.front());
-                    CoreCoord mcast_last_end = device->worker_core_from_logical_core(mcast_group_last.back());
-
-                    if (reader_noc == NOC::NOC_1) {
-                        std::swap(mcast_start, mcast_end);
-                    }
-                    mcast_sender_args.push_back(mcast_last_start.x);
-                    mcast_sender_args.push_back(mcast_last_start.y);
-                    mcast_sender_args.push_back(mcast_last_end.x);
-                    mcast_sender_args.push_back(mcast_last_end.y);
-                    mcast_sender_args.push_back(mcast_group_last.size());
-
-                    log_debug(
-                        tt::LogOp,
-                        "mcast last group start coord: {} {} end coord: {} {}",
-                        mcast_last_start.x,
-                        mcast_last_start.y,
-                        mcast_last_end.x,
-                        mcast_last_end.y);
-                    log_debug(tt::LogOp, "mcast last group size: {}", mcast_group_last.size());
-                }
-
                 // add all coords within a group
-                std::vector<uint32_t> mcast_noc_xy;
-                mcast_noc_xy.reserve(group.size() * 2);
                 for (const auto& gcore : group) {
                     CoreCoord coord = device->worker_core_from_logical_core(gcore);
-                    mcast_noc_xy.push_back(coord.x);
+                    reader_mcast_args.push_back(coord.x);
                 }
                 for (const auto& gcore : group) {
                     CoreCoord coord = device->worker_core_from_logical_core(gcore);
-                    mcast_noc_xy.push_back(coord.y);
+                    reader_mcast_args.push_back(coord.y);
                 }
-                mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());
-                reader_mcast_sender_desc.runtime_args.emplace_back(core, std::move(mcast_sender_args));
+            }
+            for (const auto& mcast : group_mcasts) {
+                mcast.append_runtime_args_to(reader_mcast_args, core);
+            }
+            if (j == 0) {  // mcast sender
+                reader_mcast_sender_desc.runtime_args.emplace_back(core, std::move(reader_mcast_args));
 
             } else {  // mcast receiver
                 log_debug(tt::LogOp, "mcast receiver receive from coord: {} {}", group.front().x, group.front().y);
-                std::vector<uint32_t> mcast_receiver_args;
-                mcast_receiver_args.push_back(device->worker_core_from_logical_core(group.front()).x);
-                mcast_receiver_args.push_back(device->worker_core_from_logical_core(group.front()).y);
-                reader_mcast_receiver_desc.runtime_args.emplace_back(core, std::move(mcast_receiver_args));
+                reader_mcast_receiver_desc.runtime_args.emplace_back(core, std::move(reader_mcast_args));
             }
         }
     }

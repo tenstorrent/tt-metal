@@ -269,6 +269,21 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         writer_noc = NOC::NOC_1;
     }
 
+    std::optional<DistributedLayerNormMcast> distributed_mcast;
+    if (is_pre_all_gather || is_post_all_gather) {
+        distributed_mcast.emplace(
+            device,
+            is_post_all_gather ? core_ranges.mcast_dest_cores : grid.shard_spec.grid,
+            core_ranges.start_core,
+            is_post_all_gather,
+            grid.mcast_1d,
+            grid.row_wise,
+            grid.use_two_stage_reduce,
+            reader_noc,
+            reduce_sender_semaphore_id,
+            reduce_receiver_semaphore_id);
+    }
+
     // Build compile-time args using helper
     CompileTimeArgsContext ct_ctx{
         .reduce_receiver_semaphore_id = reduce_receiver_semaphore_id,
@@ -277,6 +292,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .grid = &grid,
         .workers = &workers,
         .core_ranges = &core_ranges,
+        .distributed_mcast = distributed_mcast ? &*distributed_mcast : nullptr,
         .block_ht = block_ht,
         .block_wt = block_wt,
         .subblock_wt = subblock_wt,
@@ -307,7 +323,10 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .eps = eps,
         .per_core_recip_lut_size = block_w,
         .tile_width = tile_width};
-    auto compile_time_args = CompileTimeArgs::build(ct_ctx);
+    const auto reader_kernel_variant = is_pre_all_gather    ? ReaderKernelVariant::PreAllGather
+                                       : is_post_all_gather ? ReaderKernelVariant::PostAllGather
+                                                            : ReaderKernelVariant::Sharded;
+    auto compile_time_args = CompileTimeArgs::build(ct_ctx, reader_kernel_variant);
 
     // Pack eps for later use
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
@@ -377,6 +396,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .grid = grid,
         .workers = workers,
         .core_ranges = core_ranges,
+        .distributed_mcast = distributed_mcast ? &*distributed_mcast : nullptr,
         .mcast_noc_x = std::move(mcast_noc_x),
         .mcast_noc_y = std::move(mcast_noc_y),
         .packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv, bfloat_cinv}),

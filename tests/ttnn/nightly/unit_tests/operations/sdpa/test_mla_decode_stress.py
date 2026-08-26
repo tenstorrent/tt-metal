@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
-from models.common.utility_functions import is_wormhole_b0
 import ttnn
 from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import (
     run_flash_mla_decode_impl,
@@ -49,9 +50,8 @@ def create_replicated_q_shard_spec(device, batch, nh, d, num_cores_per_head=4):
     )
 
 
-@pytest.mark.parametrize("batch", [4])
+@pytest.mark.parametrize("batch,nh", [(4, 128), (8, 64)])
 @pytest.mark.parametrize("seq_len", [1 * 1024])
-@pytest.mark.parametrize("nh", [128])
 @pytest.mark.parametrize("nkv", [1])
 @pytest.mark.parametrize("kv_lora_rank", [512])
 @pytest.mark.parametrize("d_rope", [64])
@@ -97,9 +97,7 @@ def test_flash_mla_decode_stress(
         )
 
     q_mem_config = (
-        create_replicated_q_shard_spec(device, batch, nh, kv_lora_rank + d_rope, 4)
-        if q_custom_shard and is_wormhole_b0()
-        else None
+        create_replicated_q_shard_spec(device, batch, nh, kv_lora_rank + d_rope, 4) if q_custom_shard else None
     )
 
     run_flash_mla_decode_impl(
@@ -118,6 +116,9 @@ def test_flash_mla_decode_stress(
         block_size,
         reuse_k,
         max_cores_per_head_batch,
+        compute_grid_size=(8, 8) if q_custom_shard else None,
+        num_iters=int(os.environ.get("MCAST_PERF_ITERATIONS", "3")),
+        validate=os.environ.get("MCAST_PERF_SKIP_VALIDATION") != "1",
     )
 
     ttnn.ReadDeviceProfiler(device)

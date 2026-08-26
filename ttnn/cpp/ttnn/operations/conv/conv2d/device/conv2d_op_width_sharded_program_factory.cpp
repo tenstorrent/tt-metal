@@ -19,6 +19,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn::prim {
@@ -376,23 +377,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         .initial_value = 0,  // 0 == INVALID
     });
 
-    CoreCoord act_mcast_start_core_logical(0, 0);
-    CoreCoord act_mcast_end_core_logical(all_cores.bounding_box().end_coord.x, all_cores.bounding_box().end_coord.y);
-    auto act_mcast_start = device->worker_core_from_logical_core(act_mcast_start_core_logical);
-    auto act_mcast_end = device->worker_core_from_logical_core(act_mcast_end_core_logical);
-
-    // Swap multicast coordinates if using NOC_1 for proper addressing
-    // NOC_0 and NOC_1 have inverted coordinate systems on some architectures
-    if (act_noc == tt::tt_metal::NOC::NOC_1) {
-        std::swap(act_mcast_start, act_mcast_end);
-        log_debug(
-            tt::LogOp,
-            "Conv2D: Swapped mcast coords for NOC_1: start=({},{}), end=({},{})",
-            act_mcast_start.x,
-            act_mcast_start.y,
-            act_mcast_end.x,
-            act_mcast_end.y);
-    }
+    const CoreRangeSet all_reader_cores_set(all_reader_cores);
+    const ttnn::kernel_lib::host::Mcast2D activation_mcast(
+        device,
+        all_reader_cores_set,
+        CoreCoord{0, 0},
+        ttnn::kernel_lib::host::McastConfig{
+            .noc = act_noc,
+            .handshake = true,
+            .data_ready = ttnn::kernel_lib::host::DataReadyMode::Flag,
+            .rotating_sender = true,
+            .sem_ids = std::vector<uint32_t>{act_mcast_receiver_semaphore, act_mcast_sender_semaphore}},
+        std::max(input_num_cores, output_num_cores) - 1);
 
     TT_FATAL(act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
 
@@ -464,7 +460,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // output, READER_INDICES on the workload-scoped indices buffer) and patches
     // their addresses on cache hits — no per-op UpdateDynamicCircularBufferAddress
     // override needed.
-    const CoreRangeSet all_reader_cores_set(all_reader_cores);
     emit_cb_descriptors(cb_info, desc, all_reader_cores_set, a.buffer(), output.buffer(), conv_reader_indices_buffer);
     std::vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,                         // in0_block_w
@@ -524,12 +519,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         (uint32_t)input_num_cores,
         (uint32_t)num_blocks_act_h_per_core,
         (uint32_t)per_core_num_blocks_act_w,
-        (uint32_t)act_mcast_sender_semaphore,
-        (uint32_t)act_mcast_receiver_semaphore,
-        (uint32_t)act_mcast_start.x,
-        (uint32_t)act_mcast_start.y,
-        (uint32_t)act_mcast_end.x,
-        (uint32_t)act_mcast_end.y,
         (uint32_t)act_block_num_tiles * tt::tile_size(tilized_act_df),
         (uint32_t)output_num_cores,
         (uint32_t)all_reader_cores.size(),
@@ -539,7 +528,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index};
-
     std::vector<uint32_t> weights_kernel_compile_args = {
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,          // cb_id_weight
         act_block_w_ntiles / (filter_h * filter_w),                     // core_in_channels_ntiles
@@ -557,6 +545,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
         (uint32_t)has_bias};
 
+    activation_mcast.append_compile_time_args_to(activation_kernel_compile_args);
     if (config_tensors_in_dram) {
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         activation_kernel_compile_args.push_back(conv_reader_indices_buffer->address());  // smuggled-rta-ok
@@ -611,19 +600,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     };
 
     auto full_core_grid = device->compute_with_storage_grid_size();
-    std::vector<uint32_t> act_mcast_noc_y;
-    std::vector<uint32_t> act_mcast_noc_x;
-
-    act_mcast_noc_x.reserve(full_core_grid.x);
-    for (uint32_t core_index = 0; core_index < full_core_grid.x; core_index++) {
-        act_mcast_noc_x.push_back(device->worker_core_from_logical_core(CoreCoord(core_index, 0)).x);
-    }
-
-    act_mcast_noc_y.reserve(full_core_grid.y);
-    for (uint32_t core_index = 0; core_index < full_core_grid.y; core_index++) {
-        act_mcast_noc_y.push_back(device->worker_core_from_logical_core(CoreCoord(0, core_index)).y);
-    }
-
     tt::tt_metal::Buffer* weights_buffer = b.buffer();
     tt::tt_metal::Buffer* bias_buffer = bias ? bias->buffer() : nullptr;
     auto total_num_active_cores = std::max(input_num_cores, output_num_cores);
@@ -638,12 +614,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
             core_y,
             full_core_grid.x,  // num_cores_x
         };
-
-        // Mcast X Lookup table
-        rt_args.insert(rt_args.end(), act_mcast_noc_x.begin(), act_mcast_noc_x.end());
-
-        // Mcast Y Lookup Table
-        rt_args.insert(rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
+        activation_mcast.append_runtime_args_to(rt_args, CoreCoord(core_x, core_y));
 
         act_kernel_desc.runtime_args.emplace_back(CoreCoord(core_x, core_y), std::move(rt_args));
 

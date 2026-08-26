@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 struct RemoteCoord {
     uint32_t x;
@@ -31,17 +32,18 @@ void kernel_main() {
     constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(13);
     constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(14);
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(15);
+    constexpr uint32_t reduce_second_stage_sem_id = get_compile_time_arg_val(16);
     constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
 
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
-    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(2);
-    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(3);
     const uint32_t start_x = get_arg_val<uint32_t>(4);
     const uint32_t start_y = get_arg_val<uint32_t>(5);
 
     tt_l1_ptr uint32_t* in0_remote_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
     tt_l1_ptr uint32_t* in0_remote_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_x));
+
+    constexpr uint32_t operation_ct_args_end = 20;
+    constexpr uint32_t operation_rt_args_end = get_named_compile_time_arg_val("mcast_operation_rt_args");
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end> reduce_mcast_args;
 
     constexpr uint32_t dfb_ex_partial2 = tt::CBIndex::c_11;
     constexpr uint32_t dfb_ex2 = tt::CBIndex::c_12;
@@ -49,10 +51,9 @@ void kernel_main() {
     constexpr uint32_t dfb_ex2_global = tt::CBIndex::c_14;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(16));
+    Semaphore<> reduce_second_stage_sem(reduce_second_stage_sem_id);
     UnicastEndpoint remote_ep;
+    auto reduce_pipe = reduce_mcast_args.sender(noc);
 
     DataflowBuffer dfb_ex_partial2_obj(dfb_ex_partial2);
     const uint32_t single_tile_size_bytes = dfb_ex_partial2_obj.get_tile_size();
@@ -100,16 +101,7 @@ void kernel_main() {
 
                 // inc semaphore of other cores, tell other all-to-all workers to start
                 if constexpr (num_blocks > 1) {
-                    reduce_sender_sem.set(VALID);
-                    reduce_receiver_sem.wait(num_blocks - 1);
-                    reduce_receiver_sem.set(0);
-                    reduce_sender_sem.set_multicast(
-                        noc,
-                        mcast_dest_noc_start_x,
-                        mcast_dest_noc_start_y,
-                        mcast_dest_noc_end_x,
-                        mcast_dest_noc_end_y,
-                        num_blocks - 1);
+                    reduce_pipe.send_signal();
                 }
 
                 // read data from other cores

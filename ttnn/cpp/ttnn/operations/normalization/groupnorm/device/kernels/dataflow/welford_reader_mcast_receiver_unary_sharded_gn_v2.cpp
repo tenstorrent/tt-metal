@@ -11,28 +11,26 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
-    constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_sender_semaphore_id = get_compile_time_arg_val(1);
+    constexpr uint32_t num_batches = get_compile_time_arg_val(0);
 
-    constexpr uint32_t num_batches = get_compile_time_arg_val(2);
-
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(3);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(4);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(5);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(6);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(7);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(1);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(2);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(3);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(4);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(5);
 
     // These are numbers in absolute terms, on a per group, per batch without tiling
-    constexpr uint32_t block_hw = get_compile_time_arg_val(8);
-    constexpr uint32_t num_groups = get_compile_time_arg_val(9);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(10);
+    constexpr uint32_t block_hw = get_compile_time_arg_val(6);
+    constexpr uint32_t num_groups = get_compile_time_arg_val(7);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(8);
     // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16.
-    constexpr bool stats_is_fp32 = get_compile_time_arg_val(11) != 0;
+    constexpr bool stats_is_fp32 = get_compile_time_arg_val(9) != 0;
 
-    const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(1);
+    constexpr uint32_t operation_ct_args_end = 10;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0> mid_mcast_args;
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
@@ -42,8 +40,8 @@ void kernel_main() {
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
+    auto reduce_pipe = mid_mcast_args.receiver(noc);
+
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_in0(dfb_in0_id);
@@ -107,12 +105,7 @@ void kernel_main() {
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
-            // Signal to sender that our partial data is ready
-            reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
-
-            // Wait for sender to signal that it has sent the global data
-            reduce_sender_sem.wait(VALID);
-            reduce_sender_sem.set(INVALID);
+            reduce_pipe.receive();
 
             local_means_ptr += local_stride_per_group;
             local_vars_ptr += local_stride_per_group;

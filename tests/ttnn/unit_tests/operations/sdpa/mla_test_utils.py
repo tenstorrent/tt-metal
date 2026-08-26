@@ -289,10 +289,10 @@ def run_flash_mla_decode_impl(
     block_size=ttnn.TILE_SIZE,
     reuse_k=False,
     max_cores_per_head_batch=16,
+    compute_grid_size=None,
+    num_iters=3,
+    validate=True,
 ):
-    # Can't run too many iters, or run out of L1
-    num_iters = 3
-
     # Log the test parameters
     logger.debug(f"Running FlashMLA Decode with parameters: ")
     logger.debug(f"Batch: {batch}")
@@ -375,7 +375,7 @@ def run_flash_mla_decode_impl(
     padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size)
 
     sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=compute_grid_size or device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
@@ -504,10 +504,16 @@ def run_flash_mla_decode_impl(
         for i in range(num_iters):  # Check for program cache
             logger.debug(f"Running FlashMLA Decode operation iteration {i + 1}/{num_iters}")
             tt_out = run_op()
-            tt_outs.append(tt_out)
+            if validate:
+                tt_outs.append(tt_out)
+            else:
+                ttnn.deallocate(tt_out)
 
             # Increment start indices for the next iteration
             ttnn.plus_one(tt_start_indices)
+
+        if not validate:
+            return
 
         ########################
         ### Validation

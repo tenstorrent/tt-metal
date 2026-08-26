@@ -5,6 +5,7 @@
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
 #include "debug/debug.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     // This writer is for output tensor in tile format
@@ -48,12 +49,20 @@ void kernel_main() {
     constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(37) == 1;
     constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(38) == 1;
 
+    constexpr auto s_weight_args = TensorAccessorArgs<39>();
+    constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
+    constexpr uint32_t mcast_sem_args_base = s_bias_args.next_compile_time_args_offset();
     uint32_t i = 0;
-    uint32_t noop = get_arg_val<uint32_t>(i++);
+    const uint32_t noop = get_arg_val<uint32_t>(i++);
+    const uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(i++);
 
     if (noop) {
         return;
     }
+
+    constexpr uint32_t operation_runtime_args_end = 2;
+    constexpr auto weights_mcast_args =
+        dataflow_kernel_lib::McastArgs<mcast_sem_args_base, operation_runtime_args_end>();
 
     // Experimental API objects
     Noc noc;
@@ -64,19 +73,13 @@ void kernel_main() {
         }
     }
 
-    // mcast args
-    const uint32_t weights_mcast_sender_noc_x = get_arg_val<uint32_t>(i++);
-    const uint32_t weights_mcast_sender_noc_y = get_arg_val<uint32_t>(i++);
-    Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
-    Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
     DataflowBuffer dfb_weight_obj(cb_id_weight);
     DataflowBuffer dfb_bias_obj(bias_cb_id);
     DataflowBuffer dfb_act_second_obj(cb_id_act_second_reader);
     DataflowBuffer dfb_reader_indices_obj(cb_reader_indices);
     DataflowBuffer dfb_sharded_act_obj(cb_id_sharded_act);
 
-    const uint32_t remaining_tiles_to_push =
-        split_reader_enabled && activation_reuse_enabled ? get_arg_val<uint32_t>(i++) : 0;
+    auto weights_pipe = weights_mcast_args.receiver(noc);
 
     // Split reader configuration
     if constexpr (split_reader_enabled) {
@@ -174,15 +177,7 @@ void kernel_main() {
             // Receive weights
             dfb_weight_obj.reserve_back(weight_block_num_tiles);
             if (bh == 0) {
-                // Set weights semaphore value to INVALID
-                weights_mcast_receiver_sem.set(INVALID);
-
-                // Atomic increment source core counter
-                weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
-
-                // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts
-                // data)
-                weights_mcast_receiver_sem.wait(VALID);
+                weights_pipe.receive();
             }
 
             dfb_weight_obj.push_back(weight_block_num_tiles);
@@ -192,14 +187,7 @@ void kernel_main() {
             if (load_bias) {
                 dfb_bias_obj.reserve_back(bias_ntiles);
 
-                // Set weights semaphore value to INVALID
-                weights_mcast_receiver_sem.set(INVALID);
-
-                // Atomic increment source core counter
-                weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
-
-                // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                weights_mcast_receiver_sem.wait(VALID);
+                weights_pipe.receive();
 
                 dfb_bias_obj.push_back(bias_ntiles);
                 load_bias = false;
@@ -211,6 +199,5 @@ void kernel_main() {
             start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
         }
     }  // out_num_blocks_h
-
     noc.async_write_barrier();
 }

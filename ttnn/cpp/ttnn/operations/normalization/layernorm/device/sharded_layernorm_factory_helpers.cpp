@@ -454,6 +454,73 @@ KernelLayout KernelLayout::compute(
     return layout;
 }
 
+DistributedLayerNormMcast::DistributedLayerNormMcast(
+    IDevice* device,
+    const CoreRangeSet& grid,
+    CoreCoord global_sender,
+    bool is_post_allgather,
+    bool mcast_1d,
+    bool row_wise,
+    bool use_two_stage_reduce,
+    NOC noc,
+    uint32_t data_ready_sem_id,
+    uint32_t consumer_ready_sem_id) :
+    bbox_(grid.bounding_box()), per_line_(is_post_allgather && !mcast_1d), row_wise_(row_wise) {
+    const ttnn::kernel_lib::host::McastConfig config{
+        .noc = noc,
+        .handshake = !is_post_allgather,
+        .sem_ids = std::vector<uint32_t>{data_ready_sem_id, consumer_ready_sem_id}};
+
+    if (!is_post_allgather && use_two_stage_reduce) {
+        channels_.emplace_back(ttnn::kernel_lib::host::Mcast1D(
+            device,
+            grid,
+            row_wise ? ttnn::kernel_lib::host::Mcast1DShape::PerRow : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
+            /*starting_sender_index=*/0,
+            config));
+    } else if (!per_line_) {
+        channels_.emplace_back(ttnn::kernel_lib::host::Mcast2D(device, grid, global_sender, config));
+    } else {
+        const uint32_t num_lines =
+            row_wise_ ? bbox_.end_coord.y - bbox_.start_coord.y + 1 : bbox_.end_coord.x - bbox_.start_coord.x + 1;
+        channels_.reserve(num_lines);
+        for (uint32_t line = 0; line < num_lines; ++line) {
+            const CoreCoord sender = row_wise_ ? CoreCoord{bbox_.start_coord.x, bbox_.start_coord.y + line}
+                                               : CoreCoord{bbox_.start_coord.x + line, bbox_.start_coord.y};
+            CoreRange receivers(sender, sender);
+            if (row_wise_ && bbox_.start_coord.x < bbox_.end_coord.x) {
+                receivers = CoreRange({bbox_.start_coord.x + 1, sender.y}, {bbox_.end_coord.x, sender.y});
+            } else if (!row_wise_ && bbox_.start_coord.y < bbox_.end_coord.y) {
+                receivers = CoreRange({sender.x, bbox_.start_coord.y + 1}, {sender.x, bbox_.end_coord.y});
+            }
+            channels_.emplace_back(ttnn::kernel_lib::host::Mcast2D(device, CoreRangeSet(receivers), sender, config));
+        }
+    }
+    const uint32_t expected_active =
+        use_two_stage_reduce ? (row_wise ? bbox_.grid_size().x : bbox_.grid_size().y) - 1 : bbox_.size() - 1;
+    TT_FATAL(is_post_allgather || ack_count() == expected_active, "LayerNorm multicast fan-out mismatch");
+}
+
+const DistributedLayerNormMcast::Channel& DistributedLayerNormMcast::channel(const CoreCoord& core) const {
+    if (!per_line_) {
+        return channels_.front();
+    }
+    const uint32_t line = row_wise_ ? core.y - bbox_.start_coord.y : core.x - bbox_.start_coord.x;
+    return channels_.at(line);
+}
+
+std::vector<uint32_t> DistributedLayerNormMcast::compile_time_args() const {
+    return std::visit([](const auto& channel) { return channel.compile_time_args(); }, channels_.front());
+}
+
+std::vector<uint32_t> DistributedLayerNormMcast::runtime_args(const CoreCoord& core) const {
+    return std::visit([&core](const auto& channel) { return channel.runtime_args(core); }, channel(core));
+}
+
+uint32_t DistributedLayerNormMcast::ack_count() const {
+    return std::visit([](const auto& channel) { return channel.ack_count(); }, channels_.front());
+}
+
 //////////////////////////////////////////////////////////////////////////////
 // Kernel paths, defines, and compile-time args helpers
 //////////////////////////////////////////////////////////////////////////////
@@ -610,17 +677,21 @@ CBSizeParams::Sizes CBSizeParams::compute() const {
     return sizes;
 }
 
-CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
-    CompileTimeArgs args;
+namespace {
 
+struct ReaderCompileTimeArgs {
+    std::vector<uint32_t> sender;
+    std::vector<uint32_t> receiver_all_to_all;
+    std::vector<uint32_t> receiver;
+};
+
+ReaderCompileTimeArgs build_common_reader_compile_time_args(const CompileTimeArgsContext& ctx) {
     const auto& grid = *ctx.grid;
     const auto& workers = *ctx.workers;
     const auto& core_ranges = *ctx.core_ranges;
 
-    uint32_t num_subblocks_w = ctx.block_wt / ctx.subblock_wt;
-
-    // Reader sender compile time args
-    args.reader_sender = {
+    ReaderCompileTimeArgs args;
+    args.sender = {
         ctx.reduce_receiver_semaphore_id,
         ctx.reduce_sender_semaphore_id,
         grid.num_blocks,
@@ -642,8 +713,7 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         (uint32_t)ctx.use_welford,
         core_ranges.num_mcast_dests};
 
-    // Reader receiver all-to-all compile time args
-    args.reader_receiver_all_to_all = {
+    args.receiver_all_to_all = {
         ctx.reduce_receiver_semaphore_id,
         ctx.reduce_sender_semaphore_id,
         grid.num_blocks,
@@ -662,8 +732,7 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         (uint32_t)ctx.rms_norm,
         (uint32_t)ctx.use_welford};
 
-    // Reader receiver (not all-to-all) compile time args
-    args.reader_receiver = {
+    args.receiver = {
         ctx.reduce_receiver_semaphore_id,
         ctx.reduce_sender_semaphore_id,
         grid.num_blocks,
@@ -681,6 +750,40 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         ctx.reduce_second_stage_semaphore_id,
         (uint32_t)ctx.rms_norm,
         (uint32_t)ctx.use_welford};
+
+    return args;
+}
+
+ReaderCompileTimeArgs build_distributed_reader_compile_time_args(const CompileTimeArgsContext& ctx) {
+    TT_FATAL(ctx.distributed_mcast != nullptr, "Distributed reader arguments require a multicast wire");
+    auto args = build_common_reader_compile_time_args(ctx);
+    ctx.distributed_mcast->append_compile_time_args_to(args.sender);
+    ctx.distributed_mcast->append_compile_time_args_to(args.receiver_all_to_all);
+    ctx.distributed_mcast->append_compile_time_args_to(args.receiver);
+    return args;
+}
+
+ReaderCompileTimeArgs build_sharded_reader_compile_time_args(const CompileTimeArgsContext& ctx) {
+    return build_common_reader_compile_time_args(ctx);
+}
+
+}  // namespace
+
+CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx, ReaderKernelVariant reader_variant) {
+    CompileTimeArgs args;
+    const auto& workers = *ctx.workers;
+
+    ReaderCompileTimeArgs reader_args;
+    switch (reader_variant) {
+        case ReaderKernelVariant::PreAllGather:
+        case ReaderKernelVariant::PostAllGather: reader_args = build_distributed_reader_compile_time_args(ctx); break;
+        case ReaderKernelVariant::Sharded: reader_args = build_sharded_reader_compile_time_args(ctx); break;
+    }
+    args.reader_sender = std::move(reader_args.sender);
+    args.reader_receiver_all_to_all = std::move(reader_args.receiver_all_to_all);
+    args.reader_receiver = std::move(reader_args.receiver);
+
+    uint32_t num_subblocks_w = ctx.block_wt / ctx.subblock_wt;
 
     // Writer sender compile time args
     args.writer_sender = {
@@ -971,12 +1074,19 @@ void add_kernel_descriptors(
         compute_cb_named_args);
 
     // Reader sender kernel
+    const uint32_t sender_operation_rt_args =
+        grid.mcast_1d ? 6 + core_ranges.num_cores_x_mcast + core_ranges.num_cores_y_mcast
+                      : 7 + (grid.row_wise ? core_ranges.num_cores_x_mcast : core_ranges.num_cores_y_mcast);
+    const uint32_t receiver_all_to_all_operation_rt_args =
+        grid.mcast_1d ? 5 + core_ranges.num_cores_x_mcast + core_ranges.num_cores_y_mcast
+                      : 6 + (grid.row_wise ? core_ranges.num_cores_x_mcast : core_ranges.num_cores_y_mcast);
     KernelDescriptor reader_sender_kernel_desc;
     reader_sender_kernel_desc.kernel_source = kernel_config.reader_sender_path;
     reader_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_sender_kernel_desc.core_ranges = core_ranges.sender_cores;
     reader_sender_kernel_desc.compile_time_args = std::move(kernel_config.reader_sender_ct_args);
     reader_sender_kernel_desc.named_compile_time_args = reader_cb_named_args;
+    reader_sender_kernel_desc.named_compile_time_args.emplace_back("mcast_operation_rt_args", sender_operation_rt_args);
     reader_sender_kernel_desc.defines = std::move(kernel_config.reader_sender_defines);
     reader_sender_kernel_desc.runtime_args = std::move(kernel_config.reader_sender_rt_args);
     reader_sender_kernel_desc.config = DataMovementConfigDescriptor{
@@ -994,6 +1104,8 @@ void add_kernel_descriptors(
         reader_receiver_all_to_all_kernel_desc.compile_time_args =
             std::move(kernel_config.reader_receiver_all_to_all_ct_args);
         reader_receiver_all_to_all_kernel_desc.named_compile_time_args = reader_cb_named_args;
+        reader_receiver_all_to_all_kernel_desc.named_compile_time_args.emplace_back(
+            "mcast_operation_rt_args", receiver_all_to_all_operation_rt_args);
         reader_receiver_all_to_all_kernel_desc.defines = kernel_config.reader_receiver_defines;
         reader_receiver_all_to_all_kernel_desc.runtime_args =
             std::move(kernel_config.reader_receiver_all_to_all_rt_args);
@@ -1012,6 +1124,7 @@ void add_kernel_descriptors(
         reader_receiver_kernel_desc.core_ranges = core_ranges.not_all_to_all_workers;
         reader_receiver_kernel_desc.compile_time_args = std::move(kernel_config.reader_receiver_ct_args);
         reader_receiver_kernel_desc.named_compile_time_args = reader_cb_named_args;
+        reader_receiver_kernel_desc.named_compile_time_args.emplace_back("mcast_operation_rt_args", 7);
         reader_receiver_kernel_desc.defines = std::move(kernel_config.reader_receiver_defines);
         reader_receiver_kernel_desc.runtime_args = std::move(kernel_config.reader_receiver_rt_args);
         reader_receiver_kernel_desc.config = DataMovementConfigDescriptor{
@@ -1572,6 +1685,9 @@ std::vector<uint32_t> build_reader_sender_args(
             args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
         }
     }
+    if (ctx.distributed_mcast != nullptr) {
+        ctx.distributed_mcast->append_runtime_args_to(args, core);
+    }
     return args;
 }
 
@@ -1611,10 +1727,14 @@ std::vector<uint32_t> build_reader_receiver_all_to_all_args(
             args.insert(args.end(), ctx.mcast_noc_y.begin(), ctx.mcast_noc_y.end());
         }
     }
+    if (ctx.distributed_mcast != nullptr) {
+        ctx.distributed_mcast->append_runtime_args_to(args, core);
+    }
     return args;
 }
 
-std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(const CoreIndices& idx, const RuntimeArgsContext& ctx) {
+std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(
+    const CoreCoord& core, const CoreIndices& idx, const RuntimeArgsContext& ctx) {
     std::vector<uint32_t> args;
     args.reserve(7);
     args.push_back(false);  // is_last_all_to_all_worker
@@ -1634,6 +1754,9 @@ std::vector<uint32_t> build_reader_receiver_not_all_to_all_args(const CoreIndice
             args.push_back(ctx.mcast_noc_x[idx.height_index]);
             args.push_back(ctx.mcast_noc_y[0]);
         }
+    }
+    if (ctx.distributed_mcast != nullptr) {
+        ctx.distributed_mcast->append_runtime_args_to(args, core);
     }
     return args;
 }
@@ -1729,7 +1852,7 @@ RuntimeArgsResult RuntimeArgsResult::build(
             auto reader_args = build_reader_receiver_all_to_all_args(core, idx, ctx);
             result.reader_receiver_all_to_all.emplace_back(core, reader_args);
         } else {
-            auto reader_args = build_reader_receiver_not_all_to_all_args(idx, ctx);
+            auto reader_args = build_reader_receiver_not_all_to_all_args(core, idx, ctx);
             result.reader_receiver.emplace_back(core, reader_args);
         }
 

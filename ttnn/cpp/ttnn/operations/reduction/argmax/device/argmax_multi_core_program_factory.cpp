@@ -3,6 +3,7 @@
 
 #include "argmax_device_operation.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
+#include "ttnn/kernel_lib/host/mcast_host.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
@@ -137,24 +138,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
  *    - cores1 handles red_dim_units1 elements
  *    - Each core gets a minimum of `min_red_dim_units_per_core` elements to process, except the last core
  *
- * 2. Core Layout:
- *    - Cores are arranged in a grid pattern
- *    - Example for 4x4 grid:
- *
- *      +---+---+---+---+
- *      |R0 |W1 |W2 |W3 |
- *      +---+---+---+---+
- *      |W4 |W5 |W6 |W7 |
- *      +---+---+---+---+
- *      |W8 |W9 |W10|W11|
- *      +---+---+---+---+
- *      |W12|W13|W14|W15|
- *      +---+---+---+---+
- *
- *    Where R0 is reduce core, W* are worker cores
- *    There may be two grids (based on the number of cores)
- *
- *    Refer to the kernel code for info on compile time args and runtime args
+ * Core 0 is the reducer. At most two dense worker rectangles participate.
  */
 ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value) {
@@ -181,7 +165,7 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     // Last dimension in output i.e. the dim left after reduction
     const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
-    const tt::tt_metal::IDevice* device = &output.mutable_device();
+    tt::tt_metal::IDevice* device = &output.mutable_device();
 
     const auto src_is_dram = input.mesh_buffer().device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
 
@@ -280,22 +264,17 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
 
-    // Get physical coordinates of the reduce core that collates the intermediate outputs
+    // Get the reduce core that collates the intermediate outputs
     const uint32_t reduce_core_id = 0;  // We can do perf optimization by tuning this in the future
     const auto cores = corerange_to_cores(all_cores, num_total_cores, true);
-    const auto reduce_core = device->worker_core_from_logical_core(cores.at(reduce_core_id));
+    const auto reduce_core_logical = cores.at(reduce_core_id);
+    const auto reduce_core = device->worker_core_from_logical_core(reduce_core_logical);
 
-    // Get first and last core's coordinates for the at max two groups of cores in all_cores
+    // The reducer starts every k > 0 round over two independent control wires. Rectangle 0 contains
+    // the reducer, while rectangle 1 (when present) has the reducer as a separate sender.
     const auto group0 = all_cores.ranges().at(0);
-    const auto group1 = all_cores.size() > 1 ? all_cores.ranges().at(1) : CoreRange(CoreCoord(0, 0), CoreCoord(0, 0));
-
-    const auto start_core0 = device->worker_core_from_logical_core(group0.start_coord);
-    const auto end_core0 = device->worker_core_from_logical_core(group0.end_coord);
-    const auto start_core1 = device->worker_core_from_logical_core(group1.start_coord);
-    const auto end_core1 = device->worker_core_from_logical_core(group1.end_coord);
-
-    const auto num_cores_range0 = group0.size();
-    const auto num_cores_range1 = all_cores.size() > 1 ? group1.size() : 0;
+    const auto group1 =
+        all_cores.size() > 1 ? all_cores.ranges().at(1) : CoreRange(reduce_core_logical, reduce_core_logical);
 
     // Allocate two semaphores for synchronization (cores -> reducer core) and (reducer core -> cores)
     const uint32_t start_sem_idx = 0;
@@ -306,6 +285,14 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
         .core_ranges = all_cores,
         .initial_value = 0,
     });
+    const ttnn::kernel_lib::host::McastConfig start_mcast_config{
+        .handshake = false,
+        .data_ready = ttnn::kernel_lib::host::DataReadyMode::Counter,
+        .sem_ids = std::vector<uint32_t>{start_sem_idx}};
+    const ttnn::kernel_lib::host::Mcast2D group0_start_mcast(
+        device, CoreRangeSet(group0), reduce_core_logical, start_mcast_config);
+    const ttnn::kernel_lib::host::Mcast2D group1_start_mcast(
+        device, CoreRangeSet(group1), reduce_core_logical, start_mcast_config);
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = done_sem_idx,
         .core_type = tt::CoreType::WORKER,
@@ -356,22 +343,13 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
         reduce_core_id,
         static_cast<uint32_t>(reduce_core.x),
         static_cast<uint32_t>(reduce_core.y),
-        // end comes before start for NOC1
-        static_cast<uint32_t>(end_core0.x),
-        static_cast<uint32_t>(end_core0.y),
-        static_cast<uint32_t>(start_core0.x),
-        static_cast<uint32_t>(start_core0.y),
-        static_cast<uint32_t>(end_core1.x),
-        static_cast<uint32_t>(end_core1.y),
-        static_cast<uint32_t>(start_core1.x),
-        static_cast<uint32_t>(start_core1.y),
-        static_cast<uint32_t>(num_cores_range0),
-        static_cast<uint32_t>(num_cores_range1),
-        start_sem_idx,
+        num_cores0,
         done_sem_idx,
     };
     tt::tt_metal::TensorAccessorArgs(input).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output).append_to(reader_compile_args);
+    group0_start_mcast.append_compile_time_args_to(reader_compile_args);
+    group1_start_mcast.append_compile_time_args_to(reader_compile_args);
 
     KernelDescriptor reader_desc0;
     reader_desc0.kernel_source =
@@ -391,15 +369,18 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     // Refer to the kernel code for explanation of the args
     for (uint32_t i = 0; i < num_cores0; ++i) {
         const CoreCoord& core = cores_coords0.at(i);
-        reader_desc0.emplace_runtime_args(
-            core,
-            {input,
-             output,
-             i,
-             static_cast<uint32_t>(i * src_read_size0),
-             i * red_dim_units0,
-             static_cast<uint32_t>((i == num_cores0 - 1) ? src_read_size_last0 : src_read_size0),
-             (i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0});
+        KernelDescriptor::RTArgList reader_runtime_args;
+        reader_runtime_args.push_back(input);
+        reader_runtime_args.push_back(output);
+        reader_runtime_args.push_back(i);
+        reader_runtime_args.push_back(static_cast<uint32_t>(i * src_read_size0));
+        reader_runtime_args.push_back(i * red_dim_units0);
+        reader_runtime_args.push_back(
+            static_cast<uint32_t>((i == num_cores0 - 1) ? src_read_size_last0 : src_read_size0));
+        reader_runtime_args.push_back((i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0);
+        group0_start_mcast.append_runtime_args_to(reader_runtime_args, core);
+        group1_start_mcast.append_runtime_args_to(reader_runtime_args, core);
+        reader_desc0.emplace_runtime_args(core, reader_runtime_args);
     }
 
     desc.kernels.push_back(std::move(reader_desc0));
@@ -421,15 +402,18 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
 
         for (uint32_t i = 0; i < num_cores1; ++i) {
             const CoreCoord& core = cores_coords1.at(i);
-            reader_desc1.emplace_runtime_args(
-                core,
-                {input,
-                 output,
-                 static_cast<uint32_t>(num_cores0 + i),
-                 static_cast<uint32_t>(src_offset1 + (i * src_read_size1)),
-                 red_dim_offset1 + (i * red_dim_units1),
-                 static_cast<uint32_t>((i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1),
-                 (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
+            KernelDescriptor::RTArgList reader_runtime_args;
+            reader_runtime_args.push_back(input);
+            reader_runtime_args.push_back(output);
+            reader_runtime_args.push_back(static_cast<uint32_t>(num_cores0 + i));
+            reader_runtime_args.push_back(static_cast<uint32_t>(src_offset1 + (i * src_read_size1)));
+            reader_runtime_args.push_back(red_dim_offset1 + (i * red_dim_units1));
+            reader_runtime_args.push_back(
+                static_cast<uint32_t>((i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1));
+            reader_runtime_args.push_back((i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1);
+            group0_start_mcast.append_runtime_args_to(reader_runtime_args, core);
+            group1_start_mcast.append_runtime_args_to(reader_runtime_args, core);
+            reader_desc1.emplace_runtime_args(core, reader_runtime_args);
         }
 
         desc.kernels.push_back(std::move(reader_desc1));
