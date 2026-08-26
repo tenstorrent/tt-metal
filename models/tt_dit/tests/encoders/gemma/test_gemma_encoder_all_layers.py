@@ -19,6 +19,7 @@ import gc
 
 import pytest
 import torch
+from huggingface_hub.constants import HF_HUB_CACHE
 from loguru import logger
 from safetensors.torch import load_file
 
@@ -56,9 +57,9 @@ def _gemma_path() -> str:
     explicit = os.environ.get("GEMMA_PATH")
     if explicit:
         return explicit
-    cands = glob.glob(
-        os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/")
-    )
+    # HF_HUB_CACHE resolves HF_HUB_CACHE / HF_HOME / the default. Hardcoding ~/.cache/huggingface
+    # here made this unfindable in CI, which points HF_HUB_CACHE at the shared weights mount.
+    cands = glob.glob(os.path.join(HF_HUB_CACHE, "models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/"))
     if cands:
         return cands[0].rstrip("/")
     return "google/gemma-3-12b-it-qat-q4_0-unquantized"

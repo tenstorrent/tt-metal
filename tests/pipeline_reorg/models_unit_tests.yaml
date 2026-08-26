@@ -972,7 +972,13 @@
     export DIT_UNIT_TEST=1  # read at collection time by t5/test_t5_full, umt5/test_umt5, clip/test_clip_full_projection
     # No -k: params needing more than 8 devices skip themselves in the mesh_device fixture.
     # -rs keeps those skip reasons visible so a green leg can be told from one that ran nothing.
-    pytest --timeout 10000 -rs --durations=0 models/tt_dit/tests/encoders/
+    # mistral3 is excluded: it loads black-forest-labs/FLUX.2-dev, a manually gated repo that CI's
+    # HF_TOKEN has no access to, so all 13 of its cases fail with a 403 GatedRepoError. This is an
+    # access problem, not a caching one -- MLPerf write access does not help.
+    # TODO(#48144): get the CI account added to the FLUX.2-dev allowlist, then drop the --ignore.
+    pytest --timeout 10000 -rs --durations=0 \
+      --ignore=models/tt_dit/tests/encoders/mistral3 \
+      models/tt_dit/tests/encoders/
   model: dit-encoders
   skus:
     wh_llmbox:
