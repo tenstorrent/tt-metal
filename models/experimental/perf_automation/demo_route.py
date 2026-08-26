@@ -19,7 +19,7 @@ def main(argv):
     if argv:
         prof_path = Path(argv[0]) / "profiles" / "baseline_profile.json"
     else:
-        cands = sorted(glob.glob("runs/2026-*/profiles/baseline_profile.json"))
+        cands = sorted(glob.glob("runs/[0-9][0-9][0-9][0-9]-*/profiles/baseline_profile.json"))
         if not cands:
             print("no run with a baseline_profile.json — run the Before Loop first")
             return 1
