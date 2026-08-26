@@ -332,7 +332,7 @@ models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_dpr
     env:
       TT_METAL_ENV: dev
       TT_METAL_SLOW_DISPATCH_MODE: 1
-      PYTEST_TIMEOUT: 1200
+      PYTEST_ADDOPTS: "--timeout=1200"
 
 models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_strided_reduce.py:
   - runner: pytest
