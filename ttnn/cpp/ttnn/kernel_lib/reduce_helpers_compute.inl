@@ -221,10 +221,10 @@ ALWI void reload_accumulator_if_needed(
     uint32_t input_dfb_id,
     uint32_t scaler_dfb_id,
     const AccumulateT& accumulate,
-    uint32_t num_tiles = 1) {
+    uint32_t dest_chunk_size = 1) {
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first
-            accum_dfb.wait_front(num_tiles);
+            accum_dfb.wait_front(dest_chunk_size);
             constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, is_sfpu>();
             const uint32_t prev_srca_cb = swap_operands ? scaler_dfb_id : input_dfb_id;
 
@@ -245,10 +245,10 @@ ALWI void reload_accumulator_if_needed(
                 accumulate.config.cb_accumulator,
                 /*transpose_of_faces=*/0,
                 /*transpose_within_16x16_face=*/reload_within_face_transpose ? 1u : 0u);
-            for (uint32_t tile = 0; tile < num_tiles; ++tile) {
+            for (uint32_t tile = 0; tile < dest_chunk_size; ++tile) {
                 copy_tile(accumulate.config.cb_accumulator, tile, accumulate.config.dst_index + tile);
             }
-            accum_dfb.pop_front(num_tiles);
+            accum_dfb.pop_front(dest_chunk_size);
 
             // CRITICAL: Re-init after copy_tile corrupts SRCA config
             // Use short version since packer config is still valid from initial init
