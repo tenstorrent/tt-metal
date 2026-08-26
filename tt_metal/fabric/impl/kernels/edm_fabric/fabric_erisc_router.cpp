@@ -1582,10 +1582,34 @@ void run_coordinated_context_switch_to_base_firmware(
         static_cast<uint32_t>(get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0])));
     if (!dbell_was_down && !link_up_now) {
         dbell_was_down = true;
+        // [#45872 R0] Raw register at the instant of down, BEFORE the handshake -- may include in-flight
+        // decrements (compare against R1 = w11, the settled post-handshake value). Also (re)seed the climb-max.
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_DOWN_RAW_ADDR) = fs22_now;    // word[4]  R0
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_RETRAIN_END_ADDR) = 0xFFFFu;  // word[5] R2 sentinel
+                                                                                              // (0xFFFF => up-edge
+                                                                                              // never fired = frozen)
+        // [#45872 QUIESCE HANDSHAKE] Before ANY measurement or the retrain, stop the connected payload sender and
+        // wait for its ACK so no packets are in flight. STOP (word[10]) + ACK (word[3]) are on-chip NoC / local
+        // L1, unaffected by the down eth link. Bounded spin: if no sender is connected (ACK never comes) or one
+        // died, we time out and proceed rather than wedging recovery. Retrain (run_routing_without_noc_sync below)
+        // is held off until this returns.
+        constexpr uint32_t HANDSHAKE_ACK_TIMEOUT_ITERS = 200000000u;
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) = 1u;  // STOP = 1 (word[10])
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_HANDSHAKE_ACK_ADDR) = 0u;       // ACK = 0 (word[3])
+        for (uint32_t k = 0; k < HANDSHAKE_ACK_TIMEOUT_ITERS; ++k) {
+            if (*reinterpret_cast<volatile uint32_t*>(MEM_AERISC_HANDSHAKE_ACK_ADDR) != 0u) {
+                break;  // sender acknowledged: channel is quiescent
+            }
+        }
+        // Quiescent (or timed out). Seed the measurements from the SETTLED register + occupancy -- re-read here,
+        // after the handshake, so w11/w12/w9 reflect the no-in-flight state (not the instant of the down edge).
+        const uint32_t fs22_q =
+            static_cast<uint32_t>(get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0])));
+        const uint32_t exact_free_q = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_CUM_ADDR);  // w8
         *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_WHILE_DOWN_ADDR) =
-            exact_free_now;                                                                    // w9 EXACT_FREE_MIN seed
-        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_AT_DOWN_ADDR) = fs22_now;  // w11 FS22_AT_DOWN
-        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_MIN_ADDR) = fs22_now;      // w12 FS22_MIN seed
+            exact_free_q;                                                                    // w9 EXACT_FREE_MIN seed
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_AT_DOWN_ADDR) = fs22_q;  // w11 FS22_AT_DOWN
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_MIN_ADDR) = fs22_q;      // w12 FS22_MIN seed
     } else if (dbell_was_down) {
         auto* ef_min = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_WHILE_DOWN_ADDR);  // w9
         if (exact_free_now < *ef_min) {
@@ -1597,13 +1621,12 @@ void run_coordinated_context_switch_to_base_firmware(
         }
         if (link_up_now) {
             dbell_was_down = false;
-            // [OPTION1] STOP flag DISABLED -- senders run to completion into the barrier so the last-packet
-            // reconcile fires in the naturally-drained state (residual = true off-by-one deficit).
-            // *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) = 1u;  // w10 STOP_FLAG = 1
-            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_LINK_DOWN_FLAG_ADDR) =
-                exact_free_now;  // w13 EXACT_FREE_AT_UP (backlog)
-            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_NEUTRAL_MIN_ADDR) =
-                tx_now;  // w14 TX_AT_UP (drain baseline)
+            // [#45872 R2] Register at retrain-finish (up-edge). Captured in-line by the router, so no observer lag
+            // -- this is the precise value at the moment the link came back, before the speedy loop resumes and
+            // the register starts climbing (that climb is tracked separately as R3 = w6).
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_RETRAIN_END_ADDR) = fs22_now;  // word[5]  R2
+            // NOTE: w13/w14 are now the read-pointer @ begin/finish (written from the speedy step). The former
+            // EXACT_FREE_AT_UP / TX_AT_UP writes here are removed to avoid clobbering them.
         }
     }
 

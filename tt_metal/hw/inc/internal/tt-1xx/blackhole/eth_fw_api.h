@@ -492,6 +492,33 @@ inline void fabric_dbg_inc_rx_pkt_count() {
 // loudbox core is exactly one link): peer_RX - this_recvd_completions == completion credits lost over the
 // link. A nonzero gap on a tail-stalled sender is the smoking gun for signature (a) (lost final completion).
 constexpr uint32_t MEM_AERISC_CRED_RECVD_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 12;
+// [#45872 QUIESCE HANDSHAKE] word[3] repurposed as the sender->router ACK. Router raises STOP (word[10]) at the
+// link-down edge and spins on this until the connected payload sender sets it to 1 (after it stops sending +
+// flushes its outstanding NoC writes), so all register/occupancy measurement happens on a quiescent channel.
+constexpr uint32_t MEM_AERISC_HANDSHAKE_ACK_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 12;  // word[3]
+// [#45872 STREAM-REG TRAJECTORY] Router-local get_ptr_val(stream 22) captured at the four regions of interest,
+// all on the quiescent channel (measurement begins only after the STOP/ACK handshake):
+//   R0 = raw register at the instant of down (pre-handshake; may include in-flight)  -> word[4]
+//   R1 = settled register at retrain-begin (post-handshake)                          -> word[11] FS22_AT_DOWN
+//   min= lowest register seen while down                                             -> word[12] FS22_MIN
+//   R2 = register at retrain-finish (up-edge)                                        -> word[5]
+//   R3 = how far it climbs back after retrain (max free_slots, retrain_count>0)      -> word[6]
+constexpr uint32_t MEM_AERISC_REG_AT_DOWN_RAW_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 16;     // word[4]  R0
+constexpr uint32_t MEM_AERISC_REG_AT_RETRAIN_END_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 20;  // word[5]  R2
+constexpr uint32_t MEM_AERISC_REG_CLIMB_MAX_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 24;       // word[6]  R3
+// [#45872 OCCUPANCY COMPARE] Router-side, both read locally in the SAME speedy iteration (true simultaneity, no
+// NoC, no shadow staleness). After the STOP/ACK handshake the sender is frozen, so:
+//   occ_true = occ_at_STOP - (local_read_counter - F0)   [counter-based: sender writes fixed, router forwards]
+//   occ_reg  = num_buffers - get_ptr_val()               [what the router reads in the stream register]
+// Amortized credits mean occ_true steps in batches -> trust the SETTLED end-of-test values, not mid-drain.
+constexpr uint32_t MEM_AERISC_OCC_TRUE_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 28;  // word[7]   counter-based occupancy
+constexpr uint32_t MEM_AERISC_OCC_REG_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 60;   // word[15]  register-based occupancy
+// [#45872 READ-POINTER] Router's sender-channel-0 read pointer (local_read_counter = packets it has forwarded)
+// latched at three points, to see how much it actually drains AFTER retrain -- counter-based, immune to the
+// register. rp_finish - rp_begin = forwards during the retrain window; rp_settled - rp_finish = post-retrain drain.
+constexpr uint32_t MEM_AERISC_RP_BEGIN_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 52;   // word[13] read ptr @ retrain-begin
+constexpr uint32_t MEM_AERISC_RP_FINISH_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 56;  // word[14] read ptr @ retrain-finish
+constexpr uint32_t MEM_AERISC_RP_SETTLED_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 24;  // word[6]  read ptr live (settled)
 
 // [RECEIVER-SIDE PROBES] Full receiver-side flow-control state, so we can see exactly where completions
 // live (which channel, and the local completion_counter). All written by ERISC1 (receiver) from the

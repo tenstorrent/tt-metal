@@ -1185,49 +1185,71 @@ struct SenderKernelTrafficConfig {
         }
     }
 
+    // [#45872 QUIESCE HANDSHAKE] Read the router STOP flag (word[10] @ 0x6F220) over the on-chip NoC. On-chip
+    // path, so it works even while the eth link is down.
+    FORCE_INLINE bool stop_flag_is_set() {
+        auto* sc = static_cast<EdmSenderT*>(connection_ptr_);
+        const uint8_t rnoc = get_fabric_worker_noc();
+        const uint32_t scratch = payload_buffer_->get_physical_address();
+        noc_async_read(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F220u, rnoc), scratch, sizeof(uint32_t), rnoc);
+        noc_async_read_barrier(rnoc);
+        invalidate_l1_cache();
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch) != 0u;
+    }
+
+    // [#45872 QUIESCE HANDSHAKE] Called once STOP is seen. The sender's single, clean stream-register reading, at
+    // retrain-start: FLUSH -> STABILIZE-POLL the register (so any in-flight doorbell decrement has landed) ->
+    // record the register (w20) and the in-flight-immune counter occupancy (w8) as an aligned snapshot -> ACK the
+    // router (word[3]) so it proceeds to retrain -> stop. The snapshot persists in L1 for the host SLOT dump.
+    FORCE_INLINE void quiesce_and_measure() {
+        auto* sc = static_cast<EdmSenderT*>(connection_ptr_);
+        const uint8_t rnoc = get_fabric_worker_noc();
+        const uint32_t scratch = payload_buffer_->get_physical_address();
+        const uint32_t upd_addr = sc->edm_buffer_remote_free_slots_update_addr;
+        // (1) FLUSH: drain our nonposted payload writes to ACKED so they are not in flight.
+        noc_async_write_barrier(rnoc);
+        // (2) STABILIZE-POLL reg 297 until it stops changing (4 consecutive equal reads). The router is not
+        //     forwarding while down and we have stopped issuing, so once the register settles every in-flight
+        //     decrement (incl. the posted doorbell) has landed. Bounded. This disambiguates in-flight (settles)
+        //     from a genuinely LOST decrement (register stays above the counter).
+        uint32_t reg = 0xFFFFFFFFu, prev = 0xFFFFFFFEu, stable = 0;
+        for (uint32_t k = 0; k < 1000000u && stable < 4u; ++k) {
+            noc_async_read(
+                get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, upd_addr + 0x6Cu, rnoc), scratch, sizeof(uint32_t), rnoc);
+            noc_async_read_barrier(rnoc);
+            invalidate_l1_cache();
+            reg = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch) & 0x1FFFFu;
+            if (reg == prev) {
+                stable++;
+            } else {
+                stable = 0;
+                prev = reg;
+            }
+        }
+        const uint32_t occ_free = sc->get_num_free_write_slots();  // counter-based, in-flight-immune reference
+        // (3) Aligned snapshot: sender-side register (stabilized) -> word[22]; counter occupancy (free) -> word[8].
+        // NOTE word[22] (not w20): w20 is still written every iter by the KEPT set_next_slot_content (SLOT_ADDR).
+        noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 88u, rnoc), reg, 0xf, rnoc);
+        noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 32u, rnoc), occ_free, 0xf, rnoc);
+        noc_async_writes_flushed();
+        // (4) ACK the router (word[3]) -> it proceeds to retrain.
+        noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 12u, rnoc), 1u, 0xf, rnoc);
+        noc_async_writes_flushed();
+        // (5) Stop: end the send loop; the snapshot persists in L1 for the host SLOT dump.
+        num_packets_processed = metadata.num_packets;
+    }
+
     // Send exactly one packet per call (round-robin scheduling)
     // Returns: true if packet was sent, false if blocked (no credits)
     template <bool BENCHMARK_MODE, bool STATEFUL_NOC = false>
     bool send_one_packet() {
-        // [#45872 STOP] After the retrain the ERISC raises a stop flag (router word[10] @ 0x6F220, 16B-aligned).
-        // Halt sending so a quiescent window forms with the during-down backlog still buffered -> then
-        // occupancy (RECV_CUM - TX) shows whether the router drains it on its own. Throttled every 256 sends;
-        // the flag is read into the payload buffer (overwritten by fill_data below), keeping the read aligned.
-        if ((num_packets_processed & 0xFFu) == 0u && payload_buffer_ != nullptr) {
-            auto* sconn = static_cast<EdmSenderT*>(connection_ptr_);
-            const uint8_t rnoc = get_fabric_worker_noc();
-            const uint32_t sc = payload_buffer_->get_physical_address();
-            noc_async_read(
-                get_noc_addr(sconn->edm_noc_x, sconn->edm_noc_y, 0x6F220u, rnoc), sc, sizeof(uint32_t), rnoc);
-            noc_async_read_barrier(rnoc);
-            invalidate_l1_cache();
-            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc) != 0u) {
-                // [#45872 DRAIN-WATCH] Stop sending, but keep EXACT_FREE_LIVE (router word[8]) ALIVE so the
-                // ERISC sees the buffer drain to its EXACT final occupancy. We send nothing, but the router
-                // keeps advancing the read pointer as it forwards the backlog, so get_num_free_write_slots()
-                // (= num_buffers - (write_counter - read_counter), counter-based/EXACT for a worker) rises
-                // toward num_buffers as the buffer empties. Spin (writing w8 every 256 iters, breaking once
-                // fully drained) so the SLOT dump reads the true post-drain free-slot count -- no TX proxy,
-                // residual = num_buffers - w8 is exact and never negative.
-                auto* sc2 = static_cast<EdmSenderT*>(connection_ptr_);
-                const uint32_t nb = sc2->num_buffers_per_channel;
-                const uint64_t w8_addr = get_noc_addr(sc2->edm_noc_x, sc2->edm_noc_y, 0x6F1F8u + 32u);
-                uint32_t ef = 0;
-                for (uint32_t k = 0; k < 10000000u; ++k) {
-                    ef = sc2->get_num_free_write_slots();
-                    if ((k & 0xFFu) == 0u) {
-                        noc_inline_dw_write(w8_addr, ef);
-                        noc_async_writes_flushed();
-                    }
-                    if (ef >= nb) {
-                        break;  // fully drained
-                    }
-                }
-                noc_inline_dw_write(w8_addr, ef);  // final exact free-slot count (post-drain or at cap)
-                noc_async_writes_flushed();
-                num_packets_processed = metadata.num_packets;  // mark done -> outer send loop exits
-                return false;
-            }
+        // [#45872 QUIESCE HANDSHAKE] Poll the router STOP flag every 32 sends. When the router raises it (at the
+        // link-down edge) we flush, ACK, and go quiescent so all measurement happens with no packets in flight.
+        // NOTE: this only fires while we are actively sending; the blocked-in-wait-for-space case is handled by
+        // the STOP check inside STEP 2 below.
+        if ((num_packets_processed & 0x1Fu) == 0u && payload_buffer_ != nullptr && stop_flag_is_set()) {
+            quiesce_and_measure();
+            return false;
         }
         // STEP 1: Check credits BEFORE sending (non-benchmark mode only)
         if constexpr (!BENCHMARK_MODE) {
@@ -1247,8 +1269,20 @@ struct SenderKernelTrafficConfig {
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
             }
         } else {
-            // [TASK2] reconcile DISABLED -- plain blocking wait (baseline behaviour).
-            connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+            // [#45872 QUIESCE HANDSHAKE] STOP-aware wait for space. During the down window the router stops
+            // forwarding, the buffer fills, and we would otherwise park in a plain blocking wait -- never noticing
+            // STOP and deadlocking the router's ACK-wait. So spin on free slots, and every 1024 idle spins check
+            // STOP; if it fired while we were blocked, quiesce + ACK here instead of waiting forever.
+            {
+                auto* wsc = static_cast<EdmSenderT*>(connection_ptr_);
+                uint32_t wspins = 0;
+                while (wsc->get_num_free_write_slots() == 0u) {
+                    if (((++wspins) & 0x3FFu) == 0u && payload_buffer_ != nullptr && stop_flag_is_set()) {
+                        quiesce_and_measure();
+                        return false;
+                    }
+                }
+            }
             // STEP 3: Send packet
             if (payload_size_bytes > 0 && payload_buffer_) {
                 payload_buffer_->fill_data(metadata.seed);
