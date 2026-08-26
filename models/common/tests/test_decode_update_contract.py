@@ -77,6 +77,31 @@ def test_qwen_vl_slot_remap_moves_persistent_rope_deltas():
         assert generator.model.rope_setup.rope_deltas.tolist() == [40, 20, 30, 40]
 
 
+def test_qwen_vl_generator_forwards_slot_remap_to_shared_sampling_owner():
+    from models.demos.qwen3_vl.tt.generator import Generator as Qwen3Generator
+    from models.demos.qwen25_vl.tt.generator import Generator as Qwen25Generator
+
+    for generator_cls in (Qwen25Generator, Qwen3Generator):
+        calls = []
+        generator = SimpleNamespace(
+            _ttt_generator=SimpleNamespace(decode_forward=lambda **kwargs: calls.append(kwargs) or "output")
+        )
+
+        result = generator_cls.decode_forward(
+            generator,
+            tokens="tokens",
+            start_pos="positions",
+            slot_remap=[3, 1, 2, 3],
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+
+        assert result == "output"
+        assert calls[0]["slot_remap"] == [3, 1, 2, 3]
+
+
 def test_shared_generator_routes_slot_remap_to_exactly_one_sampling_owner():
     from models.tt_transformers.tt.generator import Generator
 
