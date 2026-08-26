@@ -163,13 +163,14 @@ ALWI void topk_xl_init() {
 /**
  * Initialize unpack/math state for topk_xl_copy_tile.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void topk_xl_copy_tile_init(std::uint32_t cbid, std::uint32_t call_line = __builtin_LINE()) {
     // TOPK_LARGE_INDICES ADDITION: the low-level copy wrapper only initializes
     // the TopK XL copy LLKs. This TTNN op enters through the standard compute
     // API, so it must also configure SRCA unpack/math state for the input CB.
     state_configure<Operand::SRCA>(cbid, call_line);
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(cbid)));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(cbid, cbid)));
+    UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(cbid)));
+    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(cbid, cbid)));
     UNPACK((llk_unpack_topk_xl_copy_init(cbid)));
     MATH((llk_math_topk_xl_copy_init(cbid)));
 }
