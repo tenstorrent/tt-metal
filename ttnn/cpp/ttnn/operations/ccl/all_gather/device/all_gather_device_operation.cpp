@@ -266,21 +266,17 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 break;
             }
             case tt::ARCH::BLACKHOLE: {
-                // Factory-vs-factory sweep, fitted on tile only. How long unicast's extra store-and-forward
-                // hop takes to pay for itself is what sets both boundaries, so a ring -- which halves that
-                // hop count by pulling from both sides -- switches far earlier than a line.
-                if (is_ring) {
-                    // Unicast wins almost everywhere. Multicast only holds on where the op is pure overhead
-                    // rather than transfer: a small volume moved as small pages.
-                    const uint64_t page = std::min(
-                        input_tensor.tensor_spec().compute_page_size_bytes(),
-                        args.output_spec.compute_page_size_bytes());
-                    use_unicast = per_link_bytes > 64 * 1024 || page > 1024;
-                } else {
-                    // One inbound link, so unicast trails until the volume is large enough for its
-                    // bandwidth edge to cover the hops. Page size does not move this boundary.
-                    use_unicast = per_link_bytes >= 512 * 1024;
-                }
+                // Factory-vs-factory sweep at 8 devices x 2 links, both factories tuned, tile and
+                // row-major. How long unicast's store-and-forward relay takes to pay for itself is what
+                // sets the boundary, so a ring -- which halves the hop count by pulling from both sides --
+                // switches about four times earlier than a line.
+                //
+                // Volume alone decides it. Page size was swept 64 B..8 KB and stripe length 2..32 chunks,
+                // both at fixed volume, and neither flipped the winner anywhere except within ~1.5% of the
+                // line boundary itself. The previous rule's `page > 1024` term forced unicast for every
+                // tile shape, which cost up to 9% on a small ring; its 512 KB line threshold cost up to
+                // 54%, because multicast still wins by a wide margin there.
+                use_unicast = per_link_bytes >= (is_ring ? 640u * 1024u : 2560u * 1024u);
                 break;
             }
             default: break;  // uncalibrated arch

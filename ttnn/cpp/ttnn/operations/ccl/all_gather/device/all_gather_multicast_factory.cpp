@@ -308,8 +308,22 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         // No run cap: the sweeps put the best run length at the hardware ceiling (7616 B), so any value
         // settable here is already above it and would only cost payload.
     } else if (arch == tt::ARCH::BLACKHOLE) {
+        // Re-swept at 8 devices x 2 links. cb_depth and the run cap were both already at their optimum --
+        // every other value measured within ~1.3% of these, which is inside the run-to-run spread.
         cb_depth = 3;
-        packets_per_cb_entry = 4;  // unicast wants 1 here; every cell was swept on its own
+        // Packets per CB entry. Four amortises the reader/sender handshake and is right almost everywhere,
+        // but on a line carrying a long stripe it is not: there the sender is already serialised per hop,
+        // and a four-packet entry just delays the first send behind three more packet loads (-6%). A ring,
+        // sending in both directions at once, wants the amortisation even at a long stripe (+6%), so the
+        // rule is line-only. Measured across stripes 4..64 at 1.3 MB..48 MB per link; the boundary sits
+        // between 16 and 32 chunks and does not move with volume.
+        bool any_ring = false;
+        for (uint32_t ax = 0; ax < 2; ++ax) {
+            any_ring = any_ring || (operation_attributes.axis_num_devices[ax] > 1 &&
+                                    tt::tt_fabric::is_ring_or_torus(operation_attributes.axis_topology[ax]));
+        }
+        const bool long_stripe = output_chunks_per_stripe >= 32;
+        packets_per_cb_entry = (!any_ring && long_stripe) ? 1 : 4;  // unicast wants its own value here
         // Past ~8 KB a run gains little packet fill but keeps the walk in one DRAM bank longer. Only chunks
         // big enough to still span a few runs are worth capping; below that the packet's own limit wins.
         run_cap_bytes = output_chunk_size >= 1024 ? 8192 : 0;

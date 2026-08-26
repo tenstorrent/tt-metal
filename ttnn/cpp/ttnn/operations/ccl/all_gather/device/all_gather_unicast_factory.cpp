@@ -259,6 +259,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     uint32_t packets_per_cb_entry = 1;
     uint32_t run_cap_bytes = 0;
     uint8_t mux_slots_per_channel = 2;
+    const uint32_t cb_depth = 2;  // two entries: one filling while the other drains.
     if (arch == tt::ARCH::WORMHOLE_B0) {
         // A second worker needs a fabric mux: 6 cores per link instead of 2, and an extra hop per packet. So
         // take one wherever it is not slower (T3000 sweep, 64 KB..1.6 GB per link) -- while the op is
@@ -278,23 +279,41 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         // No run cap: the sweeps put the best run length at the hardware ceiling (7616 B), so any value
         // settable here is already above it and would only cost payload.
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        // Fabric-bound: the link runs short of payload, so it wants more workers feeding it and whole-packet
-        // runs rather than short DRAM-friendly ones. Two ways to get there -- a line, whose inbound traffic
-        // all arrives over one link where a ring's splits over two, and a chunk big enough that only one fits
-        // a packet, leaving the rest of the packet empty.
-        const bool bulk_line = !is_ring && per_link_bytes >= 1024u * 1024u;
-        const bool half_empty_packets = 2 * output_chunk_size > packet_size;
-        const bool fabric_bound = bulk_line || half_empty_packets;
-        // A mux plus its workers only pays off once each slice has real work; below that the extra cores
-        // are pure launch cost. A line relays far more stripes per device than a ring, so its per-slice
-        // overhead is amortized much later.
-        const uint64_t mux_floor = is_ring ? 16u * 1024u : 192u * 1024u;
-        workers_per_dir = per_link_bytes < mux_floor ? 1u : (fabric_bound ? 3u : 2u);
-        packets_per_cb_entry = 1;  // a packet-sized entry keeps the writer closer behind the reader
-        // Past ~4 KB a run gains little packet fill but keeps the walk in one DRAM bank longer. Capping
-        // costs payload, so only do it where DRAM rather than the fabric is the limit.
-        run_cap_bytes = fabric_bound ? 0 : 4096;
-        // mux_slots_per_channel was not swept here; it keeps the default.
+        // Blackhole sweep, 8 devices x 2 links, tile and row-major, 8 KB..96 MB per link. Every rule below
+        // is a function of per_link_bytes alone: page size was swept from 64 B to 8 KB at fixed volume and
+        // moved none of these boundaries, and stripe length was swept from 2 to 64 chunks at fixed volume
+        // and moved none of them either. Absolute throughput does depend on both, but the choices do not.
+        //
+        // Workers per direction. Each extra worker feeds the link harder but costs a core and, past one,
+        // a mux core plus an extra NOC hop per packet. Three is where it stops paying on either topology --
+        // four was within 1% at every volume measured, and five is a clear loss. A line saturates its single
+        // inbound link much sooner than a ring, which pulls from two neighbours, so both of its floors sit
+        // lower.
+        const uint64_t two_worker_floor = is_ring ? 16u * 1024u : 48u * 1024u;
+        const uint64_t three_worker_floor = is_ring ? 2560u * 1024u : 400u * 1024u;
+        workers_per_dir =
+            per_link_bytes < two_worker_floor ? 1u : (per_link_bytes < three_worker_floor ? 2u : 3u);
+        // Packets per CB entry. A two-packet entry halves the reader/writer handshake count, which a ring
+        // wants once there is enough volume to amortise the writer trailing an extra packet behind (+1 to
+        // +5%). A line, whose per-hop relay is already serialised, loses 5-10% from that extra lag
+        // everywhere but one shape, so it keeps one.
+        packets_per_cb_entry = (is_ring && per_link_bytes >= 2u * 1024u * 1024u) ? 2u : 1u;
+        // Run cap. Capping a run costs packet fill but stops the walk parking in one DRAM bank. What decides
+        // whether that trade pays differs by topology:
+        //  - Ring: it pays once the volume is large enough for DRAM rather than latency to bind (+5 to +10%
+        //    by 24 MB per link), whatever the slice split looks like.
+        //  - Line: it tracks the slice split instead, at every volume measured from 4.7 MB per link up. An
+        //    uneven split leaves one worker holding an extra page, and it finishes last; shortening its runs
+        //    only makes that straggler slower (-3 to -4%). Split the pages evenly and the cap pays (+4 to
+        //    +6%) because no worker is behind to begin with. A ring hides the same imbalance by pulling from
+        //    two neighbours at once, which is why only the line sees it.
+        // Measured over 8 even/uneven pairs at matched volume; the predicate called the winner in all 8.
+        const bool even_split = (num_input_pages % (num_links * workers_per_dir)) == 0;
+        const bool cap_pays = is_ring ? (per_link_bytes >= 8u * 1024u * 1024u) : even_split;
+        run_cap_bytes = cap_pays ? 8192u : 0u;
+        // Two mux slots. One slot only wins where num_input_pages divides evenly by total_slices -- and it
+        // wins ~5% there against 12-18% lost when the split is uneven, so the even case is not worth taking.
+        mux_slots_per_channel = 2;
     }
 
     // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
@@ -372,9 +391,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
     chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
     uint32_t cb_page_size = chunks_per_packet * output_chunk_size;
-    // Two entries: one filling while the other drains. Deeper is perf-neutral -- the writer's fabric flush,
-    // not CB turnaround, paces the loop -- so keep the L1 instead.
-    const uint32_t cb_depth = 2;
     // Pack several packets into one CB page to reduce reader/writer sync frequency (this also raises the
     // effective CB depth). An integer multiplier preserves the whole-packet and whole-page properties above.
     // The clamp is defensive: it holds whatever packets_per_cb_entry is tuned to, including 1.
