@@ -39,12 +39,12 @@
  *      @c strided_reduce_scatter_async hardcodes 8). @c arm() asserts it against
  *      @c DEST_AUTO_LIMIT — which @c dest_helpers.hpp already derives correctly, kernel-side, from
  *      the JIT sync/accum mode. @c run_chunked() serves callers whose block genuinely exceeds DST.
- *   3. INIT HOISTING. Most of these kernels call @c add_tiles_init on every single chunk. @c arm()
+ *   3. INIT HOISTING. Most of these kernels call @c add_init on every single chunk. @c arm()
  *      programs it once and re-programs ONLY when the seeded/unseeded mode actually changes, tracked
  *      in @c programmed_seeded_ — the same hoist-but-re-establish-on-change discipline the matmul
  *      helper uses.
  *   4. THE 3-INPUT SHAPE. The terminal ring step adds THREE tensors. The idiom is
- *      @c copy_tile the seed into DST, then @c add_tiles_init(..., acc_to_dest=true) so the add
+ *      @c copy_tile the seed into DST, then @c add_init(..., acc_to_dest=true) so the add
  *      accumulates onto it. @c run_seeded() owns that sequence.
  *
  * @par The DST-zero invariant (acquire does not zero; RELEASE does).
@@ -62,7 +62,7 @@
  *
  * @par OWNERSHIP SPLIT (same discipline as the other helpers).
  *   Owned here: the CB wait/pop/reserve/push protocol at granularity, the @c tile_regs lifecycle, the
- *   @c add_tiles loop, DST-capacity checking, and the per-op @c add_tiles_init placement. NOT owned:
+ *   @c add_tiles loop, DST-capacity checking, and the per-op @c add_init placement. NOT owned:
  *   which CBs to reduce and when (that is the schedule), the fabric, any epilogue fused after the add
  *   (e.g. @c strided_reduce_scatter_async's addcmul — the op keeps that and re-arms afterwards), and
  *   anything multi-device.
@@ -74,13 +74,13 @@
  *   would silently swap one startup path for the other: the two are NOT interchangeable, since
  *   @c binary_op_init_common additionally issues @c state_configure, @c llk_unpack_AB_init,
  *   @c llk_pack_init and @c llk_pack_dest_init. The kernel keeps its existing startup call verbatim;
- *   @c arm() only issues the op-level @c add_tiles_init.
+ *   @c arm() only issues the op-level @c add_init.
  *
  * @par USAGE.
  * @code
  *   compute_kernel_hw_startup(cb_a, cb_b, cb_out);   // stays with the kernel, unchanged
  *
- *   // Arm once, outside the loop: programs add_tiles_init + asserts granularity <= DST.
+ *   // Arm once, outside the loop: programs add_init + asserts granularity <= DST.
  *   auto acc = compute_kernel_lib::BlockAccumulate::arm(cb_a, cb_b, cb_out, tile_granularity);
  *
  *   while (...) {
@@ -127,7 +127,7 @@ public:
     /**
      * @brief @c out = a + b over @c num_tiles tiles.
      * @param num_tiles Tiles to add, <= the armed granularity. A short final chunk is normal.
-     * @note Re-programs @c add_tiles_init only if the previous run was seeded.
+     * @note Re-programs @c add_init only if the previous run was seeded.
      */
     ALWI void run(uint32_t num_tiles);
 
@@ -136,7 +136,7 @@ public:
      *
      * Seeds DST from @c cb_seed with @c copy_tile, then accumulates @c a + @c b onto it via
      * @c acc_to_dest. Waits and pops @c cb_seed at granularity alongside @c a and @c b.
-     * @note Re-programs @c add_tiles_init only if the previous run was unseeded.
+     * @note Re-programs @c add_init only if the previous run was unseeded.
      */
     ALWI void run_seeded(uint32_t cb_seed, uint32_t num_tiles);
 
@@ -162,11 +162,11 @@ public:
      *
      * The mode tracking in @c programmed_seeded_ assumes nothing else reprogrammed the unpack/math
      * state between runs. A kernel that fuses an epilogue — @c strided_reduce_scatter_async's addcmul
-     * issues @c mul_tiles_init / @c add_tiles_init / @c reconfig_data_format of its own — breaks that
+     * issues @c mul_tiles_init / @c add_init / @c reconfig_data_format of its own — breaks that
      * assumption, and the next @c run() would then skip an init it actually needs. Call this after any
      * such interleaved op.
      *
-     * Restores the unpack/pack DATA FORMATS as well as the op init, because @c add_tiles_init does not
+     * Restores the unpack/pack DATA FORMATS as well as the op init, because @c add_init does not
      * (its @c state_configure call is the ComputeKernelSentinel tracker, not a hardware reconfigure).
      * That closes a pre-existing hazard: @c strided_reduce_scatter_async's normal ring step never
      * re-issued any init, so after a fused final step it ran with the addcmul operands' formats still
@@ -178,14 +178,14 @@ private:
     ALWI BlockAccumulate(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint32_t granularity) :
         cb_a_(cb_a), cb_b_(cb_b), cb_out_(cb_out), granularity_(granularity) {}
 
-    /// Re-establish add_tiles_init only when the seeded/unseeded mode actually changes.
+    /// Re-establish add_init only when the seeded/unseeded mode actually changes.
     ALWI void ensure_mode(bool seeded);
 
     uint32_t cb_a_;
     uint32_t cb_b_;
     uint32_t cb_out_;
     uint32_t granularity_;
-    /// What add_tiles_init currently has programmed. Unlike the dataflow helper's per-channel packet
+    /// What add_init currently has programmed. Unlike the dataflow helper's per-channel packet
     /// headers, unpack/math config is SINGULAR hardware state, so two differently-armed accumulators
     /// cannot coexist — hence tracking the mode here rather than handing out two armed objects.
     bool programmed_seeded_ = false;
@@ -215,7 +215,7 @@ private:
  *   no scaler). Different LLK op and output shape — neither can express the other.
  *
  * @pre Hardware startup (@c binary_op_init_common) has run — same ownership note as arm().
- * @post @c add_tiles_init is left in acc_to_dest mode; a BlockAccumulate live in the same kernel
+ * @post @c add_init is left in acc_to_dest mode; a BlockAccumulate live in the same kernel
  *       must @c rearm() before its next run().
  *
  * @param cb_in           CB holding the num_blocks gathered blocks.
