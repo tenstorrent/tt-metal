@@ -93,12 +93,16 @@ inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
         (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes),
         L1WordCount::from_bytes(l1_to_noc_size_bytes));
 
-    int32_t dram_offsets_size_bytes = sizeof(bank_to_dram_offset);
+    constexpr int32_t dram_offsets_size_bytes = sizeof(bank_to_dram_offset);
+    static_assert(
+        dram_offsets_size_bytes % 4 == 0, "bank_to_dram_offset size must be 4-byte aligned for l1_to_local_mem_copy");
     l1_to_local_mem_copy(
         (uint*)bank_to_dram_offset,
         (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes),
         L1WordCount::from_bytes(dram_offsets_size_bytes));
-    int32_t l1_offsets_size_bytes = sizeof(bank_to_l1_offset);
+    constexpr int32_t l1_offsets_size_bytes = sizeof(bank_to_l1_offset);
+    static_assert(
+        l1_offsets_size_bytes % 4 == 0, "bank_to_l1_offset size must be 4-byte aligned for l1_to_local_mem_copy");
     l1_to_local_mem_copy(
         (uint*)bank_to_l1_offset,
         (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes +
@@ -107,13 +111,19 @@ inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
 }
 
 inline void noc_worker_logical_to_virtual_map_init(uint64_t worker_logical_to_virtual_map_addr) {
-    int32_t worker_logical_col_to_virtual_col_size_bytes = sizeof(worker_logical_col_to_virtual_col);
+    constexpr int32_t worker_logical_col_to_virtual_col_size_bytes = sizeof(worker_logical_col_to_virtual_col);
+    static_assert(
+        worker_logical_col_to_virtual_col_size_bytes % 4 == 0,
+        "worker_logical_col_to_virtual_col size must be 4-byte aligned for l1_to_local_mem_copy");
     l1_to_local_mem_copy(
         (uint*)worker_logical_col_to_virtual_col,
         (uint tt_l1_ptr*)(worker_logical_to_virtual_map_addr),
         L1WordCount::from_bytes(worker_logical_col_to_virtual_col_size_bytes));
 
-    int32_t worker_logical_row_to_virtual_row_size_bytes = sizeof(worker_logical_row_to_virtual_row);
+    constexpr int32_t worker_logical_row_to_virtual_row_size_bytes = sizeof(worker_logical_row_to_virtual_row);
+    static_assert(
+        worker_logical_row_to_virtual_row_size_bytes % 4 == 0,
+        "worker_logical_row_to_virtual_row size must be 4-byte aligned for l1_to_local_mem_copy");
     l1_to_local_mem_copy(
         (uint*)worker_logical_row_to_virtual_row,
         (uint tt_l1_ptr*)(worker_logical_to_virtual_map_addr + worker_logical_col_to_virtual_col_size_bytes),

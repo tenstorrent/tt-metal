@@ -26,7 +26,8 @@ struct L1WordCount {
     static constexpr L1WordCount from_bytes(size_t bytes) { return {(int32_t)(bytes / 4)}; }
     template <typename T>
     static constexpr L1WordCount from_range(T* start, T* end) {
-        return {(int32_t)(end - start)};
+        static_assert(sizeof(T) == sizeof(uint32_t), "L1WordCount ranges must use 32-bit elements");
+        return {static_cast<int32_t>(end - start)};
     }
 };
 
