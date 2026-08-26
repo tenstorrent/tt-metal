@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <array>
 #include <map>
+#include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -28,10 +30,28 @@ struct StreamPlacement {
 };
 
 using StreamPlacements = std::map<StreamId, StreamPlacement>;
-using MeshPlacement = std::map<ttnn::MeshCoordinate, StreamPlacements>;
 
-// Placement for every chip and every stream on the mesh. Decided for the whole mesh at once because a
-// sender's arguments name the worker serving the same stream on the downstream chip.
+// Untilizers are grouped by the ring direction whose senders they feed, because a direction's senders walk
+// the token index monotonically and in the same direction: one group can serve both of them in order. The
+// two groups sit in their own senders' columns so their bulk traffic does not share a NoC line.
+constexpr uint32_t UNTILIZER_GROUPS = 2;
+constexpr uint32_t untilizer_group_of(StreamId stream) { return stream % UNTILIZER_GROUPS; }
+
+// Cores per group. Kept a constant while the untilizers carry no data; it becomes a tuning knob when
+// there is something to tune. Above 5 a group no longer fits one row next to its senders.
+constexpr uint32_t UNTILIZERS_PER_GROUP = 4;
+
+using UntilizerGroups = std::array<std::vector<CoreCoord>, UNTILIZER_GROUPS>;
+
+struct DevicePlacement {
+    StreamPlacements streams;
+    UntilizerGroups untilizers;  // indexed by untilizer_group_of(stream)
+};
+
+using MeshPlacement = std::map<ttnn::MeshCoordinate, DevicePlacement>;
+
+// Placement for every chip on the mesh. Decided for the whole mesh at once because a sender's arguments
+// name the worker serving the same stream on the downstream chip.
 MeshPlacement decide_placement(ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
