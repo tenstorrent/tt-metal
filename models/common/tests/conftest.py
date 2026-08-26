@@ -279,6 +279,7 @@ def _pick_parent_shape_for_submesh(system_shape: tuple[int, int], requested_shap
         f"(or its rotated view {rotated}) with default offset."
     )
 
+
 @pytest.fixture(scope="module")
 def skip_on_galaxy_system():
     """Skip a module whose meshes are 1D-only when the host system is a Galaxy.

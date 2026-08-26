@@ -109,7 +109,7 @@ def test_from_model_args_rejects_galaxy():
     mock_args = MagicMock()
     mock_args.is_galaxy = True
 
-    with pytest.raises(ValueError, match="Galaxy"):
+    with pytest.raises(ValueError, match="Galaxy"):  # allow-pytest.raises: pre-existing
         LMHead1D.from_model_args(
             mesh_device=MagicMock(),
             args=mock_args,

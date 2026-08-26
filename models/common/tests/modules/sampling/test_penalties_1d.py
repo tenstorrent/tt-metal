@@ -513,7 +513,7 @@ class TestPenalties1DDevice:
             padded_vocab_size = 1024
             sub_core_grids = None
 
-        with pytest.raises(ValueError, match="1D mesh topologies"):
+        with pytest.raises(ValueError, match="1D mesh topologies"):  # allow-pytest.raises: pre-existing
             Penalties1D.from_model_args(FakeMesh(), MockArgs())
 
 
@@ -992,7 +992,7 @@ class TestPenalties1DDeviceExtra:
         """_pad_batch_to_max raises ValueError for non-2D input (lines 396-397)."""
         pen = Penalties1D(vocab_size=1024, mesh_device=ttnn_mesh_device)
         pen.load_device_buffers()
-        with pytest.raises(ValueError, match="Expected 2D"):
+        with pytest.raises(ValueError, match="Expected 2D"):  # allow-pytest.raises: pre-existing
             pen._pad_batch_to_max(torch.zeros(10), pad_value=-1)
 
     # ------------------------------------------------------------------
