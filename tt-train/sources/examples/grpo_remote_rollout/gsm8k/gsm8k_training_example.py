@@ -226,6 +226,7 @@ def _ttml_main() -> None:
     client: Any = None
     try:
         bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
+        client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
 
         dataset = build_dataset(seed=int(raw["training_config"].get("seed", 0)))
 
@@ -243,11 +244,11 @@ def _ttml_main() -> None:
             transformer_config=transformer_config,
             mesh_device=mesh_device,
             model_source=model_id,
+            inference_client=client,
             enable_ddp=device_config.enable_ddp,
         )
 
-        client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
-        completer._client = client
+        client.connect()
         completer.push_weights()
 
         trainer = GRPOTrainer(
@@ -313,6 +314,7 @@ def _ttt_main() -> None:
             generate_fn=worker.generate,
             on_weights_received=worker.update_weights,
         )
+        server.connect()
         server.serve_forever()
     finally:
         worker = None
