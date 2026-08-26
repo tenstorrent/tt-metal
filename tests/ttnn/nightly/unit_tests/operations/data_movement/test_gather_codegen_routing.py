@@ -49,47 +49,27 @@ def _materialize_index(shape, kwargs, layout, device):
 _DTYPES = [ttnn.bfloat16]
 _DTYPE_IDS = ["bfloat16"]
 
+# Every case here is ROW_MAJOR, which supported_by_codegen() rejects on layout alone: the codegen
+# kernels address purely in tile pages. So this list is a negative suite -- it asserts `auto` falls
+# back to native -- and the rejection happens before any shape, geometry or L1 arithmetic is
+# consulted. Rank, `dim` and the index dtype boundary are therefore the only axes that discriminate
+# anything; a wider or taller row re-proves the same layout check at a cost that is all host-side
+# golden and comparison. Positive per-factory coverage lives in the TILE_LAYOUT tests below, which
+# size themselves off the device's real L1 budget.
 _ROUTING = [
-    # ROW_MAJOR input/index: the codegen kernels address purely in tile pages
-    ([1, 1, 128, 128], {"dim": -1, "index": [1, 1, 128, 64]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 128, 128], {"dim": -2, "index": [1, 1, 64, 128]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 1536, 32768], {"dim": -1, "index": [1, 1, 1536, 256]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 20, 31990], {"dim": -1, "index": [1, 1, 20, 7670]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 256, 256], {"dim": -1, "index": [1, 1, 256, 128]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 32, 15360], {"dim": -1, "index": [1, 1, 32, 7680]}, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 1, 32, 64], {"dim": -1, "index": [1, 1, 32, 32]}, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 1, 32, 64], {"dim": -2, "index": [1, 1, 16, 64]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 4352, 128], {"dim": -1, "index": [1, 1, 4352, 96]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 64, 128], {"dim": -2, "index": [1, 1, 32, 128]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 64, 32000], {"dim": -1, "index": [1, 1, 64, 3200]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 64, 64], {"dim": -1, "index": [1, 1, 64, 32]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 151936], {"dim": -1, "index": [1, 151936]}, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 32, 64], {"dim": -1, "index": [1, 32, 32]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 64, 128], {"dim": -1, "index": [1, 64, 64]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([128, 256], {"dim": -1, "index": [128, 128]}, ttnn.ROW_MAJOR_LAYOUT),
     ([32, 64], {"dim": -1, "index": [32, 32]}, ttnn.ROW_MAJOR_LAYOUT),
-    ([64, 128], {"dim": -1, "index": [64, 64]}, ttnn.ROW_MAJOR_LAYOUT),
+    # Sole case whose gathered axis exceeds 65535, so _materialize_index picks uint32 over uint16.
+    ([1, 151936], {"dim": -1, "index": [1, 151936]}, ttnn.ROW_MAJOR_LAYOUT),
 ]
 _ROUTING_IDS = [
-    # ROW_MAJOR input/index: the codegen kernels address purely in tile pages
-    "[1, 1, 128, 128]|dim=-1&index=[1, 1, 128, 64]|row_major",
-    "[1, 1, 128, 128]|dim=-2&index=[1, 1, 64, 128]|row_major",
-    "[1, 1, 1536, 32768]|dim=-1&index=[1, 1, 1536, 256]|row_major",
-    "[1, 1, 20, 31990]|dim=-1&index=[1, 1, 20, 7670]|row_major",
-    "[1, 1, 256, 256]|dim=-1&index=[1, 1, 256, 128]|row_major",
-    "[1, 1, 32, 15360]|dim=-1&index=[1, 1, 32, 7680]|row_major",
     "[1, 1, 32, 64]|dim=-1&index=[1, 1, 32, 32]|row_major",
     "[1, 1, 32, 64]|dim=-2&index=[1, 1, 16, 64]|row_major",
-    "[1, 1, 4352, 128]|dim=-1&index=[1, 1, 4352, 96]|row_major",
-    "[1, 1, 64, 128]|dim=-2&index=[1, 1, 32, 128]|row_major",
-    "[1, 1, 64, 32000]|dim=-1&index=[1, 1, 64, 3200]|row_major",
-    "[1, 1, 64, 64]|dim=-1&index=[1, 1, 64, 32]|row_major",
-    "[1, 151936]|dim=-1&index=[1, 151936]|row_major",
     "[1, 32, 64]|dim=-1&index=[1, 32, 32]|row_major",
-    "[1, 64, 128]|dim=-1&index=[1, 64, 64]|row_major",
-    "[128, 256]|dim=-1&index=[128, 128]|row_major",
     "[32, 64]|dim=-1&index=[32, 32]|row_major",
-    "[64, 128]|dim=-1&index=[64, 64]|row_major",
+    "[1, 151936]|dim=-1&index=[1, 151936]|row_major",
 ]
 
 
