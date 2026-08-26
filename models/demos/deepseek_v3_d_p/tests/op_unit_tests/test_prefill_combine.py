@@ -58,6 +58,11 @@ def perf_iterations():
     return int(os.environ.get("CMBF2D_PERF_ITERS", "1"))
 
 
+# What an unwritten row of the dispatch buffer is filled with. Large enough that one leaking into the
+# output moves PCC well below any threshold, and exactly representable in bfloat16.
+PADDING_POISON = -1024.0
+
+
 def run_combine(
     mesh_device,
     seq_len_per_chip,
@@ -105,12 +110,6 @@ def run_combine(
     # non-BH; skip cleanly here so this surfaces as "skipped" instead of an error.
     if use_fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
         pytest.skip("fp8 combine output requires Blackhole hardware")
-
-    # combine_fabric2d takes its tokens one DRAM page per row, so TILE input needs an untilize
-    # stage it does not have yet — the op rejects TILE outright rather than producing wrong output.
-    # Delete this skip when the untilizer cores land and TILE becomes part of the op's contract.
-    if cmb_version == 2 and dispatched_buffer_layout == ttnn.TILE_LAYOUT:
-        pytest.skip("combine_fabric2d does not untilize yet; TILE input arrives with the untilizer cores")
 
     # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
     if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -237,6 +236,12 @@ def run_combine(
 
     # Run dispatch for each EP rank with rank-specific weights
     dispatched_buffer, dispatched_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
+
+    # Dispatch leaves every row it did not fill as zeros, and a zero row is indistinguishable from a
+    # correctly skipped one: a combine that emitted a padding row, or read past the end of a run, would
+    # still match the reference. Give the padding a value no token can have. -1 in the first metadata
+    # field is how dispatch itself marks a row it never wrote.
+    dispatched_buffer[dispatched_metadata[..., 0] == -1] = PADDING_POISON
 
     # Use different sharding: shard both dimensions
     mesh_mapper = get_ep_mesh_mapper(mesh_device)
@@ -632,8 +637,6 @@ _CMB_SWEEP_TRAFFIC = (
     ("hot_expert", 0),
 )
 
-# TILE is here so that deleting the untilizer skip in run_combine is all it takes to turn these into
-# real coverage; until then they report as skipped rather than being absent.
 _CMB_SWEEP_LAYOUTS = (
     ("row_major", ttnn.ROW_MAJOR_LAYOUT),
     ("tile", ttnn.TILE_LAYOUT),
