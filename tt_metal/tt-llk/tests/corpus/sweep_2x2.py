@@ -1012,6 +1012,24 @@ KNOBS = {
     # the HD cells exact; hand arms byte-identical under the knob in
     # both compositions; laneHO-evidence-20260826).
     "store-source-tier": "-mtt-tensix-optimize-store-source-tier",
+    # HR (crossloop-cc-peel, 2026-08-26): programming-only lift of the
+    # CC-canonical residency peel placement across enclosing loops.
+    # The peel exists only to manufacture an all-lanes programming
+    # point inside a CC-writing loop body, and the crossloop placement
+    # walk blanket-refused those very CC writes at every enclosing
+    # level (crossloop-cc-unproven — census at pin-32 ON-34: 47 rows /
+    # 593 instances, the ONLY walk-stop reason corpus-wide), so the
+    # peel-plus-programming re-executed per enclosing iteration for
+    # constants that cannot change (atan2's face loop, lane HC's named
+    # witness).  Under the knob the walk runs a cc-immaterial region
+    # discipline (structured typed CC atoms admitted; word/replay/MOP/
+    # LREG refusals unchanged), the lifted preheader carries the plain
+    # loop class's no-CC-write-reaches ambient proof, every lifted
+    # candidate passes the pressure-park consumer audit (pre-CC prefix
+    # included — the forgone peel kept iteration one verbatim), and
+    # the constants program ONCE at the outermost proven entry with no
+    # peel.  Refusals keep the peel byte-identically.
+    "crossloop-cc-peel": "-mtt-tensix-optimize-crossloop-cc-peel",
 }
 
 
@@ -1156,6 +1174,12 @@ KNOB_MODES = {
     # vs plain ON.  on-plus while a booking knob; promotion requires an
     # R9 witness and the ON-vs-ON attribution ceremony.
     "store-source-tier": "on-plus",
+    # HR crossloop-cc-peel: default-off Init(0) booking knob; the peel
+    # placements it lifts exist only under the reviewed-ON residency
+    # classes + pressure-park, so the booking A/B is (ON + flag) vs
+    # plain ON.  on-plus while a booking knob; promotion requires an
+    # R9 witness and the ON-vs-ON attribution ceremony.
+    "crossloop-cc-peel": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
