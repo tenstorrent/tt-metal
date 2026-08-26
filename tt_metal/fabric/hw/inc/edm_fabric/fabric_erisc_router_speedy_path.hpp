@@ -120,6 +120,44 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     // TX resets it) this isolates the sync window: ==num_buffers -> decrement NEVER landed (LOST);
     // <num_buffers -> it landed (dipped) then got reset (RESET).
     fabric_dbg_track_min_free_since_tx(free_slots);
+    // [#45872 OCCUPANCY COMPARE] Channel-0 (stream 22) only. Once the sender has quiesced (ACK set), its write
+    // count is frozen, so occupancy changes only as WE forward. Compute the counter-based true occupancy from the
+    // occupancy latched at STOP minus our own forward delta, and the register-based occupancy from get_ptr_val --
+    // both read locally in THIS iteration (true simultaneity). At the settled end-of-test they should match; a gap
+    // means the register isn't tracking the drain. word[7]=occ_true (counter), word[15]=occ_reg (register).
+    if constexpr (sender_channel_index == 0) {
+        if (*reinterpret_cast<volatile uint32_t*>(MEM_AERISC_HANDSHAKE_ACK_ADDR) != 0u) {
+            static bool occ_latched = false;
+            static bool rp_finish_latched = false;
+            static uint32_t occ_at_stop = 0, f0 = 0, rc_at_begin = 0;
+            const uint32_t fwd = local_sender_channel_worker_interface.get_local_read_counter();  // router read pointer
+            const uint32_t rc = fabric_get_retrain_count();
+            if (!occ_latched) {
+                const uint32_t w8_free =
+                    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_CUM_ADDR);  // sender free-slots @STOP
+                occ_at_stop =
+                    (w8_free <= WorkerInterfaceT::num_buffers) ? (WorkerInterfaceT::num_buffers - w8_free) : 0u;
+                f0 = fwd;
+                rc_at_begin = rc;
+                occ_latched = true;
+                *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RP_BEGIN_ADDR) =
+                    fwd;  // word[13] read ptr @ retrain-begin
+            }
+            // [#45872 READ-POINTER] retrain-finish = first retrain_count change after ACK; settled = live last value.
+            if (occ_latched && !rp_finish_latched && rc != rc_at_begin) {
+                rp_finish_latched = true;
+                *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RP_FINISH_ADDR) =
+                    fwd;  // word[14] read ptr @ retrain-finish
+            }
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RP_SETTLED_ADDR) = fwd;  // word[6] read ptr live (settled)
+            const uint32_t fwd_since = fwd - f0;
+            const uint32_t occ_true = (fwd_since <= occ_at_stop) ? (occ_at_stop - fwd_since) : 0u;
+            const uint32_t occ_reg =
+                (free_slots <= WorkerInterfaceT::num_buffers) ? (WorkerInterfaceT::num_buffers - free_slots) : 0u;
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_OCC_TRUE_ADDR) = occ_true;  // word[7]
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_OCC_REG_ADDR) = occ_reg;    // word[15]
+        }
+    }
 #endif
 
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
@@ -206,6 +244,20 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
     if (can_send) {
         progress = true;
+
+#if defined(ARCH_BLACKHOLE)
+        // [#45872 DRAIN-TRACE] Channel-0, post-retrain: push the register (pre-forward free_slots) on each of the
+        // first ~24 forwards after a retrain. Ring: tag 0xE4 [31:24], forward index [23:16], free_slots [15:0].
+        // A ramp = honest drain. Now the ONLY thing filling the ring, so it won't be evicted by recover stages.
+        if constexpr (sender_channel_index == 0) {
+            static uint32_t drain_budget = 24;
+            if (fabric_get_retrain_count() != 0u && drain_budget != 0u) {
+                WATCHER_RING_BUFFER_PUSH(
+                    (0xE4u << 24) | (((24u - drain_budget) & 0xFFu) << 16) | (free_slots & 0xFFFFu));
+                drain_budget--;
+            }
+        }
+#endif
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
