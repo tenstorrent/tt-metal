@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass, asdict
 import csv
 import inspect
@@ -107,6 +108,10 @@ class GRPOConfig:
     # accumulates gradients over micro-batches of size per_device_train_batch_size * num_devices
     # before each optimizer step. Larger values mean a larger effective batch per step.
     gradient_accumulation_steps: int
+    # Metrics are accumulated every step and emitted every ``logging_steps``
+    # steps as an interval-mean (except ``min_completion_len``,
+    # ``max_completion_len``, ``lr`` where minimum, maximum, last value is
+    # emitted respectively).
     logging_steps: int
     output_dir: str
     checkpointing: bool
@@ -256,6 +261,48 @@ _BASE_COLUMNS = (
 _NON_CSV_KEYS = frozenset({"completions", "prompts", "rewards"})
 
 
+class _MetricStats:
+    """Constant-memory running stats for a single metric key."""
+
+    __slots__ = ("sum", "count", "min", "max", "last")
+
+    def __init__(self) -> None:
+        self.sum = 0.0
+        self.count = 0
+        self.min = math.inf
+        self.max = -math.inf
+        self.last = float("nan")
+
+    def push(self, value: float) -> None:
+        self.sum += value
+        self.count += 1
+        if value < self.min:
+            self.min = value
+        if value > self.max:
+            self.max = value
+        self.last = value
+
+
+# Per-key aggregation policy for interval emission. Anything not listed defaults
+# to ``"mean"`` (matching TRL, which averages every metric it logs).
+_AGG_POLICY: dict[str, str] = {
+    "min_completion_len": "min",
+    "max_completion_len": "max",
+    "lr": "last",
+}
+
+
+def _aggregate(key: str, r: _MetricStats) -> float:
+    policy = _AGG_POLICY.get(key, "mean")
+    if policy == "min":
+        return r.min
+    if policy == "max":
+        return r.max
+    if policy == "last":
+        return r.last
+    return r.sum / max(r.count, 1)
+
+
 class GRPOMonitor(TrainerCallback):
     """CSV + console + optional wandb logger for GRPO training.
 
@@ -298,6 +345,11 @@ class GRPOMonitor(TrainerCallback):
         # ``on_train_end`` — that stays the caller's responsibility.
         self._wandb_owned = False
 
+        # Per-key running stats accumulated every step; flushed to CSV / wandb
+        # (as interval-mean, or the policy in ``_AGG_POLICY``) every
+        # ``logging_steps`` steps.
+        self._running: dict[str, _MetricStats] = defaultdict(_MetricStats)
+
     # -- lifecycle -----------------------------------------------------------
 
     def on_train_begin(self, trainer: Any) -> None:
@@ -326,11 +378,32 @@ class GRPOMonitor(TrainerCallback):
 
     def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
         metrics: dict[str, Any] = getattr(trainer, "metrics", None) or dict(kwargs)
+        self._accumulate(metrics)
 
-        self._log_console(step, metrics)
-        self._write_csv_row(step, metrics)
-        self._maybe_log_completions(step, metrics)
-        self._maybe_log_wandb(step, metrics)
+        if not self._is_logging_step(step):
+            return
+
+        row: dict[str, Any] = {k: _aggregate(k, r) for k, r in self._running.items()}
+        for key in _NON_CSV_KEYS:
+            if key in metrics:
+                row[key] = metrics[key]
+
+        self._log_console(step, row)
+        self._write_csv_row(step, row)
+        self._maybe_log_completions(step, row)
+        self._maybe_log_wandb(step, row)
+        self._running.clear()
+
+    def _accumulate(self, metrics: dict[str, Any]) -> None:
+        for key, value in metrics.items():
+            if key in _NON_CSV_KEYS:
+                continue
+            if isinstance(value, (bool, int, float)) and not (isinstance(value, float) and math.isnan(value)):
+                self._running[key].push(float(value))
+
+    def _is_logging_step(self, step: int) -> bool:
+        ls = self._config.logging_steps
+        return ls > 0 and step % ls == 0
 
     def on_train_end(self, trainer: Any) -> None:
         logging.info("Training complete.")
@@ -442,7 +515,7 @@ class GRPOMonitor(TrainerCallback):
         for key, value in metrics.items():
             if key in _NON_CSV_KEYS:
                 continue
-            if isinstance(value, (int, float)) and not (isinstance(value, float) and math.isnan(value)):
+            if isinstance(value, (bool, int, float)) and not (isinstance(value, float) and math.isnan(value)):
                 scalar_payload[f"grpo/{key}"] = value
         if scalar_payload:
             _wandb.log(scalar_payload, step=step)
@@ -1062,38 +1135,35 @@ class GRPOTrainer:
                     max_completion_len = 0
 
                 monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
-                is_logging_step = grpo_cfg.logging_steps > 0 and num_steps % grpo_cfg.logging_steps == 0
 
-                if is_logging_step:
-                    # Build the mutable per-step metrics dict on ``self`` so
-                    # callbacks can inject additional columns (e.g. an eval
-                    # callback writing ``trainer.metrics["eval_similarity"]``).
-                    # ``step_time_s`` is filled in below, once the entire step
-                    # (including non-monitor ``on_step_end`` callbacks and any
-                    # checkpoint save) has completed.
-                    self.metrics = {
-                        "reward_mean": mean_reward,
-                        "reward_std": float(rewards_np.std()),
-                        "mean_completion_len": mean_completion_len,
-                        "min_completion_len": min_completion_len,
-                        "max_completion_len": max_completion_len,
-                        "lr": base_lr * warmup_factor,
-                        "generation_time_s": generation_time_s_for_step,
-                        **self._callback_times,
-                    }
-                    if grpo_cfg.log_completions and grpo_cfg.num_completions_to_print > 0:
-                        k = grpo_cfg.num_completions_to_print
-                        self.metrics["prompts"] = prompts_strs[:k]
-                        self.metrics["completions"] = completions_strs[:k]
-                        self.metrics["rewards"] = list(rewards[:k])
+                # Build the mutable per-step metrics dict on ``self`` every step
+                # so callbacks can inject additional columns (e.g. an eval
+                # callback writing ``trainer.metrics["eval_similarity"]``) and
+                # so the built-in ``GRPOMonitor`` can accumulate per-key running
+                # stats across every step. ``step_time_s`` is filled in below,
+                # once the entire step (including non-monitor ``on_step_end``
+                # callbacks and any checkpoint save) has completed.
+                self.metrics = {
+                    "reward_mean": mean_reward,
+                    "reward_std": float(rewards_np.std()),
+                    "mean_completion_len": mean_completion_len,
+                    "min_completion_len": min_completion_len,
+                    "max_completion_len": max_completion_len,
+                    "lr": base_lr * warmup_factor,
+                    "generation_time_s": generation_time_s_for_step,
+                    **self._callback_times,
+                }
+                if grpo_cfg.log_completions and grpo_cfg.num_completions_to_print > 0:
+                    k = grpo_cfg.num_completions_to_print
+                    self.metrics["prompts"] = prompts_strs[:k]
+                    self.metrics["completions"] = completions_strs[:k]
+                    self.metrics["rewards"] = list(rewards[:k])
 
-                    # Fire every non-monitor callback so their times land in
-                    # ``self.metrics`` and inside the ``step_time_s`` window.
-                    for cb in self.callbacks:
-                        if cb is monitor_cb:
-                            continue
-                        key = self._time_callback(cb, "on_step_end", self, num_steps, **self.metrics)
-                        self.metrics[key] = self._callback_times[key]
+                for cb in self.callbacks:
+                    if cb is monitor_cb:
+                        continue
+                    key = self._time_callback(cb, "on_step_end", self, num_steps, **self.metrics)
+                    self.metrics[key] = self._callback_times[key]
 
                 if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
                     ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")
@@ -1111,8 +1181,7 @@ class GRPOTrainer:
                         if cb is monitor_cb:
                             continue
                         key = self._time_callback(cb, "on_save", self, num_steps, ckpt_dir)
-                        if is_logging_step:
-                            self.metrics[key] = self._callback_times[key]
+                        self.metrics[key] = self._callback_times[key]
 
                 # Seal ``step_time_s`` after all non-monitor work is done, so it
                 # covers the full per-step wall time (generation, host post-gen,
@@ -1120,11 +1189,10 @@ class GRPOTrainer:
                 # any checkpoint save on this step). ``GRPOMonitor``'s own cost
                 # is deliberately outside this window.
                 step_time_s = time.perf_counter() - step_t0
+                self.metrics["step_time_s"] = step_time_s
 
-                if is_logging_step:
-                    self.metrics["step_time_s"] = step_time_s
-                    if monitor_cb is not None:
-                        self._time_callback(monitor_cb, "on_step_end", self, num_steps, **self.metrics)
+                if monitor_cb is not None:
+                    self._time_callback(monitor_cb, "on_step_end", self, num_steps, **self.metrics)
 
                 step_t0 = time.perf_counter()
 
