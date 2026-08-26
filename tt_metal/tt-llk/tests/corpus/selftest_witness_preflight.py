@@ -16,7 +16,7 @@ fixtures only — no toolchain, no compile:
      own dump pass files -> not found (dump-flag scoping is real);
   6. grouping: entries sharing a pytest node compile once;
   7. the CHECKED-IN conf's active table parses clean, names only ON-set
-     flags, and remains within the reviewed eight-compile budget.
+     flags, and remains within the reviewed fourteen-compile budget.
 
 NOTE: the shipping table deliberately carries a prgm-const row that is RED
 on the pin-11 union (lane BT owns the fix) — that RED is the system
@@ -179,9 +179,15 @@ if conf_rows:
     # promotion (lane GE noted it pre-existing; lane GF refreshed).  Keep
     # Keep the ratified GF budget.  A future promotion that adds a witness
     # group must update this budget in the same reviewed commit.
+    # Budget refreshed 8 -> 14 at the knob-promotion-round-2 ceremony
+    # (lane HE, 2026-08-26): +window-pairing-stride +crossrow-pairing
+    # +record-hoist-peel +lut-select-fp16 +native-compare +pressure-park
+    # each added its own R9 union fire witness (one compile group apiece;
+    # all 18 rows / 14 groups verified ALL GREEN on the installed pin-29
+    # binary in the same ceremony).
     check(
-        f"checked-in table stays within the 8-compile budget ({n_groups})",
-        1 <= n_groups <= 8,
+        f"checked-in table stays within the 14-compile budget ({n_groups})",
+        1 <= n_groups <= 14,
     )
 
 if FAILS:

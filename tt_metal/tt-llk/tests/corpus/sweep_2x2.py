@@ -373,7 +373,37 @@ ON_FLAGS = (
     # on-plus -> drop-one for all three (their tokens are now ON-set).
     "-mtt-tensix-optimize-window-pairing "
     "-mtt-tensix-optimize-replay-record-hoist "
-    "-mtt-tensix-optimize-lreg-alloc"
+    "-mtt-tensix-optimize-lreg-alloc "
+    # PROMOTED 2026-08-26 (knob promotion round 2, lane HE; same pin-29
+    # binary f47f72b40b8a): the six silicon-proven wave knobs join the
+    # reviewed ON set (28 -> 34).
+    #   window-pairing-stride (lane GJ): mulint32-fresh KERNEL -9.29%,
+    #     vs-hand +5.11 -> -4.65 LOSS->WIN;
+    #   crossrow-pairing (lane GP): sigmoidappx-fresh KERNEL -31.27%,
+    #     vs-hand +31.75 -> -9.44 LOSS->WIN;
+    #   record-hoist-peel (lane GQ): recip math zone DIAG -34.28%
+    #     (KERNEL-neutral, honest);
+    #   lut-select-fp16 (lane GU): sigmoidlut-fresh +289.78 -> -0.94 WIN,
+    #     geluappx-fresh +559.08 -> +6.25, tanhlut-fresh parity at 3.6x
+    #     accuracy (BH all-2^32 bit-exact certs, unlicensed);
+    #   native-compare (lane GW): threshold-fresh -19.49% / hardshrink-fresh
+    #     -17.76% knob-causal (2^32x2 pointwise proofs);
+    #   pressure-park (lane GV): gelu-fresh +2.54 -> -2.79 LOSS->WIN,
+    #     softplus-fresh +13.30 -> +0.68.
+    # Promotion gates (laneHE-evidence-20260826): 6 R9 union witnesses
+    # added, each union-verified on the installed pin-29 binary
+    # (witness_preflight --only-flag) AND proven flag-attributable
+    # (line absent at union-minus-flag); ON-28-vs-ON-34 leg pair at the
+    # installed binary (store corpus-legs-laneHB) with EVERY delta TU
+    # adjudicated via single-flag third legs (zero-interaction proofs;
+    # composition TUs CRAQ'd at the pinned sim); KNOB_MODES flipped
+    # on-plus -> drop-one for all six (their tokens are now ON-set).
+    "-mtt-tensix-optimize-window-pairing-stride "
+    "-mtt-tensix-optimize-crossrow-pairing "
+    "-mtt-tensix-optimize-record-hoist-peel "
+    "-mtt-tensix-optimize-lut-select-fp16 "
+    "-mtt-tensix-optimize-native-compare "
+    "-mtt-tensix-optimize-pressure-park"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -474,8 +504,12 @@ KNOBS = {
     # admission-proofs/), so the paired CRAQ legs are expected to PASS
     # bit-exactly.  Target rows: geluappx-fresh (TABLE1 mod0 2),
     # sigmoidlut-fresh + tanhlut-fresh (TABLE2 mod0 7).
-    "lut-select-fp16": "-mtt-tensix-optimize-lut-select "
-    "-mtt-tensix-optimize-lut-select-fp16",
+    # PROMOTED 2026-08-26 (lane HE): the token is now ONLY the fp16
+    # extension flag — the parent lut-select has been in the reviewed ON
+    # set since pin 9, and a drop-one leg must remove ONLY the promoted
+    # extension, never strip the long-standing parent with it (the
+    # on-plus-era parent token existed purely for the dedup note above).
+    "lut-select-fp16": "-mtt-tensix-optimize-lut-select-fp16",
     # CN (representation-propagation): bit-involution pair cancellation
     # on audited choose-webs; corpus 0-changed at the CN gate (fire
     # evidence lives in the dg twins) — the knob leg surfaces any pin-14
@@ -842,7 +876,6 @@ KNOB_MODES = {
     "replay-loop-unroll": "on-plus",
     "int-abs": "on-plus",
     "lut-select-leaf-ext": "on-plus",
-    "lut-select-fp16": "on-plus",
     "repr-prop": "on-plus",
     # pin-15 crown-jewel booking flags (lane DZ): shapes only materialize
     # on the reviewed-ON baseline (the allocator/scheduler act on the
@@ -873,15 +906,16 @@ KNOB_MODES = {
     # ON-set planner emission places one.  PROMOTED into the ON set
     # 2026-08-23 — drop-one from here (was on-plus while a booking knob).
     "window-pairing": "drop-one",
-    # GJ window-pairing-stride remains a default-off on-plus knob at pin-28;
-    # promotion requires an R9 witness and ON-vs-ON attribution ceremony.
-    "window-pairing-stride": "on-plus",
-    # GP crossrow-pairing: default-off Init(0) booking knob; the pairing
-    # phase runs before the region schedulers and composes with the
-    # ON-28 replay capture (record + halved launches).  on-plus while a
-    # booking knob; promotion requires an R9 witness and ON-vs-ON
-    # attribution ceremony.
-    "crossrow-pairing": "on-plus",
+    # The six wave knobs PROMOTED into the ON set 2026-08-26 (lane HE,
+    # knob promotion round 2; R9 witnesses + ON-28-vs-ON-34 adjudication
+    # in laneHE-evidence-20260826) — drop-one from here (was on-plus
+    # while booking knobs; see each flag's ON_FLAGS promotion note).
+    "window-pairing-stride": "drop-one",
+    "crossrow-pairing": "drop-one",
+    "record-hoist-peel": "drop-one",
+    "lut-select-fp16": "drop-one",
+    "native-compare": "drop-one",
+    "pressure-park": "drop-one",
     # HB crossrow-pairing-seed: default-off Init(0) booking knob; the
     # Rule-B rename runs only inside an admitted pairing, so the knob
     # leg carries pairing + seed together (the arm booking A/B is
@@ -889,21 +923,6 @@ KNOB_MODES = {
     # knob; promotion requires an R9 witness and ON-vs-ON attribution
     # ceremony.
     "crossrow-pairing-seed": "on-plus",
-    # GQ record-hoist-peel: default-off on-plus booking knob — the peel
-    # rescues a record-hoist refusal, so its shape only exists on the
-    # reviewed-ON pipeline (record-hoist is in the ON set); the booking
-    # A/B is (ON + flag) vs plain ON.
-    "record-hoist-peel": "on-plus",
-    # GW native-compare: default-off Init(0) booking knob; a pure
-    # expansion-time lowering choice (no scheduler interaction beyond
-    # shorter CC webs).  on-plus while a booking knob; promotion requires
-    # an R9 witness and ON-vs-ON attribution ceremony.
-    "native-compare": "on-plus",
-    # GV pressure-park: default-off on-plus knob — the residency classes
-    # it widens run in the ON set (const-residency), so attribution is
-    # ON vs ON+flag.  Promotion requires an R9 witness and the ON-vs-ON
-    # attribution ceremony.
-    "pressure-park": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
