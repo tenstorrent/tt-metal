@@ -46,6 +46,12 @@ class SpeculativeDecoder:
     remaining env flags are QWEN36_SPEC_DRAFT_LEN (K) and QWEN36_SPEC_PROFILE (diagnostics).
     """
 
+    # Field order of the QWEN36_SPEC_TIMING lines.
+    _TPHASES = ("draft", "verify", "readback", "accept", "commit", "reseed", "other", "total")
+    # The demo runs a throwaway warmup generate() on a separate instance before the timed one, so
+    # the timing lines are tagged with a class-level call id to tell the two apart in the log.
+    _gen_calls = 0
+
     def __init__(self, model, page_table_torch, draft_len=None, stop_tokens=None):
         assert model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
         assert model.num_devices > 1, "SpeculativeDecoder is TP-only for now"
@@ -62,6 +68,11 @@ class SpeculativeDecoder:
         # QWEN36_SPEC_PROFILE=1: per-phase wall-clock (synchronize-bracketed) to see where time goes.
         self._prof = bool(int(os.environ.get("QWEN36_SPEC_PROFILE", "0")))
         self._pt = {"draft": 0.0, "verify": 0.0, "commit": 0.0, "reseed": 0.0}
+        # QWEN36_SPEC_TIMING=1: per-ITERATION breakdown (one log line per iteration + a mean at the
+        # end). Off by default and every cost sits behind `self._timing`.
+        self._timing = bool(int(os.environ.get("QWEN36_SPEC_TIMING", "0")))
+        self._tsum = {}  # phase -> summed seconds, warmup iterations excluded
+        self._tn = 0  # iterations folded into _tsum
         self.stop_tokens = set(stop_tokens or [])
         self.mtp = model.mtp
         # The MTP layer keeps its own paged KV cache with its own (identity) page table.
@@ -289,6 +300,74 @@ class SpeculativeDecoder:
         self._pt[name] += time.perf_counter() - t
         return r
 
+    # --------------------------------------------------------------------- #
+    # Per-iteration timing (QWEN36_SPEC_TIMING=1)
+    # --------------------------------------------------------------------- #
+    def _tick(self):
+        """Fence the device, then take a host timestamp.
+
+        Dispatch is async: without the fence a host timestamp bounds only the ENQUEUE of a phase, so
+        every phase that does not itself read back to host would measure ~0 and the phase after it
+        would absorb the device time.
+        """
+        ttnn.synchronize_device(self.mesh)
+        return time.perf_counter()
+
+    def _verify_split(self, tokens, p):
+        """``_verify``, with the logits device->host readback split out of the device time.
+
+        ``model.verify_traced`` runs execute_trace + synchronize_device and only THEN pulls the
+        logits back (``ttnn.to_torch(ttnn.get_device_tensors(...)[0])`` + reshape/float), so hooking
+        ``ttnn.get_device_tensors`` for the duration of the call marks the device/host boundary
+        without editing model.py. The trailing sync flushes the small hidden-rows clone that follows
+        the readback, which lands in the readback bucket.
+
+        Returns (vlogits, vhidden, device_seconds, readback_seconds).
+        """
+        orig = ttnn.get_device_tensors
+        mark = []
+
+        def hooked(*a, **kw):
+            if not mark:
+                mark.append(time.perf_counter())
+            return orig(*a, **kw)
+
+        ttnn.get_device_tensors = hooked
+        t0 = time.perf_counter()
+        try:
+            vlogits, vhidden = self._verify(tokens, p)
+        finally:
+            ttnn.get_device_tensors = orig
+        ttnn.synchronize_device(self.mesh)
+        t1 = time.perf_counter()
+        t_mark = mark[0] if mark else t1
+        return vlogits, vhidden, t_mark - t0, t1 - t_mark
+
+    def _log_iter_timing(self, row):
+        """Log one iteration's breakdown and fold it into the mean (first 2 iterations excluded)."""
+        row["other"] = row["total"] - sum(v for k, v in row.items() if k != "total")
+        logger.info(
+            f"[SPEC_TIMING] iter={self.iters} "
+            + " ".join(f"{k}={row[k] * 1e3:.2f}" for k in self._TPHASES)
+            + f" gen={self._gen_id}"
+        )
+        if self.iters >= 2:  # skip the 2 warmup iterations
+            for k, v in row.items():
+                self._tsum[k] = self._tsum.get(k, 0.0) + v
+            self._tn += 1
+
+    def _log_mean_timing(self):
+        """Log the mean-over-iterations breakdown gathered under QWEN36_SPEC_TIMING=1."""
+        if not self._timing or not self._tn:
+            return
+        mean = {k: self._tsum.get(k, 0.0) / self._tn for k in self._TPHASES}
+        cpi = self.accept_rate() + 1.0
+        logger.info(
+            f"[SPEC_TIMING] MEAN gen={self._gen_id} iters={self._tn} (excl 2 warmup) "
+            + " ".join(f"{k}={mean[k] * 1e3:.2f}" for k in self._TPHASES)
+            + f" committed_per_iter={cpi:.3f} tok_s={cpi / max(mean['total'], 1e-9):.2f}"
+        )
+
     def log_profile(self, prefix="spec", tokens=None):
         """Log the per-phase wall-clock breakdown gathered when QWEN36_SPEC_PROFILE=1."""
         if not self._prof:
@@ -310,6 +389,8 @@ class SpeculativeDecoder:
         """
         model = self.model
         T = len(prompt_ids)
+        SpeculativeDecoder._gen_calls += 1
+        self._gen_id = SpeculativeDecoder._gen_calls
         _t_start = time.perf_counter()
 
         # Chunked prompt prefill (2048-token chunks + masked tail — the same path the demo uses, so
@@ -364,15 +445,23 @@ class SpeculativeDecoder:
         _t_decode = time.perf_counter()
 
         while len(out) < max_new_tokens:
+            _tm = self._tick() if self._timing else 0.0
             drafts = self._phase("draft", lambda: self._draft(pending, Hp, p))
+            _t_draft = self._tick() if self._timing else 0.0
 
             # Verify buffers per-token GDN state and keeps the hidden; commit = select the accepted
             # slot (no re-run forward). committed = [pending] + drafts[:m].
-            vlogits, vhidden = self._phase("verify", lambda: self._verify([pending] + drafts, p))
+            if self._timing:
+                vlogits, vhidden, _s_verify, _s_read = self._verify_split([pending] + drafts, p)
+                _t_verify = time.perf_counter()
+            else:
+                vlogits, vhidden = self._phase("verify", lambda: self._verify([pending] + drafts, p))
             m = self._accept_greedy(drafts, vlogits)
             committed = [pending] + drafts[:m]
             mi = len(committed) - 1  # accepted-prefix's last token index in the verify window
+            _t_accept = time.perf_counter() if self._timing else 0.0  # host-only: no fence needed
             self._phase("commit", lambda: [dn.commit_verify_slot(mi) for dn in self._gdn])
+            _t_commit = self._tick() if self._timing else 0.0
             ttnn.deallocate(Hp)
             prev_p = p
             Lp = vlogits[mi]
@@ -385,6 +474,7 @@ class SpeculativeDecoder:
             # verify window (row i is the base hidden at slot prev_p+1+i, paired with the token at
             # slot+1). Done before vhidden is freed.
             self._phase("reseed", lambda: self._reseed_mtp(prev_p + 1, vhidden, committed[1:]))
+            _t_reseed = self._tick() if self._timing else 0.0
             ttnn.deallocate(vhidden)
 
             p += len(committed)
@@ -392,6 +482,20 @@ class SpeculativeDecoder:
             pending = int(Lp.argmax())
 
             out.extend(committed)
+            if self._timing:
+                # `other` = the anchor-hidden slice/clone, the deallocates, and the host argmax that
+                # picks the next `pending`.
+                self._log_iter_timing(
+                    {
+                        "draft": _t_draft - _tm,
+                        "verify": _s_verify,
+                        "readback": _s_read,
+                        "accept": _t_accept - _t_verify,
+                        "commit": _t_commit - _t_accept,
+                        "reseed": _t_reseed - _t_commit,
+                        "total": self._tick() - _tm,  # fenced, so nothing leaks into the next iter
+                    }
+                )
             self.iters += 1
             self.total_drafted += len(drafts)
             self.total_accepted += m
@@ -403,6 +507,7 @@ class SpeculativeDecoder:
         ttnn.deallocate(Hp)
         ttnn.synchronize_device(self.mesh)
         self.decode_time = time.perf_counter() - _t_decode  # spec loop wall-clock (excludes prefill)
+        self._log_mean_timing()
         self.log_profile(tokens=len(out[:max_new_tokens]))
         return out[:max_new_tokens]
 
