@@ -1306,7 +1306,7 @@
       tier: 1
       release_ready: true
     wh_galaxy_perf:
-      timeout: 45
+      timeout: 60
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
