@@ -1,34 +1,42 @@
 # Changelog: all_reduce
 
 ## Phase 0 — Core Implementation
-- **Date**: 2026-07-06
-- **What was done**: Initial implementation via the incremental pipeline (planner → implementer →
-  verifier). Self-contained Python CCL op **with a compute stage**: `ttnn.generic_op` +
-  `ttnn.MeshProgramDescriptor` over a 1-D MeshDevice line, with newly-authored fabric-dataflow and
-  compute (TRISC) kernels. Gather-then-reduce algorithm — Phase A line store-and-forward fabric
-  gather into an op-internal `gather_buffer`, Phase B local element-wise N-way tile SUM. Fabric egress
-  goes through the `ccl_helpers_dataflow.hpp` safety-by-construction typestate helper; the receive
-  ingress, counting wait, and cache-reuse semaphore re-arm are op-owned. Does not wrap/import/dispatch
-  any existing all_reduce / reduce_scatter / all_gather op.
-- **SUPPORTED at Phase 0**: dtype=[bfloat16, float32], layout=[TILE], topology=[Linear];
-  INPUT_TAGGERS={}, EXCLUSIONS=[]. Equals `feature_spec.py` TARGET exactly (full-TARGET at Phase 0).
-- **Accuracy achieved**: bfloat16 PCC ≥ 0.99998 (max_abs ≤ 0.1875, mean_abs ≈ 0.017, rel_RMS ≈ 0.0087);
-  float32 PCC ≥ 0.9999998 (max_abs ≤ 0.0151, mean_abs ≈ 0.0015, rel_RMS ≈ 0.0007). Measured on 4 shapes
-  × 2 dtypes over the (1, 8) line mesh (N=8 summands) via test_all_reduce_precision_baseline.py.
-- **Golden suite at Phase 0**: 6 / 6 cells passing (3 INPUTS × {bf16, f32} × TILE × Linear) — per
-  `generated/all_reduce_verify/verifier_report.json`: supported_pass=6, supported_fail=0,
-  xpass_drift=0, xfail_wrong_mode=0, xfail_expected=0, invalid_skipped=0.
-- **Verification runner**: multi-device craq-sim, `scripts/run_multidevice_sim_pytest.py --op
-  all_reduce` (topology `wh_t3k_allmmio_all_reduce`, mesh (1,8), FABRIC_1D). Aggregate exit 0 on
-  acceptance (10 passed), golden (6 passed), and precision baseline (8 passed) runs.
-- **Issues encountered**: No correctness defects. Two code-review cleanups applied by the verifier:
-  (1) marked the unused `ring_size` compile-time-arg local `[[maybe_unused]]` in both Phase-A kernels
-  (it is part of the uniform CT superset but genuinely unread — every index derives from `my_chip_id`
-  + `num_targets_{fwd,bwd}`); (2) moved `_num_line_devices` above its first use in
-  `all_reduce_program_descriptor.py`. Both are behavior-preserving; kernels recompiled fresh under the
-  sim and all cells still pass. No drift — no SUPPORTED edits were needed.
-- **Tests added**: test_all_reduce.py (acceptance: shape/dtype sweep + program-cache re-arm +
-  output_tensor path — pre-existing), test_all_reduce_precision_baseline.py (PCC + max/mean abs error
-  + relative RMS error across 4 shapes × 2 dtypes — added by the verifier).
-- **Refinement queue**: EMPTY — SUPPORTED == TARGET on every axis; no `(axis, missing_value)` gap to
-  close. Beyond-TARGET directions recorded in verification_report.md §Recommendations.
+- **Date**: 2026-08-25
+- **What was done**: Initial implementation via incremental pipeline
+  (planner → implementer → verifier). Self-contained Python compute-CCL op:
+  ONE `ttnn.generic_op` + `ttnn.MeshProgramDescriptor` dispatch per invocation —
+  line store-and-forward gather of whole shards fused with an arrival-ordered
+  incremental N-way SUM on a dedicated reduce core (5 newly-authored kernels,
+  7 kernel descriptors per device program). Verified end-to-end on REAL 4-chip
+  Blackhole hardware (`bh_quietbox_1x4_hw`: mesh (1,4), FABRIC_1D) via
+  `python_env/bin/python3 scripts/run_multidevice_sim_pytest.py --op all_reduce`.
+- **SUPPORTED at Phase 0**: dtype=[bfloat16, float32], layout=[TILE],
+  topology=[Linear]. INPUT_TAGGERS={}, EXCLUSIONS=[]. This covers the ENTIRE
+  feature-spec TARGET — the refinement queue is empty by gap accounting
+  (see op_requirements.md).
+- **Accuracy achieved** (worst-device, N=4, from
+  test_all_reduce_precision_baseline.py, 8 cells on hardware):
+  bf16 PCC ≥ 0.9999955, max_abs ≤ 1 ULP at output scale, rel_rms ≈ 0.0035
+  (bf16 mantissa budget for an N=4 sum); f32 PCC ≥ 0.9999994, rel_rms ≈ 6.3e-4
+  (FPU srcA/srcB ~10-bit truncation — hardware datapath property, matches the
+  reduce_scatter reference).
+- **Golden suite at Phase 0**: 6 / 6 cartesian cells passing (per
+  `generated/all_reduce_verify/verifier_report.json`: supported_pass=6,
+  supported_fail=0, xpass_drift=0, xfail_wrong_mode=0, xfail_expected=0,
+  invalid_skipped=0) + 5 translated passes + 1 lenient-xfail beyond-TARGET Ring
+  cell. Full hardware tally: acceptance 10, deterministic debug 4, extended 5,
+  precision 8, golden 11 (+1 xfail) — all green, aggregate exit 0.
+- **Issues encountered**: No op or kernel defects — zero code changes from
+  verification. One verification-environment footgun found and neutralized: the
+  login shell's bare `python3` resolves `ttnn` to a stale sibling clone
+  (`/localdev/wransom/tt-metal-eval`) shipping an older two-dispatch all_reduce;
+  early runs silently exercised it (caught by the missing accumulator-budget
+  ValueError, confirmed by `probes/probe_budget_gate.py`). All graded runs were
+  redone with this repo's `python_env/bin/python3`; the interpreter pin is now
+  documented in op_requirements.md / verification_report.md. The implementer's
+  documented rank-2 widening (vs. the design's rank-4 pin) was reviewed and
+  kept — required by the immutable translated suite, zero kernel cost,
+  hardware-verified at ranks 2/3/4.
+- **Tests added**: test_all_reduce.py + test_all_reduce_debug.py +
+  conftest.py (implementer); test_all_reduce_precision_baseline.py +
+  test_all_reduce_extended.py + probes/probe_budget_gate.py (verifier).
