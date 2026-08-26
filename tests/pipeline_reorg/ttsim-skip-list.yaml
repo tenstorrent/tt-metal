@@ -20,6 +20,9 @@ wormhole_b0:
   - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_nd_sharded_to_interleaved_large_row
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
+  # Stable sort runs the index-aware comparator network, which ttsim cannot simulate
+  # (SFPSWAP index-operand gap).
+  - tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_stable_issue33492_repro
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
@@ -46,6 +49,9 @@ blackhole:
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
   - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
+  # Stable sort runs the index-aware comparator network, which ttsim cannot simulate
+  # (SFPSWAP index-operand gap).
+  - tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_stable_issue33492_repro
   - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
