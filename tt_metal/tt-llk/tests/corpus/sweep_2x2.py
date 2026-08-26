@@ -638,6 +638,63 @@ KNOBS = {
     # 2 word-level fires (unary max/min int32, replay window 8->7,
     # CRAQ PASS) + 267 word-neutral value-identical scalar ripple.
     "store-fold": "-mtt-tensix-optimize-store-fold",
+    # HL (store-sink license, owner ratification 2026-08-26): THE
+    # LICENSED S2 STORE SINK.  COUPLED: merges only at a pin advance
+    # whose toolchain carries sfpi-gcc agent/store-sink-license (the
+    # pin-30 driver rejects the new flag; a knob classify at an older
+    # pin CLASSIFY_FAILs loudly).  Lane HK certified the threshold-
+    # fresh/hardshrink-fresh same-leg losses as the SEM-CONTRACT WORD
+    # FLOOR: the whole gap = ONE issue word per SIMD row = the
+    # predicated value-merge forced by the fresh bodies' unconditional
+    # all-lanes store, and the erasing transform (store-fold S2 sink)
+    # was PROOF-REFUSED because the float store round trip
+    # canonicalizes Dst on the enabled-complement lanes (denormal
+    # flush, tt/proofs/store-sink-roundtrip, BF16 254/2^16 — every
+    # mismatch denormal-class).  The owner LICENSED the sink for this
+    # shape class: the store-under-predicate form PRESERVES those Dst
+    # bits, which is the golden-closer semantics (torch keeps
+    # pass-through lanes exactly; the write-back flushes them) — a
+    # value-changing license under the full EJ discipline.  The
+    # license token is the dedicated default-off
+    # -mtt-tensix-optimize-store-sink half-key: BOTH it and the parent
+    # store-fold pass flag must be given (either absent = the standing
+    # named refusal store-fold-sink-format-canonicalizing,
+    # byte-identical).  Admission is SHAPE-GENERAL (the same S2
+    # recognizer, no op keys) and scope-bounded by the proof's
+    # divergence class: float pairs only (all-mismatches-denormal);
+    # the WH INT32_SM pair (-0 normalization, an integer class)
+    # refuses regardless.  PER-TU INERTNESS NOTE (accuracy gate): on
+    # the two target rows the predicate bound makes every
+    # enabled-complement lane strictly normal (threshold keeps only
+    # v > 5.0; hardshrink keeps only |v| > 0.5), so the licensed
+    # output is BIT-IDENTICAL to the unlicensed baseline for every
+    # representable input — the paired CRAQ legs are expected to PASS
+    # bit-exactly on these rows (the LICENSED-EXPECTED disposition
+    # covers any future row whose predicate admits denormal
+    # complement lanes).  The sink composes with the
+    # store-source-encoding-ceiling const-residency refusal (same
+    # compiler branch): a store-sourced constant hoists to a plain
+    # LREG instead of a PRGM register (SFPSTORE sources L0-L11 only),
+    # so threshold reaches the 5-word hand row instead of trading the
+    # merge for a residency-read copy.  MEASURED
+    # (laneHL-evidence-20260826, BH p150, 3 reps cycle-exact, paired
+    # CRAQ 8/8 pinned sim 32489dda + device corr 12/12 corr-first):
+    # KERNEL mean(MATH_ISOLATE) same-leg — threshold-fresh
+    # 33849 -> 29882 vs hand 29872.67 = +0.03 PARITY (was +13.31,
+    # licensed row 5 words = hand word parity); hardshrink-fresh
+    # 37943 -> 33722 vs hand 33841.33 = -0.35 PARITY (was +12.12, sem
+    # now faster; licensed row 6 words = hand word parity, store
+    # sources creg L9 directly).  Hand arms byte-identical AND
+    # cycle-identical under the knob (same-leg anchors immovable);
+    # on34 controls reproduce the HK cells cycle-exact.  KNOB-LEG
+    # CENSUS (shim farm, ON-34 vs ON-34+knob, 3300 rows): 242 changed,
+    # fully adjudicated — 228 sfpu_binary = store-fold S1 word-neutral
+    # value-identical forwarding (the laneEK class; CRAQ 414 passed
+    # both legs), 8 generalized_moe_gate = licensed S2 sinks (12
+    # dump-witnessed fires; CRAQ 89/89 both legs), 6 eltwise_unary =
+    # exactly the two target rows' TUs; threshold-fitted and every
+    # hand arm byte-identical.
+    "store-sink": "-mtt-tensix-optimize-store-fold " "-mtt-tensix-optimize-store-sink",
     # EK (int-not): single-SFPNOT selection for the
     # all-ones-minus-x value function (exhaustive 2^32 equivalence
     # proof); byte-inert on the mapped corpus at its lane gate.
@@ -973,6 +1030,13 @@ KNOB_MODES = {
     "prera": "on-plus",
     "round-interleave": "on-plus",
     "store-fold": "on-plus",
+    # HL store-sink license: the booking A/B is (reviewed-ON + parent
+    # store-fold + license token) vs plain reviewed-ON — the licensed
+    # fire acts on the post-ON pipeline's structured CC regions, and
+    # the delta must read as the license's own effect (the parent
+    # store-fold flag rides the knob string because store-fold is not
+    # in the reviewed ON set; a licensed fire needs both).
+    "store-sink": "on-plus",
     "int-not": "on-plus",
     # EJ licensed reassociation: booking A/B is (reviewed-ON + license
     # tokens) vs plain reviewed-ON — the licensed fire acts on the
@@ -1032,6 +1096,14 @@ LICENSED_KNOBS = {
         "-fassociative-math (+ the -fno-signed-zeros -fno-trapping-math "
         "pair GCC requires for it to take effect) AND "
         "-mtt-tensix-optimize-reassoc"
+    ),
+    "store-sink": (
+        "value-changing store-fold S2 sink on Dst-canonicalizing float "
+        "format pairs, owner-ratified 2026-08-26: the predicated store "
+        "preserves enabled-complement Dst bits the all-lanes write-back "
+        "would denormal-flush (golden-closer per "
+        "tt/proofs/store-sink-roundtrip); requires BOTH "
+        "-mtt-tensix-optimize-store-fold AND -mtt-tensix-optimize-store-sink"
     ),
 }
 for _k in LICENSED_KNOBS:
