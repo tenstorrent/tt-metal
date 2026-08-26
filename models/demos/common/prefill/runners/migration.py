@@ -266,6 +266,20 @@ def validate_stage_layout_contiguous(stage_layout) -> int:
     return expected
 
 
+def remove_stale_device_map_sidecars(path: str) -> None:
+    """Drop the JSON device map and its rank-scoped ``_r*`` siblings left by a prior run — a leftover
+    (e.g. from a run with more ranks) would silently merge into this run's map. Call BEFORE the
+    stage-layout all-gather: every rank writes its own fresh file only after that barrier, so
+    co-located ranks racing here can never delete a fresh one."""
+    stem, ext = os.path.splitext(path)
+    for stale in [path, *glob.glob(f"{stem}_r*{ext}")]:
+        try:
+            os.remove(stale)
+            logger.warning(f"[migration] removed stale device map {stale} from a prior run")
+        except FileNotFoundError:
+            pass
+
+
 def serialize_device_map(mesh_device, path: str) -> str:
     """Write a JSON {"<mesh_id>:<chip_id>": <asic_unique_id>} device map so a device-less consumer
     (the prefill_producer) can resolve a table's FabricNodeIds to the ASIC unique_id that

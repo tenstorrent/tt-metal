@@ -143,8 +143,13 @@ def build_and_serialize_kv_chunk_table(
     for cache_name, layout in zip(("v", "index_k"), stage_layouts[1:]):
         # M3's three caches share one layer-index space (index_k allocates a slot for every layer, zeros
         # on dense ones), so every cache must gather the identical per-rank ranges.
-        if validate_stage_layout_contiguous(layout) != total_layers or any(
-            (a["first_layer"], a["count"]) != (b["first_layer"], b["count"]) for a, b in zip(stage_layouts[0], layout)
+        if (
+            len(layout) != len(stage_layouts[0])
+            or validate_stage_layout_contiguous(layout) != total_layers
+            or any(
+                (a["first_layer"], a["count"]) != (b["first_layer"], b["count"])
+                for a, b in zip(stage_layouts[0], layout)
+            )
         ):
             raise RuntimeError(
                 f"{cache_name} layout's layer ranges differ from k's; M3's caches share one layer-index "
