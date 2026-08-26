@@ -295,23 +295,32 @@ only explicitly named parameters are passed.
 auto-appends one to its callback list unless `GRPOConfig.disable_default_monitor`
 is set, so you do not need to construct one yourself.
 
-At `on_train_begin` it opens `<output_dir>/grpo_metrics.csv` and writes a
-header. The columns are frozen at that point and consist of a fixed base set:
+At `on_train_begin` it creates `<output_dir>/` if needed and snapshots the
+callback classes present at that moment, but does **not** write the CSV
+header yet. On the first logging step, `GRPOMonitor` derives the column list
+from `trainer.metrics` at that moment and writes the header line together
+with the first data row (both are committed to `<output_dir>/grpo_metrics.csv`
+before the next step runs). The columns are a fixed base set —
 
 ```
 step, reward_mean, reward_std, mean_completion_len, min_completion_len,
 max_completion_len, lr, step_time_s, generation_time_s
 ```
 
-...followed by one `<CallbackClassName>_time_s` column per callback present at
-`on_train_begin`, **excluding `GRPOMonitor` itself**. Each extra column is the
-callback's total wall-clock cost for the **current** step, accumulated across
-every hook the trainer fired for that step (`on_before_optimizer_step`,
-`on_step_end`, and — on checkpoint steps — `on_save`). The counter is reset at
-the top of every optimizer step, and each entry is refreshed in the metrics
-dict immediately after that callback's hook returns, so `GRPOMonitor` (which
-runs last, after `step_time_s` is sealed) sees current-step totals for every
-other callback when it writes the row.
+— followed by one `<CallbackClassName>_time_s` column per callback present at
+`on_train_begin` (**excluding `GRPOMonitor` itself**), followed by every extra
+numeric key populated on `trainer.metrics` before the first logging step
+fires. Once the header is on disk the column set is frozen for the rest of
+the run; keys that first appear later are dropped with a one-time warning.
+
+Each `<Callback>_time_s` column is the callback's total wall-clock cost for
+the **current** step, accumulated across every hook the trainer fired for
+that step (`on_before_optimizer_step`, `on_step_end`, and — on checkpoint
+steps — `on_save`). The counter is reset at the top of every optimizer step,
+and each entry is refreshed in the metrics dict immediately after that
+callback's hook returns, so `GRPOMonitor` (which runs last, after
+`step_time_s` is sealed) sees current-step totals for every other callback
+when it writes the row.
 
 `step_time_s` is the **total per-step wall time** — it covers generation, host
 post-generation work, the reference log-probs pass, the training loop, every
@@ -386,11 +395,12 @@ Two contracts are worth calling out:
   the merged view. The dict is rebuilt at the top of every optimizer step, so
   writes do not leak between steps; `GRPOMonitor` accumulates values across
   steps in its own running-stats state.
-- **Column-set freeze**: `GRPOMonitor` snapshots the CSV column set at
-  `on_train_begin`. New keys added mid-run log a one-time warning instead of
-  churning the schema. If you know upfront that your callback will emit a new
-  scalar, register it there (or wrap it in a callback that runs before
-  `on_train_begin` completes).
+- **Column-set freeze**: `GRPOMonitor` writes the CSV header on the first
+  logging step, deriving the columns from `trainer.metrics` at that moment.
+  Any key populated by the trainer or by a callback's `on_step_end` before
+  the first logging step fires will appear as a column. Keys that first
+  appear after that step are dropped with a one-time warning — the schema is
+  not churned mid-run.
 
 | Hook | Signature | When |
 |------|-----------|------|

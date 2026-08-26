@@ -246,8 +246,10 @@ def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
 
 
 # Fixed base column order in the CSV. Callback-timing columns are appended after
-# these at ``on_train_begin`` (see :meth:`GRPOMonitor.on_train_begin`).
-_BASE_COLUMNS = (
+# these; any extra scalar keys populated on ``trainer.metrics`` follow. The
+# header line is materialised together with the first row on the first logging
+# step (see :meth:`GRPOMonitor._write_csv_header`).
+_CSV_BASE_COLUMNS = (
     "step",
     "reward_mean",
     "reward_std",
@@ -335,10 +337,16 @@ class GRPOMonitor(TrainerCallback):
         self._num_completions_to_print = config.num_completions_to_print
 
         self._csv_path = os.path.join(self._output_dir, "grpo_metrics.csv") if self._output_dir else None
-        # Frozen list of CSV columns; populated in ``on_train_begin`` so we can
-        # snapshot the callback class names alongside the base columns and keep
-        # the header stable for the rest of the run.
+        # Frozen list of CSV columns; populated on the first ``_write_csv_row``
+        # call so that the header reflects the actual contents of ``trainer.metrics``
+        # at the first logging step (including keys populated by user callbacks
+        # in their ``on_step_end``). Empty means "header not written yet".
         self._columns: list[str] = []
+        # Snapshot of the callback classes present at ``on_train_begin`` — used
+        # to seed the ``<Callback>_time_s`` columns in the header. Captured then
+        # rather than at write time so mutations to ``trainer.callbacks`` after
+        # training starts do not silently churn the CSV schema.
+        self._callback_time_columns: list[str] = []
         # One-time-warning flags to avoid spamming logs on every step.
         self._warned_missing_wandb = False
         self._warned_unknown_columns: set[str] = set()
@@ -360,23 +368,12 @@ class GRPOMonitor(TrainerCallback):
     def on_train_begin(self, trainer: Any) -> None:
         # Skip GRPOMonitor: its cost is deliberately outside step_time_s and it
         # never populates _callback_times, so a column would always be empty.
-        callback_time_columns = [
+        self._callback_time_columns = [
             f"{type(cb).__name__}_time_s" for cb in trainer.callbacks if not isinstance(cb, GRPOMonitor)
         ]
 
-        preseeded: list[str] = []
-        seen = set(_BASE_COLUMNS) | set(callback_time_columns) | _NON_CSV_KEYS
-        for key in getattr(trainer, "metrics", {}) or {}:
-            if key not in seen:
-                preseeded.append(key)
-                seen.add(key)
-
-        self._columns = list(_BASE_COLUMNS) + callback_time_columns + preseeded
-
         if self._csv_path is not None:
             os.makedirs(self._output_dir, exist_ok=True)
-            with open(self._csv_path, mode="w", newline="") as f:
-                csv.writer(f).writerow(self._columns)
 
         if self._report_to == "wandb":
             self._start_wandb(trainer)
@@ -469,29 +466,48 @@ class GRPOMonitor(TrainerCallback):
         if self._csv_path is None:
             return
 
-        row: list[Any] = []
-        for column in self._columns:
-            if column == "step":
-                row.append(step)
-                continue
-            row.append(_format_cell(metrics.get(column, float("nan"))))
+        if not self._columns:
+            self._write_csv_header(metrics)
 
-        # Warn once for any keys that would be dropped (columns that didn't
-        # exist at ``on_train_begin``) so a callback adding a new metric
-        # mid-run has an audit trail without churning the CSV schema.
+        row_values = [step if col == "step" else _format_cell(metrics.get(col, float("nan"))) for col in self._columns]
+        with open(self._csv_path, mode="a", newline="") as f:
+            csv.writer(f).writerow(row_values)
+
+        self._warn_unknown_keys(metrics)
+
+    def _write_csv_header(self, metrics: dict[str, Any]) -> None:
+        """Derive the CSV column list from the first row's metrics and write the header.
+
+        Called once, on the first logging step. Columns are the base scalars,
+        then the ``<Callback>_time_s`` columns captured in ``on_train_begin``,
+        then any other numeric keys already populated on ``trainer.metrics``.
+        """
+        extras = [
+            k
+            for k in metrics
+            if k not in _NON_CSV_KEYS and k not in _CSV_BASE_COLUMNS and k not in self._callback_time_columns
+        ]
+        self._columns = list(_CSV_BASE_COLUMNS) + self._callback_time_columns + extras
+        with open(self._csv_path, mode="w", newline="") as f:
+            csv.writer(f).writerow(self._columns)
+
+    def _warn_unknown_keys(self, metrics: dict[str, Any]) -> None:
+        """Log a one-time warning for any metric key that appeared after the header froze.
+
+        On the first row this is a no-op — ``_write_csv_header`` derives the
+        columns from ``metrics`` so every key present is already in
+        ``self._columns``.
+        """
         for key in metrics:
             if key in _NON_CSV_KEYS or key in self._columns or key in self._warned_unknown_columns:
                 continue
             self._warned_unknown_columns.add(key)
             logging.warning(
-                "GRPOMonitor: metric %r was not present at on_train_begin; "
-                "it will not be written to %s (header is frozen).",
+                "GRPOMonitor: metric %r first appeared after the CSV header was frozen; "
+                "it will not be written to %s.",
                 key,
                 self._csv_path,
             )
-
-        with open(self._csv_path, mode="a", newline="") as f:
-            csv.writer(f).writerow(row)
 
     def _maybe_log_completions(self, step: int, metrics: dict[str, Any]) -> None:
         if not self._log_completions or self._num_completions_to_print <= 0:
