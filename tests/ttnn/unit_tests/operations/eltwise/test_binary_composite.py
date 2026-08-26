@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, asser
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, is_slow_dispatch
 
 
 def _data_gen_div_scalar_input(input_shapes, low, high, device, divisor):
@@ -1074,6 +1074,7 @@ def test_situ_glu_sub_core_grids_rejects_interleaved_l1(device, expect_error, vi
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.skipif(is_slow_dispatch(), reason="sub-device managers are unsupported with slow dispatch")
 def test_situ_glu_requires_cores_when_sub_devices_loaded(device, expect_error):
     shape = torch.Size([1, 1, 32, 32])
     grid = device.compute_with_storage_grid_size()
