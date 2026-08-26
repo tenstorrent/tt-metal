@@ -30,7 +30,6 @@ def _argmax_misc_and_rank_special():
     return [
         _case([], RM, None, True, torch.bfloat16),
         _case([32], RM, -1, False, torch.float32),
-        _case([32, 0], RM, 1, True, torch.bfloat16),
         _case([64], RM, -1, True, torch.bfloat16),
         _case([1, 512], RM, -1, True, torch.float32),
         _case([1, 1024], RM, -1, True, torch.int32),
@@ -197,6 +196,31 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, dtype):
 
     # test for equivalance
     assert_equal(torch_result, ttnn_result)
+
+
+def test_argmax_rejects_zero_size_reduction_dim(device, expect_error):
+    """Reducing over a zero-size dim is rejected by both frameworks.
+
+    Kept out of the parity table: expect_error brackets the provoked failure so CI log
+    triage reads the TT_FATAL as expected rather than as a crash, and that bracket has to
+    wrap the ttnn call alone.
+    """
+    torch_tensor = torch.randn([32, 0], dtype=torch.bfloat16)
+
+    torch_errored = False
+    try:
+        torch.argmax(torch_tensor, dim=1, keepdim=True)
+    except (IndexError, RuntimeError) as e:
+        logger.info(f"torch argmax raised: {e}")
+        torch_errored = True
+
+    ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=RM)
+    with expect_error(RuntimeError, "Expected reduction dim 1 to have non-zero size"):
+        ttnn.argmax(ttnn_tensor, dim=1, keepdim=True)
+
+    # ttnn's rejection is enforced by expect_error above, which fails the test if the call
+    # returns instead of raising; this covers the other half of the pair.
+    assert torch_errored, "torch accepted a zero-size reduction dim that ttnn rejects"
 
 
 def test_argmax_nc_ties_first_index_wins(device):
