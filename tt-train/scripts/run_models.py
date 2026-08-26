@@ -178,7 +178,7 @@ def main() -> int:
     # Check for required environment variables
     tt_metal_runtime_root = get_env("TT_METAL_RUNTIME_ROOT", required=True)
     # Turn off tt-logger to reduce log noise
-    os.environ["TT_LOGGER_LEVEL"] = "off"
+    # os.environ["TT_LOGGER_LEVEL"] = "off"
 
     # Save current git commit hash
     git_commit_hash = get_git_commit_hash()

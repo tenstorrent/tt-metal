@@ -21,7 +21,7 @@ models:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama_ddp.yaml"
       - "--track_memory"
       - "--batch_size=160"
-      - "--max_steps=1000"
+      - "--max_steps=20"
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_32_1_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"

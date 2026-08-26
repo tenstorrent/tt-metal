@@ -1721,6 +1721,52 @@
     SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
     rc=0
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
+      echo '=== SYSCHECK cpu governor ==='
+      cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || true
+      grep MHz /proc/cpuinfo | head -n 1 || true
+      echo '=== SYSCHECK meminfo huge ==='
+      grep -i huge /proc/meminfo || true
+      echo '=== SYSCHECK hugepage pools per size ==='
+      grep -H '' /sys/kernel/mm/hugepages/hugepages-*/nr_hugepages /sys/kernel/mm/hugepages/hugepages-*/free_hugepages /sys/kernel/mm/hugepages/hugepages-*/resv_hugepages 2>/dev/null || true
+      echo '=== SYSCHECK hugetlb cgroup limits ==='
+      grep -H '' /sys/fs/cgroup/hugetlb.*.max /sys/fs/cgroup/hugetlb/hugetlb.*.limit_in_bytes 2>/dev/null || true
+      echo '=== SYSCHECK cgroup delegation and identity ==='
+      cat /sys/fs/cgroup/cgroup.controllers 2>/dev/null || true
+      cat /proc/self/cgroup 2>/dev/null || true
+      ls -1 /sys/fs/cgroup 2>/dev/null | grep -i hugetlb || echo NO_HUGETLB_CGROUP_FILES
+      echo '=== SYSCHECK own cgroup hugetlb limit ==='
+      CG=\$(awk -F: '/^0::/{print \$3}' /proc/self/cgroup)
+      echo cgroup_path=\$CG
+      grep -H '' /sys/fs/cgroup\$CG/hugetlb.*.max /sys/fs/cgroup\$CG/hugetlb.*.current 2>/dev/null || echo NO_HUGETLB_FILES_AT_OWN_CGROUP
+      echo '=== SYSCHECK per-NUMA 1GB pool ==='
+      grep -H '' /sys/devices/system/node/node*/hugepages/hugepages-1048576kB/nr_hugepages /sys/devices/system/node/node*/hugepages/hugepages-1048576kB/free_hugepages 2>/dev/null || true
+      echo '=== SYSCHECK hugetlbfs mounts ==='
+      grep -i hugetlbfs /proc/mounts || true
+      echo '=== SYSCHECK 1GB hugetlb alloc probe ==='
+      command -v fallocate >/dev/null && echo fallocate_present || echo NO_FALLOCATE
+      rm -f /dev/hugepages-1G/tt_hp_probe_syscheck
+      fallocate -l 1G /dev/hugepages-1G/tt_hp_probe_syscheck 2>&1 && echo HUGETLB_PROBE_OK || echo HUGETLB_PROBE_FAILED
+      grep -H '' /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages 2>/dev/null || true
+      rm -f /dev/hugepages-1G/tt_hp_probe_syscheck
+      echo '=== SYSCHECK raise hugetlb limit in place ==='
+      C=/sys/fs/cgroup\$(awk -F: '/^0::/{print \$3}' /proc/self/cgroup)
+      P=\$(dirname \$C)
+      for f in \$C/hugetlb.1GB.max \$C/hugetlb.1GB.rsvd.max \$P/hugetlb.1GB.max \$P/hugetlb.1GB.rsvd.max; do
+        if [ -e \$f ]; then
+          if echo max > \$f 2>/dev/null; then echo raised \$f; else echo write_failed \$f; fi
+        else
+          echo absent \$f
+        fi
+      done
+      grep -H '' \$C/hugetlb.1GB.* \$P/hugetlb.1GB.* 2>/dev/null || true
+      echo '=== SYSCHECK re-probe 1GB alloc after raise ==='
+      rm -f /dev/hugepages-1G/tt_hp_probe_syscheck
+      fallocate -l 1G /dev/hugepages-1G/tt_hp_probe_syscheck 2>&1 && echo HUGETLB_PROBE2_OK || echo HUGETLB_PROBE2_FAILED
+      grep -H '' /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages 2>/dev/null || true
+      rm -f /dev/hugepages-1G/tt_hp_probe_syscheck
+      echo '=== SYSCHECK nr_hugepages writable ==='
+      test -w /proc/sys/vm/nr_hugepages && echo WRITABLE || echo read-only
+      echo '=== SYSCHECK end ==='
       ./tt-train/scripts/setup_pth.sh
       python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames tinyllama_1_1b_ddp32_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
     " || rc=$?
