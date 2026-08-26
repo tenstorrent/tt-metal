@@ -239,13 +239,7 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
     dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     fp32_enabled = dtype == ttnn.float32  # FP32 requires fp32_dest_acc_en
 
-    # The device is module-scoped, so the cache arrives here already populated -- and every config
-    # this test runs is also a cell of test_layernorm_part_2_with_program_cache above, so the entry
-    # for it always pre-exists. Without clearing, the count below can never change and the assertion
-    # holds no matter what the program cache does. Clear it so the assertion measures this test's
-    # own compilation, per the cache-state guidance in conftest.py's _device_module_impl docstring.
-    # Note: clear_program_cache(), not disable_and_clear_program_cache() -- the latter turns caching
-    # off, so the second run would recompile and the entry count would never reach 1.
+    # Module-scoped device: clear first (not disable_and_clear, which turns caching off) or `== 1` is vacuous.
     device.clear_program_cache()
 
     for i in range(2):

@@ -178,16 +178,11 @@ def _fuse_distribution_into_shapes(shapes, distributions, offset=0):
 
 
 _SHAPES_BF16 = _fuse_distribution_into_shapes(_SHAPES, _BF16_DISTRIBUTIONS)
-# The FP32 rotation is offset by one so the non-tile-aligned 37x41 shape does not land on
-# wide_uniform. That shape is the padding-contamination probe of this group: it is the only one
-# whose logical width is padded inside the reduction dim (41 -> 64, filled with PAD_VALUE by
-# _run_ttnn_layer_norm). A wide-range distribution inflates the near-zero atol enough to absorb the
-# error from normalizing over those padded columns -- the same reason the sharded tests below are
-# restricted to small-range distributions.
+# Offset so 37x41 (the only shape padded inside the reduction dim) avoids wide_uniform, whose
+# inflated near-zero atol would absorb padding contamination -- see the sharded tests below.
 _SHAPES_FP32 = _fuse_distribution_into_shapes(_SHAPES, _FP32_DISTRIBUTIONS, offset=1)
 
-# Guard the property the offset above buys, so that appending a shape to _build_layer_norm_shapes
-# shifts the rotation into a collection error rather than silently weakening padding coverage.
+# Fail at collection if a new shape shifts a padding probe onto wide_uniform.
 _WIDE_RANGE_DISTRIBUTIONS = ("wide_uniform",)
 for _rows in (_SHAPES_BF16, _SHAPES_FP32):
     _unguarded = [desc for _, w, desc, dist in _rows if w % 32 and dist in _WIDE_RANGE_DISTRIBUTIONS]

@@ -22,17 +22,14 @@ import ttnn
 # Shared test_id x gamma/beta dtype grid for the mix-precision layernorm tests.
 #
 # The dtype is fused into ``test_id``, alternating across the residual / no-residual pair so that
-# both formats appear in every {LN, RMSN} x {G, GB} category. Residual status is the axis that
-# carries the alternation, so it is not itself a category here -- each individual test_id runs
-# exactly one gamma/beta dtype:
+# both formats appear in every {LN, RMSN} x {G, GB} category (each test_id runs exactly one dtype):
 #
 #   test_id   0     1      2       3      4       5        6    7     8      9     10     11
 #   name      LN    LN_G   LN_GB   RMSN   RMSN_G  RMSN_GB  LN   LN_G  LN_GB  RMSN  RMSN_G RMSN_GB
 #             |<---------- residual (add_*) ---------->|   |<--------- no residual --------->|
 #   gamma     bf16  bf16   fp32    fp32   fp32    bf16     bf16 fp32  bf16   fp32  bf16   fp32
 #
-# Reading the pairs down the columns: LN_G is bf16 with residual / fp32 without, LN_GB is fp32 /
-# bf16, RMSN_G is fp32 / bf16, RMSN_GB is bf16 / fp32 -- both formats in each of the four.
+# Down the residual pairs: LN_G bf16/fp32, LN_GB fp32/bf16, RMSN_G fp32/bf16, RMSN_GB bf16/fp32.
 #
 # ---------------------------------------------------------------------------
 
@@ -68,12 +65,7 @@ _MIX_PRECISION_GAMMA_DTYPES = (
 
 
 def _mix_precision_id(name, dtype):
-    """Test id for one (test_id, gamma/beta dtype) pair.
-
-    The ``_G`` / ``_GB`` suffix in the name marks the cases that actually pass gamma (and beta) to
-    the op. The remaining four build the tensors but never pass them, so the fused dtype is inert
-    there -- they are labelled ``no_gb`` rather than advertising a dtype they do not exercise.
-    """
+    """Test id for one (test_id, dtype) pair; cases that never pass gamma/beta are labelled no_gb."""
     if not name.endswith(("_G", "_GB")):
         return f"{name}-no_gb"
     return f"{name}-{'gb_fp32' if dtype == ttnn.float32 else 'gb_bf16'}"
