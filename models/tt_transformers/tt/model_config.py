@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import inspect
 import json
 import math
@@ -16,6 +17,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
+from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
+from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
+from models.common.weight_cache import mark_weight_cache_complete as _mark_weight_cache_complete
+from models.common.weight_cache import marker_path as _wc_marker_path
+from models.common.weight_cache import weight_cache_is_complete as _weight_cache_is_complete
 from models.tt_transformers.tt.common import (
     Mode,
     calculate_hidden_dim,
@@ -1339,11 +1345,13 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
-                per_core_N=math.ceil(
-                    (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
-                )
-                if not self.is_galaxy
-                else None,
+                per_core_N=(
+                    math.ceil(
+                        (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
+                    )
+                    if not self.is_galaxy
+                    else None
+                ),
             )
 
     @lru_cache(maxsize=None)
@@ -1399,9 +1407,11 @@ class ModelArgs:
                     k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                     n=self.dim,
                     grid_size=self.mlp2_grid(seq_len),
-                    per_core_N=math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                    if not self.is_galaxy
-                    else None,
+                    per_core_N=(
+                        math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
+                        if not self.is_galaxy
+                        else None
+                    ),
                 )
         else:
             raise ValueError(f"Invalid mode: {mode}")
@@ -1561,21 +1571,29 @@ class ModelArgs:
         q_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
-            if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else min(256, chunk_start_idx & -chunk_start_idx)
-            if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else (
+                64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else (
+                    min(256, chunk_start_idx & -chunk_start_idx)
+                    if seq_len >= 2048
+                    else min(64, chunk_start_idx & -chunk_start_idx)
+                )
+            )
         )
         # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225:
         k_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
-            if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else min(256, chunk_start_idx & -chunk_start_idx)
-            if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else (
+                64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else (
+                    min(256, chunk_start_idx & -chunk_start_idx)
+                    if seq_len >= 2048
+                    else min(64, chunk_start_idx & -chunk_start_idx)
+                )
+            )
         )
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
@@ -2035,9 +2053,9 @@ class ModelArgs:
                 grid_size=self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
-                per_core_N=math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                if dram_sharded_wo
-                else None,
+                per_core_N=(
+                    math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width)) if dram_sharded_wo else None
+                ),
             )
         else:
             raise ValueError(f"Invalid mode: {mode}")
@@ -3126,6 +3144,161 @@ class ModelArgs:
                 self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
             )
 
+    # Name of the marker file dropped into a weight-cache directory once every weight for that
+    # (model, dtype, mesh shape) has been materialized to disk. Generalizes the GPT-OSS
+    # warm-cache detector (#48531) to every tt_transformers e2e model.
+    # Marker filename and schema version both come from models/common/weight_cache.py -- this
+    # class must not define its own, or the two writers diverge (they previously shared a filename
+    # and version number while encoding mesh_shape incompatibly). See that module for the version
+    # history and what each field guarantees.
+    WEIGHT_CACHE_MARKER = _WC_MARKER
+    WEIGHT_CACHE_FORMAT_VERSION = _WC_FORMAT_VERSION
+
+    def _weight_cache_build_variant(self):
+        """A signature of the build options that change an ``as_tensor`` cache *filename*.
+
+        The cache name is ``{name}_dtype_{dtype}_layout_{layout}.tensorbin``, so anything that moves
+        a weight to a different dtype -- or adds weights outright -- produces a different file set.
+        Two knobs do that here: the DRAM prefetcher (pins every layer to decoder 0's dtype and adds
+        the ring-matmul splits in lm_head) and the precision/optimizations config (per-decoder,
+        per-tensor-group dtypes). Recording them means a cache seeded under one variant is not
+        accepted for a build that needs a different one -- which matters because a filename this
+        build needs but the seed never wrote would otherwise be regenerated by as_tensor FROM the
+        placeholder. (#45400 review)"""
+        try:
+            # get_tensor_dtype lives on the DecodersPrecision held in self.optimizations, NOT on
+            # ModelArgs. The original self.get_tensor_dtype(...) raised AttributeError on every
+            # model -- unnoticed because the old except collapsed it to the match-anything
+            # "unknown", and no hardware run executed this method until the 0ec5959bade sweep,
+            # where the fail-closed sentinel surfaced it on the first cold build. (#45400 review)
+            dtypes = [
+                str(self.optimizations.get_tensor_dtype(decoder_id, group, prefetcher=bool(self.prefetcher)))
+                for decoder_id in range(self.n_layers)
+                for group in TensorGroup
+            ]
+            precision = hashlib.sha1("|".join(dtypes).encode()).hexdigest()[:12]
+        except Exception as e:
+            # A variant we cannot compute is a variant we cannot verify. Do NOT collapse to a
+            # match-anything constant (that silently reopened the placeholder-persistence hole for
+            # every precision variant); return an unverifiable sentinel that the completeness gate
+            # rejects and mark_weight_cache_complete refuses to write, so the build cold-loads --
+            # slow but correct -- and the log says why. (#45400 review, finding R3)
+            logger.warning(f"Could not compute the weight-cache build variant ({e!r}); warm-cache skip disabled.")
+            return {"unverifiable": True, "error": f"{type(e).__name__}: {e}"}
+        return {
+            "prefetcher": bool(self.prefetcher),
+            "precision": precision,
+            # attention.py caches wqkv_bias_decode_sharded_{batch_size}, so batch is in a filename.
+            "batch": int(getattr(self, "max_batch_size", 0) or 0),
+            # attention.py picks cache_name("wo_width_sharded_2d") vs cache_name("wo") off this.
+            "fused_ag": bool(getattr(self, "use_fused_all_gather_matmul", False)),
+            # load_state_dict permutes QKV differently per rope mode, so the SAME cache filename
+            # carries different content across modes. The Llama CI job runs both modes against one
+            # cache dir; keeping the mode in the variant stops a marker seeded under one mode from
+            # certifying the other. (#45400 review, finding R2)
+            "hf_rope": bool(getattr(self, "use_hf_rope", False)),
+        }
+
+    def _weight_cache_identity(self, components=None):
+        """Marker identity for this build. `components` names the parts being constructed, so a
+        text-only seed cannot certify a cache for a build that also needs the vision tower."""
+        return dict(
+            model_name=self.model_name,
+            n_layers=self.n_layers,
+            mesh_shape=tuple(self.mesh_device.shape),
+            components=components,
+            build_variant=self._weight_cache_build_variant(),
+        )
+
+    def weight_cache_is_complete(self, dtype, components=None):
+        """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape, components)
+        was fully built by a previous run and every tensorbin that build produced is still present.
+
+        When True, ttnn.as_tensor loads every weight from its cached .tensorbin and the HF
+        state_dict is never read, so the caller can skip the expensive from_pretrained host
+        load entirely (the load that OOMs/hangs during prefill, #48509). Set
+        TT_TRANSFORMERS_FORCE_MODEL_LOAD=1 to force a fresh load (e.g. to regenerate the cache).
+
+        Delegates to models/common/weight_cache.py so there is a SINGLE marker reader/writer: the
+        two used to encode mesh_shape differently while sharing one filename and format_version,
+        so a model reachable from both (gemma3 inherits this class but its demos call the shared
+        helper) had each side reject the other's marker and cold-load forever. (#45400 review)"""
+        return _weight_cache_is_complete(self.weight_cache_path(dtype), **self._weight_cache_identity(components))
+
+    def mark_weight_cache_complete(self, dtype, state_dict=None, components=None):
+        """Record that the ttnn weight cache for this (model, dtype, mesh shape, components) was
+        fully built, so subsequent runs can skip the HF state_dict load.
+
+        state_dict (the real, just-loaded weights) is captured as a {key: [shape, dtype]} manifest
+        so a later warm run can reconstruct a dataless placeholder without touching HF. Must be
+        called AFTER the model is constructed, so the tensorbins exist to be recorded."""
+        if state_dict is None:
+            return
+        _mark_weight_cache_complete(
+            self.weight_cache_path(dtype),
+            state_dict,
+            is_moe=bool(getattr(self, "is_mixture_of_experts", False)),
+            **self._weight_cache_identity(components),
+        )
+
+    def placeholder_state_dict(self, dtype):
+        """Warm-cache build: return a lazy, dataless stand-in for the HF state_dict.
+
+        Every weight is served as an uninitialized CPU torch.empty of the shape/dtype recorded
+        in the marker manifest -- no from_pretrained, no weight bytes read from disk, so the
+        prefill host-OOM (#48509) is avoided. ttnn.as_tensor(cache_file_name=...) ignores this
+        placeholder on a cache hit (ttnn/operations/core.py) and loads the real weight from its
+        .tensorbin; the placeholder exists only to satisfy the host-side reshape ops
+        (permute/chunk/cat/transpose) the modules run before calling as_tensor. Guarded by
+        weight_cache_is_complete, so every as_tensor is guaranteed to hit and discard it.
+
+        The mapping is falsy (__bool__ -> False) so reference-building callers that test
+        `if not state_dict` (e.g. test_model_prefill) load real weights explicitly, while
+        modules that index it during construction still work."""
+        import collections.abc
+
+        marker = _wc_marker_path(self.weight_cache_path(dtype), self._weight_cache_build_variant())
+        meta = json.loads(marker.read_text())
+        manifest = meta["weights"]
+        self.is_mixture_of_experts = bool(meta.get("is_moe", False))
+        # Same reasoning as build_cached_state_dict: these are set by load_state_dict from the
+        # checkpoint keys, which the warm path never reads. The manifest has the same keys.
+        self.fuse_qkv = any("qkv" in k for k in manifest)
+        self.fuse_mlp = any("gate_up" in k for k in manifest)
+        if self.is_mixture_of_experts:
+            self.moe = True
+            expert_indices = [int(k[-11]) + 1 for k in manifest if "block_sparse_moe.experts" in k]
+            self.num_experts = max(expert_indices) if expert_indices else self.num_local_experts
+
+        dtype_cache = {}
+
+        def _to_dtype(s):
+            if s not in dtype_cache:
+                dtype_cache[s] = getattr(torch, s.rsplit(".", 1)[-1])
+            return dtype_cache[s]
+
+        class _PlaceholderStateDict(collections.abc.Mapping):
+            is_placeholder = True
+
+            def __init__(self, spec):
+                self._spec = spec  # key -> (shape, dtype_str)
+
+            def __bool__(self):
+                return False
+
+            def __getitem__(self, key):
+                shape, dt = self._spec[key]
+                return torch.empty(tuple(shape), dtype=_to_dtype(dt))
+
+            def __iter__(self):
+                return iter(self._spec)
+
+            def __len__(self):
+                return len(self._spec)
+
+        logger.info(f"Warm ttnn weight cache: built placeholder state_dict for {len(manifest)} weights (no HF load).")
+        return _PlaceholderStateDict(manifest)
+
     def get_model_config(self):
         return self.model_config
 
@@ -3194,7 +3367,7 @@ class ModelArgs:
                 self.CKPT_DIR,
                 torch_dtype="auto",
                 trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true"
+                local_files_only=os.getenv("CI") == "true",
                 # Note that the default setting is torch.dtype.float32, but model weights are
                 # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.

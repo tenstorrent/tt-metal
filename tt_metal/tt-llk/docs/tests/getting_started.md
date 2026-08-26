@@ -545,6 +545,7 @@ An external pytest suite should:
    pytest_plugins = ["helpers.llk_pytest_plugin"]
    ```
    Invoke pytest with that suite as the rootdir (so `pytest_plugins` is legal). Set `LLK_HOME` if it cannot be inferred. `CHIP_ARCH` is optional on a live card (`check_context()`); export it for compile-only / no-device.
+   Test files should not touch `sys.path`. The plugin prepends `<rootdir>/python_tests` so suite-local packages (e.g. `goldens/`) import without per-test boilerplate. Keep suite-local Python packages there, not under a `helpers/` overlay (that name is reserved for the harness).
 
 2. Register proprietary search dirs on `TestConfig` (before or after `setup_build`):
    ```python

@@ -81,8 +81,11 @@ TracedExecutor
 ```
 
 `TracedExecutor` does not inherit from `EagerExecutor`, and it does not choose
-an eager fallback. The caller selects either target. A serving adapter that
-discovers a trace-ineligible request must call the eager target explicitly.
+an eager fallback. Trace mode selects the operation policy: `none` is eager,
+`decode_only` intentionally leaves prefill eager, and `all` selects traced
+prefill and decode. Once an operation is selected for tracing, its complete
+prepared call must pass coverage preflight; a miss raises `TraceCoverageError`
+before device work instead of silently changing that call to eager execution.
 
 ### Programs and traces have separate registries
 
@@ -106,6 +109,7 @@ Prefix caching and chunking are represented once in immutable
 `PrefillRequest` and `PrefillChunk` values. Planning decides:
 
 - source-row and slot mapping;
+- active and padded batch sizes;
 - actual and padded sequence lengths;
 - cached-token offsets;
 - canonical page-table width;
@@ -115,6 +119,37 @@ Prefix caching and chunking are represented once in immutable
 
 `PrefillRuntime` consumes that plan. There is no separate cached-prefill
 service and no separate chunked-prefill service.
+
+### Pad compatible prefill rows into one physical wave
+
+Batched prefill is an explicit per-model capability, bounded by the model's
+configured maximum physical prefill batch and lane capacity. Within each lane,
+the planner buckets rows by padded sequence length. An eligible bucket is kept
+whole and its active row count is rounded up to the next supported physical
+batch size in `{1, 2, 4, 8, 16, 32}`; for example, 15 active rows use one
+padded-16 wave rather than being split.
+
+A bucket falls back to sequential single-row planning when batching is disabled
+or unsupported, the padded batch exceeds either configured limit, any row has
+cached tokens, the padded sequence exceeds the regular prefill chunk size, or
+`padded_batch_size * padded_sequence_length` is greater than or equal to
+`128 * 1024`. Supplying sampling parameters also selects sequential planning
+when the model cannot extract batched prefill outputs. `DISABLE_BATCHED_PREFILL`
+is a diagnostic off switch. These are planning choices, not executor fallbacks.
+
+Logical activity remains in `source_rows`, slots, and last-token metadata while
+device tensors use padded geometry. Padding token rows are zero. Regular page
+tables copy only each active prompt's allocated prefix; active tails and every
+padding row remain `-1`, the skip sentinel, so padded rows do not write KV.
+Chunked full-request page tables retain their SDPA-safe nonnegative filler,
+while fill-only chunk tables use `-1` after the mapped prefix.
+
+Program and trace identities intentionally omit `active_batch_size`; they use
+the padded batch, sequence and page geometry, operation variant, and sampling
+material. Eager regular batching fills active rows only. Trace capture fills
+all physical rows, relying on `-1` page-table rows as no-ops, and replay
+refreshes the complete padded inputs. Postprocessing pads extraction indices
+separately and returns only active results in original source-row order.
 
 ### Make ownership explicit
 
@@ -136,12 +171,21 @@ released.
 
 ## Module map
 
+For the package's internal planning, eager-sequence, trace, postprocessing, and
+ownership contracts, see the [prefill runtime README](prefill/README.md).
+
 | Module | Main responsibility |
 | --- | --- |
 | `config.py` | Trace policy, warmup policy, paged-KV policy, and canonical page-table geometry |
 | `prefill/config.py` | Fully resolved static prefill collaborators, capabilities, and geometry ceilings |
 | `prefill/plan.py` | Pure host-side construction of `PrefillRequest` and `PrefillChunk` values |
-| `prefill/runtime.py` | Prefill preparation, eager sequence execution, trace hooks, assembly, and transient cleanup |
+| `prefill/signatures.py` | Prepared requests plus pure eager-program and trace identity construction |
+| `prefill/inputs.py` | Host/device input values, staging, in-place replay refresh, and rotary handling |
+| `prefill/trace.py` | Trace capture plans, mutable replay state, input refresh, and replay ownership |
+| `prefill/postprocess.py` | Sampling classification, K/P/T state, output extraction, and device sampling |
+| `prefill/result_collector.py` | Streaming synchronized readback, source-row restoration, and result release |
+| `prefill/sequence_runner.py` | Run eager prefill sequence chunks with failure-safe ownership transfer |
+| `prefill/runtime.py` | Stable public facade, collaborator composition, model-body calls, and transient cleanup |
 | `prefill/sampling_helpers.py` | Stateless prefill sampling parameter and log-probability helpers |
 | `decode.py` | Decode preparation, signatures, eager invocation, trace refresh, output leases, and cleanup |
 | `execution.py` | `EagerExecutor` and `TracedExecutor` composition |
@@ -246,23 +290,32 @@ either order. Each method:
 
 - validates dynamic warmup hints against static config ceilings;
 - materializes device sampling buffers before capture when needed;
+- resolves representative inputs through the real planner and lane routing;
 - compiles the required eager program signatures;
-- registers trace plans when tracing is requested; and
+- registers regular and configured cached/chunked trace plans when requested;
+  and
 - records completed coverage idempotently.
 
-Trace capture begins only after the configured prefill and decode coverage is
-complete. This shared barrier prevents early capture from closing the compile
-gate before the other operation has registered its programs.
+The compiler and trace registries are authoritative. An immutable coverage
+manifest records eager programs, traced source programs, trace signatures, and
+aliases; schema and workspace fingerprints keep alias capture independent of
+request order. Trace capture begins only after configured prefill and decode
+coverage, required programs, and aliases are complete. For Q128 prefill,
+configured warmup batch sizes denote physical padded waves; other configured
+sequence lengths use single-row coverage by default. In a lane group, capture
+is deferred until every lane reports identical readiness, then activated as
+one barrier. These barriers prevent early capture from closing the compile gate
+before another operation or lane has registered its programs.
 
 ### 5. Serve
 
 After trace activation:
 
-- an already-compiled eager signature may still execute eagerly;
+- an intentionally eager operation may execute an already-compiled signature;
 - no unseen program signature may compile;
-- traced calls must have an explicit program-to-trace association; and
-- the serving boundary, not `TracedExecutor`, chooses eager versus traced
-  execution.
+- a traced operation must have an explicit program-to-trace association for
+  every prepared request before any executes; and
+- a selected traced operation never downgrades a coverage miss to eager.
 
 ### 6. Read outputs
 
@@ -326,8 +379,11 @@ model_executor.prefill_forward(execution=eager, ...)
        -> release invocation transients
 ```
 
-One public prefill call can produce several prepared requests because rows may
-have different prompt lengths, slots, cached prefixes, or chunk sequences.
+Within a lane, compatible rows become one padded wave per padded-sequence
+bucket. Ineligible rows become sequential single requests; cached or long
+single requests may themselves contain several chunk steps. Slots are carried
+within a wave and do not by themselves split it. Batched sampling uses top-k;
+the forced-argmax path is restricted to single-row requests.
 
 ### Traced prefill
 
@@ -348,17 +404,29 @@ Replay:
 ```text
 TracedExecutor.prefill_forward(...)
   -> PrefillRuntime.prepare(...)
-  -> TraceCompiler.replay(...)
+  -> preflight every prepared request and program-to-trace association
+  -> for each prepared request and each chunk step:
        -> PrefillRuntime.refresh_trace(...)
+       -> TraceCompiler.replay(...)
        -> non-blocking ttnn.execute_trace(...)
-  -> PrefillRuntime.finish_trace(...)
+  -> PrefillRuntime.finish_trace(...) after each request's final step
   -> PrefillRuntime.assemble(...)
 ```
 
-Only regular, uncached requests with configured sequence lengths are trace
-eligible. A server adapter should call `PrefillRuntime.can_trace()` through its
-model-owned target before selecting traced execution. Cached or multi-chunk
-prefill is dispatched to the eager target by that adapter.
+Regular single, regular batched, cached, and multi-chunk requests can be traced
+when their invocation geometry has compiled and captured coverage. Batched
+trace identity uses the padded batch size, not the number of active rows.
+Cached offsets and chunk starts are refreshed runtime inputs, so one fixed
+chunk trace can be replayed repeatedly in a host loop for a long request.
+`PrefillRuntime.can_trace()` is a capability query against invocation geometry;
+it is not permission to route a selected-operation trace miss to eager.
+Preflight covers the complete public call before the first KV write, and exact
+association misses raise `TraceCoverageError`.
+
+The capability query intentionally uses only its legacy token/length/start
+inputs and therefore cannot classify page-table or sampling details. Serving
+correctness does not rely on that approximation: traced execution prepares the
+real request and preflights every resulting program-to-trace association.
 
 ### Eager decode
 
@@ -427,9 +495,17 @@ Prefill:
 global request rows + global slots
   -> assign rows to lanes by slot
   -> convert slots to lane-local slots
-  -> call each participating lane
+  -> route row-scoped sampling parameters with those rows
+  -> plan lane-local padded-sequence buckets and waves
+  -> preflight every participating traced lane and prepared request
+  -> execute participating lanes only after all preflights pass
   -> restore original source-row order
 ```
+
+Singleton tensor/list/tuple sampling fields broadcast within each participating
+lane; other row-scoped fields follow source rows through lane routing. This
+facade aggregates tokens and logits, but data-parallel log-probability
+aggregation is not implemented and is rejected explicitly.
 
 Decode:
 
@@ -440,9 +516,11 @@ global fixed-capacity batch
   -> aggregate tokens/logits or retain per-lane raw outputs
 ```
 
-Cache configuration, allocation, compilation, warmup, and cleanup are
-replicated across lanes. Async output reads run concurrently per lane and
-return one combined external contract.
+Cache configuration, allocation, and cleanup cover every lane. Decode
+compilation covers every fixed-capacity lane, while prefill compilation calls
+only lanes participating in the slot-routed request. Warmup coordinates
+readiness and trace activation across all lanes. Async output reads run
+concurrently per lane and return one combined external contract.
 
 ## Main public surfaces
 
@@ -455,7 +533,7 @@ return one combined external contract.
 | `configure_page_table_layout` methods | model executor | Install final physical geometry before allocation/use |
 | `EagerExecutor.compile_*` / `*_forward` | model executor or lane | Compile and run eager requests |
 | `TracedExecutor.compile_*` / `*_forward` | model executor or lane | Register and replay traced requests |
-| `PrefillRuntime.can_trace` | serving dispatch through model target | Classify request-level prefill trace eligibility |
+| `PrefillRuntime.can_trace` | model target and diagnostics | Query request-level prefill trace capability by invocation geometry |
 | `ProgramCompiler` | eager/traced composition | Own eager program identity and readiness |
 | `TraceCompiler` | traced composition and warmup | Own trace artifacts and replay |
 | `PagedKVCacheManager` | model executor | Own physical KV allocation and binding |

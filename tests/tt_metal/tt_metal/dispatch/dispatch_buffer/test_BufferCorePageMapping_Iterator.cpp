@@ -121,7 +121,7 @@ struct Test_BufferCorePageMapping_Iterator_params {
 class Test_BufferCorePageMapping_Iterator
     : public ::testing::TestWithParam<Test_BufferCorePageMapping_Iterator_params> {};
 
-TEST_P(Test_BufferCorePageMapping_Iterator, Runs) {
+TEST_P(Test_BufferCorePageMapping_Iterator, CPU_Runs) {
     const auto& p = GetParam();
     test_BufferCorePageMapping_Iterator(p.page_mapping, p.pages_per_txn);
 }

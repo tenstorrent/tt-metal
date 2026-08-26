@@ -15,7 +15,13 @@ from models.common.llm_runtime.config import PageTableLayout, TraceConfig, Warmu
 from models.common.llm_runtime.decode import DecodeRuntimeConfig
 from models.common.llm_runtime.output_reader import OutputReader
 from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
-from models.common.llm_runtime.warmup import WarmupCoordinator, WarmupCoordinatorConfig
+from models.common.llm_runtime.program_compiler import CompiledProgram, OutputSpec, ProgramKey
+from models.common.llm_runtime.warmup import (
+    CoverageAlias,
+    WarmupCoordinator,
+    WarmupCoordinatorConfig,
+    _resolve_coverage_manifest,
+)
 
 
 class RecordingExecution:
@@ -261,6 +267,7 @@ def test_registered_plugin_warmup_calls_validate_cache_without_forwarding_it():
     coordinator.warmup_prefill(enable_trace=False, **prefill_kwargs)
     coordinator.warmup_decode(enable_trace=False, **decode_kwargs)
 
+    assert coordinator.coverage_manifest is None
     assert bound_calls == [cache, cache]
     assert all(
         tuple(call) == ("tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "sampling_params")
@@ -427,8 +434,8 @@ def test_direct_config_construction_rejects_inconsistent_derived_plan(expect_err
         ("lane", "share one lane capacity"),
         ("sampling", "share device-sampling policy"),
         ("argmax", "share force-argmax capability"),
-        ("raw_ceiling", "original capacity ceiling"),
-        ("decode_ceiling", "original decode-width ceiling"),
+        ("raw_ceiling", "share one page-table layout ceiling"),
+        ("decode_ceiling", "share one page-table layout ceiling"),
     ],
 )
 def test_resolution_rejects_inconsistent_runtime_configs(mismatch, message, expect_error):
@@ -463,9 +470,21 @@ def test_resolution_rejects_inconsistent_runtime_configs(mismatch, message, expe
             device_sampling_enabled=True,
         )
     elif mismatch == "raw_ceiling":
-        prefill = replace(prefill, max_page_table_capacity_width=prefill.max_page_table_capacity_width + 1)
+        ceiling = prefill.page_table_layout_ceiling
+        prefill = replace(
+            prefill,
+            page_table_layout_ceiling=replace(
+                ceiling,
+                raw_capacity_width=ceiling.raw_capacity_width + 1,
+                decode_width=ceiling.decode_width + 8,
+            ),
+        )
     else:
-        prefill = replace(prefill, max_decode_page_table_width=prefill.max_decode_page_table_width + 8)
+        ceiling = prefill.page_table_layout_ceiling
+        prefill = replace(
+            prefill,
+            page_table_layout_ceiling=replace(ceiling, decode_width=ceiling.decode_width + 8),
+        )
 
     with expect_error(ValueError, message):
         WarmupCoordinatorConfig.resolve(
@@ -522,6 +541,7 @@ def test_layout_replacement_is_immutable_bounded_and_rebuilds_coverage(expect_er
     coordinator.configure_page_table_layout(replacement)
 
     assert coordinator.config is not original
+    assert coordinator.config.page_table_layout_ceiling is original.page_table_layout
     assert original.page_table_layout.raw_capacity_width == 128
     assert not any(case.cached_tokens for case in coordinator.config.eager_plan.prefill)
     with expect_error(ValueError, "cannot change block_size"):
@@ -639,6 +659,100 @@ def test_eager_and_trace_coverage_are_separately_idempotent():
     assert trace_compiler.calls == 0
 
 
+def test_trace_warmup_routes_cached_prefill_through_traced_execution_target():
+    coordinator, eager, *_ = make_coordinator(
+        warmup_config=WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,)),
+        sequence_lengths=(128,),
+        lane_capacity=1,
+        sampling=False,
+    )
+    traced = RecordingExecution()
+    coordinator.execution = traced
+
+    coordinator.warmup_prefill(kv_cache="cache", enable_trace=True, can_sample_on_device=False)
+
+    assert not eager.prefill_calls
+    assert any(call["start_pos"] is None for call in traced.prefill_calls)
+    assert any(call["start_pos"] is not None for call in traced.prefill_calls)
+
+
+def test_coverage_manifest_uses_compiler_registries_and_deduplicates_trace_identities():
+    eager_program = CompiledProgram(ProgramKey("0" * 64), "eager", OutputSpec((1,), torch.float32))
+    first_traced = CompiledProgram(ProgramKey("1" * 64), "traced-a", OutputSpec((1,), torch.float32))
+    second_traced = CompiledProgram(ProgramKey("2" * 64), "traced-b", OutputSpec((1,), torch.float32))
+    shared_trace_key = ProgramKey("a" * 64)
+    program_compiler = SimpleNamespace(compiled_programs=(eager_program, first_traced, second_traced))
+    eager = SimpleNamespace(program_compiler=program_compiler)
+    trace_compiler = SimpleNamespace(
+        trace_key_for_program=lambda key: None if key == eager_program.key else shared_trace_key,
+        get=lambda key: SimpleNamespace(signature="shared-trace") if key == shared_trace_key else None,
+    )
+
+    manifest = _resolve_coverage_manifest(eager, trace_compiler)
+
+    assert manifest.eager_program_signatures == ("eager",)
+    assert manifest.traced_source_program_signatures == ("traced-a", "traced-b")
+    assert manifest.trace_signatures == ("shared-trace",)
+    assert manifest.aliases == (
+        CoverageAlias("traced-a", "shared-trace"),
+        CoverageAlias("traced-b", "shared-trace"),
+    )
+
+
+def test_coverage_manifest_rejects_any_missing_required_trace_alias(expect_error):
+    first_traced = CompiledProgram(ProgramKey("1" * 64), "traced-a", OutputSpec((1,), torch.float32))
+    second_traced = CompiledProgram(ProgramKey("2" * 64), "traced-b", OutputSpec((1,), torch.float32))
+    trace_key = ProgramKey("a" * 64)
+    eager = SimpleNamespace(program_compiler=SimpleNamespace(compiled_programs=(first_traced, second_traced)))
+    trace_compiler = SimpleNamespace(
+        trace_key_for_program=lambda key: trace_key if key == first_traced.key else None,
+        get=lambda key: SimpleNamespace(signature="trace-a") if key == trace_key else None,
+    )
+
+    with expect_error(RuntimeError, "required trace alias"):
+        _resolve_coverage_manifest(
+            eager,
+            trace_compiler,
+            required_program_keys={first_traced.key, second_traced.key},
+            required_trace_program_keys={first_traced.key, second_traced.key},
+        )
+
+
+def test_activation_validates_every_program_returned_by_trace_warmup(expect_error):
+    coordinator, execution, trace_compiler, *_ = make_coordinator(
+        warmup_config=WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,)),
+        sequence_lengths=(128,),
+        lane_capacity=1,
+        sampling=False,
+    )
+    programs = tuple(
+        CompiledProgram(ProgramKey(str(index) * 64), f"program-{index}", OutputSpec((1,), torch.float32))
+        for index in range(1, 4)
+    )
+    execution.program_compiler = SimpleNamespace(compiled_programs=programs)
+    prefill_programs = iter(programs[:2])
+    execution.compile_prefill = lambda **_kwargs: (next(prefill_programs),)
+    execution.compile_decode = lambda **_kwargs: programs[2]
+    trace_keys = {
+        programs[0].key: ProgramKey("a" * 64),
+        programs[2].key: ProgramKey("c" * 64),
+    }
+    trace_compiler.trace_key_for_program = trace_keys.get
+    trace_compiler.get = lambda key: SimpleNamespace(signature=f"trace-{key.digest[0]}")
+
+    coordinator.warmup_prefill(kv_cache="cache", enable_trace=True, can_sample_on_device=False)
+    with expect_error(RuntimeError, programs[1].key.digest):
+        coordinator.warmup_decode(
+            kv_cache="cache",
+            enable_trace=True,
+            max_batch_size=1,
+            num_blocks=8,
+            can_sample_on_device=False,
+        )
+
+    assert trace_compiler.calls == 0
+
+
 @pytest.mark.parametrize("order", [("prefill", "decode"), ("decode", "prefill")])
 def test_prefill_decode_order_is_independent_and_capture_waits_for_both(order):
     config = WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,))
@@ -665,6 +779,103 @@ def test_prefill_decode_order_is_independent_and_capture_waits_for_both(order):
     run(order[0])
     run(order[1])
     assert trace_compiler.calls == 1
+
+
+@pytest.mark.parametrize("order", [("prefill", "decode"), ("decode", "prefill")])
+def test_capture_uses_phase_specific_sampling_decisions(order):
+    config = WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,))
+    coordinator, execution, trace_compiler, *_ = make_coordinator(
+        trace_mode="all",
+        warmup_config=config,
+        sequence_lengths=(128,),
+        lane_capacity=1,
+    )
+
+    def run(operation):
+        if operation == "prefill":
+            coordinator.warmup_prefill(kv_cache="cache", enable_trace=True, can_sample_on_device=False)
+        else:
+            coordinator.warmup_decode(
+                kv_cache="cache",
+                enable_trace=True,
+                max_batch_size=1,
+                num_blocks=8,
+                can_sample_on_device=True,
+            )
+
+    coordinator.warmup_prefill(kv_cache="cache", enable_trace=False, can_sample_on_device=False)
+    coordinator.warmup_decode(
+        kv_cache="cache",
+        enable_trace=False,
+        max_batch_size=1,
+        num_blocks=8,
+        can_sample_on_device=True,
+    )
+    with coordinator.defer_capture():
+        run(order[0])
+        assert trace_compiler.calls == 0
+        run(order[1])
+        assert coordinator.capture_pending
+        coordinator.activate_pending_capture()
+
+    assert trace_compiler.calls == 1
+    assert coordinator.already_warmed_up_prefill
+    assert all(call["sampling_params"] is None for call in execution.prefill_calls)
+    assert any(call["sampling_params"] is not None for call in execution.decode_calls)
+    assert not execution.prefill_replays
+
+
+def test_capture_deferral_stages_complete_registration_until_explicit_activation():
+    coordinator, _, trace_compiler, *_ = make_coordinator(
+        warmup_config=WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,)),
+        sequence_lengths=(128,),
+        lane_capacity=1,
+        sampling=False,
+    )
+
+    with coordinator.defer_capture():
+        coordinator.warmup_prefill(kv_cache="cache", enable_trace=True, can_sample_on_device=False)
+        coordinator.warmup_decode(
+            kv_cache="cache",
+            enable_trace=True,
+            max_batch_size=1,
+            num_blocks=8,
+            can_sample_on_device=False,
+        )
+        assert coordinator.capture_pending
+        assert not coordinator.trace_activated
+        assert trace_compiler.calls == 0
+        coordinator.activate_pending_capture()
+        assert coordinator.trace_activated
+        assert trace_compiler.calls == 1
+
+    assert not coordinator.capture_pending
+
+
+def test_capture_deferral_exception_discards_pending_activation(expect_error):
+    coordinator, _, trace_compiler, *_ = make_coordinator(
+        warmup_config=WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,)),
+        sequence_lengths=(128,),
+        lane_capacity=1,
+        sampling=False,
+    )
+
+    with expect_error(RuntimeError, "staging failed"):
+        with coordinator.defer_capture():
+            coordinator.warmup_prefill(kv_cache="cache", enable_trace=True, can_sample_on_device=False)
+            coordinator.warmup_decode(
+                kv_cache="cache",
+                enable_trace=True,
+                max_batch_size=1,
+                num_blocks=8,
+                can_sample_on_device=False,
+            )
+            assert coordinator.capture_pending
+            raise RuntimeError("staging failed")
+
+    assert not coordinator.capture_pending
+    assert not coordinator.trace_activated
+    assert trace_compiler.calls == 0
 
 
 def test_static_all_can_capture_decode_only_runtime_trace():
