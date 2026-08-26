@@ -584,35 +584,36 @@ class MiniMaxH3Transformer3DModel(Module):
         audio_1BAC: ttnn.Tensor,
         prompt_1BLP: ttnn.Tensor,
         condition_blocks: list[tuple[ttnn.Tensor, str]] | None,
+        timestep: ttnn.Tensor | None = None,
         adaln_indices: ttnn.Tensor,
         timestep_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """One denoising forward, shaped so `Tracer` can capture it. Precomputed-AdaLN path only.
+        """One denoising forward, shaped so `Tracer` can capture it. Serves both AdaLN paths.
 
         `Tracer` accepts only tensors and plain scalars, nested in tuples/lists/dicts, and validates
-        that every input keeps its shape across calls. `forward` violates both:
+        that every input keeps its shape across calls. Two of `forward`'s arguments need care:
 
-        * `adaln_cache` is a `MiniMaxH3AdalnCache` object, so it is read off `self` here instead of
-          being passed. Set `self.traced_adaln_cache` before the loop.
-        * `timestep` is `[1, 1, num_timesteps, 1]`, and the *number* of distinct noise levels changes
-          from step to step (the conditioning floor collides with the video level early in the
-          schedule and separates later), so it cannot be a traced input. It is also unused on this
-          path -- `forward` computes `temb` only when `not self.precomputed_adaln` -- so it is dropped
-          rather than padded, under an assert so that turning the precompute path off fails loudly
-          instead of changing numerics.
+        * `adaln_cache` is a `MiniMaxH3AdalnCache` object, not a tensor, so it is read off `self` here
+          instead of being passed. Set `self.traced_adaln_cache` before the loop (it is `None` on the
+          resident path).
+        * `timestep` is `[1, 1, num_slots, 1]`. On the resident path the caller assigns each row a
+          *fixed* slot by role rather than deduplicating levels per step, so `num_slots` is constant
+          for the whole request and the tensor is a valid traced input -- only its values change,
+          which the tracer copies in place. On the precomputed path nothing consumes it (`forward`
+          computes `temb` only when `not self.precomputed_adaln`), so the caller passes `None` and it
+          is a constant scalar input.
 
         Everything else is fixed-shape for a given request: the row counts are set by the packed
         layout and the index tensors are built against `padded_len`.
         """
-        assert self.precomputed_adaln, "traced_step drops `timestep`, which the non-precomputed AdaLN path needs"
         return self.forward(
             video_1BVC=video_1BVC,
             audio_1BAC=audio_1BAC,
             prompt_1BLP=prompt_1BLP,
             condition_blocks=condition_blocks,
-            timestep=None,
+            timestep=timestep,
             adaln_indices=adaln_indices,
             timestep_indices=timestep_indices,
             rope_cos=rope_cos,

@@ -25,15 +25,15 @@ in the same file, sharing its module-level parametrize constants:
 
 ```
 tests/models/minimax_h3/
-├── test_transformer_minimax_h3.py    # attention, one block, token refiner, precomputed AdaLN, whole DiT
+├── test_transformer_minimax_h3.py    # attention, one block, token refiner, precomputed AdaLN, whole DiT, Tracy block device-perf
 ├── test_vae_minimax_h3.py            # convs/resnets, encoder, 36-layer ViT decoder, tiling  (SINGLE_DEVICE)
 ├── test_vae_parallel_minimax_h3.py   # H/W sharding, data-parallel independence, device stitch  (mesh)
 ├── test_audio_minimax_h3.py          # weight-norm conversion, decode (accurate defaults), encode, traced
-├── test_performance_minimax_h3.py    # per-block device time (pipeline latency lives in the pipeline tests)
+├── test_performance_minimax_h3.py    # t2va pipeline wall-clock (`BenchmarkProfiler`)
 ├── test_performance_vae_minimax_h3.py    # VAE perf, and the shared VAE test helpers others import
 ├── test_packing_minimax_h3.py        # host-only layout parity (t2va/fl2va)
 ├── test_references_minimax_h3.py     # ref2va host parity (prep/layout/presentation) + device encode gate
-├── test_pipeline{,_fl2va,_ref2va}_minimax_h3.py   # one e2e mode each (perf + quality), one process each
+├── test_pipeline{,_fl2va,_ref2va}_minimax_h3.py   # one e2e quality gate each (t2va wall-clock is in test_performance_minimax_h3.py; fl2va/ref2va still log stage times)
 └── tools/                            # not tests: perf projection, Tracy harnesses, VBench runner
 ```
 
@@ -287,7 +287,7 @@ The video VAE tiles this canvas **4x7 = 28** ways (256px tiles, overlap 64), mat
 
 ### Meshes
 
-Measured warm (the MEASUREMENT block in `test_pipeline_minimax_h3.py`), 768P/15s, 362 frames,
+Measured warm (the MEASUREMENT block in `test_performance_minimax_h3.py`), 768P/15s, 362 frames,
 49 forwards:
 
 | | 4x8 Galaxy | 4x32 quad (traced) | speedup |
@@ -386,7 +386,7 @@ repeating.
 against 61.7 s in an earlier measurement), and the mp4 write and every weight load are excluded from the
 rows by design. `warmup()` must be given the **real prompt and the real keyframes** — every program in
 the 50-block stack is keyed on the padded packed length, so warming a different one warms nothing.
-`test_performance_minimax_h3.py` asserts the warm and measured lengths agree; for t2va the hazard is
+`run_warm_generation` asserts the warm and measured lengths agree; for t2va the hazard is
 masked only by luck, since 1 and 39 tokens both round up to 37888.
 
 ## Precision
