@@ -87,9 +87,9 @@ volatile tt_l1_ptr cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
     return reinterpret_cast<volatile tt_l1_ptr cmbf2d::FwdMetadata*>(slot_addr_of(slot) + ct.token_size_bytes);
 }
 
-cmbf2d::ChunkDescriptor incoming_chunk(uint32_t chunk) {
+cmbf2d::ChunkDescriptor forwarding_chunk(uint32_t chunk) {
     return cmbf2d::ChunkDescriptor::from_words(
-        &kernel_compile_time_args[ct.incoming_chunk_base + chunk * cmbf2d::CHUNK_WORDS]);
+        &kernel_compile_time_args[ct.forwarding_chunk_base + chunk * cmbf2d::CHUNK_WORDS]);
 }
 
 // Experts hosted by any chip on our ring. The dispatch group's experts are laid out in dispatch-group-index order, so
@@ -330,7 +330,7 @@ struct Reader {
     // speculative about them: `batch` pages at a time, capped by what is left of the chunk and by what
     // upstream says has arrived. An EMPTY chunk occupies no pages at all and so is simply not there.
     void do_forward_chunk(uint32_t chunk) {
-        uint32_t remaining = chunk_tokens(incoming_chunk(chunk));
+        uint32_t remaining = chunk_tokens(forwarding_chunk(chunk));
         if (remaining == 0) {
             return;
         }

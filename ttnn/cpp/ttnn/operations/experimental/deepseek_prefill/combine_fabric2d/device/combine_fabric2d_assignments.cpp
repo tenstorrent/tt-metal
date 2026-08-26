@@ -67,60 +67,51 @@ void validate_coverage(const std::map<StreamId, std::vector<Assignment>>& per_st
 
 namespace {
 
-// A chunk's (origin, destination) as hop offsets along the stream's own direction, in emission order. The
-// list a chip emits is its own forwarding destinations, furthest first, followed by the arrivals it passes
-// on — which is the same list one hop older with the arrivals for its neighbour removed. That recursion has
-// a fixed point, so the offsets are the same for every chip and need no simulation.
-std::vector<std::pair<int32_t, int32_t>> emitted_offsets(uint32_t m) {
-    std::vector<std::pair<int32_t, int32_t>> emitted;
-    emitted.reserve(relay_chunks_per_stream(2 * m));
-    for (uint32_t hop = 0; hop + 2 <= m; hop++) {
-        for (uint32_t dst = m - hop; dst >= 2; dst--) {
-            emitted.emplace_back(-static_cast<int32_t>(hop), static_cast<int32_t>(dst));
+// Every chunk a chip forwards, as (source, destination) hop offsets from that chip along the stream's own
+// direction: sources upstream, so negative, destinations downstream, so positive. A chunk whose destination
+// is the forwarder itself is delivered rather than forwarded and so is not here, which is why the nearest
+// destination is 1 and the furthest source is -(dg_size/2 - 1). Offsets are the same on every chip, so this
+// takes only the size of the dispatch group, which is assumed even.
+//
+// The order is the order the upstream chip writes the chunks, which the forwarder must match: the region is
+// dense and holds no per-chunk addresses, so a chunk is found only by walking those before it. Upstream
+// emits its own destinations furthest first (the whole src == -1 group) before any chunk it is itself
+// relaying, so sources run outwards from -1.
+std::vector<std::pair<int32_t, int32_t>> chunks_in_forwarder_ref_frame(uint32_t dg_size) {
+    const int32_t half = static_cast<int32_t>(dg_size / 2);
+    std::vector<std::pair<int32_t, int32_t>> chunks;
+    chunks.reserve(relay_chunks_per_stream(dg_size));
+    for (int32_t src = -1; src > -half; src--) {
+        for (int32_t dst = src + half; dst >= 1; dst--) {
+            chunks.emplace_back(src, dst);
         }
-    }
-    return emitted;
-}
-
-std::vector<cmbf2d::ChunkDescriptor> chunks_at_offsets(
-    const std::vector<std::pair<int32_t, int32_t>>& offsets,
-    StreamId stream,
-    uint32_t my_dg_index,
-    uint32_t extent,
-    uint32_t num_links,
-    int32_t hop_shift) {
-    const bool is_cw = (stream % 2) == 0;
-    const uint32_t link = stream / 2;
-    const uint32_t m = extent / 2;
-    const int32_t travel = is_cw ? 1 : -1;
-
-    std::vector<cmbf2d::ChunkDescriptor> chunks;
-    chunks.reserve(offsets.size());
-    for (const auto& [origin_off, dst_off] : offsets) {
-        const int32_t origin = origin_off + hop_shift;
-        const int32_t dst = dst_off + hop_shift;
-        const uint32_t distance = static_cast<uint32_t>(dst - origin);
-        chunks.push_back(cmbf2d::ChunkDescriptor{
-            .origin_dg_index = static_cast<uint32_t>(
-                (static_cast<int32_t>(my_dg_index) + travel * origin + static_cast<int32_t>(extent)) % extent),
-            .dst_dg_index = static_cast<uint32_t>(
-                (static_cast<int32_t>(my_dg_index) + travel * dst + static_cast<int32_t>(extent)) % extent),
-            .split_idx = distance == m ? stream : link,
-            .split_count = distance == m ? stream_count(num_links) : num_links});
     }
     return chunks;
 }
 
 }  // namespace
 
-std::vector<cmbf2d::ChunkDescriptor> incoming_chunks(
+std::vector<cmbf2d::ChunkDescriptor> forwarding_chunks(
     StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links) {
-    return chunks_at_offsets(emitted_offsets(ring_extent / 2), stream, my_dg_index, ring_extent, num_links, -1);
-}
+    const bool is_cw = (stream % 2) == 0;
+    const uint32_t link = stream / 2;
+    const uint32_t m = ring_extent / 2;
+    const int32_t travel = is_cw ? 1 : -1;
 
-std::vector<cmbf2d::ChunkDescriptor> outgoing_chunks(
-    StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links) {
-    return chunks_at_offsets(emitted_offsets(ring_extent / 2), stream, my_dg_index, ring_extent, num_links, 0);
+    std::vector<cmbf2d::ChunkDescriptor> chunks;
+    for (const auto& [src, dst] : chunks_in_forwarder_ref_frame(ring_extent)) {
+        // A counter-clockwise stream mirrors the offsets through 0; then both land on a dispatch-group index
+        // by adding where this chip sits on the ring.
+        const uint32_t distance = static_cast<uint32_t>(dst - src);
+        chunks.push_back(cmbf2d::ChunkDescriptor{
+            .origin_dg_index = static_cast<uint32_t>(
+                (static_cast<int32_t>(my_dg_index) + travel * src + static_cast<int32_t>(ring_extent)) % ring_extent),
+            .dst_dg_index = static_cast<uint32_t>(
+                (static_cast<int32_t>(my_dg_index) + travel * dst + static_cast<int32_t>(ring_extent)) % ring_extent),
+            .split_idx = distance == m ? stream : link,
+            .split_count = distance == m ? stream_count(num_links) : num_links});
+    }
+    return chunks;
 }
 
 std::map<StreamId, std::vector<Assignment>> generate_assignments(
@@ -151,7 +142,8 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
 
             // Furthest destination first, with relays interleaved so downstream streams get work early.
             // After the j-th own assignment the cumulative relay count is the triangular number
-            // T(j-2) = (j-2)(j-1)/2, which for m=4 gives own3 own2 relay0 own1 relay1 relay2 own0 relay3..5.
+            // T(j-2) = (j-2)(j-1)/2, which for m=4 gives own4 own3 own2 relay0 own1 relay1 relay2 relay3..5
+            // (own by distance, so own1 is the neighbour, which is delivered rather than forwarded).
             uint32_t relays = 0;
             for (uint32_t j = 1; j <= m; j++) {
                 const uint32_t distance = m - j + 1;

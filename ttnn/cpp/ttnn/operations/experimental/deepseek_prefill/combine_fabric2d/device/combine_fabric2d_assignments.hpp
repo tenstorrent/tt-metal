@@ -37,12 +37,8 @@ struct Assignment {
 std::map<StreamId, std::vector<Assignment>> generate_assignments(
     const std::vector<uint32_t>& ring_chip_ids, uint32_t my_dg_index, uint32_t num_links);
 
-// Chunks a stream receives in its own region, in the order the upstream chip emits them.
-std::vector<cmbf2d::ChunkDescriptor> incoming_chunks(
-    StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links);
-
-// Chunks a stream emits into the downstream chip's region, in the order it emits them.
-std::vector<cmbf2d::ChunkDescriptor> outgoing_chunks(
+// Chunks a stream forwards, in the order the upstream chip emits them into its region.
+std::vector<cmbf2d::ChunkDescriptor> forwarding_chunks(
     StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links);
 
 // Relay chunks a stream receives, which is also how many its upstream neighbour emits into this stream's
