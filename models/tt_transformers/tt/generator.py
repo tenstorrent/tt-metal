@@ -32,6 +32,7 @@ from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
     Mode,
     copy_host_to_device,
+    get_all_padded_prefill_lengths,
     get_block_size,
     get_max_prefill_chunk_size,
     get_padded_prefill_len,
@@ -245,8 +246,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         )
 
         # Only models that accept a nonzero ``start_pos`` can ever take the
-        # resumed path, so only they should reserve trace region for it.
-        if enable_trace and self.model_capabilities.get("supports_prefix_caching", False):
+        # resumed path, so only they should reserve trace region for it. Both
+        # prefix caching and a prompt split across engine steps produce one.
+        resumes_prefill = self.model_capabilities.get("supports_prefix_caching", False) or self.model_capabilities.get(
+            "supports_chunked_prefill", False
+        )
+        if enable_trace and resumes_prefill:
             self._warmup_prefill_resumed_sweep(kv_cache=kv_cache)
 
     def _warmup_prefill_resumed_sweep(self, kv_cache):
@@ -274,11 +279,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     continue
                 # The offset a real request will be floored to for this length, so
                 # the captured program config is the one those replays need.
-                q_chunk = self._traced_sdpa_q_chunk_size(prefill_seq_len, model_id) or block_size
-                num_cached = math.lcm(block_size, int(q_chunk))
-                total_seq_len = num_cached + prefill_seq_len
-                if total_seq_len > model_args.max_seq_len:
-                    continue
+                num_cached = self._resume_offset_alignment(prefill_seq_len, block_size, model_id)
+                # The prompt spans the bucket rather than the bucket plus the
+                # offset: adding to it would exceed max_seq_len for the largest
+                # bucket, skipping the trace a real request of that length uses.
+                # The suffix still pads back to this bucket because the offset is
+                # at most half of it.
+                total_seq_len = prefill_seq_len
+                assert (
+                    get_padded_prefill_len(total_seq_len - num_cached) == prefill_seq_len
+                ), f"warmup suffix {total_seq_len - num_cached} does not pad to bucket {prefill_seq_len}"
 
                 num_blocks = num_blocks_in_seq(total_seq_len, block_size)
                 logger.info(
@@ -1459,11 +1469,35 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         get_config = getattr(self.model_args[model_id], "get_attn_sdpa_program_config", None)
         if get_config is None:
             return None
-        try:
-            return get_config(Mode.PREFILL, prefill_seq_len, 0, None).q_chunk_size
-        except (AttributeError, TypeError, ValueError):
-            # A model whose program config this signature does not describe.
-            return None
+        # Deliberately unguarded: a model whose program config this signature does
+        # not describe must say so by not exposing the method. Swallowing the error
+        # here would drop back to block-only alignment and reinstate the wrong
+        # prefix reads this exists to prevent.
+        return get_config(Mode.PREFILL, prefill_seq_len, 0, None).q_chunk_size
+
+    def _resume_offset_alignment(self, prefill_seq_len, block_size, model_id=0):
+        """Multiple a resume offset must land on for this padded suffix length.
+
+        The paged ops need ``block_size``; the traced SDPA needs the q_chunk_size
+        its program was captured with. Their least common multiple satisfies both.
+
+        The q_chunk_size is taken from the model's own program config where it
+        exposes one, so a short suffix keeps its smaller alignment instead of
+        being rounded away. A model without one must declare
+        ``resumed_prefill_token_alignment``: there is no safe default, and
+        guessing block_size is what produces the silent wrong prefix.
+        """
+        q_chunk = self._traced_sdpa_q_chunk_size(prefill_seq_len, model_id)
+        if q_chunk is None:
+            q_chunk = self.model_capabilities.get("resumed_prefill_token_alignment")
+        if q_chunk is None:
+            raise ValueError(
+                f"{type(self).__name__} resumes a prefill but neither exposes "
+                "`get_attn_sdpa_program_config` on its model_args nor declares "
+                "`model_capabilities['resumed_prefill_token_alignment']`, so the "
+                "alignment its chunked-SDPA program requires cannot be determined."
+            )
+        return math.lcm(block_size, int(q_chunk))
 
     def _align_resume_offsets(self, num_cached_per_user, prompt_lens, kv_cache):
         """Floor each resume offset to what the paged ops and the traced SDPA need.
@@ -1489,14 +1523,22 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         aligned = []
         for i, (num_cached, seq_len) in enumerate(zip(num_cached_per_user, prompt_lens)):
             floored = (int(num_cached) // block_size) * block_size
-            # The pinned q_chunk_size depends on the padded length, which depends on
-            # the offset. Flooring further only lengthens the remaining span, and
-            # the pinned value never decreases with length, so one re-floor settles
-            # it.
-            q_chunk = self._traced_sdpa_q_chunk_size(get_padded_prefill_len(int(seq_len) - floored))
-            if q_chunk and q_chunk > block_size:
-                alignment = math.lcm(block_size, int(q_chunk))
-                floored = (int(num_cached) // alignment) * alignment
+            # The alignment depends on the padded suffix length, which depends on
+            # the offset, so it has to settle: flooring lengthens the suffix, a
+            # longer suffix can pin a larger q_chunk_size, and that can demand a
+            # smaller offset again. Both are monotonic and the q_chunk_size set is
+            # finite, so this terminates; the bound is a guard, not an expectation.
+            for _ in range(len(get_all_padded_prefill_lengths(int(seq_len))) + 1):
+                alignment = self._resume_offset_alignment(get_padded_prefill_len(int(seq_len) - floored), block_size)
+                settled = (int(num_cached) // alignment) * alignment
+                if settled == floored:
+                    break
+                floored = settled
+            else:
+                raise RuntimeError(
+                    f"user {i}: resume offset alignment did not settle for "
+                    f"start_pos={num_cached}, seq_len={seq_len}, block_size={block_size}"
+                )
             if floored != num_cached:
                 logger.debug(f"Resume offset alignment: user {i} start_pos {num_cached} -> {floored}")
             aligned.append(floored)

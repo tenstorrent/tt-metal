@@ -1495,6 +1495,11 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
+        # Gemma4ModelArgs exposes no get_attn_sdpa_program_config, so the resume
+        # offset alignment cannot be derived. chunked_prefill_sdpa pins
+        # q_chunk_size=128 and documents that its base_offset must be a multiple
+        # of it.
+        "resumed_prefill_token_alignment": 128,
     }
 
     def __init__(self, *args, **kwargs):

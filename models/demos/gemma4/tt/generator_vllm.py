@@ -230,6 +230,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": os.environ.get("GEMMA4_SUPPORTS_ASYNC_DECODE", "1").lower() in ("1", "true", "yes"),
+        # Gemma4ModelArgs exposes no get_attn_sdpa_program_config, so the resume
+        # offset alignment cannot be derived. chunked_prefill_sdpa pins
+        # q_chunk_size=128 and documents that its base_offset must be a multiple
+        # of it.
+        "resumed_prefill_token_alignment": 128,
         "supports_sample_on_device": True,
     }
 
