@@ -3865,6 +3865,29 @@ std::string full_mapping_signature(const TopologyMappingResult& result) {
     return signature;
 }
 
+// Count how many distinct same-rank global groups (host partitions) an inter-mesh placement occupies. Used to
+// enforce the hard host-group cap on EVERY enumerated multi-solution result: unlike the single-solve path, the
+// enumeration solver (solve_topology_mapping_n / the incremental session) does not apply the cap, so a placement it
+// returns can occupy more than max_same_rank_groups_used hosts. The multi-solution utils below drop such placements.
+std::size_t inter_mesh_placement_occupied_host_groups(
+    const ::tt::tt_fabric::MappingResult<MeshId, MeshId>& placement,
+    const ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& constraints) {
+    const auto& groups = constraints.get_same_rank_global_groups();
+    if (groups.empty()) {
+        return 0;
+    }
+    std::set<std::size_t> occupied;
+    for (const auto& [logical_mesh, physical_mesh] : placement.target_to_global) {
+        for (std::size_t i = 0; i < groups.size(); ++i) {
+            if (groups[i].contains(physical_mesh)) {
+                occupied.insert(i);
+                break;
+            }
+        }
+    }
+    return occupied.size();
+}
+
 }  // namespace
 
 std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
@@ -3906,10 +3929,18 @@ std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
         max_solutions,
         unique_shapes);
 
+    // Hard host-group cap applies to EVERY enumerated solution, not just the single-solve path: the enumeration
+    // solver does not honor set_max_same_rank_groups_used, so drop any placement that occupies more than the cap.
+    const std::size_t host_group_cap = inter_mesh_constraints.max_same_rank_groups_used();
+
     std::set<std::string> seen_signatures;
     for (const auto& placement : placements) {
         if (!placement.success) {
             continue;
+        }
+        if (host_group_cap > 0 &&
+            inter_mesh_placement_occupied_host_groups(placement, inter_mesh_constraints) > host_group_cap) {
+            continue;  // enforce the hard host-group cap on this enumerated solution
         }
 
         std::unordered_map<MeshId, MeshId> mesh_mappings(
@@ -3986,6 +4017,15 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
 
         // Block this inter-mesh placement (by shape when unique_shapes) so the next warm solve returns a new one.
         excluded_.emplace_back(placement.target_to_global.begin(), placement.target_to_global.end());
+
+        // Hard host-group cap applies to every enumerated solution: the enumeration session does not honor
+        // set_max_same_rank_groups_used, so skip (but keep blocked, above) any placement over the cap and warm-solve
+        // for the next distinct one.
+        if (const std::size_t host_group_cap = inter_mesh_constraints_.max_same_rank_groups_used();
+            host_group_cap > 0 &&
+            inter_mesh_placement_occupied_host_groups(placement, inter_mesh_constraints_) > host_group_cap) {
+            continue;
+        }
 
         std::unordered_map<MeshId, MeshId> mesh_mappings(
             placement.target_to_global.begin(), placement.target_to_global.end());
