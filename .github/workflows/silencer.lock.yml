@@ -1145,8 +1145,7 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "unit",
-                          "wan22"
+                          "unit"
                         ],
                         "type": "string"
                       },
