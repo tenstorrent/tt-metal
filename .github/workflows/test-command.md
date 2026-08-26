@@ -164,6 +164,100 @@ pre-agent-steps:
 
       echo "PR #${PR_NUMBER}: head=${HEAD_REF} fork=${IS_FORK} files=$(wc -l < /tmp/gh-aw/agent/pr-files.txt) diff_lines=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)"
 
+# Deterministic backfill of the one dispatch field the agent must never get wrong.
+#
+# `ref` decides which code every dispatched pipeline actually tests, and omitting it does
+# not fail — gh-aw's resolution chain (message.ref > target-ref > GITHUB_HEAD_REF >
+# GITHUB_REF) bottoms out at `GITHUB_REF`, which on an `issue_comment` event is
+# `refs/heads/main`. The developer gets a green pipeline that tested none of their code,
+# reported as a success. See *The ref rule* below for the full statement of the invariant.
+#
+# The prompt states that rule about as forcefully as prose can, and the agent still
+# dropped the field on both dispatches for #54397 — after reading `pr-head-ref.txt` —
+# while asserting in its comment that it had targeted the PR branch. The value is a
+# verbatim copy of a file the runner already wrote, so there is no judgement here for the
+# model to contribute. Take it out of the loop.
+#
+# Placement matters: `post-steps` runs after `Ingest agent output` (which writes
+# /tmp/gh-aw/agent_output.json) and before `Upload agent artifacts`, so rewriting that
+# file here is exactly what the `safe_outputs` job downloads and acts on.
+post-steps:
+  - name: Force PR head ref on every dispatch
+    # `always()` so the guard still fires when an earlier step soft-failed but safe
+    # outputs were already emitted.
+    if: always()
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      OUT=/tmp/gh-aw/agent_output.json
+      RAW=/tmp/gh-aw/safeoutputs.jsonl
+      HEAD_REF_FILE=/tmp/gh-aw/agent/pr-head-ref.txt
+
+      if [ ! -f "$OUT" ]; then
+        echo "No agent output at $OUT; nothing to rewrite."
+        exit 0
+      fi
+
+      DISPATCHES="$(jq '[.items[]? | select(.type == "dispatch_workflow")] | length' "$OUT")"
+      if [ "$DISPATCHES" -eq 0 ]; then
+        echo "No dispatch_workflow items; nothing to rewrite."
+        exit 0
+      fi
+
+      # Fail closed. A dispatch we cannot aim is worse than no dispatch, because it
+      # reports as a pass.
+      if [ ! -s "$HEAD_REF_FILE" ]; then
+        echo "::error::$DISPATCHES dispatch(es) requested but $HEAD_REF_FILE is missing or empty." >&2
+        exit 1
+      fi
+
+      HEAD_REF="$(tr -d '[:space:]' < "$HEAD_REF_FILE")"
+      case "$HEAD_REF" in
+        ''|main|master|refs/heads/main|refs/heads/master)
+          echo "::error::Refusing to dispatch: PR head ref resolved to '$HEAD_REF'." >&2
+          exit 1
+          ;;
+      esac
+
+      # Unconditional set, not a fill-in-if-absent: the file is the only authority on
+      # which branch this invocation is about, so a value the agent supplied instead can
+      # only agree with it or be wrong.
+      jq --arg ref "$HEAD_REF" '
+        .items = [ .items[]?
+                 | if .type == "dispatch_workflow" then . + {ref: $ref} else . end ]
+      ' "$OUT" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+
+      # Keep the raw NDJSON copy in the artifact consistent with what was acted on, so a
+      # later reader of the artifact is not comparing two different stories. Best-effort:
+      # this file is for humans, and a malformed stream must not fail the run once the
+      # authoritative rewrite above has already succeeded.
+      if [ -f "$RAW" ]; then
+        if jq -c --arg ref "$HEAD_REF" '
+             if .type == "dispatch_workflow" then . + {ref: $ref} else . end
+           ' "$RAW" > "$RAW.tmp" 2>/dev/null; then
+          mv "$RAW.tmp" "$RAW"
+        else
+          rm -f "$RAW.tmp"
+          echo "Note: left $RAW unchanged (not a clean JSON stream)."
+        fi
+      fi
+
+      # Auditable record derived from the payload rather than from the agent's prose.
+      # The comment's "Ref for both dispatches" line is written from the agent's intent
+      # and can therefore claim a ref it never set; this table cannot.
+      {
+        echo "### \`/test\` dispatch refs"
+        echo
+        echo "| Pipeline | ref |"
+        echo "|---|---|"
+        jq -r '.items[]?
+               | select(.type == "dispatch_workflow")
+               | "| \(.workflow_name) | \(.ref) |"' "$OUT"
+      } >> "$GITHUB_STEP_SUMMARY"
+
+      echo "Forced ref=$HEAD_REF on $DISPATCHES dispatch item(s)."
+
 safe-outputs:
   mentions: false
   add-comment:
@@ -458,6 +552,13 @@ tested none of their code, which is worse than no result at all.
 
 Copy the branch name from that file verbatim. Do not reconstruct it from the PR title, the
 comment, or your memory of the diff. Never dispatch `main`, `master`, or a release branch.
+
+A `post-steps` hook now overwrites `ref` on every dispatch item with the contents of that
+file before the `safe_outputs` job acts on them, and hard-fails the run if the file is
+missing or resolves to a default branch. That backstop exists because this rule was
+violated in practice — see the comment above `post-steps:` in the frontmatter. Set `ref`
+correctly anyway: relying on the hook makes your reported inputs disagree with what ran,
+and the hook is a guard against a mistake, not a substitute for the rule.
 
 ## Reporting
 
