@@ -755,7 +755,14 @@ KNOBS = {
     # row-too-small); QSR refuses wholesale.  Target row: topk-perf
     # (typed-multiresult ph0-3 phase drivers + steps-4-1 while flatten to
     # hand-shaped straight-line launch runs; ph4 step-N nest refuses
-    # trip-count-unproven -- rolled in the hand arm too).
+    # trip-count-unproven -- rolled in the hand arm too).  Also admits
+    # computed-word VOLATILE delivery stores (the TT_ macro
+    # `instrn_buffer[0] = word` shape; volatile loads refuse), which
+    # unlocks the merge/rebuild ii-loops.  MEASURED (lane HH 2026-08-26,
+    # 3-rep cycle-exact): topk-perf sem KERNEL 6022 -> 5708 (vs hand
+    # 5755 booked / 5768 same-leg = L +4.64 -> WIN -0.82); TOPK_BODY
+    # 5317 -> 4974 (sem faster than hand in the sort body); corr 12/12
+    # device-golden + paired CRAQ 12/12 at knob flags.
     "launch-flatten": "-mtt-tensix-optimize-launch-flatten",
 }
 
