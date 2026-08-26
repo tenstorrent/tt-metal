@@ -91,6 +91,13 @@ struct SpanDecodeState {
     std::vector<uint8_t> seeded;
     std::unordered_map<uint32_t, uint32_t> core_of_xy;  // packed (y<<16)|x -> dense core index
     uint64_t live_words = 0;
+    // Zone size-class histogram (S/M/L + legacy pair HALVES), counted where the walk already branches
+    // on type -- the S-fraction is what says whether the 2-word class pays for its branch on a real
+    // workload (family design step 4).
+    uint64_t zone_s = 0;
+    uint64_t zone_m = 0;
+    uint64_t zone_l = 0;
+    uint64_t zone_pair_halves = 0;
     uint64_t resync_events = 0;
     uint64_t resync_words = 0;
     uint64_t head_lag = 0;
@@ -248,6 +255,7 @@ inline uint32_t spsc_decode_frame(
                     }
                     const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
                     const uint32_t w2 = ring[(hm + i + 2) & kSpscRingMask];
+                    st.zone_m++;
                     cur = pp_full_ts(th, w1);                  // absolute end re-anchors the lane cursor
                     emit(lane, t, pp_low27(w0), cur, w2, pg);  // ts = END, w2 = duration
                     i += 3;
@@ -257,6 +265,7 @@ inline uint32_t spsc_decode_frame(
                         break;
                     }
                     const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    st.zone_s++;
                     cur += pp_zone_s_delta(w1);  // 64-bit add: crosses the lo-wrap with no sticky
                     emit(lane, PP_ZONE_ATOMIC, pp_low27(w0), cur, pp_zone_s_dur(w1), pg);  // normalized
                     i += 2;
@@ -271,6 +280,7 @@ inline uint32_t spsc_decode_frame(
                                          ring[(hm + i + 3) & kSpscRingMask];
                     // 64-bit duration cannot ride the 32-bit dur argument: normalize to a synthetic
                     // START/END pair for the downstream pairing stack. Does NOT move the cursor.
+                    st.zone_l++;
                     emit(lane, PP_ZONE_START, pp_low27(w0), end - dur, 0, pg);
                     emit(lane, PP_ZONE_END, pp_low27(w0), end, 0, pg);
                     i += 5;
@@ -280,6 +290,7 @@ inline uint32_t spsc_decode_frame(
                         break;
                     }
                     const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    st.zone_pair_halves++;
                     emit(lane, t, pp_low27(w0), pp_full_ts(th, w1), 0, pg);  // full 27-bit structural id
                     i += 2;
                 } else if (t == PP_STICKY_TIMER) {
@@ -377,6 +388,7 @@ inline uint32_t spsc_decode_frame(
                     st.anomalies++;
                     break;
                 }
+                st.zone_m++;
                 cur = pp_full_ts(th, p[i + 1]);                  // absolute end re-anchors the lane cursor
                 emit(lane, t, pp_low27(w0), cur, p[i + 2], pg);  // ts = END, [2] = duration
                 i += 3;
@@ -386,6 +398,7 @@ inline uint32_t spsc_decode_frame(
                     break;
                 }
                 const uint32_t w1 = p[i + 1];
+                st.zone_s++;
                 cur += pp_zone_s_delta(w1);  // 64-bit add: crosses the lo-wrap with no sticky
                 emit(lane, PP_ZONE_ATOMIC, pp_low27(w0), cur, pp_zone_s_dur(w1), pg);  // normalized
                 i += 2;
@@ -397,6 +410,7 @@ inline uint32_t spsc_decode_frame(
                 const uint64_t end = (static_cast<uint64_t>(p[i + 2]) << 32) | p[i + 1];
                 const uint64_t dur = (static_cast<uint64_t>(p[i + 4]) << 32) | p[i + 3];
                 // Normalized to a synthetic START/END pair (64-bit duration; see the raw walk). No cursor move.
+                st.zone_l++;
                 emit(lane, PP_ZONE_START, pp_low27(w0), end - dur, 0, pg);
                 emit(lane, PP_ZONE_END, pp_low27(w0), end, 0, pg);
                 i += 5;
@@ -406,6 +420,7 @@ inline uint32_t spsc_decode_frame(
                     break;
                 }
                 const uint32_t w1 = p[i + 1];
+                st.zone_pair_halves++;
                 emit(lane, t, pp_low27(w0), pp_full_ts(th, w1), 0, pg);  // full 27-bit structural id
                 i += 2;
             } else if (t == PP_STICKY_TIMER) {

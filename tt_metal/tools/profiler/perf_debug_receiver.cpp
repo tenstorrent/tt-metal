@@ -783,6 +783,26 @@ void PerfDebugReceiver::log_report() const {
             s.bad_frames,
             s.decode.unknown_core_frames,
             s.order_regressions);
+        // Zone size-class histogram (family design step 4): the S-fraction is what says whether the
+        // 2-word class pays for its branch on this workload. Wire words = 2S + 3M + 5L + 2*halves.
+        const uint64_t zc_total = s.decode.zone_s + s.decode.zone_m + s.decode.zone_l + s.decode.zone_pair_halves;
+        if (zc_total != 0) {
+            log_info(
+                tt::LogMetal,
+                "[perf-debug receiver] d{}/s{}: zone classes: S {} ({:.1f}%) | M {} ({:.1f}%) | L {} | legacy pair "
+                "halves {} | zone wire {:.1f} MB",
+                s.dev,
+                s.sock_idx,
+                s.decode.zone_s,
+                100.0 * static_cast<double>(s.decode.zone_s) / static_cast<double>(zc_total),
+                s.decode.zone_m,
+                100.0 * static_cast<double>(s.decode.zone_m) / static_cast<double>(zc_total),
+                s.decode.zone_l,
+                s.decode.zone_pair_halves,
+                static_cast<double>(
+                    2 * s.decode.zone_s + 3 * s.decode.zone_m + 5 * s.decode.zone_l + 2 * s.decode.zone_pair_halves) *
+                    4.0 / 1e6);
+        }
     }
     uint64_t consumer_drops = 0;
     for (const auto& c : consumers_report_) {
