@@ -185,15 +185,47 @@ def require_galaxy_ccl_hardware_resources(
     return GalaxyHardwareResources(owner=owner, ccl=owner.ccl, prefetcher=subdevices)
 
 
-def _create_hardware_prefetcher(
+GALAXY_PREFETCH_SENDER_COORDS = (
+    (0, 9),
+    (0, 0),
+    (0, 4),
+    (0, 5),
+    (4, 0),
+    (4, 9),
+    (4, 1),
+    (4, 7),
+    (4, 6),
+    (4, 2),
+    (4, 4),
+    (4, 5),
+)
+GALAXY_PREFETCH_GLOBAL_CB_SIZE = 728 * 1088
+
+
+def galaxy_prefetcher_sender_cores() -> ttnn.CoreRangeSet:
+    """The 12 real DRAM-prefetch sender cores the address tensor is placed on."""
+
+    return ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in GALAXY_PREFETCH_SENDER_COORDS]
+    )
+
+
+def galaxy_prefetcher_config(
     mesh_device: ttnn.MeshDevice,
     resources: GalaxyResourcesConfig,
-    weights: tuple[tuple[str, Any], ...],
-) -> Prefetcher2D:
-    sender_coords = tuple(
-        ttnn.CoreCoord(x, y)
-        for x, y in ((0, 9), (0, 0), (0, 4), (0, 5), (4, 0), (4, 9), (4, 1), (4, 7), (4, 6), (4, 2), (4, 4), (4, 5))
-    )
+    weight_count: int,
+    *,
+    global_cb_size: int | None = GALAXY_PREFETCH_GLOBAL_CB_SIZE,
+) -> Prefetcher2DConfig:
+    """Resolve the qualified WH Galaxy prefetch sender/receiver geometry.
+
+    12 real senders stream the registered weights into the decode ring; 8 dummy
+    senders exist only so the global circular buffer covers every remaining
+    worker core. `global_cb_size` is exposed so a test can deliberately build an
+    undersized configuration; leave it at the default for a working prefetcher.
+    """
+
+    sender_coords = tuple(ttnn.CoreCoord(x, y) for x, y in GALAXY_PREFETCH_SENDER_COORDS)
     receiver_pairs = tuple(((1, y), (2, y)) for y in (9, 0, 4, 5)) + tuple(
         ((5, y), (6, y)) for y in (0, 9, 1, 7, 6, 2, 4, 5)
     )
@@ -222,11 +254,11 @@ def _create_hardware_prefetcher(
     )
     all_sender_coords = sender_coords + dummy_sender_coords
     all_receiver_sets = receiver_sets + dummy_receiver_sets
-    sender_cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in sender_coords])
+    sender_cores = galaxy_prefetcher_sender_cores()
     address_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(sender_cores, [1, len(weights)], ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(sender_cores, [1, weight_count], ttnn.ShardOrientation.ROW_MAJOR),
     )
 
     def mode_config(plan: GalaxyModePlan) -> Prefetcher2DModeConfig:
@@ -238,20 +270,26 @@ def _create_hardware_prefetcher(
             local_l1_size=plan.local_l1_size,
         )
 
-    prefetcher = Prefetcher2D(
-        Prefetcher2DConfig(
-            mesh_device=mesh_device,
-            architecture=resources.architecture,
-            prefill=mode_config(resources.prefill),
-            decode=mode_config(resources.decode),
-            sender_receiver_mapping=tuple(zip(all_sender_coords, all_receiver_sets)),
-            global_cb_size=728 * 1088,
-            expected_weight_count=len(weights),
-            address_repeat_count=len(sender_coords),
-            address_memory_config=address_memory_config,
-            address_mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+    return Prefetcher2DConfig(
+        mesh_device=mesh_device,
+        architecture=resources.architecture,
+        prefill=mode_config(resources.prefill),
+        decode=mode_config(resources.decode),
+        sender_receiver_mapping=tuple(zip(all_sender_coords, all_receiver_sets)),
+        global_cb_size=global_cb_size,
+        expected_weight_count=weight_count,
+        address_repeat_count=len(sender_coords),
+        address_memory_config=address_memory_config,
+        address_mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+
+
+def _create_hardware_prefetcher(
+    mesh_device: ttnn.MeshDevice,
+    resources: GalaxyResourcesConfig,
+    weights: tuple[tuple[str, Any], ...],
+) -> Prefetcher2D:
+    prefetcher = Prefetcher2D(galaxy_prefetcher_config(mesh_device, resources, len(weights)))
     try:
         prefetcher.initialize()
         for name, tensor in weights:
@@ -278,7 +316,17 @@ def galaxy_mode_plan(
     *,
     semaphore_cores: Any | None = None,
 ) -> GalaxyModePlan:
-    """Build the common no-prefetch worker envelope used by focused module tests."""
+    """Build the common no-prefetch worker envelope used by focused module tests.
+
+    `semaphore_cores` narrows where the mode's global semaphores are allocated. Narrow
+    it only for a collective that binds its semaphore to a grid it owns, the way the
+    fused RMS all-gather does. The generic async CCLs (`all_gather_async`,
+    `reduce_scatter_minimal_async`, `all_reduce_async`, `all_reduce_create_qkv_heads`)
+    instead choose sender worker cores from the worker subdevice minus the reserved
+    output cores, so on those a semaphore narrower than the subdevice leaves a sender
+    polling an L1 address that its own core never had reserved or zeroed. That hangs
+    the collective rather than failing it, so leave this at the default for them.
+    """
 
     grid = mesh_device.compute_with_storage_grid_size()
     cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})

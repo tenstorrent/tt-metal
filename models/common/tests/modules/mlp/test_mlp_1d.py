@@ -34,34 +34,9 @@ from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _matmul_config
 from models.common.tensor_utils import TILE_SIZE
+from models.common.tests.modules._hf_reference import get_mlp_weights_from_ref_model
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.common import Mode
-
-
-def get_mlp_weights_from_ref_model(reference_mlp) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Extract w1, w2, w3 weights from a reference MLP module in TTNN layout (transposed).
-
-    Handles both standard LLaMA-style MLPs (gate_proj, up_proj, down_proj) and
-    fused gate_up_proj models (Phi-3/Phi-4).
-
-    Returns:
-        (w1, w2, w3) tensors in TTNN layout: (in_features, out_features)
-    """
-    if hasattr(reference_mlp, "gate_proj"):
-        w1_torch = reference_mlp.gate_proj.weight.T  # (dim, hidden_dim)
-        w3_torch = reference_mlp.up_proj.weight.T  # (dim, hidden_dim)
-    elif hasattr(reference_mlp, "gate_up_proj"):
-        # Handle models like Phi-3/Phi-4 that use fused gate_up_proj
-        gate_up_weight = reference_mlp.gate_up_proj.weight
-        hidden_dim = gate_up_weight.shape[0] // 2
-        w1_torch = gate_up_weight[:hidden_dim, :].T  # (dim, hidden_dim)
-        w3_torch = gate_up_weight[hidden_dim:, :].T  # (dim, hidden_dim)
-    else:
-        raise AttributeError(f"Reference MLP {type(reference_mlp)} has no gate_proj or gate_up_proj")
-
-    w2_torch = reference_mlp.down_proj.weight.T  # (hidden_dim, dim)
-    return w1_torch, w2_torch, w3_torch
 
 
 def _get_prefill_len_cutoff(hf_model_name: str, mesh_shape: tuple[int, int]) -> int | None:

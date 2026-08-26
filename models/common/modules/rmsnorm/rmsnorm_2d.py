@@ -248,6 +248,7 @@ class RMSNorm2D(LightweightModule):
         cfg = self.config
         stats_shape = (1, 1, int(x.shape[-2]), TILE_SIZE)
         resources = _select_all_gather_resources(cfg, mode="decode", tensor=stats_shape)
+        _require_fused_stats_placement(cfg, resources.persistent_output_buffers[0])
         output = ttnn.fused_rms_minimal(
             x,
             cfg.decode_progcfg,
@@ -486,9 +487,15 @@ def _resolve_2d_config(config: RMSNorm2DConfig) -> RMSNorm2DConfig:
     hidden_size_per_device = dim // num_cols if geometry is RMSNorm2DGeometry.DISTRIBUTED else dim
     hidden_tiles = hidden_size_per_device // TILE_SIZE
     if geometry is RMSNorm2DGeometry.HEAD_LOCAL:
-        grid_width = grid_height = 1
+        # A head-local norm is a plain `rms_norm` over one 128-wide head: no
+        # collective, and the program config is derived from the input placement.
+        # Decode feeds it `batch * local heads` rows, not the fixed 32 rows a
+        # width-sharded L1 recipe would pin, so keep decode interleaved like
+        # prefill and let callers opt into an explicit sharded placement.
+        if config.decode_input_memcfg is None:
+            to_set["decode_input_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
     else:
-        # The canonical column-dispatch Galaxy layout reserves x=0. Keep four
+        # The canonical column-dispatch Galaxy layout reserves x=0..1. Keep four
         # width tiles per core and use the proven two-column norm grid.
         grid_width = 2
         if hidden_tiles % (grid_width * 4) != 0:
@@ -496,38 +503,46 @@ def _resolve_2d_config(config: RMSNorm2DConfig) -> RMSNorm2DConfig:
         grid_height = hidden_tiles // (grid_width * 4)
         if not 1 <= grid_height <= 10:
             raise ValueError(f"distributed decode norm grid height must fit Wormhole, got {grid_height}")
-    core_grid_ln = (grid_height, grid_width)
-    num_cores_ln = grid_height * grid_width
-    # x=1 owns the fused distributed-stats circular buffer. Keep the norm
-    # shards on the proven Galaxy x=2..3 grid so those L1 allocations do not
-    # contend with it.
-    decode_core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, grid_height - 1))})
-
-    if config.decode_input_memcfg is None:
-        to_set["decode_input_memcfg"] = ttnn.create_sharded_memory_config(
-            shape=(1, 1, 32, hidden_size_per_device // num_cores_ln),
-            core_grid=decode_core_range,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            use_height_and_width_as_shard_shape=True,
+        num_cores_ln = grid_height * grid_width
+        norm_origin = ttnn.CoreCoord(2, 0)
+        decode_core_range = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    norm_origin, ttnn.CoreCoord(norm_origin.x + grid_width - 1, norm_origin.y + grid_height - 1)
+                )
+            }
         )
 
-    if config.decode_progcfg is None:
-        to_set["decode_progcfg"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid_ln[1], core_grid_ln[0]),
-            subblock_w=(hidden_size_per_device // num_cores_ln) // TILE_SIZE,
-            block_h=1,
-            block_w=(hidden_size_per_device // num_cores_ln) // TILE_SIZE,
-            inplace=False,
-        )
+        if config.decode_input_memcfg is None:
+            to_set["decode_input_memcfg"] = ttnn.create_sharded_memory_config(
+                shape=(1, 1, 32, hidden_size_per_device // num_cores_ln),
+                core_grid=decode_core_range,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                use_height_and_width_as_shard_shape=True,
+            )
 
-    if config.decode_stats_memcfg is None:
-        # Stats memory: 32 x (32 * num_cols) where num_cols is the cluster width
-        to_set["decode_stats_memcfg"] = ttnn.create_sharded_memory_config(
-            shape=[1, 1, 32, 32 * num_cols],
-            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            use_height_and_width_as_shard_shape=True,
-        )
+        if config.decode_progcfg is None:
+            to_set["decode_progcfg"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(grid_width, grid_height),
+                subblock_w=(hidden_size_per_device // num_cores_ln) // TILE_SIZE,
+                block_h=1,
+                block_w=(hidden_size_per_device // num_cores_ln) // TILE_SIZE,
+                inplace=False,
+            )
+
+        if config.decode_stats_memcfg is None:
+            # Stats memory: 32 x (32 * num_cols) where num_cols is the cluster width.
+            # The stats shard must sit on the *first* core of the norm input shard
+            # grid: the sharded RMS kernels build their stats circular buffer on
+            # that core and bind it to this tensor's L1 address, so a shard placed
+            # anywhere else makes the kernel read unrelated L1 (see
+            # _require_fused_stats_placement).
+            to_set["decode_stats_memcfg"] = ttnn.create_sharded_memory_config(
+                shape=[1, 1, 32, 32 * num_cols],
+                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(norm_origin, norm_origin)}),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                use_height_and_width_as_shard_shape=True,
+            )
 
     if config.prefill_input_memcfg is None:
         to_set["prefill_input_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
@@ -639,6 +654,38 @@ def _load_input_device_tensor_2d(
     # Already a ttnn.Tensor - return as is
     assert isinstance(x, ttnn.Tensor), f"x must be ttnn.Tensor or LazyWeight, got {type(x)}"
     return x
+
+
+def _shard_origin(memory_config: Any) -> Any:
+    """First core of a sharded memory config, or None when interleaved."""
+    shard_spec = getattr(memory_config, "shard_spec", None)
+    if shard_spec is None:
+        return None
+    return shard_spec.grid.bounding_box().start
+
+
+def _require_fused_stats_placement(config: RMSNorm2DConfig, stats: Any) -> None:
+    """
+    Reject a fused-decode stats buffer that is not sharded on the norm sender core.
+
+    `fused_rms_minimal` creates its stats circular buffer on the first core of the
+    norm input shard grid and binds it to the stats tensor's L1 address; it never
+    reads that tensor over the NoC. A stats shard on any other core therefore makes
+    the kernel reduce whatever else the allocator left at that address on the sender
+    core, which silently corrupts the normalization scale - on hardware this showed up
+    as an output scaled by ~1e37 (rsqrt of zero) or, when the aliased L1 happened to
+    hold other activations, as a plausible-looking but unearned PCC.
+    """
+    expected = _shard_origin(config.decode_input_memcfg)
+    actual = _shard_origin(stats.memory_config())
+    if expected is None:
+        raise ValueError("fused decode requires a width-sharded L1 decode input placement")
+    if actual is None or (actual.x, actual.y) != (expected.x, expected.y):
+        raise ValueError(
+            "fused decode stats buffer must be L1-sharded on the first core of the norm input shard grid "
+            f"({expected}); got {actual}. The fused RMS stats circular buffer is created on that core and "
+            "bound to this buffer's address, so any other placement reads unrelated L1."
+        )
 
 
 def _prefill_stats_shape(input_shape: Any) -> tuple[int, int, int, int]:

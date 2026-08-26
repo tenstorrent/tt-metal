@@ -9,6 +9,7 @@ import torch
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig, _resolve_sampling1d_config
+from models.common.tests.modules._hf_reference import hf_valid_token_set
 
 # ---------------------------------------------------------------------------
 # Model name constants (match test_mlp_1d.py naming convention)
@@ -816,34 +817,6 @@ def test_sampling1d_topk32_in_range(ttnn_mesh_device):
         assert sampled_token in top32_set, f"Batch {b}: sampled token {sampled_token} not in top-32 set"
 
 
-def _hf_valid_token_set(logits_row: "torch.Tensor", k: int, p: float, temp: float) -> set:
-    """Compute the set of tokens eligible under top-k / top-p / temperature filtering.
-
-    Mirrors the pipeline inside ttnn.sampling:
-      1. Temperature: divide logits by temp  (skipped if temp == 1.0)
-      2. Top-k:       zero out all but top-k tokens
-      3. Top-p:       zero out tokens outside the cumulative-probability nucleus
-
-    Uses HuggingFace's LogitsWarper classes so this reference is auditable against
-    the transformers library rather than a hand-rolled implementation.
-
-    Returns the set of token ids that have finite logit after filtering — any
-    sampled token MUST come from this set.
-    """
-    from transformers.generation.logits_process import TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper
-
-    # Warpers expect input_ids (unused here, pass None) and a [1, V] float32 scores tensor.
-    scores = logits_row.float().unsqueeze(0)  # [1, V]
-    if temp != 1.0:
-        scores = TemperatureLogitsWarper(temperature=temp)(None, scores)
-    if k > 0:
-        scores = TopKLogitsWarper(top_k=k)(None, scores)
-    if 0.0 < p < 1.0:
-        scores = TopPLogitsWarper(top_p=p)(None, scores)
-    # Tokens with -inf logit are filtered out; all others are valid candidates.
-    return set(scores[0].isfinite().nonzero(as_tuple=False).squeeze(-1).tolist())
-
-
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
 @pytest.mark.parametrize(
     "k, p, temp, max_boundary_violations",
@@ -895,7 +868,7 @@ def test_sampling1d_token_in_valid_set(ttnn_mesh_device, k, p, temp, max_boundar
     logits_2d = logits_host.squeeze().bfloat16()  # [B, V]
     violations = []
     for b in range(B):
-        valid = _hf_valid_token_set(logits_2d[b], k=k, p=p, temp=temp)
+        valid = hf_valid_token_set(logits_2d[b], k=k, p=p, temp=temp)
         token = tokens_host[b].item()
         if token not in valid:
             violations.append((b, token, len(valid)))

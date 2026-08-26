@@ -34,13 +34,24 @@ def _weight(dim: int, mesh=None):
     return LazyWeight(source=torch.ones(dim), device=mesh)
 
 
-def _context(mesh, mode):
+def _stats_buffer(core=(2, 0)):
+    """Persistent stats buffer stand-in, width-sharded on a single core."""
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, 128),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*core), ttnn.CoreCoord(*core))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return SimpleNamespace(memory_config=lambda: memory_config)
+
+
+def _context(mesh, mode, stats_buffer=None):
     resources = SimpleNamespace(
         key=SimpleNamespace(operation="all_gather", cluster_axis=1, geometry="norm-stats", sequence_key=None),
         cluster_axis=1,
         topology=ttnn.Topology.Linear,
         num_links=2,
-        persistent_output_buffers=(f"{mode}-stats-buffer",),
+        persistent_output_buffers=(stats_buffer if stats_buffer is not None else _stats_buffer(),),
         intermediate_output_buffers=(),
     )
     return SimpleNamespace(
@@ -53,8 +64,10 @@ def _context(mesh, mode):
     )
 
 
-def _ccl(mesh):
-    contexts = {mode: _context(mesh, mode) for mode in ("decode", "prefill")}
+def _ccl(mesh, decode_stats_buffer=None):
+    contexts = {
+        mode: _context(mesh, mode, decode_stats_buffer if mode == "decode" else None) for mode in ("decode", "prefill")
+    }
     return SimpleNamespace(mesh_device=mesh, context=lambda mode: contexts[mode])
 
 
@@ -82,18 +95,18 @@ def test_resolves_representative_norm_geometries(dim):
         ((8, 4), 32, ttnn.device.Arch.BLACKHOLE, "requires Wormhole"),
     ],
 )
-def test_resolution_fails_closed_on_non_wh_galaxy(shape, devices, arch, error):
+def test_resolution_fails_closed_on_non_wh_galaxy(shape, devices, arch, error, expect_error):
     mesh = _mesh(shape, devices=devices, arch=arch)
-    with pytest.raises(AssertionError, match=error):
+    with expect_error(AssertionError, error):
         _resolve_2d_config(RMSNorm2DConfig(weight=_weight(8192, mesh), mesh_device=mesh, tt_ccl=_ccl(mesh)))
 
 
-def test_resolution_rejects_resources_from_another_mesh():
+def test_resolution_rejects_resources_from_another_mesh(expect_error):
     mesh = _mesh()
     other = _mesh()
     context = SimpleNamespace(mesh_device=other)
 
-    with pytest.raises(AssertionError, match="prefetch context"):
+    with expect_error(AssertionError, "prefetch context"):
         _resolve_2d_config(
             RMSNorm2DConfig(
                 weight=_weight(8192, mesh),
@@ -104,9 +117,9 @@ def test_resolution_rejects_resources_from_another_mesh():
         )
 
 
-def test_distributed_resolution_fails_closed_without_ccl_resources():
+def test_distributed_resolution_fails_closed_without_ccl_resources(expect_error):
     mesh = _mesh()
-    with pytest.raises(TypeError, match="context"):
+    with expect_error(TypeError, "context"):
         _resolve_2d_config(
             RMSNorm2DConfig(
                 weight=_weight(8192, mesh),
@@ -116,22 +129,28 @@ def test_distributed_resolution_fails_closed_without_ccl_resources():
         )
 
 
-def test_fused_decode_returns_normalized_output_and_residual_sum(monkeypatch):
-    mesh = _mesh()
-    normalized = object()
-    x = SimpleNamespace(shape=(1, 1, 32, 2048))
-    residual = object()
+def _fused_decode_module(mesh, ccl):
     module = object.__new__(RMSNorm2D)
     module.config = _resolve_2d_config(
         RMSNorm2DConfig(
             weight=_weight(8192, mesh),
             mesh_device=mesh,
-            tt_ccl=_ccl(mesh),
+            tt_ccl=ccl,
             residual_policy=RMSNorm2DResidualPolicy.FUSED_DECODE,
         )
     )
     module.weight = "weight"
     module.load_device_weights = lambda: None
+    return module
+
+
+def test_fused_decode_returns_normalized_output_and_residual_sum(monkeypatch):
+    mesh = _mesh()
+    normalized = object()
+    x = SimpleNamespace(shape=(1, 1, 32, 2048))
+    residual = object()
+    stats_buffer = _stats_buffer()
+    module = _fused_decode_module(mesh, _ccl(mesh, stats_buffer))
     monkeypatch.setattr(rmsnorm_2d, "_load_input_device_tensor_2d", lambda value, *_args, **_kwargs: value)
     fused = MagicMock(return_value=normalized)
     monkeypatch.setattr(ttnn, "fused_rms_minimal", fused)
@@ -141,7 +160,41 @@ def test_fused_decode_returns_normalized_output_and_residual_sum(monkeypatch):
     assert result == (normalized, residual)
     assert fused.call_args.args[4] == "decode-all_gather-semaphore"
     assert fused.call_args.kwargs["residual_input_tensor"] is residual
-    assert fused.call_args.kwargs["stats"] == "decode-stats-buffer"
+    assert fused.call_args.kwargs["stats"] is stats_buffer
+
+
+def test_fused_decode_rejects_stats_buffer_off_the_norm_sender_core(monkeypatch, expect_error):
+    """The fused stats circular buffer is bound to the first norm core's L1 address."""
+    mesh = _mesh()
+    module = _fused_decode_module(mesh, _ccl(mesh, _stats_buffer(core=(1, 0))))
+    monkeypatch.setattr(rmsnorm_2d, "_load_input_device_tensor_2d", lambda value, *_args, **_kwargs: value)
+    fused = MagicMock()
+    monkeypatch.setattr(ttnn, "fused_rms_minimal", fused)
+
+    with expect_error(ValueError, "first core of the norm input shard grid"):
+        module.decode_forward(SimpleNamespace(shape=(1, 1, 32, 2048)), residual=object())
+    fused.assert_not_called()
+
+
+def test_head_local_decode_stays_interleaved():
+    """A 128-wide head norm takes any row count, so it must not pin a 32-row L1 shard."""
+    mesh = _mesh()
+    resolved = _resolve_2d_config(RMSNorm2DConfig(weight=_weight(128, mesh), mesh_device=mesh))
+
+    assert resolved.geometry is RMSNorm2DGeometry.HEAD_LOCAL
+    assert resolved.decode_input_memcfg == ttnn.DRAM_MEMORY_CONFIG
+    assert resolved.decode_residual_memcfg == ttnn.DRAM_MEMORY_CONFIG
+    assert resolved.decode_output_memcfg == ttnn.DRAM_MEMORY_CONFIG
+
+
+def test_distributed_decode_stats_share_the_norm_sender_core():
+    mesh = _mesh()
+    resolved = _resolve_2d_config(RMSNorm2DConfig(weight=_weight(8192, mesh), mesh_device=mesh, tt_ccl=_ccl(mesh)))
+
+    stats_grid = resolved.decode_stats_memcfg.shard_spec.grid
+    input_grid = resolved.decode_input_memcfg.shard_spec.grid
+    assert stats_grid.num_cores() == 1
+    assert stats_grid.bounding_box().start == input_grid.bounding_box().start
 
 
 def test_qwen_128_wide_norm_is_head_local_and_skips_collectives(monkeypatch):
@@ -170,7 +223,10 @@ def test_chunked_prefill_stats_shape_preserves_all_token_axes():
 
 def test_distributed_decode_consumes_resolved_gather_resources(monkeypatch):
     mesh = _mesh()
-    resolved = _resolve_2d_config(RMSNorm2DConfig(weight=_weight(8192, mesh), mesh_device=mesh, tt_ccl=_ccl(mesh)))
+    stats_buffer = _stats_buffer()
+    resolved = _resolve_2d_config(
+        RMSNorm2DConfig(weight=_weight(8192, mesh), mesh_device=mesh, tt_ccl=_ccl(mesh, stats_buffer))
+    )
     module = object.__new__(RMSNorm2D)
     module.config = resolved
     module.weight = "weight"
@@ -189,7 +245,7 @@ def test_distributed_decode_consumes_resolved_gather_resources(monkeypatch):
 
     kwargs = gather.call_args.kwargs
     assert gather.call_args.args[1:5] == (3, 1, mesh, ttnn.Topology.Linear)
-    assert kwargs["persistent_output_tensor"] == "decode-stats-buffer"
+    assert kwargs["persistent_output_tensor"] is stats_buffer
     assert kwargs["barrier_semaphore"] is None
     assert kwargs["subdevice_id"] == "decode-subdevice"
     stats.deallocate.assert_called_once_with(True)
@@ -262,7 +318,7 @@ def test_simple_constructor_accepts_explicit_galaxy_ccl():
     assert module.config.geometry is RMSNorm2DGeometry.DISTRIBUTED
 
 
-def test_forward_rejects_unknown_mode():
+def test_forward_rejects_unknown_mode(expect_error):
     module = object.__new__(RMSNorm2D)
-    with pytest.raises(ValueError, match="mode must be"):
+    with expect_error(ValueError, "mode must be"):
         module.forward(object(), mode="train")

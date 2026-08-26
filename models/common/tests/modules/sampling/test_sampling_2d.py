@@ -70,33 +70,33 @@ def test_qwen_padded_vocab_is_tile_aligned_per_vocab_shard():
         ("sampling_all_gather_axis", 1, "vocabulary axis 0"),
     ],
 )
-def test_config_fails_closed_outside_canonical_galaxy(field, value, message):
+def test_config_fails_closed_outside_canonical_galaxy(field, value, message, expect_error):
     kwargs = {field: value}
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, message):
         _resolve_sampling2d_config(_config(vocab_size=256, padded_vocab_size=256, mesh_device=_galaxy_mesh(), **kwargs))
 
 
-def test_config_rejects_wrong_device_count():
+def test_config_rejects_wrong_device_count(expect_error):
     mesh = _galaxy_mesh()
     mesh.get_num_devices.return_value = 31
-    with pytest.raises(ValueError, match="32 devices"):
+    with expect_error(ValueError, "32 devices"):
         _resolve_sampling2d_config(_config(vocab_size=256, mesh_device=mesh))
 
 
-def test_config_rejects_non_wormhole_mesh():
+def test_config_rejects_non_wormhole_mesh(expect_error):
     mesh = _galaxy_mesh()
     mesh.arch.return_value = ttnn.device.Arch.BLACKHOLE
-    with pytest.raises(ValueError, match="Wormhole"):
+    with expect_error(ValueError, "Wormhole"):
         _resolve_sampling2d_config(_config(vocab_size=256, mesh_device=mesh))
 
 
-def test_config_rejects_unaligned_local_vocabulary():
-    with pytest.raises(ValueError, match="tile aligned"):
+def test_config_rejects_unaligned_local_vocabulary(expect_error):
+    with expect_error(ValueError, "tile aligned"):
         _resolve_sampling2d_config(_config(vocab_size=151936, padded_vocab_size=151936, mesh_device=_galaxy_mesh()))
 
 
-def test_config_rejects_excess_padded_vocabulary():
-    with pytest.raises(ValueError, match="minimal Galaxy-aligned"):
+def test_config_rejects_excess_padded_vocabulary(expect_error):
+    with expect_error(ValueError, "minimal Galaxy-aligned"):
         _resolve_sampling2d_config(_config(vocab_size=151936, padded_vocab_size=152320, mesh_device=_galaxy_mesh()))
 
 
@@ -164,7 +164,8 @@ def test_prepare_call_refreshes_lazy_sources_by_global_slot():
     config = sampler.config
     assert config.top_k_buffer.source[2].item() == 4
     assert config.top_p_buffer.source[2].float().item() == pytest.approx(0.4, abs=0.01)
-    assert config.temperature_buffer.source[2].float().item() == pytest.approx(0.5, abs=0.01)
+    # The device buffer carries the reciprocal temperature; ttnn.sampling multiplies by it.
+    assert config.temperature_buffer.source[2].float().item() == pytest.approx(2.0, abs=0.01)
     assert config.top_k_buffer.source[18].item() == 1
     assert config.top_p_buffer.source[18].item() == 0
     assert config.temperature_buffer.source[18].item() == 1
@@ -212,6 +213,33 @@ def test_seeded_sampling_is_repeatable_and_slot_stable():
     assert remapped.tolist() == original[permutation].tolist()
 
 
+def test_device_temperature_buffer_holds_reciprocal_temperature():
+    """The device temperature buffer carries 1/T, because ttnn.sampling multiplies by it.
+
+    ``ttnn.sampling``'s ``temp`` argument is documented as ``1/T`` and its compute kernel
+    applies ``values *= temp`` before the softmax. Writing the raw temperature here
+    inverts the effect of every non-unit temperature on device while leaving ``T == 1.0``
+    and the greedy path - where the buffer is forced to ``1.0`` - looking correct, so no
+    greedy hardware test can catch it.
+    """
+    sampler = _sampler()
+    sampler.prepare_call(
+        slot_ids=[0, 1, 2, 3],
+        top_k=8,
+        top_p=0.9,
+        temperature=[0.8, 2.0, 0.0, 1.0],
+        forced_argmax=[False, False, False, True],
+    )
+    temperatures = sampler.config.temperature_buffer.source
+
+    # 1/0.8 and 1/2.0 are both exact in bfloat16, so this is an equality, not a tolerance.
+    assert temperatures[0].item() == 1.25
+    assert temperatures[1].item() == 0.5
+    # temperature=0.0 and forced_argmax both collapse to greedy, which uses 1.0.
+    assert temperatures[2].item() == 1.0
+    assert temperatures[3].item() == 1.0
+
+
 def test_unseeded_sampling_uses_fresh_randomness(monkeypatch):
     sampler = _sampler()
     logits = torch.zeros(1, 256)
@@ -236,13 +264,13 @@ def test_unseeded_sampling_uses_fresh_randomness(monkeypatch):
         ({"slot_ids": [0, 0]}, "unique"),
     ],
 )
-def test_invalid_per_call_values_are_rejected(kwargs, message):
+def test_invalid_per_call_values_are_rejected(kwargs, message, expect_error):
     sampler = _sampler()
     values = dict(slot_ids=[0], top_k=1, top_p=1.0, temperature=1.0, seed=None)
     values.update(kwargs)
     if values["slot_ids"] == [0, 0]:
         values.update(top_k=[1, 1], top_p=[1.0, 1.0], temperature=[1.0, 1.0], seed=[None, None])
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, message):
         sampler.prepare_call(**values, update_buffers=False)
 
 
@@ -254,8 +282,8 @@ def test_source_has_no_legacy_or_penalties_dependency():
     assert "Penalt" not in source
 
 
-def test_config_requires_explicit_device_execution_resources():
-    with pytest.raises(ValueError, match="explicit sub_core_grids"):
+def test_config_requires_explicit_device_execution_resources(expect_error):
+    with expect_error(ValueError, "explicit sub_core_grids"):
         _resolve_sampling2d_config(Sampling2DConfig(vocab_size=256, padded_vocab_size=256, mesh_device=_galaxy_mesh()))
 
 

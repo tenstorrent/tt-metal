@@ -13,7 +13,14 @@ from typing import Any
 
 import pytest
 import torch
-import torch.nn.functional as F
+from transformers import AutoModelForCausalLM, LlamaConfig, Qwen3Config
+
+# transformers 5.x moved no_init_weights to transformers.initialization; fall back
+# to the old location for transformers < 5.x.
+try:
+    from transformers.initialization import no_init_weights
+except ImportError:
+    from transformers.modeling_utils import no_init_weights
 
 import ttnn
 from models.common.models.galaxy import GalaxyCollectivePlan, GalaxyResourceKey, GalaxyResourcesConfig, GalaxyTensorSpec
@@ -32,6 +39,12 @@ from models.common.modules.attention.attention_2d import (
 )
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rmsnorm.rmsnorm_2d import RMSNorm2DConfig, RMSNorm2DGeometry
+from models.common.tests.modules._hf_reference import (
+    HfAttentionWrapper,
+    IdentityRotaryEmbedding,
+    get_attention_weights_from_ref_model,
+    reverse_permute_1d,
+)
 from models.common.tests.modules._wh_galaxy_hardware import (
     deallocate_module_weights,
     deallocate_tensor,
@@ -46,11 +59,13 @@ _BATCH_SIZE = 32
 _HEAD_DIM = 128
 _MAX_SEQ_LEN = 2048
 _PCC = 0.99
+_DECODE_POSITIONS = (127, 128)
 
 
 @dataclass(frozen=True)
 class _ModelSpec:
     name: str
+    architecture: str
     dim: int
     n_heads: int
     n_kv_heads: int
@@ -67,8 +82,8 @@ class _ModelSpec:
 
 
 _MODEL_SPECS = (
-    _ModelSpec("llama-70b", dim=8192, n_heads=64, n_kv_heads=8, qk_norm=False, norm_eps=1e-5),
-    _ModelSpec("qwen3-32b", dim=5120, n_heads=40, n_kv_heads=8, qk_norm=True, norm_eps=1e-6),
+    _ModelSpec("llama-70b", "llama", dim=8192, n_heads=64, n_kv_heads=8, qk_norm=False, norm_eps=1e-5),
+    _ModelSpec("qwen3-32b", "qwen3", dim=5120, n_heads=40, n_kv_heads=8, qk_norm=True, norm_eps=1e-6),
 )
 
 
@@ -527,14 +542,73 @@ def _runtime_tensor_factory(offsets: tuple[int, ...], lower: tuple[int, ...], up
     return make(offsets), make(lower), make(upper)
 
 
-def _fused_qkv_weight(wq: torch.Tensor, wk: torch.Tensor, wv: torch.Tensor, spec: _ModelSpec) -> torch.Tensor:
-    q_chunks = torch.chunk(wq, _MESH_SHAPE[0], dim=-1)
-    k_chunks = torch.chunk(wk, _MESH_SHAPE[0], dim=-1)
-    v_chunks = torch.chunk(wv, _MESH_SHAPE[0], dim=-1)
-    return torch.cat(
-        [torch.cat((q_chunks[row], k_chunks[row], v_chunks[row]), dim=-1) for row in range(_MESH_SHAPE[0])],
-        dim=-1,
-    ).contiguous()
+def _hf_config(spec: _ModelSpec) -> Any:
+    """HuggingFace config for the attention geometry this spec models.
+
+    Built locally rather than downloaded: only the attention block matters here,
+    so the vocabulary and MLP are shrunk to keep the host reference small.
+    """
+    settings = dict(
+        vocab_size=128,
+        hidden_size=spec.dim,
+        intermediate_size=256,
+        num_hidden_layers=1,
+        num_attention_heads=spec.n_heads,
+        num_key_value_heads=spec.n_kv_heads,
+        head_dim=_HEAD_DIM,
+        max_position_embeddings=_MAX_SEQ_LEN,
+        rms_norm_eps=spec.norm_eps,
+        attention_bias=False,
+    )
+    if spec.architecture == "qwen3":
+        return Qwen3Config(**settings, use_sliding_window=False)
+    return LlamaConfig(**settings)
+
+
+def _reference_attention(spec: _ModelSpec) -> HfAttentionWrapper:
+    """Build the HuggingFace attention this test qualifies Attention2D against.
+
+    Weights are drawn in bfloat16 and held in float32 so the reference runs at
+    full precision on exactly the values the device receives. Rotation is
+    identity on both sides: RoPE has its own Milestone-A hardware qualification,
+    which keeps this test on Attention2D projection, SDPA, cache, and CCL.
+    """
+    with no_init_weights():
+        hf_model = AutoModelForCausalLM.from_config(_hf_config(spec), torch_dtype=torch.float32)
+    reference_attn = hf_model.model.layers[0].self_attn
+    weight_scale = 1.0 / math.sqrt(spec.dim)
+    with torch.no_grad():
+        for _name, parameter in reference_attn.named_parameters():
+            if parameter.dim() >= 2:  # projections
+                values = torch.randn(parameter.shape, dtype=torch.bfloat16) * weight_scale
+            else:  # Q/K norm gains
+                values = 1.0 + 0.05 * torch.randn(parameter.shape, dtype=torch.bfloat16)
+            parameter.copy_(values.float())
+    return HfAttentionWrapper(reference_attn, _HEAD_DIM, IdentityRotaryEmbedding(_HEAD_DIM))
+
+
+def _reference_decode(reference: HfAttentionWrapper, x: torch.Tensor, position: int) -> torch.Tensor:
+    """One decode step for every user at `position`, from a (1, 1, batch, dim) input."""
+    output = reference(x[0, 0].float().unsqueeze(1), start_pos=position, mask=None)
+    return output.reshape(1, 1, _BATCH_SIZE, -1)
+
+
+def _reference_prefill(reference: HfAttentionWrapper, x: torch.Tensor) -> torch.Tensor:
+    """Causal prefill of one user, from a (1, 1, seq_len, dim) input."""
+    reference.reset_cache()
+    output = reference(x[0].float(), start_pos=0, mask=None)
+    return output.reshape(1, 1, x.shape[-2], -1)
+
+
+def _reference_cache_kv(reference: HfAttentionWrapper, index: Any) -> tuple[torch.Tensor, torch.Tensor]:
+    """Reference K/V at `index` of [batch, seq_len, n_kv_heads, head_dim].
+
+    Attention2D is fed Q/K projections in Meta (interleaved) layout while the HF
+    reference keeps its own layout, so the cached keys differ by that same
+    per-head permutation - with identity rotation, applying it makes them equal.
+    Values are unpermuted.
+    """
+    return reverse_permute_1d(reference.cache_k[index]), reference.cache_v[index]
 
 
 def _sequence_config(
@@ -645,12 +719,14 @@ def _resources_config(
         prefill=galaxy_mode_plan(
             "prefill", tuple(plan for length in (128, 2048) for plan in plans(length)), mesh_device
         ),
-        decode=galaxy_mode_plan(
-            "decode",
-            plans(_BATCH_SIZE, decode=True),
-            mesh_device,
-            semaphore_cores=decode_all_reduce["worker_cores"],
-        ),
+        # Decode semaphores are deliberately left on the plan's default core set,
+        # which is the whole worker subdevice. The async CCLs pick their sender
+        # worker cores with choose_worker_cores(subdevice) - reserved output cores,
+        # so a semaphore allocated on a narrower grid leaves those senders polling
+        # an L1 address that was never reserved or zeroed on their core, which
+        # hangs the collective instead of failing. Production narrows the subdevice
+        # itself; this test cannot, because its decode matmuls span the full grid.
+        decode=galaxy_mode_plan("decode", plans(_BATCH_SIZE, decode=True), mesh_device),
     )
 
 
@@ -935,69 +1011,6 @@ def _compose_cache(cache: ttnn.Tensor, mesh_device: ttnn.MeshDevice, spec: _Mode
     return composed[:_BATCH_SIZE, : spec.n_kv_heads, :, :_HEAD_DIM]
 
 
-def _rms_norm(x: torch.Tensor, weight: torch.Tensor | None, eps: float) -> torch.Tensor:
-    return x if weight is None else F.rms_norm(x.float(), (_HEAD_DIM,), weight.float(), eps).to(x.dtype)
-
-
-def _project_qkv(
-    x: torch.Tensor,
-    spec: _ModelSpec,
-    wq: torch.Tensor,
-    wk: torch.Tensor,
-    wv: torch.Tensor,
-    q_norm: torch.Tensor | None,
-    k_norm: torch.Tensor | None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    flat = x.reshape(-1, spec.dim).float()
-    q = torch.matmul(flat, wq.float()).reshape(*x.shape[:-1], spec.n_heads, _HEAD_DIM)
-    k = torch.matmul(flat, wk.float()).reshape(*x.shape[:-1], spec.n_kv_heads, _HEAD_DIM)
-    v = torch.matmul(flat, wv.float()).reshape(*x.shape[:-1], spec.n_kv_heads, _HEAD_DIM)
-    q = _rms_norm(q, q_norm, spec.norm_eps)
-    k = _rms_norm(k, k_norm, spec.norm_eps)
-    return q, k, v
-
-
-def _decode_reference(
-    x: torch.Tensor,
-    positions: torch.Tensor,
-    spec: _ModelSpec,
-    weights: tuple[torch.Tensor, ...],
-    cache: tuple[torch.Tensor, torch.Tensor],
-    norms: tuple[torch.Tensor | None, torch.Tensor | None],
-) -> torch.Tensor:
-    wq, wk, wv, wo = weights
-    q, k, v = _project_qkv(x[0, 0], spec, wq, wk, wv, *norms)
-    rows = torch.arange(_BATCH_SIZE)
-    cache[0][rows, :, positions, :] = k
-    cache[1][rows, :, positions, :] = v
-    keys = cache[0][:, :, : int(positions.max()) + 1]
-    values = cache[1][:, :, : int(positions.max()) + 1]
-    q = q.transpose(0, 1).unsqueeze(2).transpose(0, 1)
-    keys = keys.repeat_interleave(spec.n_heads // spec.n_kv_heads, dim=1)
-    values = values.repeat_interleave(spec.n_heads // spec.n_kv_heads, dim=1)
-    attention = F.scaled_dot_product_attention(q.float(), keys.float(), values.float(), scale=_HEAD_DIM**-0.5)
-    merged = attention.transpose(1, 2).reshape(_BATCH_SIZE, 1, spec.dim)
-    return torch.matmul(merged, wo.float()).unsqueeze(0)
-
-
-def _prefill_reference(
-    x: torch.Tensor,
-    spec: _ModelSpec,
-    weights: tuple[torch.Tensor, ...],
-    norms: tuple[torch.Tensor | None, torch.Tensor | None],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    wq, wk, wv, wo = weights
-    q, k, v = _project_qkv(x[0, 0], spec, wq, wk, wv, *norms)
-    q = q.transpose(0, 1).unsqueeze(0)
-    keys = k.transpose(0, 1).unsqueeze(0).repeat_interleave(spec.n_heads // spec.n_kv_heads, dim=1)
-    values = v.transpose(0, 1).unsqueeze(0).repeat_interleave(spec.n_heads // spec.n_kv_heads, dim=1)
-    attention = F.scaled_dot_product_attention(
-        q.float(), keys.float(), values.float(), is_causal=True, scale=_HEAD_DIM**-0.5
-    )
-    merged = attention.transpose(1, 2).reshape(1, x.shape[-2], spec.dim)
-    return torch.matmul(merged, wo.float()).unsqueeze(0), k, v
-
-
 def _assert_pcc(expected: torch.Tensor, actual: torch.Tensor, case: str) -> None:
     passing, message = comp_pcc(expected.float(), actual.float(), _PCC)
     if not passing and case.startswith("decode") and expected.numel() == actual.numel():
@@ -1048,16 +1061,18 @@ def _assert_cache(
 @torch.no_grad()
 def test_attention_2d_wh_galaxy_decode_and_prefill_repeat(mesh_device: ttnn.MeshDevice, spec: _ModelSpec):
     torch.manual_seed(17)
-    weight_scale = 1.0 / math.sqrt(spec.dim)
-    wq = torch.randn(spec.dim, spec.n_heads * _HEAD_DIM, dtype=torch.bfloat16) * weight_scale
-    wk = torch.randn(spec.dim, spec.n_kv_heads * _HEAD_DIM, dtype=torch.bfloat16) * weight_scale
-    wv = torch.randn(spec.dim, spec.n_kv_heads * _HEAD_DIM, dtype=torch.bfloat16) * weight_scale
-    wo = torch.randn(spec.dim, spec.dim, dtype=torch.bfloat16) * weight_scale
-    wqkv = _fused_qkv_weight(wq, wk, wv, spec)
-    q_norm = 1.0 + 0.05 * torch.randn(_HEAD_DIM, dtype=torch.bfloat16) if spec.qk_norm else None
-    k_norm = 1.0 + 0.05 * torch.randn(_HEAD_DIM, dtype=torch.bfloat16) if spec.qk_norm else None
-    weights = (wq, wk, wv, wo)
-    norms = (q_norm, k_norm)
+    reference = _reference_attention(spec)
+    # The row-fused QKV layout Attention2D expects is exactly what the shared
+    # extractor builds for a mesh row count of _MESH_SHAPE[0].
+    wqkv, wo, q_norm, k_norm, wqkv_bias = get_attention_weights_from_ref_model(
+        reference.attention, num_devices=_MESH_SHAPE[0]
+    )
+    assert wqkv_bias is None, "Attention2D has no QKV bias path"
+    assert (q_norm is not None) == spec.qk_norm
+    wqkv = wqkv[0, 0].to(torch.bfloat16).contiguous()
+    wo = wo[0, 0].to(torch.bfloat16).contiguous()
+    q_norm = q_norm.to(torch.bfloat16) if q_norm is not None else None
+    k_norm = k_norm.to(torch.bfloat16) if k_norm is not None else None
     decode_ring = _decode_ring_config(spec)
     decode_all_reduce = _decode_all_reduce_config(spec, mesh_device, decode_ring["ring_cores"])
     dram_grid = ttnn.CoreRangeSet(
@@ -1109,16 +1124,16 @@ def test_attention_2d_wh_galaxy_decode_and_prefill_repeat(mesh_device: ttnn.Mesh
         )
         binding = _make_cache(module, mesh_device)
         module.bind_kv_cache(binding)
-        reference_cache = (
-            torch.zeros(_BATCH_SIZE, spec.n_kv_heads, _MAX_SEQ_LEN, _HEAD_DIM),
-            torch.zeros(_BATCH_SIZE, spec.n_kv_heads, _MAX_SEQ_LEN, _HEAD_DIM),
-        )
+        # Decode starts mid-cache without a prefill, so the reference history is the
+        # same zero-filled span the freshly allocated device cache holds.
+        reference.reset_cache_to_zeros(_BATCH_SIZE, spec.n_kv_heads, _DECODE_POSITIONS[0])
 
-        for invocation, position in enumerate((127, 128)):
+        for invocation, position in enumerate(_DECODE_POSITIONS):
             resources.activate("decode")
             x = torch.randn(1, 1, _BATCH_SIZE, spec.dim, dtype=torch.bfloat16) * 0.05
             positions = torch.full((_BATCH_SIZE,), position, dtype=torch.long)
-            expected = _decode_reference(x, positions, spec, weights, reference_cache, norms)
+            expected = _reference_decode(reference, x, position)
+            expected_k, expected_v = _reference_cache_kv(reference, (slice(None), position))
             tt_x = _to_device_input(x, mesh_device)
             tt_positions = ttnn.from_torch(
                 positions[: module.config.users_per_column].to(torch.int32),
@@ -1135,8 +1150,8 @@ def test_attention_2d_wh_galaxy_decode_and_prefill_repeat(mesh_device: ttnn.Mesh
                     binding,
                     mesh_device,
                     spec,
-                    reference_cache[0][:, :, position],
-                    reference_cache[1][:, :, position],
+                    expected_k,
+                    expected_v,
                     (slice(None), slice(None), position),
                     f"decode invocation {invocation}",
                 )
@@ -1154,7 +1169,8 @@ def test_attention_2d_wh_galaxy_decode_and_prefill_repeat(mesh_device: ttnn.Mesh
         for invocation in range(2):
             for sequence_length in (128, 2048):
                 x = torch.randn(1, 1, sequence_length, spec.dim, dtype=torch.bfloat16) * 0.05
-                expected, expected_k, expected_v = _prefill_reference(x, spec, weights, norms)
+                expected = _reference_prefill(reference, x)
+                expected_k, expected_v = _reference_cache_kv(reference, 0)
                 tt_x = _to_device_input(x, mesh_device)
                 output = None
                 try:
@@ -1193,5 +1209,5 @@ def test_attention_2d_wh_galaxy_decode_and_prefill_repeat(mesh_device: ttnn.Mesh
                 deallocate_tensor(binding.keys)
                 deallocate_tensor(binding.values)
         finally:
-            del wq, wk, wv, wo, wqkv, weights
+            del reference, wqkv, wo, q_norm, k_norm
             gc.collect()

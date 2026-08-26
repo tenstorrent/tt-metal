@@ -199,6 +199,10 @@ class Sampling2D(LightweightModule):
         cfg = self.config
         k_values = torch.ones(cfg.max_batch_size, dtype=torch.int32)
         p_values = torch.zeros(cfg.max_batch_size, dtype=torch.bfloat16)
+        # ttnn.sampling's ``temp`` argument is the *reciprocal* temperature: the kernel
+        # multiplies the candidate logits by it before the softmax. This buffer therefore
+        # carries 1/T, never T. 1.0 is its own reciprocal, so greedy slots are unaffected -
+        # which is why passing T straight through was invisible on the greedy path.
         temperature_values = torch.ones(cfg.max_batch_size, dtype=torch.bfloat16)
         seed_values = torch.tensor([secrets.randbits(31) for _ in range(cfg.max_batch_size)], dtype=torch.int32)
 
@@ -206,7 +210,7 @@ class Sampling2D(LightweightModule):
             force_greedy = call.forced_argmax[index] or call.temperature[index] == 0.0
             k_values[slot] = 1 if force_greedy else call.top_k[index]
             p_values[slot] = 0.0 if force_greedy else call.top_p[index]
-            temperature_values[slot] = 1.0 if force_greedy else call.temperature[index]
+            temperature_values[slot] = 1.0 if force_greedy else 1.0 / call.temperature[index]
             if call.seed[index] is not None:
                 seed_values[slot] = _device_seed(call.seed[index], slot)
 

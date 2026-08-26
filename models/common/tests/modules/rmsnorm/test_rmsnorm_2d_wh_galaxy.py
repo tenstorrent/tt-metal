@@ -34,9 +34,13 @@ from models.common.utility_functions import comp_pcc
 EPS = 1e-6
 
 
-def _torch_rms_norm(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
-    variance = x.float().pow(2).mean(dim=-1, keepdim=True)
-    return (x.float() * torch.rsqrt(variance + EPS) * weight.float()).to(x.dtype)
+def _reference_norm(weight: torch.Tensor) -> torch.nn.RMSNorm:
+    """Reference normalization: torch.nn.RMSNorm, as the 1D suite compares against,
+    rather than a hand-written variance/rsqrt re-implementation."""
+    reference = torch.nn.RMSNorm(weight.numel(), eps=EPS).to(torch.bfloat16)
+    with torch.no_grad():
+        reference.weight.copy_(weight)
+    return reference
 
 
 def _lazy(source: torch.Tensor, mesh_device: ttnn.MeshDevice) -> LazyWeight:
@@ -63,9 +67,13 @@ def _assert_pcc(expected: torch.Tensor, actual: torch.Tensor, *, case: str) -> N
 
 
 def _resources_config(mesh_device, dim):
+    # The fused RMS stats circular buffer is created on the first core of the norm
+    # input shard grid (x=2, y=0) and bound to this buffer's L1 address, so the
+    # persistent stats shard has to live on that core - see RMSNorm2D's
+    # _require_fused_stats_placement.
     decode_memcfg = ttnn.create_sharded_memory_config(
         shape=(1, 1, 32, 128),
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
@@ -188,10 +196,11 @@ def _invoke_decode_repeat(module, resources, mesh_device, x, residual, *, count)
 def test_rmsnorm_2d_wh_galaxy_final_norm_decode_batch_32_fused_residual_repeat(mesh_device, dim):
     torch.manual_seed(2)
     weight = torch.randn(dim, dtype=torch.bfloat16)
+    reference = _reference_norm(weight)
     x = torch.randn(1, 1, 32, dim, dtype=torch.bfloat16)
     residual = torch.randn_like(x)
     residual_sum = x + residual
-    expected = _torch_rms_norm(residual_sum, weight)
+    expected = reference(residual_sum)
     lazy_weight = _weight_lazy(weight, mesh_device)
     resources = require_galaxy_ccl_hardware_resources(
         mesh_device,
@@ -229,6 +238,7 @@ def test_rmsnorm_2d_wh_galaxy_final_norm_decode_batch_32_fused_residual_repeat(m
 def test_rmsnorm_2d_wh_galaxy_final_norm_prefill_repeat(mesh_device, dim, seq_len):
     torch.manual_seed(3)
     weight = torch.randn(dim, dtype=torch.bfloat16)
+    reference = _reference_norm(weight)
     lazy_weight = _weight_lazy(weight, mesh_device)
     device_weight = lazy_weight.get_device_weight()
     resources = require_galaxy_hardware_resources(
@@ -244,7 +254,7 @@ def test_rmsnorm_2d_wh_galaxy_final_norm_prefill_repeat(mesh_device, dim, seq_le
             residual = torch.randn_like(x)
             (actual,) = _invoke(module, resources, mesh_device, x, mode="prefill", residual=residual)
             _assert_pcc(
-                _torch_rms_norm(x + residual, weight),
+                reference(x + residual),
                 actual,
                 case=f"final norm prefill {seq_len} invocation {invocation}",
             )
@@ -266,6 +276,7 @@ def test_rmsnorm_2d_wh_galaxy_final_norm_prefill_repeat(mesh_device, dim, seq_le
 def test_rmsnorm_2d_wh_galaxy_head_local_128_qk_decode_and_prefill_repeat(mesh_device, projection):
     torch.manual_seed(4 if projection == "q_norm" else 5)
     weight = torch.randn(128, dtype=torch.bfloat16)
+    reference = _reference_norm(weight)
     resources = None
     module = None
     try:
@@ -276,7 +287,7 @@ def test_rmsnorm_2d_wh_galaxy_head_local_128_qk_decode_and_prefill_repeat(mesh_d
                 x = torch.randn(1, 1, rows, 128, dtype=torch.bfloat16)
                 (actual,) = _invoke(module, resources, mesh_device, x, mode=mode)
                 _assert_pcc(
-                    _torch_rms_norm(x, weight),
+                    reference(x),
                     actual,
                     case=f"{projection} {mode} {rows} invocation {invocation}",
                 )
