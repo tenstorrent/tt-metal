@@ -89,20 +89,45 @@ _DTYPE_TAG = {
 _MEM_TAG = {"INTERLEAVED": "int", "HEIGHT_SHARDED": "hs", "WIDTH_SHARDED": "ws", "BLOCK_SHARDED": "bs"}
 
 
-# ``ast.literal_eval`` never executes code, but parsing an arbitrarily long or
-# deeply nested repr still costs unbounded memory/recursion. Every literal we
-# actually want out of a capture is a scalar, a small tuple or a short list, so
-# bound the input first and let the caller fall back to keeping the raw text.
+# A captured argument repr is arbitrary text, so the literals in it are parsed and
+# rebuilt by hand rather than handed to ``ast.literal_eval``: the value is built from
+# an explicit whitelist of literal node types, and the input is bounded first, so a
+# pathologically long or deeply nested repr cannot cost unbounded memory/recursion.
+# Every literal worth having here is a scalar, a small tuple or a short list.
 _LITERAL_MAX_LEN = 4096
 _LITERAL_MAX_DEPTH = 8
 _LITERAL_MAX_NODES = 512
 
+_LITERAL_NUMBER = (int, float, complex)
 
-def safe_literal_eval(text: str):
-    """``ast.literal_eval`` with length, nesting-depth and node-count limits.
 
-    Raises ``ValueError`` when the input exceeds a limit, so callers can treat it
-    the same way they treat a non-literal.
+def _literal_value(node):
+    """Build the value of one literal AST node; ValueError on anything else."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Tuple):
+        return tuple(_literal_value(e) for e in node.elts)
+    if isinstance(node, ast.List):
+        return [_literal_value(e) for e in node.elts]
+    if isinstance(node, ast.Set):
+        return {_literal_value(e) for e in node.elts}
+    if isinstance(node, ast.Dict):
+        if any(k is None for k in node.keys):  # {**other}: not a literal
+            raise ValueError("dict unpacking is not a literal")
+        return {_literal_value(k): _literal_value(v) for k, v in zip(node.keys, node.values)}
+    # A negative number parses as USub applied to a constant (dim=-1, scale=-0.5).
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        operand = node.operand
+        if isinstance(operand, ast.Constant) and isinstance(operand.value, _LITERAL_NUMBER):
+            return operand.value if isinstance(node.op, ast.UAdd) else -operand.value
+    raise ValueError(f"not a literal: {type(node).__name__}")
+
+
+def parse_literal(text: str):
+    """Parse ``text`` as a bounded python literal (no evaluation of any kind).
+
+    Raises ``ValueError`` when the input exceeds a size limit or is not a literal,
+    so callers treat it the same way they treat any unparsed repr.
     """
     if len(text) > _LITERAL_MAX_LEN:
         raise ValueError("literal too long")
@@ -124,7 +149,7 @@ def safe_literal_eval(text: str):
         nodes += 1
         if nodes > _LITERAL_MAX_NODES:
             raise ValueError("literal too large")
-    return ast.literal_eval(tree)
+    return _literal_value(tree.body)
 
 
 def parse_memory_config(text: str):
@@ -184,7 +209,7 @@ def parse_config(text: str):
             fields[key] = raw == "true"
         else:
             try:
-                fields[key] = safe_literal_eval(raw)
+                fields[key] = parse_literal(raw)
             except (ValueError, SyntaxError):
                 fields[key] = raw
     return {"kind": m.group("kind"), "fields": fields}
@@ -240,7 +265,7 @@ def parse_argument(text: str):
         return {"k": "skip", "repr": re.sub(r" at 0x[0-9a-f]+", "", text)}
 
     try:
-        return {"k": "lit", "v": safe_literal_eval(text)}
+        return {"k": "lit", "v": parse_literal(text)}
     except (ValueError, SyntaxError):
         return {"k": "skip", "repr": text}
 
