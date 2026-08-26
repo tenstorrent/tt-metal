@@ -146,7 +146,7 @@ class TtPrefillRuntime:
         #   _trace_metadata   — 3 persistent 1-element uint32 tensors (slot_id, actual_start, actual_end)
         #   _trace_metadata_msg — persistent packed [1,1,1,3] uint32 tensor holding the same three words;
         #                       the D2H layer-ack ships it as the record, so it needs an address the
-        #                       capture can bake in (the per-chunk socket tensor's moves every chunk)
+        #                       capture can bake in (the per-chunk socket tensor moves every chunk)
         #   _trace_d2h_service — the D2H ack service baked into the capture by set_d2h_ack_service()
         #   _trace_output     — persistent output activation (non-last rank only; read by the D2D send)
         #   _trace_captured   — flips True once capture_trace() records the segmented capture (single-shot)

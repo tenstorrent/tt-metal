@@ -35,6 +35,7 @@ import signal
 import time
 from typing import Optional
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -261,8 +262,6 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers):
 def _decode_metadata(metadata_msg) -> dict:
     """Read the packed [1,1,1,3] metadata device tensor to host: {slot_id, actual_start, actual_end}.
     This is the device->host half of the round trip the traced path avoids (see _socket_next)."""
-    import torch
-
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
     return {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
 
@@ -375,8 +374,6 @@ def _d2d_send(
     if metadata_msg is not None:
         md_tensor = metadata_msg
     else:
-        import torch
-
         backing = outbound.get_backing_tensor()
         words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
         # The outbound op ships metadata as a replicated device tensor (3 uint32 words), not a Python list.
@@ -404,8 +401,6 @@ def _forward_shutdown(d2d_out, rank: int, hidden_size: int) -> None:
     is irrelevant — the downstream discards it once it sees the sentinel — but outbound_socket_service_sync
     requires the input's per-shard spec to equal the sender backing's, so build the dummy exactly like a
     real activation: the [1, 1, CHUNK_SIZE, hidden_size] bf16 TILE spec sharded by D2D_MAPPER_CONFIG."""
-    import torch
-
     dev = d2d_out.get_backing_tensor().device()
     dummy = ttnn.from_torch(
         torch.zeros(1, 1, CHUNK_SIZE, hidden_size),
