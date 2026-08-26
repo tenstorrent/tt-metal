@@ -93,7 +93,7 @@ std::vector<std::pair<int32_t, int32_t>> chunks_in_forwarder_ref_frame(uint32_t 
 
 std::vector<cmbf2d::ChunkDescriptor> forwarding_chunks(
     StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links) {
-    const bool is_cw = (stream % 2) == 0;
+    const bool is_cw = stream_is_cw(stream);
     const uint32_t link = stream / 2;
     const uint32_t m = ring_extent / 2;
     const int32_t travel = is_cw ? 1 : -1;
