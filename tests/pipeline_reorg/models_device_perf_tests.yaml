@@ -112,3 +112,15 @@
       timeout: 8
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+
+- name: DeepSeek-V3 decode device perf tests (Galaxy)
+  cmd: |
+    export MESH_DEVICE=TG
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    pytest --timeout=1200 models/demos/deepseek_v3/demo/test_decode_demo_perf.py
+  model: deepseek-v3
+  skus:
+    wh_galaxy_perf:
+      timeout: 20
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
