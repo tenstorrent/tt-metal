@@ -3992,6 +3992,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceSeveralMembersJITSmoke) {
     dm_kernel.source = KernelSpec::SourceCode{R"(
 #include <type_traits>
 void kernel_main() {
+    // Test-only: do not use std::tuple_element_t / remove_cv_t in real kernels unless necessary.
     using inputs_t = std::remove_cv_t<decltype(tensor::inputs)>;
     static_assert(std::tuple_size_v<inputs_t> == 3);
     static_assert(std::is_same_v<std::tuple_element_t<0, inputs_t>, tensor::in0_t>);
@@ -4028,6 +4029,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceEmptyMembersJITSmoke) {
     dm_kernel.source = KernelSpec::SourceCode{R"(
 #include <type_traits>
 void kernel_main() {
+    // Test-only: do not use std::tuple_element_t / remove_cv_t in real kernels unless necessary.
     static_assert(std::tuple_size_v<decltype(tensor::empty)> == 0);
     static_assert(std::is_same_v<std::remove_cv_t<decltype(tensor::empty)>, std::tuple<>>);
 }
@@ -4053,6 +4055,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceSingletonMembersJITSmoke) {
     dm_kernel.source = KernelSpec::SourceCode{R"(
 #include <type_traits>
 void kernel_main() {
+    // Test-only: do not use std::tuple_element_t / remove_cv_t in real kernels unless necessary.
     using solo_t = std::remove_cv_t<decltype(tensor::solo)>;
     static_assert(std::tuple_size_v<solo_t> == 1);
     static_assert(std::is_same_v<std::tuple_element_t<0, solo_t>, tensor::in0_t>);
@@ -4081,6 +4084,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceSameBindingInTwoSequencesJI
     dm_kernel.source = KernelSpec::SourceCode{R"(
 #include <type_traits>
 void kernel_main() {
+    // Test-only: do not use std::tuple_element_t / remove_cv_t in real kernels unless necessary.
     using g0_t = std::remove_cv_t<decltype(tensor::g0)>;
     using g1_t = std::remove_cv_t<decltype(tensor::g1)>;
     static_assert(std::tuple_size_v<g0_t> == 1);
@@ -4116,6 +4120,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceOnComputeKernelJITSmoke) {
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
 #include <type_traits>
 void kernel_main() {
+    // Test-only: do not use std::tuple_element_t / remove_cv_t in real kernels unless necessary.
     using inputs_t = std::remove_cv_t<decltype(tensor::inputs)>;
     static_assert(std::tuple_size_v<inputs_t> == 2);
     static_assert(std::is_same_v<std::tuple_element_t<0, inputs_t>, tensor::in0_t>);
@@ -4139,6 +4144,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceNameEqualsDfbAccessorJITSmo
     spec.kernels[0].source = KernelSpec::SourceCode{R"(
 #include <type_traits>
 void kernel_main() {
+    // Test-only: do not use std::tuple_element_t / remove_cv_t in real kernels unless necessary.
     using input_dfb_t = std::remove_cv_t<decltype(tensor::input_dfb)>;
     static_assert(std::tuple_size_v<input_dfb_t> == 1);
     static_assert(std::is_same_v<std::tuple_element_t<0, input_dfb_t>, tensor::in0_t>);

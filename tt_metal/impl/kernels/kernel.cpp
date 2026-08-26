@@ -599,7 +599,9 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
     }
-    // Tensor binding sequences: user order matches genfiles emission; hash size, name, and ordered members.
+    // Tensor Binding Sequence: the ordering of the tensor binding matters here, 2 tensor bindings of
+    // the same set of members but with different orderings are different tensor binding sequences.
+    // Do not sort this sequence.
     // Per-member size is hashed before the bytes so {"a","bc"} and {"ab","c"} do not collide.
     hasher.update(static_cast<uint64_t>(this->tensor_binding_sequences_.size()));
     for (const auto& sequence : this->tensor_binding_sequences_) {
