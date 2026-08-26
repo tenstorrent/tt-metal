@@ -184,6 +184,7 @@
       <a href="#geometry">Topology geometry</a>
       <a href="#before">Baseline</a>
       <a href="#prototype">Prototype</a>
+      <a href="#prototype-ablation">Prototype ablation</a>
       <a href="#results">Before / after</a>
       <a href="#bandwidth">Bandwidth</a>
       <a href="#validation">Validation</a>
@@ -332,9 +333,26 @@
     </div>
   </section>
 
+  <section class="section" id="prototype-ablation">
+    <div class="section-head">
+      <div><span class="tag after">Final</span><h2>Prototype adapter ablation</h2></div>
+      <p>Same workload and table structure as the original ablation, now using the 110-core row-major convolution copy path.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Layout</th><th>Layer (ms)</th><th>Export S (µs)</th><th>Export conv (µs)</th><th>Export total (µs)</th><th>Layer impact</th><th>Import S (µs)</th><th>Import conv (µs)</th><th>Import total (µs)</th><th>Layer impact</th></tr></thead>
+        <tbody>
+          <tr><td><b>SP1xTP8</b></td><td>9.7115</td><td>11.76</td><td>9.02</td><td>14.96</td><td>0.154%</td><td>11.65</td><td>8.89</td><td>14.84</td><td>0.153%</td></tr>
+          <tr><td><b>SP2xTP4</b></td><td>9.6619</td><td>15.67</td><td>9.96</td><td>24.18</td><td>0.250%</td><td>15.53</td><td>9.66</td><td>18.19</td><td>0.188%</td></tr>
+          <tr><td><b>SP4xTP2</b></td><td>10.1171</td><td>23.63</td><td>11.97</td><td class="peak">28.58</td><td class="peak">0.283%</td><td>23.81</td><td>11.35</td><td class="peak">28.05</td><td class="peak">0.277%</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
   <section class="section" id="results">
     <div class="section-head">
-      <div><h2>Before / after latency</h2></div>
+      <div><span class="tag contract">Details</span><h2>Before / after latency</h2></div>
       <p>Synchronized trace-wall medians. Adapter times are microseconds; percentages are relative to the corresponding real KDA-layer median.</p>
     </div>
     <div class="comparison">
