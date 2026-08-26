@@ -463,16 +463,26 @@ def artifact_dir(name: str) -> Path:
 
 
 def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
-    """Warmup then the timed generation with identical kwargs; asserts padded-length agreement (programs are keyed on it)."""
-    pipeline.warmup(prompt=prompt, **gen_kwargs)
+    """Warmup then the timed generation with identical kwargs; asserts padded-length agreement (programs are keyed on it).
+
+    On the resident-AdaLN path, warmup runs a short 3-step schedule regardless of the measured step
+    count: every program, conv3d blocking and persistent buffer is keyed on the *padded sequence
+    length*, not the number of steps, so 3 steps compile and allocate exactly what the full run needs
+    at a fraction of the cost, and the denoise trace stays warm across step counts (its signature is
+    shape-only) so the measured full-step call still replays it. The precomputed-AdaLN path instead
+    keys warmth on the step count -- a short warmup there would force the measured call to rebuild its
+    modulation table and recapture the trace -- so it warms at the full measured step count.
+    """
+    warmup_kwargs = gen_kwargs if pipeline.precomputed_adaln else {**gen_kwargs, "num_inference_steps": 3}
+    pipeline.warmup(prompt=prompt, **warmup_kwargs)
     warm_padded_len = pipeline.last_padded_len
+
+    with pipeline.quiet():
+        output = pipeline(prompt, seed=seed, **warmup_kwargs)
 
     ttnn.synchronize_device(pipeline.mesh_device)
     if ttnn.using_distributed_env():
         ttnn.distributed_context_barrier()
-
-    with pipeline.quiet():
-        output = pipeline(prompt, seed=seed, **gen_kwargs)
 
     output = pipeline(prompt, seed=seed, **gen_kwargs)
 

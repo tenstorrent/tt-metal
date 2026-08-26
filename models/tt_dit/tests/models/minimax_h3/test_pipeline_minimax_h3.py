@@ -23,7 +23,7 @@ from loguru import logger
 import ttnn
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
-from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.pipeline_minimax_h3_refactor import MiniMaxH3Pipeline
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES
 from .common_av import (
@@ -110,7 +110,9 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
             "from the total either way, but the run will take far longer than the reported compute."
         )
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights)
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device, weights_dir=weights, precomputed_adaln=False, dit_fsdp=False
+    )
 
     output = run_warm_generation(
         pipeline,
