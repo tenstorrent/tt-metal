@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import pytest
 import torch
-import ttnn
 
+import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
