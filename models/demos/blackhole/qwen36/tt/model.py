@@ -1229,15 +1229,53 @@ class Qwen36Model:
     # bakes into the trace. State carries across iterations in place (commit_verify_slot rolls to the
     # accepted slot between replays, eager).
     # ------------------------------------------------------------------------------------------
+    def _rope_tp_cos_sin_decode_torch(self, positions):
+        """Torch cos/sin [1, B, 1, rope_head_dim] in the DECODE rope layout — one rotation per ROW.
+
+        Byte-identical to what prepare_decode_inputs_host builds for a decode step at those positions
+        (same inv_freq / outer / cat / bf16 cast). The hybrid verify pushes its candidates through the
+        DECODE attention kernel as B pseudo-users, so it needs this per-row table, not the
+        prefill [1,1,S,rd] one."""
+        rd = self.args.rope_head_dim
+        pos_vec = positions.to(torch.int32).reshape(-1)
+        # RoPE position is the KV position offset by rope_delta (0 for text); same as decode.
+        rope_pos_vec = pos_vec + self.rope.rope_delta
+        B = rope_pos_vec.shape[0]
+        inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
+        freqs = torch.outer(rope_pos_vec.float(), inv_freq)  # [B, rd/2], per-row rotation
+        emb = torch.cat([freqs, freqs], dim=-1)
+        cos = emb.cos().reshape(1, B, 1, rd).to(torch.bfloat16)
+        sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
+        return cos, sin
+
     def _forward_verify_bucket_tp(self):
         """Trace body: recurrent verify over the persistent T-token bucket buffers -> per-position
-        logits + hidden. Reads only fixed-address buffers so it is trace-capturable."""
+        logits + hidden. Reads only fixed-address buffers so it is trace-capturable.
+
+        Full-attention layers run the DECODE flash kernel with the T candidates as T pseudo-users
+        (see capture_verify_trace). GDN layers stay on the seq-dim recurrent verify — the batch dim
+        is not a valid axis for a recurrence."""
         bucket, T = self._vfy_bucket, self._vfy_T
         x = self.embd(self._vfy_token_buf)
         x = ttnn.reshape(x, (1, 1, bucket, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         for layer in self.layers:
-            if layer.is_full_attention:
+            if layer.is_full_attention and not self._vfy_prefill_sdpa:
+                # Hybrid verify: T candidates as T pseudo-users of ONE sequence. cur_pos row i is
+                # p+1+i, so the decode SDPA's own causal bound gives row i exactly [0, p+1+i] — the
+                # candidate rows above it are written but masked out. alias_kv_write=True because the
+                # rows share one page table (see TPAttention.forward_decode).
+                x_new = layer.forward(
+                    x,
+                    cos=self._vfy_cos_buf,
+                    sin=self._vfy_sin_buf,
+                    mode="decode",
+                    position_tensor=self._vfy_kvpos_buf,
+                    page_table=self._vfy_kvpt_buf,
+                    alias_kv_write=True,
+                )
+            elif layer.is_full_attention:
+                # QWEN36_VERIFY_PREFILL_SDPA=1: the old chunked prefill-SDPA verify (A/B escape hatch).
                 x_new = layer.forward(
                     x,
                     cos=self._vfy_cos_buf,
@@ -1262,10 +1300,15 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
-        # Row-select the T real positions (constant one-hot), norm, lm_head -> logits [1,1,T,vocab].
-        rows = ttnn.matmul(self._vfy_sel_buf, x)  # [1,1,T,dim/tp] fractured
-        ttnn.deallocate(x)
-        rows = ttnn.to_memory_config(rows, ttnn.DRAM_MEMORY_CONFIG)
+        # Row-select the T real positions, norm, lm_head -> logits [1,1,T,vocab]. At bucket==T the
+        # one-hot select is the identity, so it degenerates to a memory-config move.
+        if self._vfy_sel_buf is None:
+            rows = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(x)
+        else:
+            rows = ttnn.matmul(self._vfy_sel_buf, x)  # [1,1,T,dim/tp] fractured
+            ttnn.deallocate(x)
+            rows = ttnn.to_memory_config(rows, ttnn.DRAM_MEMORY_CONFIG)
         normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,K,dim]
         logits = self._lm_head(normed)  # [1,1,K,vocab] replicated per device
         ttnn.deallocate(normed)
@@ -1302,11 +1345,29 @@ class Qwen36Model:
         # Output stays coherent when it happens -- it is a different valid continuation, not
         # corruption -- but it breaks the "spec decode reproduces target greedy" guarantee.
         # Requires exact_kv (the block-aligned fill breaks the 32-row bucket outright).
+        #
+        # HYBRID VERIFY (default; QWEN36_VERIFY_PREFILL_SDPA=1 restores the prefill-SDPA path above).
+        # The full-attention layers no longer run the chunked PREFILL SDPA over the bucket. That
+        # kernel activates only batch(1) x local_heads(6) x q_chunks(1) = 6 cores, each serially
+        # scanning the whole KV, so verify cost grew ~1.9 ms per 1k of context per iteration; and it
+        # int-divides chunk_start by 32, so an unaligned anchor silently truncated up to 31 of the
+        # most recent tokens from the candidate rows. Instead the T candidates go through the
+        # ordinary DECODE flash kernel as T pseudo-users: write all T candidates' K/V first, then one
+        # SDPA-decode with per-row cur_pos [p+1..p+T], which makes row i attend exactly [0, p+1+i].
+        # Causality is therefore free (no mask, no chunk arithmetic) and the KV scan is spread over
+        # the full core grid, so verify time is ~flat in context length.
         if decode_cfg is None:
             decode_cfg = False
+        self._vfy_prefill_sdpa = bool(int(os.environ.get("QWEN36_VERIFY_PREFILL_SDPA", "0")))
         if bucket is None:
-            bucket = ttnn.TILE_SIZE if decode_cfg else self._mask_bucket_for(T)
+            if not self._vfy_prefill_sdpa:
+                # Decode-mode verify runs at the candidate width itself (a bucketed decode batch);
+                # padding to a full tile would only add T-row-wide dead pseudo-users.
+                bucket = T
+            else:
+                bucket = ttnn.TILE_SIZE if decode_cfg else self._mask_bucket_for(T)
         assert not (decode_cfg and bucket > ttnn.TILE_SIZE), "decode_cfg needs a bucket <= TILE_SIZE"
+        assert self._vfy_prefill_sdpa or bucket == T, f"hybrid verify needs bucket == T ({bucket} != {T})"
         block_size = get_block_size(self._paged_kv_caches)
         dev = self.device
         rep = ttnn.ReplicateTensorToMesh(dev)
@@ -1339,24 +1400,29 @@ class Qwen36Model:
             device=dev,
             mesh_mapper=rep,
         )
-        self._vfy_csi_buf = ttnn.from_torch(
-            torch.tensor([warm_start], dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=dev,
-            mesh_mapper=rep,
-        )
-        self._vfy_full_pt_buf = ttnn.from_torch(
-            pt_pad, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
-        )
-        _wblk0 = warm_start // block_size
-        self._vfy_chunk_pt_buf = ttnn.from_torch(
-            pt_pad[:, _wblk0 : _wblk0 + self._vfy_chunk_blocks].contiguous(),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=dev,
-            mesh_mapper=rep,
-        )
+        # Chunked-prefill-SDPA scaffolding: only the QWEN36_VERIFY_PREFILL_SDPA path reads these.
+        # The hybrid decode-SDPA verify gets its causal bound from cur_pos and its blocks from
+        # _vfy_kvpt_buf, so the chunk-start scalar and the two extra page tables are dead there.
+        self._vfy_csi_buf = self._vfy_full_pt_buf = self._vfy_chunk_pt_buf = None
+        if self._vfy_prefill_sdpa:
+            self._vfy_csi_buf = ttnn.from_torch(
+                torch.tensor([warm_start], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                mesh_mapper=rep,
+            )
+            self._vfy_full_pt_buf = ttnn.from_torch(
+                pt_pad, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
+            )
+            _wblk0 = warm_start // block_size
+            self._vfy_chunk_pt_buf = ttnn.from_torch(
+                pt_pad[:, _wblk0 : _wblk0 + self._vfy_chunk_blocks].contiguous(),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                mesh_mapper=rep,
+            )
         # Positions are staged per replay; the [T, blocks] page table is constant (T identical rows,
         # all candidates share the one sequence) so it is built once here.
         # Position-exact KV write (paged_update_cache at absolute slots) instead of
@@ -1376,19 +1442,29 @@ class Qwen36Model:
             device=dev,
             mesh_mapper=rep,
         )
-        cos_t, sin_t = self._rope_tp_cos_sin_torch(warm_start, bucket)
+        # RoPE tables. Hybrid verify feeds the DECODE attention kernel, whose cos/sin are
+        # [1, B, 1, rope_dim] (one rotation per ROW at that row's own position) — not the prefill
+        # [1, 1, S, rope_dim] table. Same host math the plain decode step uses, so the two paths'
+        # rotations are byte-identical and near-ties round the same way.
+        if self._vfy_prefill_sdpa:
+            cos_t, sin_t = self._rope_tp_cos_sin_torch(warm_start, bucket)
+        else:
+            cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(torch.arange(warm_start, warm_start + T))
         self._vfy_cos_buf = ttnn.from_torch(
             cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
         )
         self._vfy_sin_buf = ttnn.from_torch(
             sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
         )
-        sel = torch.zeros(1, 1, T, bucket, dtype=torch.float32)
-        for i in range(T):
-            sel[0, 0, i, i] = 1.0
-        self._vfy_sel_buf = ttnn.from_torch(
-            sel, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
-        )
+        # bucket == T makes the row-select one-hot the identity; None => plain memory-config move.
+        self._vfy_sel_buf = None
+        if bucket != T:
+            sel = torch.zeros(1, 1, T, bucket, dtype=torch.float32)
+            for i in range(T):
+                sel[0, 0, i, i] = 1.0
+            self._vfy_sel_buf = ttnn.from_torch(
+                sel, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
+            )
 
         # Prep GDN layers for slot capture (fixed slot bufs; verify writes per-token state into them).
         gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
@@ -1452,7 +1528,6 @@ class Qwen36Model:
         assert getattr(self, "_vfy_trace_id", None) is not None, "call capture_verify_trace first"
         bucket, T = self._vfy_bucket, self._vfy_T
         assert len(draft_tokens) == T, f"expected {T} tokens, got {len(draft_tokens)}"
-        block_size = get_block_size(self._paged_kv_caches)
         dev = self.device
         rep = ttnn.ReplicateTensorToMesh(dev)
 
@@ -1463,29 +1538,36 @@ class Qwen36Model:
             tok.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
         )
         ttnn.copy_host_to_device_tensor(_h, self._vfy_token_buf)
-        _h = ttnn.from_torch(
-            torch.tensor([chunk_start], dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=None,
-            mesh_mapper=rep,
-        )
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_csi_buf)
-        cos_t, sin_t = self._rope_tp_cos_sin_torch(chunk_start, bucket)
+        if self._vfy_prefill_sdpa:
+            # Chunked prefill SDPA: device chunk-start scalar + the blocks covering
+            # [chunk_start, chunk_start+valid_len), padded to the fixed width.
+            _h = ttnn.from_torch(
+                torch.tensor([chunk_start], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=None,
+                mesh_mapper=rep,
+            )
+            ttnn.copy_host_to_device_tensor(_h, self._vfy_csi_buf)
+            block_size = get_block_size(self._paged_kv_caches)
+            blk0 = chunk_start // block_size
+            cpt = page_table[:, blk0 : blk0 + self._vfy_chunk_blocks]
+            if cpt.shape[-1] < self._vfy_chunk_blocks:
+                cpt = torch.cat([cpt, torch.zeros(1, self._vfy_chunk_blocks - cpt.shape[-1], dtype=torch.int32)], dim=1)
+            _h = ttnn.from_torch(
+                cpt.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
+            )
+            ttnn.copy_host_to_device_tensor(_h, self._vfy_chunk_pt_buf)
+            cos_t, sin_t = self._rope_tp_cos_sin_torch(chunk_start, bucket)
+        else:
+            # Hybrid verify: per-ROW decode rope at the candidates' own positions.
+            cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(torch.arange(chunk_start, chunk_start + T))
         _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
         ttnn.copy_host_to_device_tensor(_h, self._vfy_cos_buf)
         _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
         ttnn.copy_host_to_device_tensor(_h, self._vfy_sin_buf)
-        # Chunk page table: the blocks covering [chunk_start, chunk_start+valid_len), padded to fixed width.
-        blk0 = chunk_start // block_size
-        cpt = page_table[:, blk0 : blk0 + self._vfy_chunk_blocks]
-        if cpt.shape[-1] < self._vfy_chunk_blocks:
-            cpt = torch.cat([cpt, torch.zeros(1, self._vfy_chunk_blocks - cpt.shape[-1], dtype=torch.int32)], dim=1)
-        _h = ttnn.from_torch(
-            cpt.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
-        )
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_chunk_pt_buf)
-        # Absolute cache slot for each candidate: chunk_start .. chunk_start+T-1.
+        # Absolute cache slot for each candidate: chunk_start .. chunk_start+T-1. On the hybrid path
+        # this doubles as the decode SDPA's per-row cur_pos, which is what makes it causal.
         _h = ttnn.from_torch(
             torch.arange(chunk_start, chunk_start + T, dtype=torch.int32),
             dtype=ttnn.int32,

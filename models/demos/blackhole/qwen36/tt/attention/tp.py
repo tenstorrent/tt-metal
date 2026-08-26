@@ -516,7 +516,14 @@ class TPAttention:
             self._kv_shard_cfg_cache[B] = cfg
         return cfg
 
-    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
+    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None, alias_kv_write=False):
+        """One decode step for B "users".
+
+        alias_kv_write: the B rows are NOT independent users — they all belong to ONE sequence and
+        therefore share ONE page table (identical rows), the way the speculative verify runs its
+        K+1 candidates as B pseudo-users at consecutive positions. See the KV-write branch below for
+        why that needs a per-row loop instead of the batched update.
+        """
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
         # BUCKETED decode: a request feeds B<self.B users; every shape/reshape/rope/head-split and
@@ -592,16 +599,52 @@ class TPAttention:
             v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
-            _kv_cfg = self._kv_shard_cfg(B)
-            k_sh = ttnn.to_memory_config(k_p, _kv_cfg)
-            v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
-            ttnn.deallocate(k_p)
-            ttnn.deallocate(v_p)
-            # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
-            ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
-            ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
-            ttnn.deallocate(k_sh)
-            ttnn.deallocate(v_sh)
+            if alias_kv_write and B > 1:
+                # ALIASED rows (spec verify): every row's page-table entry is the SAME sequence, so
+                # their consecutive positions land in the same physical block. paged_update_cache
+                # shards the rows across cores and each core read-modify-writes a 32-row tile, so ONE
+                # batched call puts several cores on the SAME tile: last writer wins and the other
+                # rows are silently lost (run-to-run nondeterministic acceptance / trajectory forks —
+                # see the same note in forward_prefill_paged's exact-KV write). Issue one single-row
+                # call per row instead, which keeps exactly one core on each tile.
+                #
+                # Slice the row from the INTERLEAVED tensor and shard THAT, never the other way
+                # round: slicing a sharded tensor along the user dim is unsupported and silently
+                # yields the wrong rows.
+                _sc1 = self._kv_update_shard_cfg(1, HD)
+                _nb = page_table.shape[-1]
+                for i in range(B):
+                    # B > 1 here, so neither slice is full-span (a full-span ttnn.slice returns an
+                    # ALIAS of its input, which must never be deallocated).
+                    pos_i = ttnn.slice(cur_pos_tt, (i,), (i + 1,))
+                    pt_i = ttnn.slice(page_table, (i, 0), (i + 1, _nb))
+                    for _cache, _src in ((keys, k_p), (values, v_p)):
+                        row = ttnn.slice(_src, (0, i, 0, 0), (1, i + 1, 32, HD))
+                        row_sh = ttnn.to_memory_config(row, _sc1)
+                        ttnn.deallocate(row)
+                        ttnn.experimental.paged_update_cache(_cache, row_sh, update_idxs_tensor=pos_i, page_table=pt_i)
+                        ttnn.deallocate(row_sh)
+                    ttnn.deallocate(pos_i)
+                    ttnn.deallocate(pt_i)
+                ttnn.deallocate(k_p)
+                ttnn.deallocate(v_p)
+            else:
+                _kv_cfg = self._kv_shard_cfg(B)
+                k_sh = ttnn.to_memory_config(k_p, _kv_cfg)
+                v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
+                ttnn.deallocate(k_p)
+                ttnn.deallocate(v_p)
+                # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
+                ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+                ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+                ttnn.deallocate(k_sh)
+                ttnn.deallocate(v_sh)
+            # The paged SDPA-decode derives its batch from the PAGE TABLE's row count and does not
+            # check it against Q or cur_pos: a mismatch reads out of bounds silently.
+            assert B == page_table.shape[0] == cur_pos_tt.shape[-1], (
+                f"decode SDPA batch mismatch: q rows {B}, page_table rows {page_table.shape[0]}, "
+                f"cur_pos len {cur_pos_tt.shape[-1]}"
+            )
             attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q,
                 keys,
