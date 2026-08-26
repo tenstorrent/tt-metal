@@ -1542,7 +1542,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
         coalesce_1d_depthwise_kw_reads,
-        orig_stride);
+        orig_stride,
+        mm_conv);
 }
 
 static ttnn::Tensor prepare_conv_weights_internal(
@@ -1562,13 +1563,15 @@ static ttnn::Tensor prepare_conv_weights_internal(
     uint32_t original_weights_window_w = original_weights_shape[3];
 
     const bool is_conv1d = is_1d_conv(original_weights_window_h, params.input_height);
-    const bool is_conv_1d_depthwise_conv = is_1d_depthwise_conv(
-        params.groups,
-        original_weights_in_channels * params.groups,
-        original_weights_out_channels,
-        original_weights_window_h,
-        params.input_height,
-        params.has_bias);
+    // mm_conv (1x1, stride 1, no pad) runs as ttnn::linear and needs the interleaved-MM weight
+    // layout below, never the depthwise tap-slab layout.
+    const bool is_conv_1d_depthwise_conv = !params.mm_conv && is_1d_depthwise_conv(
+                                                                  params.groups,
+                                                                  original_weights_in_channels * params.groups,
+                                                                  original_weights_out_channels,
+                                                                  original_weights_window_h,
+                                                                  params.input_height,
+                                                                  params.has_bias);
     // Convert weight tensor to 0 padded shape if groups > 1
     if (!is_conv1d and params.groups > 1) {
         weight_tensor_ =
@@ -1671,6 +1674,48 @@ static ttnn::Tensor prepare_conv_weights_internal(
     return weight_tensor_;
 }
 
+// Depthwise conv1d bias layout: the depthwise compute kernel folds the bias into DST with a plain
+// elementwise dest-reuse add on the last kernel tap (compute_depthwise_conv1d.cpp). That add has no
+// broadcast mode, so the bias tile must carry the per-channel value in every one of the 32 rows of
+// the tile instead of only row 0. Everything else matches the stock [1, 1, 32, C_padded] TILE bias,
+// so the sharded writer fills the BIAS CB unchanged.
+template <typename T>
+static Tensor to_depthwise_bias_tile_layout(const Tensor& bias_tensor, uint32_t out_channels_padded) {
+    const uint32_t in_channels = bias_tensor.logical_shape()[3];
+    const ttnn::Shape output_shape{1, 1, constants::TILE_HEIGHT, out_channels_padded};
+
+    auto compute = [in_channels, out_channels_padded, &output_shape, bias_dtype = bias_tensor.dtype()](
+                       const tt::tt_metal::HostBuffer& input_host_buffer) {
+        auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
+        auto output_buffer = std::vector<T>(output_shape.volume(), T(0));
+        for (uint32_t row = 0; row < constants::TILE_HEIGHT; ++row) {
+            for (uint32_t col = 0; col < out_channels_padded; ++col) {
+                output_buffer[row * out_channels_padded + col] = col < in_channels ? input_buffer[col] : T(0);
+            }
+        }
+        return create_host_buffer_for_conv_weight<T>(
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), bias_dtype, output_shape);
+    };
+
+    const tt::tt_metal::TensorSpec output_spec(
+        output_shape,
+        tt::tt_metal::TensorLayout(bias_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{}));
+    return convert_tensor<T>(bias_tensor, compute, output_spec);
+}
+
+static Tensor convert_conv_bias_tensor_to_depthwise_tiled_layout(
+    const Tensor& bias_tensor, uint32_t out_channels_padded) {
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, uint32_t)>> to_depthwise_bias_map = {
+        {DataType::BFLOAT16, &to_depthwise_bias_tile_layout<bfloat16>},
+        {DataType::FLOAT32, &to_depthwise_bias_tile_layout<float>},
+    };
+    auto entry = to_depthwise_bias_map.find(bias_tensor.dtype());
+    if (entry == to_depthwise_bias_map.end()) {
+        TT_THROW("Unsupported bias dtype for 1D depthwise conv: {}", bias_tensor.dtype());
+    }
+    return entry->second(bias_tensor, out_channels_padded);
+}
+
 std::optional<ttnn::Tensor> prepare_conv_bias_internal(
     const std::optional<const ttnn::Tensor>& bias_tensor,
     uint32_t out_channels,
@@ -1689,12 +1734,23 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
         if (params.output_parallel_config.has_value()) {
             out_channels_padded = calculate_out_channels_padded(out_channels, params.output_parallel_config.value());
         }
-        // Inline the operations from conv_bias_layout_convert
-        validate_host_conv_bias(bias_tensor_);
-        ttnn::Shape bias_channels_padded_shape(
-            {1, 1, 32, round_up(out_channels_padded, params.weight_block_w_ntiles * 32)});
-        bias_tensor_ = ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), ttnn::Array4D{0, 0, 0, 0}, 0);
-        bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE);
+        // The 1D depthwise kernel folds bias with an elementwise (non-broadcast) add, so its bias
+        // tiles are row-replicated rather than the stock row-0-only form. mm_conv never runs the
+        // depthwise kernel (ttnn::linear consumes the stock bias tile), so it keeps the stock form.
+        const bool conv_is_1d_depthwise =
+            !params.mm_conv &&
+            is_1d_depthwise_conv(params.groups, out_channels, out_channels, 1, params.input_height, true);
+        const uint32_t bias_width_padded = round_up(out_channels_padded, params.weight_block_w_ntiles * 32);
+        if (conv_is_1d_depthwise) {
+            bias_tensor_ = convert_conv_bias_tensor_to_depthwise_tiled_layout(bias_tensor_, bias_width_padded);
+        } else {
+            // Inline the operations from conv_bias_layout_convert
+            validate_host_conv_bias(bias_tensor_);
+            ttnn::Shape bias_channels_padded_shape({1, 1, 32, bias_width_padded});
+            bias_tensor_ =
+                ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), ttnn::Array4D{0, 0, 0, 0}, 0);
+            bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE);
+        }
         if (bias_tensor_.dtype() != weight_dtype) {
             bias_tensor_ = ttnn::to_dtype(bias_tensor_, weight_dtype);
         }

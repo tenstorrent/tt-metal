@@ -144,7 +144,8 @@ struct Conv2dWeightsBiasPrepConfig {
         bool full_inner_dim_ = false,
         bool enable_activation_reuse_ = false,
         bool coalesce_1d_depthwise_kw_reads_ = false,
-        std::array<uint32_t, 2> stride_ = {1, 1}) :
+        std::array<uint32_t, 2> stride_ = {1, 1},
+        bool mm_conv_ = false) :
         input_channels_alignment(input_channels_alignment_),
         weights_bias_dtype(weights_bias_dtype_),
         weight_block_h_ntiles(weight_block_h_ntiles_),
@@ -162,6 +163,7 @@ struct Conv2dWeightsBiasPrepConfig {
         coalesce_1d_depthwise_kw_reads(coalesce_1d_depthwise_kw_reads_),
         stride(stride_),
         interleaved_mm_conv(interleaved_mm_conv),
+        mm_conv(mm_conv_),
         out_channels(out_channels_) {}
 
     // Common parameters
@@ -188,6 +190,9 @@ struct Conv2dWeightsBiasPrepConfig {
     const std::array<uint32_t, 2> stride;
     // This conv will go through auto shard codepath for matmul based convs
     const bool interleaved_mm_conv;
+    // The conv will run as a matmul (1x1, stride 1, no pad), so neither the depthwise weight
+    // layout nor the depthwise (row-replicated) bias layout applies.
+    const bool mm_conv;
     // Output channels (mandatory)
     const uint32_t out_channels;
 
@@ -209,6 +214,7 @@ struct Conv2dWeightsBiasPrepConfig {
         "coalesce_1d_depthwise_kw_reads",
         "stride",
         "interleaved_mm_conv",
+        "mm_conv",
         "out_channels");
     auto attribute_values() const {
         return std::make_tuple(
@@ -229,6 +235,7 @@ struct Conv2dWeightsBiasPrepConfig {
             std::cref(this->coalesce_1d_depthwise_kw_reads),
             std::cref(this->stride),
             std::cref(this->interleaved_mm_conv),
+            std::cref(this->mm_conv),
             std::cref(this->out_channels));
     }
 };

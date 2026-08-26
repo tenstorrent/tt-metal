@@ -404,10 +404,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const uint32_t act_matrix_height = act_matrix_height_ntiles * tt::constants::TILE_HEIGHT;
 
     if (has_bias) {
-        if (is_conv_1d_depthwise_conv) {
-            TT_THROW("Bias is not supported for depthwise conv1d");
-        }
-        // Tensor bias is of shape {output_channels}
+        // Tensor bias is of shape {output_channels}. 1D depthwise is supported: the bias CB is
+        // populated by the same sharded writer as for non-depthwise conv, and the depthwise
+        // compute kernel broadcasts it into DST on the last kernel tap.
         TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
         TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
@@ -1058,6 +1057,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         // take the output format, and the JIT honors the mode only for Float32-format CBs
         // (get_unpack_dst_formats). Mixed-dtype calls keep the stock FPU path.
         const bool use_fp32_sfpu_depthwise =
+            !has_bias &&  // bias fuses on the FPU dest-reuse path; SFPU has no bias consumer
             fp32_dest_acc_en && a.dtype() == tt::tt_metal::DataType::FLOAT32 &&
             b.dtype() == tt::tt_metal::DataType::FLOAT32 &&
             get_cb_info_by_name(cb_info, Conv2dCb::OUT).data_format == tt::DataFormat::Float32;
@@ -1089,6 +1089,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             coalesce_1d_depthwise_kw_reads,                             // 10: coalesced activation block
             dest_reuse_scratch_cb_id,                                   // 11: dest-reuse read-back scratch
             (uint32_t)use_fp32_sfpu_depthwise,                          // 12: SFPU fp32-exact dispatch
+            has_bias,                                                   // 13: fuse_bias
+            get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,         // 14: bias cb (row-replicated tiles)
         };
     } else {
         compute_kernel_args = {
