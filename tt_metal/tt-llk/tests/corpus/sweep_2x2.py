@@ -738,6 +738,25 @@ KNOBS = {
     # (cycle-identical under the knob; named lreg-file-exhausted / no
     # admissible candidate).
     "pressure-park": "-mtt-tensix-optimize-pressure-park",
+    # HH (launch-flatten): complete-unroll request for counted innermost
+    # Tensix DELIVERY loops (typed TTREPLAY records/launches, fixed raw
+    # .ttinsn words, typed SFPU builtins, own scalar control), placed
+    # immediately before the GIMPLE complete unroller so cunroll bypasses
+    # the typed-spelling size ESTIMATE (~13x over delivered words) and
+    # folds per-trip conditionals (direction flip-flops, record-once init
+    # guards) at their proven values.  Closes the lane-HD topk
+    # replay-window-density gap at its true layer: the hand raw-word arm
+    # has always unrolled these loops (its asm estimates small), so the
+    # typed arm's per-trip loop control rode the timed issue path between
+    # launches.  Annotation-only; trips must prove (single exit, SCEV
+    # constant latch count); word budget = the replay-unroll table
+    # constants; refusals by name (trip-count-unproven, memory,
+    # foreign-stmt/asm, unpriced-builtin, word-budget, multi-exit,
+    # row-too-small); QSR refuses wholesale.  Target row: topk-perf
+    # (typed-multiresult ph0-3 phase drivers + steps-4-1 while flatten to
+    # hand-shaped straight-line launch runs; ph4 step-N nest refuses
+    # trip-count-unproven -- rolled in the hand arm too).
+    "launch-flatten": "-mtt-tensix-optimize-launch-flatten",
 }
 
 
@@ -856,6 +875,12 @@ KNOB_MODES = {
     # ON vs ON+flag.  Promotion requires an R9 witness and the ON-vs-ON
     # attribution ceremony.
     "pressure-park": "on-plus",
+    # HH launch-flatten: default-off Init(0) booking knob; a pure
+    # GIMPLE unroll-request (delivery-shape change only, dynamic word
+    # stream unchanged by construction).  on-plus while a booking knob;
+    # promotion requires an R9 witness and the ON-vs-ON attribution
+    # ceremony.
+    "launch-flatten": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
