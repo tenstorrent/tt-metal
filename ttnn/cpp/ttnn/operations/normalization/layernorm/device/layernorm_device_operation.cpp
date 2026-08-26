@@ -48,6 +48,13 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         a.layout() == Layout::TILE || (a.layout() == Layout::ROW_MAJOR && !a.is_sharded()),
         "Input tensor must have TILE layout (ROW_MAJOR is only supported for non-sharded tensors), got: {}",
         a.layout());
+    if (a.layout() == Layout::TILE) {
+        TT_FATAL(
+            tile_width == tt::constants::TILE_WIDTH,
+            "LayerNorm TILE input requires tile width {}, got: {}",
+            tt::constants::TILE_WIDTH,
+            tile_width);
+    }
     TT_FATAL(
         !(a.layout() == Layout::ROW_MAJOR && a.is_sharded()), "ROW_MAJOR input is not supported with sharded tensors");
     if (a.layout() == Layout::ROW_MAJOR) {

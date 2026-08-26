@@ -327,7 +327,7 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             two_pass_stats_update_shifted_rows<false>(input_dst, 0, rows);
             block_n += rows;
         }
-        two_pass_stats_finish_shifted_mean(reciprocal_lut[block_n - 1]);
+        two_pass_stats_finish_shifted_mean<true, true>(reciprocal_lut[block_n - 1]);
 
         for (auto i : block.local()) {
             const uint32_t global_tile = block.to_global(i);
@@ -338,6 +338,7 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
         if (block.is_first()) {
             two_pass_stats_save_state(mean_dst);
+            two_pass_stats_save_anchor_to_state(mean_dst);
         } else {
             two_pass_stats_combine_block(
                 mean_dst,
@@ -390,7 +391,8 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     copy_tile_to_dst_init_short_with_dt(dfb_ex_welford, dfb_ex2_welford);
     copy_tile(dfb_ex2_welford, 0, var_dst);
     welford_restore_state(mean_dst);
-    two_pass_stats_finalize_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
+    two_pass_stats_restore_anchor_from_state(mean_dst);
+    two_pass_stats_finalize_split_mean_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
     tile_regs_commit();
     dfb_ex_obj.pop_front(1);
     dfb_ex2_obj.pop_front(1);
@@ -680,6 +682,7 @@ void kernel_main() {
     DataflowBuffer dfb_ex2_obj(dfb_ex2);
     DataflowBuffer dfb_ex2pe_obj(dfb_ex2pe);
     DataflowBuffer dfb_x_replay_obj(dfb_x_replay);
+    DataflowBuffer dfb_interm_pre_add_obj(dfb_interm_pre_add);
 
     constexpr uint32_t onetile = 1;
 
@@ -843,9 +846,31 @@ void kernel_main() {
             if constexpr (fuse_pre_add) {
                 sub_bcast_cols_init(dfb_normalize_in, dfb_ex);
                 for (auto i : block.local()) {
-                    sub_tiles_bcast_cols(dfb_normalize_in, dfb_ex, i, 0, i);
+                    add_tiles(dfb_in, dfb_inb, i, i, i);
                 }
+                tile_regs_commit();
+                dfb_in_obj.pop_front(block.full_block_size());
+                dfb_inb_obj.pop_front(block.full_block_size());
+
+                dfb_interm_pre_add_obj.reserve_back(block.full_block_size());
+                tile_regs_wait();
+                pack_reconfig_data_format(dfb_interm_pre_add);
+                for (auto i : block.local()) {
+                    pack_tile(i, dfb_interm_pre_add);
+                }
+                tile_regs_release();
+                dfb_interm_pre_add_obj.push_back(block.full_block_size());
+
+                dfb_interm_pre_add_obj.wait_front(block.full_block_size());
+                tile_regs_acquire();
+                reconfig_data_format(dfb_interm_pre_add, dfb_ex);
+                sub_bcast_cols_compensated_init(dfb_interm_pre_add, dfb_ex);
+                sub_bcast_cols_compensated(dfb_interm_pre_add, dfb_ex, 0, 0, block.size());
+                dfb_interm_pre_add_obj.pop_front(block.full_block_size());
             } else {
+                tile_regs_acquire();
+                constexpr auto dfb_normalize_in = fused_pre_add_replay ? dfb_x_replay : dfb_in;
+                reconfig_data_format(dfb_normalize_in, dfb_ex);
                 sub_bcast_cols_compensated_init(dfb_normalize_in, dfb_ex);
                 sub_bcast_cols_compensated(dfb_normalize_in, dfb_ex, 0, 0, block.size());
             }

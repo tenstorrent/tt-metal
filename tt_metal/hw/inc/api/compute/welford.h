@@ -119,6 +119,14 @@ ALWI void two_pass_stats_restore_anchor(std::uint32_t anchor_dst_idx) {
     MATH((llk_math_two_pass_sfpu_load_anchor_from_dst(anchor_dst_idx)));
 }
 
+ALWI void two_pass_stats_save_anchor_to_state(std::uint32_t mean_dst_idx) {
+    MATH((llk_math_two_pass_sfpu_store_anchor_to_state_dst(mean_dst_idx)));
+}
+
+ALWI void two_pass_stats_restore_anchor_from_state(std::uint32_t mean_dst_idx) {
+    MATH((llk_math_two_pass_sfpu_load_anchor_from_state_dst(mean_dst_idx)));
+}
+
 template <bool dual_m2 = true>
 ALWI void two_pass_stats_combine_block(
     std::uint32_t mean_dst_idx, std::uint32_t total_reciprocal_bits, std::uint32_t block_n_bits) {

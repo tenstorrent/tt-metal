@@ -713,6 +713,19 @@ sfpi_inline void _two_pass_load_anchor_from_dst_()
     TTI_SFPLOAD(ckernel::p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 0);
 }
 
+// The mean-state tile stores its vector at raw offset 0. Offset 4 is the next
+// unused vector slot, so an anchor placed there survives state spill/reload and
+// block combines without requiring another tile.
+sfpi_inline void _two_pass_store_anchor_to_state_dst_()
+{
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 4);
+}
+
+sfpi_inline void _two_pass_load_anchor_from_state_dst_()
+{
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 4);
+}
+
 sfpi_inline void _two_pass_clear_stats_()
 {
     TTI_SFPLOADI(ckernel::p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0);

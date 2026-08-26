@@ -62,6 +62,14 @@ inline void llk_math_two_pass_sfpu_load_anchor_from_dst(std::uint32_t anchor_dst
     _llk_math_welfords_sfpu_params_(ckernel::sfpu::_two_pass_load_anchor_from_dst_, anchor_dst_idx);
 }
 
+inline void llk_math_two_pass_sfpu_store_anchor_to_state_dst(std::uint32_t mean_dst_idx) {
+    _llk_math_welfords_sfpu_params_(ckernel::sfpu::_two_pass_store_anchor_to_state_dst_, mean_dst_idx);
+}
+
+inline void llk_math_two_pass_sfpu_load_anchor_from_state_dst(std::uint32_t mean_dst_idx) {
+    _llk_math_welfords_sfpu_params_(ckernel::sfpu::_two_pass_load_anchor_from_state_dst_, mean_dst_idx);
+}
+
 template <bool dual_m2>
 inline void llk_math_two_pass_sfpu_combine_block_to_dst(
     std::uint32_t mean_dst_idx, std::uint32_t total_reciprocal_bits, std::uint32_t block_n_bits) {
