@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run (from the tt-metal repo root, after an emule build):
-//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.CB_Reservation_*"
+//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="UnitMeshFixture.CB_Reservation_*"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -11,6 +11,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
 
@@ -19,8 +20,7 @@ using namespace tt::tt_metal;
 
 namespace tt::tt_metal {
 
-TEST_F(MeshDeviceFixture, CB_Reservation_Overflow_SanityCheck) {
-    auto* device = this->devices_.at(0)->get_devices()[0];
+TEST_F(UnitMeshFixture, CB_Reservation_Overflow_SanityCheck) {
     CoreCoord logical_core = {0, 0};
 
     Program program = CreateProgram();
@@ -45,17 +45,18 @@ TEST_F(MeshDeviceFixture, CB_Reservation_Overflow_SanityCheck) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_DEATH(detail::LaunchProgram(device, program), ".*\\[ASAN ERROR\\] CB Reservation Overflow:.*");
+    EXPECT_DEATH(
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        ".*\\[ASAN ERROR\\] CB Reservation Overflow:.*");
 }
 
 // CB Reservation Overflow is the one check that is ALWAYS ON (not gated by
 // TT_METAL_EMULE_ASAN) — gating it would let an over-reserve deadlock on the
 // free-space wait instead of reporting a clear error. This test explicitly
 // clears the master switch and confirms the over-reserve still aborts.
-TEST_F(MeshDeviceFixture, CB_Reservation_Overflow_AlwaysOn) {
+TEST_F(UnitMeshFixture, CB_Reservation_Overflow_AlwaysOn) {
     ::unsetenv("TT_METAL_EMULE_ASAN");  // master switch OFF — check must still fire
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
 
     Program program = CreateProgram();
@@ -79,7 +80,9 @@ TEST_F(MeshDeviceFixture, CB_Reservation_Overflow_AlwaysOn) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_DEATH(detail::LaunchProgram(device, program), ".*\\[ASAN ERROR\\] CB Reservation Overflow:.*");
+    EXPECT_DEATH(
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        ".*\\[ASAN ERROR\\] CB Reservation Overflow:.*");
 }
 
 // Boundary positive control: reserving EXACTLY the CB's capacity (n ==
@@ -95,10 +98,9 @@ TEST_F(MeshDeviceFixture, CB_Reservation_Overflow_AlwaysOn) {
 // single-threaded parent. (The regression runner also splits them into separate
 // invocations; this ordering additionally keeps the bare `CB_Reservation_*` glob
 // runnable.)
-TEST_F(MeshDeviceFixture, CB_Reservation_ExactCapacity_NoViolation) {
+TEST_F(UnitMeshFixture, CB_Reservation_ExactCapacity_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
 
     Program program = CreateProgram();
@@ -125,7 +127,7 @@ TEST_F(MeshDeviceFixture, CB_Reservation_ExactCapacity_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

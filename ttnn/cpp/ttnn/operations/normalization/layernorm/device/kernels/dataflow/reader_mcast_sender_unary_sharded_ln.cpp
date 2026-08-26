@@ -91,7 +91,9 @@ void kernel_main() {
     UnicastEndpoint remote_ep;
     MulticastEndpoint mcast_ep;
 
-    const uint32_t single_tile_size_bytes = get_tile_size(rms_norm ? dfb_ex_partial2 : dfb_ex_partial);
+    // RMSNorm only allocates cb_ex_partial2; the host skips cb_ex_partial.
+    DataflowBuffer dfb_partial_size_ref(rms_norm ? dfb_ex_partial2 : dfb_ex_partial);
+    const uint32_t single_tile_size_bytes = dfb_partial_size_ref.get_tile_size();
 
     // Compute the NOC coordinates for remote cores that interact with this core
     df::RemoteNocCoords<num_blocks> remote_coords{};

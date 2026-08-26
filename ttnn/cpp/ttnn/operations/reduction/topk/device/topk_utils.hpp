@@ -13,6 +13,17 @@
 namespace ttnn::prim {
 uint32_t largest_power_of_two(uint32_t x);
 
+// Structural multi-core eligibility (shape/K requirements only, no grid or L1
+// feasibility): width gate (>= multi_core_min_width, or the Ht-aware relaxation
+// for inputs with <= multi_core_low_ht_max_tile_rows tile rows), reduced width
+// below the 16-bit bitonic index limit, power-of-two width, and K <=
+// multi_core_max_k. This is the single source of truth shared by
+// select_program_factory, validate_on_program_cache_miss, and the composite
+// router in topk.cpp (the router passes a pinned num_tile_rows to disable the
+// Ht-aware relaxation — the composite measured faster on that cell); the
+// cost/grid check (verify_multi_core_cost) comes on top.
+bool topk_multicore_structurally_eligible(uint32_t reduced_width, uint32_t num_tile_rows, uint32_t k);
+
 struct TopKCoreConfig {
     uint16_t num_cores = 0;
     uint16_t split_size = 0;

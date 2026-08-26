@@ -9,6 +9,9 @@
 #include <limits>
 #include <algorithm>
 
+#include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat, tt::tile_size
+#include <ttnn/tensor/types.hpp>                 // tt::tt_metal::datatype_to_dataformat_converter
+
 namespace ttnn::prim {
 
 uint32_t GroupNormPadCorrection::scaler_bits(uint32_t reduce_factor_w) const {
@@ -238,6 +241,140 @@ std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size
     }
 
     return {max_tile_span, num_groups_before_start_again_at_tile_beginning};
+}
+
+uint32_t GroupNormShardedStaticCbSizes::total(const GroupNormShardedCbFlags& flags) const {
+    uint32_t t = 0;
+    t += in_CB_size;  // c_1 tilized input
+    // The no-negative-mask path keeps a second full-shard copy for untilize-out (c_30); the
+    // negative-mask path accumulates in place into c_1 and replaces c_30 with the (much
+    // smaller) negative-mask CB (c_14). This one line is the whole L1 trade-off.
+    t += flags.with_negative_mask ? in_negative_mask_CB_size : (flags.untilize_out ? in_CB_size : 0u);
+    t += in2_CB_size;  // c_2 scaler
+    t += in3_CB_size;  // c_3 eps
+    if (!flags.use_welford) {
+        t += in2_CB_size;  // c_4 scaler-c
+    }
+    if (flags.has_gamma) {
+        t += in5_CB_size;  // c_5
+    }
+    if (flags.has_beta) {
+        t += in6_CB_size;  // c_6
+    }
+    // c_7 is unconditional: the factory allocates it whether the writer NOC-reads a
+    // caller-supplied mask or synthesizes one in L1, and one of those is always true.
+    t += in_mask_CB_size;
+    if (flags.reader_repack_output) {
+        t += repack_CB_size;  // c_11/c_12
+    }
+    t += x_CB_size;           // c_13
+    t += ex_partial_CB_size;  // c_8
+    if (!flags.use_welford) {
+        t += single_tile_size;  // c_10 ex_external
+    }
+    t += ex_global_CB_size;  // c_9/c_15
+    t += ex2pe_CB_size;      // c_17
+    t += scalar_tile_size;   // c_26 ones
+    if (flags.pad_correction_active) {
+        // c_18 rowvalid + c_19 composed mask, created inline by the sharded factory (the
+        // append_group_norm_pad_correction_cbs helper this once referred to no longer exists).
+        t += rowvalid_CB_size + composed_mask_CB_size;
+    }
+    return t;
+}
+
+GroupNormShardedStaticCbSizes compute_sharded_gn_static_cb_sizes(
+    const ttnn::Tensor& input,
+    tt::tt_metal::DataType im_data_format,
+    std::optional<tt::tt_metal::DataType> gamma_dtype,
+    std::optional<tt::tt_metal::DataType> beta_dtype,
+    std::optional<tt::tt_metal::DataType> input_mask_dtype,
+    std::optional<tt::tt_metal::DataType> negative_mask_dtype,
+    bool use_welford,
+    uint32_t num_groups) {
+    using tt::tt_metal::datatype_to_dataformat_converter;
+
+    // Data formats, mirroring groupnorm_sharded_program_factory.cpp. Note beta overrides gamma
+    // when both are present -- they share one CB format there, so they must here too.
+    const tt::DataFormat in_data_format = datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(im_data_format);
+    tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
+    if (gamma_dtype.has_value()) {
+        gamma_beta_cb_data_format = datatype_to_dataformat_converter(gamma_dtype.value());
+    }
+    if (beta_dtype.has_value()) {
+        gamma_beta_cb_data_format = datatype_to_dataformat_converter(beta_dtype.value());
+    }
+    // Absent mask tensors mean the writer synthesizes them, which it does in bfloat16.
+    const tt::DataFormat in_mask_cb_data_format = input_mask_dtype.has_value()
+                                                      ? datatype_to_dataformat_converter(input_mask_dtype.value())
+                                                      : tt::DataFormat::Float16_b;
+    const tt::DataFormat in_negative_mask_cb_data_format =
+        negative_mask_dtype.has_value() ? datatype_to_dataformat_converter(negative_mask_dtype.value())
+                                        : tt::DataFormat::Float16_b;
+
+    const uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    const uint32_t gamma_beta_single_tile_size = tt::tile_size(gamma_beta_cb_data_format);
+    const uint32_t in_mask_single_tile_size = tt::tile_size(in_mask_cb_data_format);
+    const uint32_t in_negative_mask_single_tile_size = tt::tile_size(in_negative_mask_cb_data_format);
+
+    // Geometry, again mirroring the factory. Only the derivations the CB sizes depend on.
+    const uint32_t tile_height = input.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input.tensor_spec().tile().get_width();
+    const auto& shard_spec = input.shard_spec().value();
+    const uint32_t per_core_M = shard_spec.shape[0];
+    const uint32_t per_core_N = shard_spec.shape[1];
+    const uint32_t per_core_Mt = per_core_M / tile_height;
+    const uint32_t per_core_Nt = (per_core_N + tile_width - 1) / tile_width;
+
+    const auto& padded_shape = input.padded_shape();
+    const uint32_t num_batches = padded_shape[0];
+    const uint32_t H = padded_shape[2] * num_batches;
+    const uint32_t W = padded_shape[3];
+    const uint32_t group_size = W / num_groups;
+    const uint32_t block_wt = find_max_tile_span(per_core_N, group_size).first;
+
+    const uint32_t num_shards_r = H / per_core_M;
+    const uint32_t num_shards_c = W / per_core_N;
+    const uint32_t num_batches_per_core = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
+    const uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
+    const uint32_t block_ht = per_core_Mt / num_batches_per_core;
+
+    const uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
+    const uint32_t interm_block_tiles = block_ht * block_wt;
+
+    GroupNormShardedStaticCbSizes sizes;
+    sizes.in_CB_size = in0_block_tiles * in_single_tile_size;
+    // cb_xmm (c_2) double buffer. After the Welford mask-multiply reorder
+    // (`((x - mu) * rsqrt) * mask`), only one tile is live in cb_xmm at a time, so the
+    // Welford allocation is 2 rather than 3.
+    // Scalar CBs are written as bf16 bit patterns, so they stay bf16 even on the legacy fp32
+    // path where cb_data_format is Float32. Welford repurposes c_2 as the fp32 cb_xmm
+    // intermediate; legacy uses it as the bf16 scaler. Mirrors the factory.
+    const uint32_t scalar_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t in2_single_tile_size = use_welford ? single_tile_size : scalar_tile_size;
+    sizes.in2_CB_size = in2_single_tile_size * (use_welford ? 2 : 1);
+    sizes.in3_CB_size = scalar_tile_size;
+    sizes.in5_CB_size = per_core_Nt * gamma_beta_single_tile_size;
+    sizes.in6_CB_size = per_core_Nt * gamma_beta_single_tile_size;
+    // Non-Welford: double-buffered single set. Caller masks may carry a row-masked second set
+    // under the pad correction, but the sharded writer never streams it into c_7.
+    sizes.in_mask_CB_size = block_wt * in_mask_single_tile_size * (use_welford ? num_groups_per_core : 2);
+    sizes.in_negative_mask_CB_size = block_wt * in_negative_mask_single_tile_size * 2;
+    sizes.repack_CB_size = per_core_Nt * in_single_tile_size * 2;
+    sizes.x_CB_size = single_tile_size * (use_welford ? 1 : interm_block_tiles);
+    // In welford, mean and var are both stored here, so double the size.
+    sizes.ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);
+    sizes.ex_global_CB_size = sizes.ex_partial_CB_size * (use_welford ? num_groups_per_core : 1);
+    sizes.ex2pe_CB_size = use_welford ? single_tile_size * num_groups_per_core : sizes.ex_partial_CB_size;
+    sizes.single_tile_size = single_tile_size;
+    sizes.scalar_tile_size = scalar_tile_size;
+    // Pad-correction CBs (c_18 rowvalid, c_19 composed mask), both bf16. Computed
+    // unconditionally; total() only counts them when the correction is active.
+    sizes.rowvalid_CB_size = scalar_tile_size;
+    sizes.composed_mask_CB_size = block_wt * scalar_tile_size;
+    return sizes;
 }
 
 }  // namespace ttnn::prim

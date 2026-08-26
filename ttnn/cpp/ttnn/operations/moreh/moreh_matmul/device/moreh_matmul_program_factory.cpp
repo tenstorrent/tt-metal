@@ -6,8 +6,8 @@
 
 #include "moreh_matmul_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul {
@@ -107,18 +107,25 @@ void get_not_bcast(
     }
 }
 
-tt::tt_metal::ProgramDescriptor MorehMatmulOperation::MultiCoreProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
 
     const Tensor& input = tensor_args.input;
     const Tensor& other = tensor_args.other;
     const Tensor& output = tensor_return_value;
 
     const std::optional<const Tensor>& bias = tensor_args.bias;
+
+    // Metal 2.0 tensor bindings operate on the underlying MeshTensor; the TensorArgument
+    // is matched back to its input by MeshTensor identity, so bind the exact references.
+    const auto& input_mt = tensor_args.input.mesh_tensor();
+    const auto& other_mt = tensor_args.other.mesh_tensor();
+    const auto& output_mt = tensor_return_value.mesh_tensor();
 
     bool transpose_input = operation_attributes.transpose_input;
     bool transpose_other = operation_attributes.transpose_other;
@@ -267,8 +274,33 @@ tt::tt_metal::ProgramDescriptor MorehMatmulOperation::MultiCoreProgramFactory::c
         __LINE__,
         num_output_tiles_per_core_group_1,
         num_output_tiles_per_core_group_2);
+
     ////////////////////////////////////////////////////////////////////////////
-    //                         CircularBuffer Setup
+    //                         Resource names
+    ////////////////////////////////////////////////////////////////////////////
+    const DFBSpecName IN0{"in0"};    // legacy c_0  (input)
+    const DFBSpecName IN1{"in1"};    // legacy c_1  (other)
+    const DFBSpecName IN2{"in2"};    // legacy c_2  (mask for input)
+    const DFBSpecName IN3{"in3"};    // legacy c_3  (mask for other)
+    const DFBSpecName IN4{"in4"};    // legacy c_4  (bias)
+    const DFBSpecName IM0{"im0"};    // legacy c_24 (matmul reload temp)
+    const DFBSpecName IM1{"im1"};    // legacy c_25 (input transpose)
+    const DFBSpecName IM2{"im2"};    // legacy c_26 (other transpose)
+    const DFBSpecName IM3{"im3"};    // legacy c_27 (bias-add temp)
+    const DFBSpecName OUT0{"out0"};  // legacy c_16 (output)
+
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OTHER{"other"};
+    const TensorParamName BIAS{"bias"};
+    const TensorParamName OUTPUT{"output"};
+
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                         DataflowBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     const uint32_t in0_t{2};   // input
     const uint32_t in1_t{2};   // other
@@ -284,73 +316,100 @@ tt::tt_metal::ProgramDescriptor MorehMatmulOperation::MultiCoreProgramFactory::c
     auto im0_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format;
     auto im3_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format;
 
-    ProgramDescriptor desc;
-
-    auto add_cb = [&](CBIndex idx, uint32_t num_tiles, tt::DataFormat fmt) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = num_tiles * tile_size(fmt),
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(idx),
-                .data_format = fmt,
-                .page_size = tile_size(fmt),
-            }}},
-        });
+    auto make_dfb = [](const DFBSpecName& id, uint32_t num_tiles, tt::DataFormat fmt) {
+        return DataflowBufferSpec{
+            .unique_id = id,
+            .entry_size = tile_size(fmt),
+            .num_entries = num_tiles,
+            .data_format_metadata = fmt,
+        };
     };
 
-    add_cb(tt::CBIndex::c_0, in0_t, cb_data_format);
-    add_cb(tt::CBIndex::c_1, in1_t, cb_data_format);
-    add_cb(tt::CBIndex::c_2, in2_t, cb_data_format);
-    add_cb(tt::CBIndex::c_3, in3_t, cb_data_format);
-    add_cb(tt::CBIndex::c_4, in4_t, cb_data_format);
-    add_cb(tt::CBIndex::c_24, im0_t, im0_data_format);
-    add_cb(tt::CBIndex::c_25, im1_t, cb_data_format);
-    add_cb(tt::CBIndex::c_26, im2_t, cb_data_format);
-    add_cb(tt::CBIndex::c_27, im3_t, im3_data_format);
-    add_cb(tt::CBIndex::c_16, out0_t, cb_data_format);
+    Group<DataflowBufferSpec> dataflow_buffers = {
+        make_dfb(IN0, in0_t, cb_data_format),
+        make_dfb(IN1, in1_t, cb_data_format),
+        make_dfb(IN2, in2_t, cb_data_format),
+        make_dfb(IN3, in3_t, cb_data_format),
+        make_dfb(IN4, in4_t, cb_data_format),
+        make_dfb(IM0, im0_t, im0_data_format),
+        make_dfb(IM1, im1_t, cb_data_format),
+        make_dfb(IM2, im2_t, cb_data_format),
+        make_dfb(IM3, im3_t, im3_data_format),
+        make_dfb(OUT0, out0_t, cb_data_format),
+    };
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Tensor parameters
+    ////////////////////////////////////////////////////////////////////////////
+    Group<TensorParameter> tensor_parameters = {
+        TensorParameter{.unique_id = INPUT, .spec = input_mt.tensor_spec()},
+        TensorParameter{.unique_id = OTHER, .spec = other_mt.tensor_spec()},
+        TensorParameter{.unique_id = OUTPUT, .spec = output_mt.tensor_spec()},
+    };
+    if (bias.has_value()) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = BIAS, .spec = bias.value().mesh_tensor().tensor_spec()});
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::map<std::string, std::string> reader_defines_map;
-    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        Kt,
-        static_cast<uint32_t>(transpose_input),
-        static_cast<uint32_t>(transpose_other),
-        input_mask_h,
-        input_mask_w,
-        other_mask_h,
-        other_mask_w,
-    };
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(other.buffer()).append_to(reader_compile_time_args);
-
+    KernelSpec::CompilerOptions::Defines reader_defines;
     if (bias.has_value()) {
-        reader_defines_map["FUSE_BIAS"] = "1";
-        reader_compile_time_args.push_back(static_cast<uint32_t>(is_scalar_bias));
-        TensorAccessorArgs(bias->buffer()).append_to(reader_compile_time_args);
+        reader_defines.emplace("FUSE_BIAS", "1");
         log_debug(tt::LogOp, "{}:{} bias tensor. is bias dram {}", __func__, __LINE__, is_dram(bias));
     }
 
-    KernelDescriptor::CompileTimeArgs writer_compile_time_args;
-    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    KernelSpec::CompileTimeArgs reader_compile_time_args = {
+        {"Kt", Kt},
+        {"transpose_input", static_cast<uint32_t>(transpose_input)},
+        {"transpose_other", static_cast<uint32_t>(transpose_other)},
+        {"input_mask_h", input_mask_h},
+        {"input_mask_w", input_mask_w},
+        {"other_mask_h", other_mask_h},
+        {"other_mask_w", other_mask_w},
+    };
+    if (bias.has_value()) {
+        reader_compile_time_args["is_scalar_bias"] = static_cast<uint32_t>(is_scalar_bias);
+    }
 
-    KernelDescriptor::Defines reader_defines(reader_defines_map.begin(), reader_defines_map.end());
+    Group<DFBBinding> reader_dfb_bindings = {
+        DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = IN1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = IN2, .accessor_name = "in2", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = IN3, .accessor_name = "in3", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = IN4, .accessor_name = "in4", .endpoint_type = DFBEndpointType::PRODUCER},
+    };
+    Group<TensorBinding> reader_tensor_bindings = {
+        TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
+        TensorBinding{.tensor_parameter_name = OTHER, .accessor_name = "other"},
+    };
+    if (bias.has_value()) {
+        reader_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = BIAS, .accessor_name = "bias"});
+    }
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/reader_moreh_matmul.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.defines = std::move(reader_defines);
-    reader_desc.config = ReaderConfigDescriptor{};
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/reader_moreh_matmul.cpp",
+        .compiler_options = {.defines = reader_defines},
+        .dfb_bindings = reader_dfb_bindings,
+        .tensor_bindings = reader_tensor_bindings,
+        .compile_time_args = reader_compile_time_args,
+        // input_stride[8], other_stride[8], output_stride[8], input_not_bcast[8], other_not_bcast[8]
+        .runtime_arg_schema = {.runtime_arg_names = {"output_tile_start_idx", "num_output_tiles"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .advanced_options = {.num_runtime_varargs = 5 * static_cast<uint32_t>(ttnn::MAX_NUM_DIMENSIONS)},
+    };
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/writer_moreh_matmul.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/writer_moreh_matmul.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT0, .accessor_name = "out0", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_output_tiles"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
 
     log_debug(
         tt::LogOp,
@@ -364,150 +423,198 @@ tt::tt_metal::ProgramDescriptor MorehMatmulOperation::MultiCoreProgramFactory::c
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::map<std::string, std::string> compute_defines_map;
-
-    const auto* const compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/moreh_matmul.cpp";
-    KernelDescriptor::CompileTimeArgs compute_args_group_1 = {
-        num_output_tiles_per_core_group_1,  // num_output_tiles
-        Mt,
-        Nt,
-        Kt,
-        static_cast<uint32_t>(transpose_input),
-        static_cast<uint32_t>(transpose_other),
-        input_mask_h,
-        input_mask_w,
-        other_mask_h,
-        other_mask_w};
-
+    KernelSpec::CompilerOptions::Defines compute_defines;
     if (bias.has_value()) {
-        compute_defines_map["FUSE_BIAS"] = "1";
-        compute_args_group_1.push_back(static_cast<uint32_t>(is_scalar_bias));
+        compute_defines.emplace("FUSE_BIAS", "1");
     }
-
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
-        compute_defines_map["FP32_DEST_ACC_EN"] = "1";
-        unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
+        compute_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
-    KernelDescriptor::Defines compute_defines(compute_defines_map.begin(), compute_defines_map.end());
 
-    KernelDescriptor compute_desc_1;
-    compute_desc_1.kernel_source = compute_kernel_file;
-    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc_1.core_ranges = core_group_1;
-    compute_desc_1.compile_time_args = std::move(compute_args_group_1);
-    compute_desc_1.defines = compute_defines;
-    compute_desc_1.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .unpack_to_dest_mode = unpack_to_dest_mode,
-        .math_approx_mode = math_approx_mode,
-    };
+    const char* const compute_kernel_file =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/moreh_matmul.cpp";
 
-    KernelDescriptor compute_desc_2;
-    bool has_core_group_2 = !core_group_2.ranges().empty();
-    if (has_core_group_2) {
-        KernelDescriptor::CompileTimeArgs compute_args_group_2 = {
-            num_output_tiles_per_core_group_2,  // num_output_tiles
-            Mt,
-            Nt,
-            Kt,
-            static_cast<uint32_t>(transpose_input),
-            static_cast<uint32_t>(transpose_other),
-            input_mask_h,
-            input_mask_w,
-            other_mask_h,
-            other_mask_w};
-
-        if (bias.has_value()) {
-            compute_args_group_2.push_back(static_cast<uint32_t>(is_scalar_bias));
+    auto make_compute = [&](const KernelSpecName& id, uint32_t num_output_tiles_group) {
+        // Style A: translate the resolved TTNN ComputeKernelConfig; helper handles the four knobs
+        // (math_fidelity, math_approx_mode->sfpu_precision_mode, fp32_dest_acc_en->enable_32_bit_dest,
+        // dst_full_sync_en->double_buffer_dest inverted) and the arch selection.
+        auto compute_hw = ttnn::to_compute_hardware_config(
+            device->arch(),
+            ttnn::ComputeKernelConfig{
+                .math_fidelity = math_fidelity,
+                .math_approx_mode = math_approx_mode,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en});
+        if (fp32_dest_acc_en) {
+            // Legacy set unpack_to_dest_mode[c_24] = UnpackToDestFp32 (rest Default). Metal 2.0 requires
+            // an explicit unpack_mode for every Float32 DFB consumed under enable_32_bit_dest: IM0 (c_24)
+            // and IM3 (c_27) are Float32 here. IM0 -> UnpackToDest (legacy UnpackToDestFp32), IM3 ->
+            // UnpackToSrc (legacy Default).
+            std::get<ComputeGen1Config>(compute_hw).unpack_modes = {
+                {IM0, UnpackMode::UnpackToDest},
+                {IM3, UnpackMode::UnpackToSrc},
+            };
         }
 
-        compute_desc_2.kernel_source = compute_kernel_file;
-        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc_2.core_ranges = core_group_2;
-        compute_desc_2.compile_time_args = std::move(compute_args_group_2);
-        compute_desc_2.defines = compute_defines;
-        compute_desc_2.config = ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .math_approx_mode = math_approx_mode,
+        KernelSpec::CompileTimeArgs compute_args = {
+            {"num_output_tiles", num_output_tiles_group},
+            {"Mt", Mt},
+            {"Nt", Nt},
+            {"Kt", Kt},
+            {"transpose_input", static_cast<uint32_t>(transpose_input)},
+            {"transpose_other", static_cast<uint32_t>(transpose_other)},
+            {"input_mask_h", input_mask_h},
+            {"input_mask_w", input_mask_w},
+            {"other_mask_h", other_mask_h},
+            {"other_mask_w", other_mask_w},
         };
+        if (bias.has_value()) {
+            compute_args["is_scalar_bias"] = static_cast<uint32_t>(is_scalar_bias);
+        }
+
+        Group<DFBBinding> compute_dfb_bindings = {
+            DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = IN1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = IN2, .accessor_name = "in2", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = IN3, .accessor_name = "in3", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = IN4, .accessor_name = "in4", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = OUT0, .accessor_name = "out0", .endpoint_type = DFBEndpointType::PRODUCER},
+            // Self-loop intermediates (compute both produces and consumes; shared accessor name).
+            DFBBinding{.dfb_spec_name = IM0, .accessor_name = "im0", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{.dfb_spec_name = IM0, .accessor_name = "im0", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = IM1, .accessor_name = "im1", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{.dfb_spec_name = IM1, .accessor_name = "im1", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = IM2, .accessor_name = "im2", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{.dfb_spec_name = IM2, .accessor_name = "im2", .endpoint_type = DFBEndpointType::CONSUMER},
+            DFBBinding{.dfb_spec_name = IM3, .accessor_name = "im3", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{.dfb_spec_name = IM3, .accessor_name = "im3", .endpoint_type = DFBEndpointType::CONSUMER},
+        };
+
+        return KernelSpec{
+            .unique_id = id,
+            .source = compute_kernel_file,
+            .compiler_options = {.defines = compute_defines},
+            .dfb_bindings = compute_dfb_bindings,
+            .compile_time_args = compute_args,
+            // output_stride[8]
+            .runtime_arg_schema = {.runtime_arg_names = {"output_tile_start_idx"}},
+            .hw_config = std::move(compute_hw),
+            .advanced_options = {.num_runtime_varargs = static_cast<uint32_t>(ttnn::MAX_NUM_DIMENSIONS)},
+        };
+    };
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Kernels + WorkUnits
+    ////////////////////////////////////////////////////////////////////////////
+    Group<KernelSpec> kernels = {reader, writer};
+    Group<WorkUnitSpec> work_units;
+
+    kernels.push_back(make_compute(COMPUTE_G1, num_output_tiles_per_core_group_1));
+    work_units.push_back(
+        WorkUnitSpec{.name = "moreh_mm_g1", .kernels = {READER, WRITER, COMPUTE_G1}, .target_nodes = core_group_1});
+
+    const bool has_core_group_2 = !core_group_2.ranges().empty();
+    if (has_core_group_2) {
+        kernels.push_back(make_compute(COMPUTE_G2, num_output_tiles_per_core_group_2));
+        work_units.push_back(
+            WorkUnitSpec{.name = "moreh_mm_g2", .kernels = {READER, WRITER, COMPUTE_G2}, .target_nodes = core_group_2});
     }
-    log_debug(
-        tt::LogOp,
-        "{}:{} Compute ",
-        __func__,
-        __LINE__,
-        static_cast<uint32_t>(transpose_input),
-        static_cast<uint32_t>(transpose_other));
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    auto* const input_buf = input.buffer();
-    auto* const other_buf = other.buffer();
-    auto* const output_buf = output.buffer();
-    auto* const bias_buf = bias.has_value() ? bias.value().buffer() : nullptr;
+    // The five reader dimensional arrays and the compute output_stride array are homogeneous,
+    // node-invariant, and read positionally in a loop -> runtime varargs (patterns catalog:
+    // homogeneous literal-count array). Same values on every node; built once here.
+    std::vector<uint32_t> reader_varargs;
+    reader_varargs.reserve(5 * ttnn::MAX_NUM_DIMENSIONS);
+    reader_varargs.insert(reader_varargs.end(), input_stride.begin(), input_stride.end());
+    reader_varargs.insert(reader_varargs.end(), other_stride.begin(), other_stride.end());
+    reader_varargs.insert(reader_varargs.end(), output_stride.begin(), output_stride.end());
+    reader_varargs.insert(reader_varargs.end(), input_not_bcast.begin(), input_not_bcast.end());
+    reader_varargs.insert(reader_varargs.end(), other_not_bcast.begin(), other_not_bcast.end());
+
+    std::vector<uint32_t> compute_varargs(output_stride.begin(), output_stride.end());
+
+    KernelRunArgs::RuntimeArgValues reader_rta;
+    KernelRunArgs::RuntimeArgValues writer_rta;
+    KernelRunArgs::RuntimeArgValues compute_g1_rta;
+    KernelRunArgs::RuntimeArgValues compute_g2_rta;
+    AdvancedKernelRunArgs reader_adv;
+    AdvancedKernelRunArgs compute_g1_adv;
+    AdvancedKernelRunArgs compute_g2_adv;
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_output_tiles_per_core;
-        std::vector<uint32_t> compute_rt_args;
-        compute_rt_args.push_back(num_tiles_written);
-        compute_rt_args.insert(compute_rt_args.end(), output_stride.begin(), output_stride.end());
-
-        if (core_group_1.contains(core)) {
+        const bool in_group_1 = core_group_1.contains(core);
+        if (in_group_1) {
             num_output_tiles_per_core = num_output_tiles_per_core_group_1;
-            compute_desc_1.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs(compute_rt_args.begin(), compute_rt_args.end()));
         } else if (core_group_2.contains(core)) {
             TT_FATAL(has_core_group_2, "Core not in specified core ranges");
             num_output_tiles_per_core = num_output_tiles_per_core_group_2;
-            compute_desc_2.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs(compute_rt_args.begin(), compute_rt_args.end()));
         } else {
             TT_THROW("Core not in specified core ranges");
         }
 
-        // Pass buffers as Buffer* so the ProgramDescriptor framework registers them as
-        // BufferBindings and patches their addresses on program-cache hits. Raw uint32_t
-        // addresses would be baked in once and go stale when inputs are reallocated.
-        KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(input_buf);
-        reader_rt_args.push_back(other_buf);
-        reader_rt_args.push_back(num_tiles_written);
-        reader_rt_args.push_back(num_output_tiles_per_core);
+        AddRuntimeArgsForNode(
+            reader_rta,
+            core,
+            {{"output_tile_start_idx", num_tiles_written}, {"num_output_tiles", num_output_tiles_per_core}});
+        reader_adv.runtime_varargs[core] = reader_varargs;
 
-        // TODO: move some to compile args
-        reader_rt_args.append(std::vector<uint32_t>(input_stride.begin(), input_stride.end()));
-        reader_rt_args.append(std::vector<uint32_t>(other_stride.begin(), other_stride.end()));
-        reader_rt_args.append(std::vector<uint32_t>(output_stride.begin(), output_stride.end()));
-        reader_rt_args.append(std::vector<uint32_t>(input_not_bcast.begin(), input_not_bcast.end()));
-        reader_rt_args.append(std::vector<uint32_t>(other_not_bcast.begin(), other_not_bcast.end()));
+        AddRuntimeArgsForNode(
+            writer_rta, core, {{"start_id", num_tiles_written}, {"num_output_tiles", num_output_tiles_per_core}});
 
-        if (bias.has_value()) {
-            reader_rt_args.push_back(bias_buf);
+        if (in_group_1) {
+            AddRuntimeArgsForNode(compute_g1_rta, core, {{"output_tile_start_idx", num_tiles_written}});
+            compute_g1_adv.runtime_varargs[core] = compute_varargs;
+        } else {
+            AddRuntimeArgsForNode(compute_g2_rta, core, {{"output_tile_start_idx", num_tiles_written}});
+            compute_g2_adv.runtime_varargs[core] = compute_varargs;
         }
 
-        reader_desc.emplace_runtime_args(core, reader_rt_args);
-
-        writer_desc.emplace_runtime_args(core, {output_buf, num_tiles_written, num_output_tiles_per_core});
         num_tiles_written += num_output_tiles_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc_1));
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Assemble spec + run args
+    ////////////////////////////////////////////////////////////////////////////
+    ProgramSpec spec{
+        .name = "moreh_matmul",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = std::move(work_units),
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        KernelRunArgs{
+            .kernel = READER, .runtime_arg_values = std::move(reader_rta), .advanced_options = std::move(reader_adv)},
+        KernelRunArgs{.kernel = WRITER, .runtime_arg_values = std::move(writer_rta)},
+        KernelRunArgs{
+            .kernel = COMPUTE_G1,
+            .runtime_arg_values = std::move(compute_g1_rta),
+            .advanced_options = std::move(compute_g1_adv)},
+    };
     if (has_core_group_2) {
-        desc.kernels.push_back(std::move(compute_desc_2));
+        run_args.kernel_run_args.push_back(KernelRunArgs{
+            .kernel = COMPUTE_G2,
+            .runtime_arg_values = std::move(compute_g2_rta),
+            .advanced_options = std::move(compute_g2_adv)});
     }
 
-    return desc;
+    run_args.tensor_args = {
+        {INPUT, input_mt},
+        {OTHER, other_mt},
+        {OUTPUT, output_mt},
+    };
+    if (bias.has_value()) {
+        run_args.tensor_args.emplace(BIAS, bias.value().mesh_tensor());
+    }
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_matmul

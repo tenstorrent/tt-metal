@@ -63,18 +63,17 @@ void check_semaphores_are_initialized(
     Program& program,
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& golden_sem_values) {
-    IDevice* device = unit_mesh.get_devices()[0];
     for (auto core_range : core_range_set.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto logical_core = CoreCoord{x, y};
                 std::vector<uint32_t> res;
-                auto sem_base_addr = program.impl().get_sem_base_addr(device, logical_core, CoreType::WORKER);
+                auto sem_base_addr = program.impl().get_sem_base_addr(&unit_mesh, logical_core, CoreType::WORKER);
                 slow_dispatch::ReadFromL1(
                     unit_mesh,
                     logical_core,
                     sem_base_addr,
-                    program.impl().get_sem_size(device, logical_core, CoreType::WORKER),
+                    program.impl().get_sem_size(&unit_mesh, logical_core, CoreType::WORKER),
                     res);
                 std::vector<uint32_t> filtered_res;
                 static uint32_t num_u32_to_skip =
@@ -92,7 +91,10 @@ void check_semaphores_are_initialized(
 }  // namespace
 
 TEST_F(UnitMeshFixture, CoreRangeSet) {
-    Program program = CreateProgram();
+    auto device_range = distributed::MeshCoordinateRange(this->device().shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, CreateProgram());
+    Program& program = workload.get_programs().at(device_range);
 
     CoreRange core_range_one({0, 0}, {1, 1});
     CoreRange core_range_two({2, 2}, {3, 3});
@@ -163,7 +165,7 @@ TEST_F(UnitMeshFixture, CoreRangeSet) {
 
     check_program_is_mapped_to_correct_cores(program, core_ranges, compute_kernel_args);
 
-    slow_dispatch::CompileProgram(this->device(), program);
+    program.impl().compile(&this->device());
 
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -186,7 +188,7 @@ TEST_F(UnitMeshFixture, CoreRangeSet) {
              num_tiles});
     }
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
 
     check_semaphores_are_initialized(this->device(), program, core_ranges, golden_sem_values);
 

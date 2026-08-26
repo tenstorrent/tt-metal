@@ -31,7 +31,8 @@ inline std::string get_generic_reduction_doc(
                 * - INT32
                   - TILE)doc"
                                             : "";
-    // Only ttnn.mean exposes fast_and_approximate_mode.
+    // All four generic reductions (sum/mean/max/min) expose fast_and_approximate_mode. std/var do
+    // not: Welford already reduces on the SFPU at full fp32, so there is no FPU path to select.
     // ttnn.sum and ttnn.mean both expose output_layout.
     const char* output_layout_kwarg = has_output_layout ? R"doc(
             output_layout (ttnn.Layout, optional): layout of the output tensor. Defaults to `None`, which keeps the layout the chosen path produces naturally (see the Note below). `ttnn.TILE_LAYOUT` or `ttnn.ROW_MAJOR_LAYOUT` is always honored: it is produced directly by the kernel for a -2 reduce of a ROW_MAJOR input, and converted after reducing otherwise. `ttnn.ROW_MAJOR_LAYOUT` is rejected for block-float results (BFLOAT8_B, BFLOAT4_B), which only exist in TILE layout; typecast explicitly if a row-major result is needed.)doc"
@@ -95,73 +96,9 @@ inline std::string get_generic_reduction_doc(
 // The binding-layer type is std::optional<bool> (default nb::none()) so we can
 // distinguish "user passed correction=True" from "used the default".
 // This whole function can be removed when the deprecated 'correction' parameter is removed.
+// Used by sum and mean, which take a trailing output_layout.
 template <auto Func>
-Tensor generic_reduction_with_deprecated_correction(
-    const Tensor& input_tensor,
-    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
-    bool keepdim,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    float scalar,
-    std::optional<bool> correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (correction.has_value()) {
-        // Re-acquire the GIL: this function is registered via bind_function<>(),
-        // which applies nb::call_guard<nb::gil_scoped_release>(), so the GIL is
-        // released by default. PyErr_WarnEx / PyExc_DeprecationWarning are Python
-        // C API and require the GIL.
-        nb::gil_scoped_acquire acquire;
-        PyErr_WarnEx(
-            PyExc_DeprecationWarning,
-            "The 'correction' parameter is deprecated and will be removed in a future release.",
-            1);
-    }
-    return Func(
-        input_tensor,
-        dim,
-        keepdim,
-        memory_config,
-        compute_kernel_config,
-        scalar,
-        correction.value_or(true),
-        sub_core_grids);
-}
-
-// sum takes a trailing 'output_layout' that min/max do not, so it needs its own wrapper instead of
-// the shared generic_reduction_with_deprecated_correction<>. Same deprecated-correction handling.
-inline Tensor sum_with_deprecated_correction(
-    const Tensor& input_tensor,
-    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
-    bool keepdim,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    float scalar,
-    std::optional<bool> correction,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<Layout>& output_layout) {
-    if (correction.has_value()) {
-        nb::gil_scoped_acquire acquire;
-        PyErr_WarnEx(
-            PyExc_DeprecationWarning,
-            "The 'correction' parameter is deprecated and will be removed in a future release.",
-            1);
-    }
-    return ttnn::sum(
-        input_tensor,
-        dim,
-        keepdim,
-        memory_config,
-        compute_kernel_config,
-        scalar,
-        correction.value_or(true),
-        sub_core_grids,
-        output_layout);
-}
-
-// mean exposes an extra 'fast_and_approximate_mode' opt-in that sum/min/max do not, so it needs its
-// own wrapper instead of the shared generic_reduction_with_deprecated_correction<>. Same deprecated-
-// correction handling, plus the trailing accurate flag and output_layout forwarded to ttnn::mean.
-inline Tensor mean_with_deprecated_correction(
+inline Tensor reduction_with_deprecated_correction_and_layout(
     const Tensor& input_tensor,
     const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
     bool keepdim,
@@ -179,7 +116,7 @@ inline Tensor mean_with_deprecated_correction(
             "The 'correction' parameter is deprecated and will be removed in a future release.",
             1);
     }
-    return ttnn::mean(
+    return Func(
         input_tensor,
         dim,
         keepdim,
@@ -192,13 +129,44 @@ inline Tensor mean_with_deprecated_correction(
         output_layout);
 }
 
+// As above, used by max and min, which do not take output_layout.
+template <auto Func>
+inline Tensor reduction_with_deprecated_correction(
+    const Tensor& input_tensor,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
+    bool keepdim,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    std::optional<bool> correction,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool fast_and_approximate_mode) {
+    if (correction.has_value()) {
+        nb::gil_scoped_acquire acquire;
+        PyErr_WarnEx(
+            PyExc_DeprecationWarning,
+            "The 'correction' parameter is deprecated and will be removed in a future release.",
+            1);
+    }
+    return Func(
+        input_tensor,
+        dim,
+        keepdim,
+        memory_config,
+        compute_kernel_config,
+        scalar,
+        correction.value_or(true),
+        sub_core_grids,
+        fast_and_approximate_mode);
+}
+
 inline void bind_generic_reductions(nb::module_& mod) {
-    const auto sum_doc =
-        get_generic_reduction_doc("sum", "ttnn.sum", /*int32_supported=*/true, /*has_output_layout=*/true);
+    const auto sum_doc = get_generic_reduction_doc(
+        "sum", "ttnn.sum", /*int32_supported=*/true, /*has_output_layout=*/true, /*has_fast_approximate_mode=*/true);
     ttnn::bind_function<"sum">(
         mod,
         sum_doc.c_str(),
-        &sum_with_deprecated_correction,
+        &reduction_with_deprecated_correction_and_layout<&ttnn::sum>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -208,6 +176,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("scalar") = 1.0f,
         nb::arg("correction") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("fast_and_approximate_mode") = false,
         nb::arg("output_layout") = nb::none());
 
     const auto mean_doc = get_generic_reduction_doc(
@@ -219,7 +188,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
     ttnn::bind_function<"mean">(
         mod,
         mean_doc.c_str(),
-        &mean_with_deprecated_correction,
+        &reduction_with_deprecated_correction_and_layout<&ttnn::mean>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -234,11 +203,12 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("fast_and_approximate_mode") = false,
         nb::arg("output_layout") = nb::none());
 
-    const auto max_doc = get_generic_reduction_doc("max", "ttnn.max", /*int32_supported=*/true);
+    const auto max_doc = get_generic_reduction_doc(
+        "max", "ttnn.max", /*int32_supported=*/true, /*has_output_layout=*/false, /*has_fast_approximate_mode=*/true);
     ttnn::bind_function<"max">(
         mod,
         max_doc.c_str(),
-        &generic_reduction_with_deprecated_correction<&ttnn::max>,
+        &reduction_with_deprecated_correction<&ttnn::max>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -247,13 +217,15 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("scalar") = 1.0f,
         nb::arg("correction") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("fast_and_approximate_mode") = false);
 
-    const auto min_doc = get_generic_reduction_doc("min", "ttnn.min", /*int32_supported=*/true);
+    const auto min_doc = get_generic_reduction_doc(
+        "min", "ttnn.min", /*int32_supported=*/true, /*has_output_layout=*/false, /*has_fast_approximate_mode=*/true);
     ttnn::bind_function<"min">(
         mod,
         min_doc.c_str(),
-        &generic_reduction_with_deprecated_correction<&ttnn::min>,
+        &reduction_with_deprecated_correction<&ttnn::min>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -262,7 +234,8 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("scalar") = 1.0f,
         nb::arg("correction") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("fast_and_approximate_mode") = false);
 }
 
 }  // namespace ttnn::operations::reduction::detail

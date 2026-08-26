@@ -67,11 +67,12 @@ void bind_reduction_topk_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - UINT16, UINT32
+                    * - UINT16, UINT32, INT32
                       - TILE
 
                 The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and will be in TILE layout.
-                The :attr:`output_index_tensor` will be UINT16 if the dimension size is less than or equal to 65535, otherwise it will be UINT32. It will be in TILE layout.
+                The :attr:`output_index_tensor` will be in TILE layout. Its data type is UINT16 or UINT32 by default (chosen
+                based on the reduced dimension size), or matches the preallocated index tensor dtype (UINT16, UINT32, or INT32) when one is provided.
 
             Memory Support:
                 - Interleaved: DRAM and L1
@@ -83,7 +84,8 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 - W is ideally ≥64. If this is not the case the op will pad the tensor to satisfy this constraint.
                 - The width of :attr:`input_tensor` along :attr:`dim` should be a multiple of tile width, and will be padded to the nearest multiple of tile width if needed.
                 - The padding is currently only supported for bfloat16, float32, int32, and uint32.
-                - To enable multicore execution, the width of :attr:`input_tensor` along :attr:`dim` must be ≥8192 and <65536, and :attr:`k` must be ≤64.
+                - Multi-core execution is selected automatically when :attr:`k` is at most 64 and the size of :attr:`input_tensor` along :attr:`dim` is a power of two no larger than 32768. That size must normally be at least 8192; the floor drops to 1024 when the input spans at most 2 tile rows after tile padding (64 rows with the default 32x32 tile). Nothing needs to be passed to opt in — shapes outside these bounds, or qualifying shapes that do not fit the available core grid and L1 memory (which can depend on data type), automatically run on a single core with identical results.
+                - On Blackhole, wide bfloat16 inputs with :attr:`largest` set and otherwise default arguments may instead be served transparently by a faster composite implementation for certain width and :attr:`k` ranges.
                 - All shape validations are performed on padded shapes.
                 - Sharded output memory configs are not supported for this operation.
         )doc";

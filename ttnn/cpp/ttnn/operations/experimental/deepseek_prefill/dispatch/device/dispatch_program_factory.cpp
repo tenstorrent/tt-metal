@@ -6,6 +6,7 @@
 #include "kernels/dataflow/dispatch_plan.hpp"  // PlanHeader / PlanEntry layout (host sizes the plan CB from these)
 #include <algorithm>
 #include <array>
+#include <unordered_set>
 #include <utility>
 #include <limits>
 #include <tt-metalium/core_coord.hpp>
@@ -491,14 +492,18 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     const auto [neighbors, directions] =
         ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
-    // FABRIC_2D uses the portable RoutingPlaneConnectionManager (per-destination connection +
-    // multicast handshake) so dispatch-axis traffic forwards multi-hop; FABRIC_1D keeps the legacy
+    // FABRIC_2D uses the portable RoutingPlaneConnectionManager (one connection per required physical
+    // first-hop direction) so dispatch-axis traffic forwards multi-hop; FABRIC_1D keeps the legacy
     // per-direction array connection. INVARIANT: this is_2d_fabric gate (derived from GetFabricConfig())
     // must agree with the kernel's FABRIC_2D #ifdef, which append_routing_plane_connection_manager_rt_args
     // injects based on the control plane's is_2D_routing_enabled(). If the two ever diverge, the host
     // pushes 2D-shaped args while the kernel compiles the 1D #else branch (or vice-versa) and arg
     // parsing corrupts.
     const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    TT_FATAL(
+        !is_2d_fabric || (operation_attributes.axis.has_value() && operation_attributes.axis.value() < 2),
+        "FABRIC_2D dispatch requires cluster_axis 0 or 1; got {}",
+        operation_attributes.axis.value_or(2));
 
     // c_8: packet header CB for fabric sends (sender-only)
     if (operation_attributes.num_links > 0) {
@@ -961,22 +966,49 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         }
 
         if (operation_attributes.num_links > 0) {
-            // Dispatch-axis neighbors (each a distinct fabric direction) as fabric nodes.
+            // Fabric nodes used to open sender connections. The 1D fabric path follows the two
+            // logical dispatch-axis neighbors. Under Fabric2D, however, routing to every peer in a
+            // logical dispatch group may use additional physical first-hop directions when that group
+            // turns through the physical mesh (for example, logical 8x1 on a 2x4 LoudBox). Open one
+            // connection per physical direction needed by any peer in this dispatch group.
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
-            dst_nodes.reserve(neighbors.size());
-            for (const auto& neighbor_coordinate : neighbors) {
-                if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
-                    continue;
+            if (is_2d_fabric) {
+                std::unordered_set<tt::tt_fabric::eth_chan_directions> used_directions;
+                for (const auto& peer_coordinate : ttnn::MeshCoordinateRange(mesh_view.shape())) {
+                    if (peer_coordinate == mesh_coordinate) {
+                        continue;
+                    }
+                    const bool same_dispatch_group = operation_attributes.axis.value() == 0
+                                                         ? peer_coordinate[1] == mesh_coordinate[1]
+                                                         : peer_coordinate[0] == mesh_coordinate[0];
+                    if (!same_dispatch_group) {
+                        continue;
+                    }
+                    const auto peer_node = mesh_device->get_fabric_node_id(peer_coordinate);
+                    const auto direction = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, peer_node);
+                    TT_FATAL(
+                        direction.has_value(),
+                        "No Fabric2D forwarding direction from dispatch source {} to peer {}",
+                        src_fabric_node_id,
+                        peer_node);
+                    if (used_directions.insert(direction.value()).second) {
+                        dst_nodes.push_back(peer_node);
+                    }
                 }
-                dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+            } else {
+                dst_nodes.reserve(neighbors.size());
+                for (const auto& neighbor_coordinate : neighbors) {
+                    if (neighbor_coordinate == mesh_coordinate) {
+                        continue;
+                    }
+                    dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+                }
             }
             const uint32_t core_link = core_idx % num_links;
             if (is_2d_fabric) {
-                // Portable RoutingPlaneConnectionManager path: one connection per dispatch-axis neighbor
-                // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
-                // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
-                // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
-                // appended args.
+                // Portable RoutingPlaneConnectionManager path: one connection per physical first-hop
+                // direction used by the dispatch group, so traffic forwards across MULTIPLE hops. The
+                // writer reads num_connections first, then builds the manager from the appended args.
                 //
                 // Pick a forwarding link valid for each neighbor's own direction (see
                 // compute_per_neighbor_forwarding_links above for why a single broadcast {core_link} hangs).
