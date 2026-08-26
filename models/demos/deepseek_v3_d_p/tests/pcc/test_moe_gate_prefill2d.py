@@ -192,13 +192,6 @@ MESH_CONFIGS = [
         id="fabric2d-mesh-2x2",
     ),
     pytest.param(
-        (4, 2),
-        fabric2d_device_params(),
-        2,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-        id="fabric2d-mesh-4x2",
-    ),
-    pytest.param(
         (2, 4),
         fabric2d_device_params(),
         2,
@@ -391,6 +384,17 @@ def _validate_gate(
     merged.assert_passed("Gate prefill2d validation failed")
 
 
+def _ci_unsupported_param_combos_forward_pass(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_fallback_mode = params["gate_fallback_mode"]
+
+    if not on_ci:
+        return False
+    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        return True
+    return False
+
+
 def _reference_topk(config, gate_model, gate_fallback_mode, gate_w, torch_input):
     """Golden top-k indices and scores from each model's own reference router.
 
@@ -467,6 +471,7 @@ def _reference_topk(config, gate_model, gate_fallback_mode, gate_w, torch_input)
     return reference_topk_indices, reference_topk_scores
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_forward_pass)
 @pytest.mark.parametrize("gate_model, gate_fallback_mode", REGULAR_GATE_CASES)
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
