@@ -164,6 +164,64 @@ pre-agent-steps:
 
       echo "PR #${PR_NUMBER}: head=${HEAD_REF} fork=${IS_FORK} files=$(wc -l < /tmp/gh-aw/agent/pr-files.txt) diff_lines=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)"
 
+# Deterministic enforcement of *The ref rule* (see the prompt below). The rule is
+# executed by a model, and a model can skip it: in run 32947659949 the agent omitted
+# `ref` on both of its dispatch calls (while correctly naming the PR branch in its
+# summary comment), and gh-aw's fallback chain silently dispatched them against
+# `main`. When a dispatch_workflow item carries no `ref`, gh-aw resolves one as
+# target-ref > GITHUB_HEAD_REF > GITHUB_REF; an `issue_comment` event sets neither of
+# the first two, so the fallback is always `refs/heads/main` — and `allowed-refs` is
+# only checked against *explicit* refs, so no safe-outputs configuration can make
+# that fallback fail (github/gh-aw dispatch_workflow.cjs). Until gh-aw fails closed
+# or resolves the PR head itself, close the gap on our side: after the agent runs,
+# rewrite the collected safe-output items so every dispatch_workflow item's `ref` is
+# the runner-resolved PR head branch — missing, wrong, or right, it becomes the fact
+# computed in the pre-agent step above.
+#
+# Placement is load-bearing: gh-aw emits post-steps after its "Ingest agent output"
+# step (which materializes /tmp/gh-aw/agent_output.json from the safe-outputs JSONL)
+# and before the artifact upload that the safe_outputs job downloads and dispatches
+# from — so the file rewritten here is exactly the one the dispatcher reads.
+post-steps:
+  - name: Enforce PR head ref on dispatch_workflow items
+    if: always()
+    run: |
+      set -euo pipefail
+      OUT=/tmp/gh-aw/agent_output.json
+      REF_FILE=/tmp/gh-aw/agent/pr-head-ref.txt
+
+      # gh-aw's placeholder step (which writes '{"items":[]}' when the agent
+      # produced nothing) runs before post-steps, so this file normally exists
+      # by now even on a no-dispatch run. Guard anyway: if it is absent there is
+      # nothing to enforce and nothing the safe_outputs job could dispatch.
+      if [ ! -s "$OUT" ]; then
+        echo "No agent output collected; nothing to enforce."
+        exit 0
+      fi
+
+      # The pre-agent step hard-fails the run before the agent ever starts if the
+      # head ref cannot be resolved, so an empty file here means something upstream
+      # changed shape — fail loudly rather than let a dispatch fall back to main.
+      if [ ! -s "$REF_FILE" ]; then
+        echo "::error::pr-head-ref.txt is missing or empty; cannot enforce dispatch refs." >&2
+        exit 1
+      fi
+      HEAD_REF="$(cat "$REF_FILE")"
+      case "$HEAD_REF" in
+        ""|null|main|master|refs/heads/main|refs/heads/master)
+          echo "::error::Refusing to enforce dispatch ref '$HEAD_REF'." >&2
+          exit 1
+          ;;
+      esac
+
+      BEFORE="$(jq -c '[.items[]? | select(.type == "dispatch_workflow") | {workflow_name, ref: (.ref // "MISSING")}]' "$OUT")"
+      jq --arg ref "$HEAD_REF" \
+        '.items = [ .items[]? | if .type == "dispatch_workflow" then .ref = $ref else . end ]' \
+        "$OUT" > "$OUT.tmp"
+      mv "$OUT.tmp" "$OUT"
+      echo "dispatch_workflow refs as emitted by the agent: $BEFORE"
+      echo "All dispatch_workflow items now target: $HEAD_REF"
+
 safe-outputs:
   mentions: false
   add-comment:
@@ -458,6 +516,11 @@ tested none of their code, which is worse than no result at all.
 
 Copy the branch name from that file verbatim. Do not reconstruct it from the PR title, the
 comment, or your memory of the diff. Never dispatch `main`, `master`, or a release branch.
+
+A deterministic post-step also rewrites the `ref` of every dispatch you emit to the
+contents of that file before anything is dispatched, so an omitted or mistyped `ref`
+cannot actually reach `main` — but that backstop is not a reason to skip the rule. Your
+summary comment quotes the ref, and it must match what actually runs.
 
 ## Reporting
 
