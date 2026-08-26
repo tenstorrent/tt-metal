@@ -144,7 +144,18 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params_8k_req_exact_devices, ttnn.Topology.Ring, False, None],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False, None],
-        [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params_8k_req_exact_devices}, ttnn.Topology.Ring, False, None],
+        [
+            (4, 32),
+            (4, 32),
+            1,
+            0,
+            2,
+            False,
+            {**DEVICE_PARAMS, **ring_params_8k_req_exact_devices},
+            ttnn.Topology.Ring,
+            False,
+            None,
+        ],
         # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
         [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, "all_bf8_lofi"],
     ],
