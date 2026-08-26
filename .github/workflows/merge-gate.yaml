@@ -356,6 +356,12 @@ jobs:
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
     uses: ./.github/workflows/basic.yaml
+    # Required for kernel ccache: basic.yaml reads secrets.REDIS_CCACHE_PASSWORD to build the
+    # Redis URL, and a reusable workflow gets no custom secrets without this. Omitting it makes
+    # the password empty, which Redis rejects with "WRONGPASS invalid username-password pair"
+    # on every lookup -- measured at 1200 remote_storage_error / 0 hits, and a ~17% SLOWER test
+    # step than no cache at all, because CCACHE_REMOTE_ONLY leaves no local tier to fall back on.
+    secrets: inherit
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
