@@ -23,6 +23,11 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.matmul.matmul_registry_canary_cases import (
+    CanaryLockError,
+    CanarySemanticCase,
+    represented_semantic_cases,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -45,9 +50,25 @@ def _lock() -> dict[str, Any]:
     value = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
     if value.get("artifact_kind") != "ttnn_matmul_registry_lock" or value.get("lock_schema_version") != 1:
         pytest.fail(f"unsupported registry lock at {LOCK_PATH}")
-    if not value.get("entries"):
-        _skip_or_fail("matmul registry lock is empty; populated-lock silicon canary did not run")
+    try:
+        cases = represented_semantic_cases(value, require_populated=REQUIRE_POPULATED)
+    except CanaryLockError as error:
+        pytest.fail(str(error))
+    if not cases:
+        pytest.skip("matmul registry lock has no valid dense entry; populated-lock silicon canary did not run")
     return value
+
+
+def _collection_cases() -> tuple[CanarySemanticCase, ...]:
+    try:
+        return represented_semantic_cases(json.loads(LOCK_PATH.read_text(encoding="utf-8")))
+    except (CanaryLockError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        # The module-scoped process contract reports a precise fail-closed
+        # diagnostic. Collection must not manufacture fallback domains.
+        return ()
+
+
+COLLECTION_CASES: tuple[CanarySemanticCase | None, ...] = _collection_cases() or (None,)
 
 
 def _float32_bits(value: float) -> int:
@@ -259,18 +280,12 @@ def validate_process_contract(device):
     assert final["frozen_mode"] == MODE_VALUE[MODE_NAME]
 
 
-@pytest.mark.parametrize(
-    "domain,beta_bits,beta",
-    [
-        ("dense.matmul", None, None),
-        ("dense.linear", None, None),
-        ("dense.addmm", _float32_bits(0.0), 0.0),
-        ("dense.addmm", _float32_bits(-0.0), -0.0),
-    ],
-)
-def test_exact_public_call_uses_expected_registry_mode(device, domain, beta_bits, beta):
+@pytest.mark.parametrize("case", COLLECTION_CASES, ids=lambda case: case.test_id if case is not None else "empty-lock")
+def test_exact_public_call_uses_expected_registry_mode(device, case: CanarySemanticCase | None):
     lock = _lock()
-    entry = _compatible_entries(lock, device, domain, beta_bits=beta_bits)[0]
+    assert case is not None  # _lock skips or fails closed before this point.
+    domain, beta = case.domain, case.beta
+    entry = _compatible_entries(lock, device, domain, beta_bits=case.beta_bits)[0]
     host_a, host_b, tensor_a, tensor_b = _inputs(entry, device)
     assert _resolved_key(tensor_a, tensor_b, domain, entry["key"]["output"], beta=beta) == {
         "domain": domain,
@@ -285,15 +300,10 @@ def test_exact_public_call_uses_expected_registry_mode(device, domain, beta_bits
 
 def test_unsupported_public_variants_fall_back_without_circuit_break(device):
     lock = _lock()
-    cases = (
-        ("dense.matmul", "output_tile", "unsupported_semantics"),
-        ("dense.linear", "bias", "unsupported_semantics"),
-        ("dense.addmm", "beta", "unsupported_semantics"),
-    )
-    for domain, variant, reason in cases:
-        entry = _compatible_entries(
-            lock, device, domain, beta_bits=_float32_bits(0.0) if domain == "dense.addmm" else None
-        )[0]
+    variants = {"dense.matmul": "output_tile", "dense.linear": "bias", "dense.addmm": "beta"}
+    for case in represented_semantic_cases(lock):
+        domain, variant, reason = case.domain, variants[case.domain], "unsupported_semantics"
+        entry = _compatible_entries(lock, device, domain, beta_bits=case.beta_bits)[0]
         host_a, host_b, tensor_a, tensor_b = _inputs(entry, device)
         bias = None
         output_tile = None
@@ -323,8 +333,9 @@ def test_unsupported_public_variants_fall_back_without_circuit_break(device):
 
 def test_exact_shape_miss_falls_back(device):
     lock = _lock()
-    domain = "dense.matmul"
-    entry = _compatible_entries(lock, device, domain)[0]
+    case = represented_semantic_cases(lock)[0]
+    domain, beta = case.domain, case.beta
+    entry = _compatible_entries(lock, device, domain, beta_bits=case.beta_bits)[0]
     key = entry["key"]
     invariant_key = {name: value for name, value in key.items() if name not in {"logical_m", "padded_m"}}
     occupied_m = {
@@ -344,7 +355,7 @@ def test_exact_shape_miss_falls_back(device):
     if logical_m is None:
         _skip_or_fail("could not construct a bounded exact-key miss")
     host_a, host_b, tensor_a, tensor_b = _inputs(entry, device, logical_m=logical_m)
-    native = _resolved_key(tensor_a, tensor_b, domain, key["output"])
+    native = _resolved_key(tensor_a, tensor_b, domain, key["output"], beta=beta)
     all_keys = {
         json.dumps({"domain": item["domain"], "key": item["key"]}, sort_keys=True, separators=(",", ":"))
         for item in lock["entries"]
@@ -352,7 +363,7 @@ def test_exact_shape_miss_falls_back(device):
     assert json.dumps(native, sort_keys=True, separators=(",", ":")) not in all_keys
 
     before = _domain_stats(_plain(REGISTRY.matmul_registry_stats()), domain)
-    _invoke(domain, entry, host_a, host_b, tensor_a, tensor_b)
+    _invoke(domain, entry, host_a, host_b, tensor_a, tensor_b, beta=beta)
     after = _domain_stats(_plain(REGISTRY.matmul_registry_stats()), domain)
     _assert_dispatch_delta(before, after, exact_hit=False, reason="empty_registry")
 
@@ -360,6 +371,8 @@ def test_exact_shape_miss_falls_back(device):
 def test_public_validation_error_is_not_retried(device, expect_error):
     lock = _lock()
     domain = "dense.matmul"
+    if not any(case.domain == domain for case in represented_semantic_cases(lock)):
+        pytest.skip("dense.matmul is not represented in this populated lock")
     entry = _compatible_entries(lock, device, domain)[0]
     key = entry["key"]
     generator = torch.Generator().manual_seed(11)

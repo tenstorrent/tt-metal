@@ -9,8 +9,9 @@ processes because registry mode is frozen at the first public matmul dispatch.
 
 It covers:
 
-- `ttnn.matmul`, no-bias/no-activation `ttnn.linear`, and `ttnn.addmm` with
-  `alpha=1` and both positive and negative zero `beta`;
+- every public-operation/scalar semantic represented by the checked lock:
+  `ttnn.matmul`, no-bias/no-activation `ttnn.linear`, and/or `ttnn.addmm` with
+  `alpha=1` and whichever positive/negative-zero `beta` keys are present;
 - Off baseline correctness, Shadow certified lookup without parameter
   selection, and On selection plus successful completion;
 - exact-key misses and unsupported public-call variants falling back without
@@ -20,9 +21,10 @@ It covers:
   CPU contract additionally injects an error after selection and proves that
   it propagates, records no completion, and circuit-breaks without retry.
 
-An empty table or a missing topology-compatible entry skips during ordinary
-device testing. The release launcher sets the fail-closed requirement, so the
-same conditions fail the canary instead of manufacturing a synthetic hit.
+An empty table, a lock with no valid dense entry, or a represented semantic
+with no bounded topology-compatible entry skips during ordinary device testing.
+The release launcher sets the fail-closed requirement, so the same conditions
+fail the canary instead of manufacturing absent domains or synthetic hits.
 
 Run directly on an allocated Blackhole node:
 
