@@ -1247,6 +1247,58 @@ def test_sort_zero_size_dim(shape, stable, device):
     assert ttnn_indices.dtype == ttnn.uint16
 
 
+def test_sort_zero_size_dim_memory_config(device):
+    """The zero-size early exit honors an explicit memory_config for both outputs."""
+    shape = (0, 4096)
+    ttnn_input = ttnn.from_torch(
+        torch.randn(shape).to(torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert ttnn_values.memory_config().buffer_type == ttnn.BufferType.L1
+    assert ttnn_indices.memory_config().buffer_type == ttnn.BufferType.L1
+    assert list(ttnn_values.shape) == list(shape)
+    assert list(ttnn_indices.shape) == list(shape)
+
+
+def test_sort_zero_size_dim_preallocated_outputs(device):
+    """The zero-size early exit returns the caller's preallocated tensors."""
+    shape = (0, 4096)
+    ttnn_input = ttnn.from_torch(
+        torch.randn(shape).to(torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    values = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    indices = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.uint16), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
+    )
+
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, out=(values, indices))
+
+    assert list(ttnn_values.shape) == list(shape)
+    assert list(ttnn_indices.shape) == list(shape)
+    assert ttnn_indices.dtype == ttnn.uint16
+
+
+def test_sort_zero_size_dim_mismatched_out_raise(device, expect_error):
+    """A preallocated tuple of the wrong shape raises instead of being silently ignored."""
+    ttnn_input = ttnn.from_torch(
+        torch.randn((0, 4096)).to(torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    wrong_shape = (32, 64)
+    values = ttnn.from_torch(
+        torch.zeros(wrong_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    indices = ttnn.from_torch(
+        torch.zeros(wrong_shape, dtype=torch.uint16), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
+    )
+
+    with expect_error(RuntimeError, "must match the input shape"):
+        ttnn.sort(ttnn_input, dim=-1, out=(values, indices))
+
+
 # ---------------------------------------------------------------------------
 # Unstable index contract: unstable CrossCore sorts must return valid index
 # permutations on ties. The CrossCore factory pins the index-aware comparator

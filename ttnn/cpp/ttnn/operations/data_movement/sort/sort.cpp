@@ -280,14 +280,20 @@ std::vector<Tensor> sort(
     // after the dim-range validation above so an out-of-range dim still
     // raises, matching torch.
     if (original_lshape.volume() == 0) {
-        auto indices = ttnn::zeros_like(input_tensor, index_dtype);
-        if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
-                optional_output_tensors, original_lshape)) {
-            std::get<0>(*optional_output_tensors) = input_tensor;
-            std::get<1>(*optional_output_tensors) = indices;
-            return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
+        if (optional_output_tensors.has_value()) {
+            TT_FATAL(
+                std::get<0>(*optional_output_tensors).logical_shape() == original_lshape &&
+                    std::get<1>(*optional_output_tensors).logical_shape() == original_lshape,
+                "Preallocated sort output tensors must match the input shape {}",
+                original_lshape);
+            return {std::get<0>(*optional_output_tensors), std::get<1>(*optional_output_tensors)};
         }
-        return {input_tensor, indices};
+        const Tensor values =
+            memory_config.has_value()
+                ? ttnn::zeros_like(input_tensor, std::nullopt, std::nullopt, std::nullopt, memory_config)
+                : input_tensor;
+        const Tensor indices = ttnn::zeros_like(input_tensor, index_dtype, std::nullopt, std::nullopt, memory_config);
+        return {values, indices};
     }
 
     if (original_lshape[normalized_dim] == 1) {
