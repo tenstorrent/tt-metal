@@ -1,0 +1,569 @@
+# TTTv2 2D Modules Milestone B Work Log
+
+> **Current state (2026-08-24).** All seven Milestone B sequence steps now have
+> code. Steps 1 and 4 landed in Checkpoints 1-9; steps 2, 3, 5, 6 and 7 are
+> covered by Checkpoints 9-12. **Nothing in this branch has ever run**, on
+> hardware or otherwise. Checkpoint 12 is the suggested order for the first
+> Galaxy session; Checkpoint 11 lists what is most likely to break.
+
+## Checkpoint 1 - Scope
+
+- Date: 2026-08-21.
+- Requested scope: Milestone B **sequence steps 1 and 4 only** from
+  `tttv2_2d_modules_plan.md` — the Llama-3.3-70B and Qwen3-32B provider adaptors
+  and their one-layer-capable tensor-model reconstructions.
+- Deliberately **not** in scope for *this checkpoint*: steps 2, 3, 5, 6, and 7
+  (one-block and full-model numerical validation, direct demos,
+  paged/prefix/concat-32/sampling coverage). All of those require a WH Galaxy
+  `(8, 4)` mesh, and all are delivered as unrun code in Checkpoints 9-12.
+- Environment: laptop with no Tenstorrent hardware. `import ttnn` fails here
+  (`ModuleNotFoundError: ttnn._ttnn`), so **nothing in this checkpoint was
+  executed** — not even the host-only tests. Every claim below is static design
+  evidence: contract reading, shape algebra, and syntax checks
+  (`python -m py_compile`, clean).
+- Executors, generators, demos, and vLLM routing remain unwritten by design;
+  they are Milestone C.
+
+## Checkpoint 2 - What was added
+
+### Shared Galaxy production layer (`models/common/models/galaxy/`)
+
+Model-neutral, topology-owned, outside any model-named package. Existing files
+(`ccl.py`, `resources.py`) are unchanged.
+
+| File | Ownership |
+| --- | --- |
+| `recipes.py` | `(8, 4)` constants, core sets, `GalaxyDenseGeometry`, memory/program-config recipes, resolved decode and prefill placements |
+| `plans.py` | The `GalaxyResourcesConfig` union of every collective the qualified modules issue, plus `select_galaxy_resource` |
+| `collectives.py` | `GalaxyAttentionCollectives` (Attention2D low-level adapters), `GalaxyColumnAllReduce` (LMHead2D collective), runtime batch-offset tensors |
+| `prefetch.py` | Canonical sender/receiver mapping, address placement, decode prefetch producer |
+| `kv_contract.py` | Per-layer paged KV metadata plus the narrow view the common `PagedKVCacheManager` already accepts |
+| `dense_transformer.py` | **Deprecated.** A shared graph + config assembly, kept only until Qwen is split. Llama no longer uses it. *(Deleted in Checkpoint 7.)* |
+
+### Model packages
+
+```text
+models/common/models/llama33_70b_galaxy/{__init__,weight_utils,model,hf_adaptor}.py
+models/common/models/qwen3_32b_galaxy/{__init__,weight_utils,model,hf_adaptor}.py
+```
+
+Each package owns the checkpoint contract, the precision recipe, and provider
+key/layout conversion. Neither imports any model-named package (asserted by a
+source scan in its host tests).
+
+**Graph ownership.** The first draft put the decoder layer, the tensor model,
+and the module-config assembly in a shared `dense_transformer.py`, with each
+product model as a thin subclass. The plan permits that (generic helpers outside
+model-named directories) but does not require it, and it reads against TTTv2's
+"library, not framework" principle and against the plan's per-package language
+("builds only the new 2D module configs"). Llama has therefore been split: its
+`model.py` now owns its precision recipe, host/lazy weight types, every 2D
+module config, `Llama33_70BTransformerBlock2D`,
+`Llama33_70BGalaxyTransformer2D`, and the construction order. It borrows only
+topology-neutral machinery from the shared Galaxy layer.
+
+The split also removed generic scaffolding Llama does not need: no Q/K
+normalization, no fused QKV bias, and `n_heads * head_dim == dim` is now an
+asserted invariant rather than a general case.
+
+Qwen still composes the shared `dense_transformer.py`; splitting it the same way
+is the immediate follow-up, after which that file is deleted.
+
+### Tests
+
+```text
+models/common/tests/models/galaxy/test_recipes.py
+models/common/tests/models/galaxy/test_plans.py
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py
+```
+
+Plus focused additions to `tests/modules/attention/test_attention_2d.py` and
+`tests/modules/lm_head/test_lm_head_2d.py` for the two module contract changes
+below.
+
+## Checkpoint 3 - Construction order
+
+The prefetcher is the resource root, and `GalaxyResources` refuses to borrow an
+unsealed prefetcher context, so the order is forced and now explicit in
+`assemble_galaxy_dense_model`:
+
+1. resolve geometry and decode placements;
+2. resolve the Galaxy collective-resource policy (`build_galaxy_resources_config`);
+3. build every `LazyWeight` (`build_galaxy_dense_lazy_weights`) — no device work;
+4. materialize and register the prefetched decode weights in per-layer issue
+   order (`wqkv, wo, w1, w3, w2`, matching the legacy Galaxy stack) and seal;
+5. create the Galaxy CCL/subdevice owner over the sealed prefetcher; and
+6. assemble module configs and construct the tensor model.
+
+Registration is explicit and ordered; nothing scans the model graph, and the
+prefill context intentionally carries no global CB.
+
+## Checkpoint 4 - Shared/module files changed, and why config alone was insufficient
+
+| File | Change | Why |
+| --- | --- | --- |
+| `modules/attention/attention_2d.py` | `wo` source shape is now `(n_heads * head_dim, dim)` instead of `(dim, dim)`; added the matching row-divisibility check | Qwen3-32B decouples `head_dim` from the hidden size (64 heads x 128 = 8192 vs dim 5120), so the previous contract could not express the real checkpoint. For Llama (and any model where the two coincide) the check is byte-identical. |
+| `modules/attention/attention_2d.py` | `wqkv`/`wo` lazy-weight resolution no longer swaps `weight_memory_config` and `wo_weight_memory_config` | Latent defect: the exact-policy validator pairs them the other way. Only reachable when a caller leaves a weight's `memory_config` unset, which no qualified path did. |
+| `modules/lm_head/lm_head_2d.py` | A device activation may carry the column-local hidden width (`dim / 4`) as well as the full `dim` | The module's own mapper shards the LM-head hidden dimension over columns, so a device activation from the column-sharded residual stream is `dim / 4` wide. Only host `LazyWeight` inputs carry the full width, which is why the hardware qualification never hit this. |
+
+No `llm_runtime` file was touched, and no `*_1d.py` module implementation file
+was touched. The batched-prefill policy delivered in Milestone A already covers
+what these models need; step 1/4 required no runtime change at all.
+
+One existing host fixture was corrected rather than re-expected:
+`tests/modules/attention/test_attention_2d.py` declared 64 heads of dimension
+128 with a square `(5120, 5120)` WO, which is not a realizable geometry. It now
+uses `(8192, 5120)`, the true Qwen3-32B shape, and two new tests pin both the
+decoupled and the square case.
+
+## Checkpoint 5 - Gaps that need the WH Galaxy mesh
+
+Ordered by risk. None of these can be closed on this machine.
+
+1. **Nothing was executed.** The four new host suites and the two updated module
+   suites have never run. Run them first; they need no hardware.
+2. **RoPE composed with Attention2D is unqualified.** *(Shape contract traced on
+   paper and confirmed in Checkpoint 8; the numerics are still unqualified.)* The Milestone A attention
+   hardware test used an identity rotary, and `RotarySetup2D` was qualified
+   standalone. `GalaxyAttentionCollectives.rotary` now issues the production
+   `rotary_embedding_llama` calls (non-fused decode by default, fused available
+   through `use_qk_fused_rotary`). Decode-mode RoPE requires the Q/K heads to be
+   height-sharded with `cos.logical_shape()[1] == batch`; that is what
+   `RotarySetup2D` produces for `users_per_column = 8`, but the pairing is
+   unproven. Expect this to be the first hardware failure point.
+3. **Real Qwen3-32B attention geometry is unqualified.** The recorded Milestone A
+   Qwen attention evidence used a 40-head fixture so that `n_heads * head_dim`
+   equalled `dim`. The model package builds the real 64-head geometry, which is
+   what the relaxed WO contract exists for.
+4. **Qwen decode ring widths.** *(Confirmed correct against the TTNN op source in
+   Checkpoint 8; no change needed.)* The scattered W1/W3 *placement* is padded to the
+   24-core ring (960 columns for both models, identical to the qualified Llama
+   recipe), while the resource *key* uses the logical width TTNN reports (960 for
+   Llama, 800 for Qwen). If the Qwen decode all-gather cannot find its resource,
+   this pair is the first thing to inspect.
+5. **Residual placement moved to the norm's own grid.** Attention and MLP decode
+   outputs are placed on `RMSNorm2D`'s default two-wide `x=2..3` grid so the
+   fused residual norm consumes them without a relocation. The module tests used
+   `x=1..2` for their own outputs; `x=1` owns the fused stats circular buffer, so
+   the norm default is the safer choice, but the combination is unproven.
+6. **`semaphore_cores` is one set per mode.** Decode uses the full worker
+   envelope, a superset of the norm grid the RMSNorm2D hardware test used. If the
+   fused norm rejects it, split the plan rather than moving the norm shards.
+7. **Sampling2D wiring is intentionally absent.** *(Closed in Checkpoint 10:
+   `GalaxyColumnUserSelector` performs the per-column user selection and each
+   model exposes `sample_decode`. The selection itself is unqualified.)* The
+   sampler expects logits with users sharded over columns; the decode graph keeps
+   the physical batch replicated across columns.
+8. **A fused QKV bias is unsupported.** Neither target checkpoint has one
+   (`attention_bias=False` is in both contracts). `Attention2D` validates a bias
+   against the projection's DRAM-sharded weight placement, which a bias vector
+   cannot satisfy; supporting one needs a bias placement field on the module
+   config. Llama's package has no bias path at all; the shared graph Qwen still
+   uses rejects one explicitly.
+9. **Qwen is not split yet.** *(Closed in Checkpoint 7: Qwen owns its graph and
+   `dense_transformer.py` is deleted.)* It composes the deprecated shared
+   `dense_transformer.py`. Splitting it mirrors Llama's `model.py` and then
+   deletes that file.
+
+## Checkpoint 6 - Suggested first commands on the Galaxy host
+
+*(Superseded by Checkpoint 12, which covers the complete sequence. Kept for the
+record of what the second session recommended.)*
+
+```bash
+# 1. Host-only, no hardware required.
+pytest models/common/tests/models/galaxy \
+       models/common/tests/models/llama33_70b_galaxy \
+       models/common/tests/models/qwen3_32b_galaxy -v
+
+# 2. Milestone A regression for the two changed modules.
+pytest models/common/tests/modules/attention/test_attention_2d.py \
+       models/common/tests/modules/lm_head/test_lm_head_2d.py -v
+
+# 3. Recorded Milestone A hardware paths, unchanged by this work.
+pytest models/common/tests/modules/attention/test_attention_2d_wh_galaxy.py -v
+
+# 4. Milestone B step 2, written statically in Checkpoint 9 and never executed.
+pytest models/common/tests/models/llama33_70b_galaxy/test_model_wh_galaxy.py -v
+```
+
+Step 2 of the Milestone B sequence (one-block decode/prefill PCC) still needs a
+new hardware test; it should build the model through
+`llama33_70b_galaxy.from_pretrained(..., n_layers=1, prefill_sequence_lengths=(128,))`
+and compare against an independent HF reference. *(Written in Checkpoint 9 for
+Llama and in Checkpoint 10 for Qwen; both construct the model directly so they
+can pass `paged_attention_config=None`.)*
+
+## Checkpoint 7 - Qwen split, shared graph deleted
+
+Date: 2026-08-21 (second session). Still no hardware and still no `ttnn` import
+in this checkout, so **nothing below was executed**. Evidence is static:
+`python -m py_compile` (clean), a 120-column scan (clean), a source scan for the
+boundary invariants (clean), plus two mechanical AST checks described below.
+
+`models/common/models/qwen3_32b_galaxy/model.py` now owns the Qwen graph the way
+Llama owns its own: precision recipe, host and lazy weight types, every 2D module
+config, the decoder layer, the tensor model, and the construction order.
+`Qwen3_32BGalaxyTransformer2D` is a direct `LightweightModule`.
+
+| Concern | Llama | Qwen as delivered |
+| --- | --- | --- |
+| Q/K normalization | none | `_head_local_norm_config` builds `RMSNorm2DGeometry.HEAD_LOCAL` norms (DRAM in/out, no `tt_ccl`) wired into `Attention2DConfig.q_norm_config` / `k_norm_config` |
+| `n_heads * head_dim` | `== dim`, asserted | 8192 vs `dim` 5120; no assertion, `wo` is `[8192, 5120]` |
+| Lazy layer weights | 5 projections + 2 norms | plus required `q_norm`, `k_norm` |
+| Prefetch registration | 5 per layer | still 5 (`wqkv, wo, w1, w3, w2`); the 128-element Q/K norms are not ring operands |
+| Precision | BFP8 MLP | `Qwen3_32BGalaxyPrecision` defaults `mlp_w1_w3_dtype`/`mlp_w2_dtype` to bfloat16 (the accuracy recipe *is* the default, as for Llama); the performance recipe drops them to BFP8 + LoFi FF1/FF3 |
+| RoPE | theta 500000, llama3 factor 8.0 | theta 1000000, `rope_scaling_factor=None`, `original_context_len=None`; the scaling parameters are gone from the config builder because there is nothing to pass |
+| Vocabulary / layers / eps | 128256 / 80 / 1e-5 | 151936 padded 152064 / 64 / 1e-6 |
+| HF revision | none | `DEFAULT_HF_REVISION` pin kept |
+| Fused QKV bias | no path at all | `weight_utils` still packs one when a checkpoint carries it; `_reject_qkv_bias` refuses it during lazy-weight resolution with the same explanation the shared graph used |
+
+Everything else — placements, collectives, prefetch order, KV contract, the
+`(x, h)` residual convention, `_relocate` / `_release_unless`, and every graph
+method — is a faithful copy. That was verified mechanically rather than by eye: a
+normalized diff (model-name tokens rewritten to a common placeholder) between
+the two `model.py` files shows only the rows above plus docstrings and constants.
+
+Also changed:
+
+- `models/common/models/galaxy/dense_transformer.py` **deleted** after confirming
+  the only remaining occurrences of the string are the two tests that assert its
+  absence.
+- `qwen3_32b_galaxy/hf_adaptor.py` converts into `Qwen3_32BGalaxyWeights` /
+  `Qwen3_32BGalaxyLayerWeights` and resolves `Qwen3_32BGalaxyPrecision`.
+- `qwen3_32b_galaxy/__init__.py` exports the package-owned graph types, mirroring
+  Llama's export surface.
+- `models/common/modules/README.md`: the shared Galaxy layer no longer "composes
+  the modules"; each product package owns its graph.
+
+Tests (`models/common/tests/models/qwen3_32b_galaxy/test_model_host.py`), all
+unrun: switched to the package-owned weight types, plus Llama's two structural
+tests (`test_prefetch_registration_is_ordered_per_layer`,
+`test_package_owns_its_graph_and_imports_no_model_named_implementation`
+including the `galaxy.dense_transformer` absence assertion) and two
+Qwen-specific ones — `test_qk_norms_resolve_to_head_local_geometry` (geometry is
+`HEAD_LOCAL`, weight width is `head_dim`, no CCL borrowed, DRAM placements) and
+`test_lazy_weights_reject_a_fused_qkv_bias`.
+
+Two mechanical checks stand in for the tests that cannot run here:
+
+1. every keyword passed to `Attention2DConfig`, `MLP2DConfig`, `RMSNorm2DConfig`,
+   `LMHead2DConfig`, `Embedding2DConfig`, `RotarySetup2DConfig`,
+   `Sampling2DConfig`, and `LazyWeight` exists as a field on that class (AST
+   comparison against the module sources) — 0 unknown keywords across both model
+   packages;
+2. every `from X import n` in the changed files resolves to a top-level name in
+   `X` — 0 unresolved (submodule imports excepted, which the checker does not
+   model).
+
+## Checkpoint 8 - Two static audits that close Checkpoint 5 gaps 2 and 4
+
+### Decode RoPE contract (gap 2): satisfied for `users_per_column = 8`
+
+Traced from the op's own validation, not from intuition. Decode-mode
+`rotary_embedding_llama`
+(`ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/rotary_embedding_llama_device_operation.cpp:84-127`)
+requires: `input.logical_shape()[0] == 1`; input, cos, sin and the transformation
+matrix all `HEIGHT_SHARDED` and bfloat16; `batch = input.logical_shape()[1]` no
+larger than the core count; `cos.logical_shape()[1] == batch`;
+`cos.shard_spec()->shape[0] == TILE_HEIGHT`; and a transformation matrix with
+leading dims `1, 1` and shard shape exactly `(TILE_HEIGHT, TILE_WIDTH)`.
+
+What the Galaxy graph actually produces:
+
+- `all_reduce_create_qkv_heads` computes its own output specs
+  (`.../all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_device_operation.cpp:190-245`):
+  with `slice_size = users_per_column = 8` the batch dimension **is** 8, so
+  `q = [1, 8, n_heads/8, head_dim]` and `k = [1, 8, n_kv_heads/8, head_dim]`,
+  each height-sharded with shard `(TILE_HEIGHT, head_dim)` over the first eight
+  cores of the grid the recipe's `attention_heads_memcfg` supplies (Q takes
+  cores 0-7, K the next eight, V the next eight — which is why the qualified
+  recipe hands it a 32-core grid rather than an 8-core one).
+- `RotarySetup2D.decode_forward` (`models/common/modules/rope/rope_2d.py:97-131`,
+  `224-237`, `336-341`) embeds 8 index rows and reshapes to logical
+  `(8, 1, head_dim)` padded `(8, TILE, head_dim)`, then unsqueezes to 4D, so
+  `cos.logical_shape()[1] == 8` and the shard is `(TILE, head_dim)` on the
+  8-core `batch_grid`. The decode transformation matrix is
+  `get_rot_transformation_mat(dhead=TILE).repeat(1, 1, 8, 1)` sharded
+  `(TILE, TILE)` on the same grid.
+
+Every clause matches: `batch = 8` on both sides, `cos.shard_spec()[0] = 32`,
+trans-mat leading dims `1, 1` with a `(32, 32)` shard, and all four tensors are
+bfloat16 because the fused head creation is asked for
+`dtype=precision.decode_activation_dtype` (bfloat16). `head_dim = 128` also
+stays inside the `head_dim <= 128 || !fp32_dest_acc_en` clause. So the default
+non-fused decode path needs no config change, and the fused-QK alternative
+(`use_qk_fused_rotary=True`, 16 rows) is not required. What remains unproven is
+numerical, not structural.
+
+### Qwen decode ring widths (gap 4): the recipe already matches the op
+
+`llama_reduce_scatter` derives its output width in
+`ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp:60-85`:
+
+```
+final_width = (input_width % input_shard_width) ? padded_input_width / ring_devices
+                                                : input_width / ring_devices
+```
+
+with `padded_input_width` the input width rounded up to a whole number of tiles
+per input core. `llama_rs_matmul` reuses the same function for its reduce-scatter
+output (`.../llama_reduce_scatter_matmul/device/rs_matmul_op.cpp:53-71`), so both
+decode call sites agree.
+
+Substituting the recipe's own placement (`mlp_w1_w3_output_memcfg`: 24 receiver
+cores, shard width `pad_ring_width(local_hidden_dim) / 24 = 160`):
+
+| Model | `local_hidden_dim` | padded | `width % shard` | op reports | `decode_reduce_scatter_width` |
+| --- | --- | --- | --- | --- | --- |
+| Llama-3.3-70B | 3584 | 3840 | 64 (non-zero) | 3840 / 4 = **960** | 960 |
+| Qwen3-32B | 3200 | 3840 | 0 | 3200 / 4 = **800** | 800 |
+
+`GalaxyDenseGeometry.decode_reduce_scatter_width` reproduces that branch exactly,
+so the Qwen decode all-gather key (800) is the width TTNN will report and the
+Llama key (960) is unchanged. `input_width % ring_devices == 0` also holds for
+both (the op asserts it). **No code change**, and the handoff's suggested
+alignment of that property is not needed.
+
+One residual observation, deliberately left alone: the scattered *placement*
+`mlp_reduce_scatter_memcfg` is sized from the padded width (960 → 30 cores of one
+tile) for both models, so for Qwen five of those cores hold no shard of the
+800-wide result. That is the same over-provisioning the qualified Llama recipe
+already relies on elsewhere — its own `mlp_w1_w3_output_memcfg` gives 24 cores to
+a tensor whose 3584 logical columns pad to 23 shards of 160 — so it is not
+evidence of a defect, and per the handoff no qualified recipe was retuned. If the
+Qwen decode MLP does fail on the mesh, the one-line experiment is to derive
+`reduce_scatter_cores` from `decode_reduce_scatter_width` instead of
+`decode_reduce_scatter_padded_width` in
+`models/common/models/galaxy/recipes.py`; that is byte-identical for Llama (both
+are 960) and yields 25 cores for Qwen.
+
+### New gap found while auditing: paged decode page-table rows *(closed in Checkpoint 10)*
+
+`Attention2D._validate_page_table` (`models/common/modules/attention/attention_2d.py:655-672`)
+is called from `decode_forward` with `users = range(max_batch_size)`, so it
+demands a page table with **more than 31 rows**, while the Galaxy decode SDPA
+batch is one mesh column's eight users (`current_positions` is accepted at
+`users_per_column` width, which is what the qualified Milestone A attention test
+passed). The Milestone A hardware test ran a *contiguous* cache
+(`KVCacheBinding` with `metadata=None`), so the paged decode path has never been
+exercised on 2D and this row contract has never been reconciled. `from_pretrained`
+always installs a paged config, so the first paged Galaxy decode is likely to hit
+this. Recorded, not changed.
+
+## Checkpoint 9 - Unrun step-2 hardware test
+
+`models/common/tests/models/llama33_70b_galaxy/test_model_wh_galaxy.py` builds a
+one-layer Llama-3.3-70B through the package's own
+`build_llama33_70b_galaxy_model`, prefills 128 tokens for one column-local user,
+takes one decode step at position 128, and compares logits against the same
+single HF layer (PCC >= 0.99). It skips unless the checkpoint resolves, uses the
+`DispatchCoreAxis.COL` + `FabricConfig.FABRIC_1D_RING` device parameters and the
+`(8, 4)` mesh fixture, and tears down explicitly.
+
+It deviates from the handoff's sketch in two deliberate ways, both documented in
+its module docstring: it constructs the model directly instead of through
+`from_pretrained` so it can pass `paged_attention_config=None` (see the page-table
+gap above), and it truncates one loaded HF checkpoint to a single layer to serve
+both the TT weight conversion and the reference, instead of loading 140 GB twice.
+The docstring states plainly that the file has never been executed and lists the
+four assumptions most likely to be wrong.
+
+## Checkpoint 10 - Remaining Milestone B sequence (steps 3, 5, 6, 7)
+
+Date: 2026-08-24 (third session). Still a laptop, still no `ttnn`, so **nothing
+below was executed**. Evidence is static as before: `python -m py_compile`
+(clean across every changed file), a 120-column scan (clean), the two mechanical
+AST checks from Checkpoint 7 re-run over the new files (0 unknown config
+keywords, 0 unresolved imports beyond two known false positives — tuple-unpacked
+constants and a namespace package), a boundary scan (0 model-named imports, 0
+cross-package imports), and two op-source reductions recorded below.
+
+Scope covered this session:
+
+| Plan step | Delivered |
+| --- | --- |
+| 3. Full Llama model and direct demo | `llama33_70b_galaxy/demo.py`, `tests/.../test_full_model_wh_galaxy.py` |
+| 5. One Qwen block, decode and prefill | `tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py` |
+| 6. Full Qwen model and direct demo | `qwen3_32b_galaxy/demo.py`, `tests/.../test_full_model_wh_galaxy.py` |
+| 7. Paged KV, prefix cache, concat-32, device sampling, long context | Runner, collectives, recipes and the tests listed below |
+
+### Two defects found by reading the op sources, both fixed
+
+Neither was reachable from any qualified path, and neither is expressible
+through configuration, which is why both are module changes rather than model
+changes.
+
+1. **Decode page-table rows** (the gap recorded in Checkpoint 8).
+   `Attention2D.decode_forward` validated the page table against
+   `users = range(max_batch_size)`, demanding more than 31 device-local rows.
+   `paged_scaled_dot_product_attention_decode`
+   (`.../sdpa_decode/device/sdpa_decode_device_operation.cpp:247`) requires
+   `page_table_shape[0] == B` with `B = q_shape[1]`, and `paged_update_cache`
+   (`.../update_cache/paged_update_cache_device_operation.cpp:170`) requires the
+   same. On Galaxy that batch is one mesh column's eight users. Decode now has
+   its own validator requiring `users_per_column` rows, or that batch repeated
+   once per core for the L1-sharded table layout the legacy stack uses. Prefill
+   keeps the by-user contract `paged_fill_cache` needs.
+2. **Chunked-SDPA page-table batch.** The prefill table must carry one row per
+   filled user, but `chunked_scaled_dot_product_attention`
+   (`.../sdpa/device/sdpa_device_operation.cpp:261`) also requires
+   `page_table_shape[0] == B`, which is one for a single-row prefill. The two
+   requirements are incompatible in one tensor, so the module now slices the
+   addressed user's row for SDPA only, exactly as the legacy stack does with its
+   one-row-per-column table. A concatenated prefill already matches and is passed
+   through.
+
+Both are pinned by host tests in `tests/modules/attention/test_attention_2d.py`.
+
+### Concat-32 prefill
+
+Implemented without touching `Attention2D`, by using the extension point the
+module already provides: the injected collectives receive the recipe identity,
+so `GalaxyAttentionCollectives.reduce_qkv` splits the reduced projection into
+one row per user and `reduce_output` merges the rows back into the residual
+stream's single token stream. Everything between them — head creation, RoPE,
+the per-row causal SDPA, the per-user paged fill, the WO matmul — already
+accepts a 32-row batch.
+
+The collective *resources* need no new family either: every prefill key is
+derived from `math.prod(shape[:-1])`, which is `32 * length` on both sides of
+the reshape, so registering the prefill collectives at the total token count
+covers concatenated prefill exactly. `GalaxyDenseGeometry` gained
+`batched_prefill_sequence_lengths` (per-row lengths) and
+`collective_prefill_token_counts` (the union that drives registration), and
+`resolve_galaxy_prefill_placements` gained the 32-row projection program configs
+plus one chunk-aligned SDPA config for the prefix-cached family.
+
+### Device sampling: the column user selector
+
+`LMHead2D` decode logits carry all 32 users on every column; `Sampling2D`
+consumes one column's eight, with its top-k/top-p/temperature/seed buffers
+sharded the same way. TTNN has no per-column slice, so
+`GalaxyColumnUserSelector` performs the selection as a matmul against a one-hot
+selector whose *rows differ per column*: the host source is `I(32)` sharded over
+columns on the user axis, so column `c` holds rows `8c .. 8c + 7`. The product is
+an exact row gather, not an arithmetic mix.
+
+This is new, unqualified composition. It has a standalone hardware test
+(`tests/models/galaxy/test_column_user_selector_wh_galaxy.py`) precisely so the
+first hardware session can qualify it in seconds instead of inside a 70B demo.
+If it fails, the fallback is host sampling, which every other test already uses.
+
+### The direct runner
+
+`models/common/models/galaxy/direct_runner.py` owns the mechanical parts of
+driving either model before the Milestone C executors exist: paged KV
+allocation, both page-table layouts, position and token staging, last-token
+extraction, sampling, chunked prefill, teacher forcing, and deterministic
+teardown. It is model neutral and imports no model-named package.
+
+Paged block ownership is static: active slot `u` owns
+`[u * blocks_per_user, (u + 1) * blocks_per_user)`. Because the decode graph
+always runs the full physical batch, **every idle slot gets its own sink block**
+so its unavoidable KV writes can neither touch an active slot's pages nor race
+another idle slot. That is what makes the batch-1 long-context smokes possible:
+128K context needs one user's blocks plus 31 single-block sinks, not 32 users'
+worth of 128K.
+
+The two tables are deliberately asymmetric. The prefill table is right-padded to
+eight int32 entries because chunked SDPA reads it in 32-byte sticks; the decode
+table is not, because the paged decode SDPA derives its KV length from the row
+width and padding would claim more cached context than a slot owns. For the
+default 2048-token geometry the widths coincide at 64, so the difference only
+appears in short-context configurations — which is why it has its own host test.
+
+### New model surface
+
+Both packages gained the same three methods, in the same place, with identical
+bodies: `project_prefill_logits` (normalize the whole token stream, then select
+one token per prefill row and project each — mirroring what the legacy stack
+does, because `LMHead2D` cannot consume a row count below the physical batch),
+`select_decode_column_users`, and `sample_decode`. Parameters gained
+`batched_prefill_sequence_lengths` and `chunked_prefill_sequence_lengths`, both
+empty by default so no existing construction changes shape.
+
+### Files added
+
+```text
+models/common/models/galaxy/direct_runner.py
+models/common/models/galaxy/direct_demo.py
+models/common/models/llama33_70b_galaxy/demo.py
+models/common/models/qwen3_32b_galaxy/demo.py
+models/common/tests/models/galaxy/galaxy_hardware.py
+models/common/tests/models/galaxy/test_direct_runner.py
+models/common/tests/models/galaxy/test_collectives.py
+models/common/tests/models/galaxy/test_column_user_selector_wh_galaxy.py
+models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py
+models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py
+models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py
+```
+
+## Checkpoint 11 - What is still unqualified, ordered by risk
+
+Everything from Checkpoint 5 that needed a mesh still needs one. New entries:
+
+1. **Nothing has been executed**, including the host-only suites, which need no
+   hardware and should run first.
+2. **The column user selector.** A matmul-based per-column row gather is a
+   composition nobody has run. Qualify it standalone before any device sampling
+   result is believed.
+3. **Concat-32 prefill.** The reshape is a view only if `ttnn.reshape` keeps the
+   buffer when the last dimension is unchanged and the split falls on tile
+   boundaries. Every batched row length is a multiple of the 128-token chunk
+   alignment, so the tile condition holds; the view assumption does not have a
+   test.
+4. **Chunked prefill at scale.** The long-context smokes chain 64 chunks at
+   128K. Each chunk re-reads the whole cached prefix, and the KV pool is roughly
+   2.7 GB per device for Llama. An allocation failure there is a capacity result,
+   not a defect.
+5. **The accuracy gates are eager.** 511 decode steps of an 80-layer model with
+   no trace. Expect minutes, not seconds.
+6. **`project_prefill_logits` runs the final norm over the whole token stream**
+   before selecting last tokens, because the distributed-statistics gather is
+   keyed by that geometry. For a 32-row concatenated prefill that is 32x more
+   norm work than the result needs. Correct, not fast; Milestone C should revisit.
+
+## Checkpoint 12 - Suggested order on the Galaxy host
+
+```bash
+# 1. Host-only, no hardware. Everything below assumes these pass.
+pytest models/common/tests/models/galaxy \
+       models/common/tests/models/llama33_70b_galaxy/test_model_host.py \
+       models/common/tests/models/qwen3_32b_galaxy/test_model_host.py -v
+
+# 2. Milestone A regression for the changed modules.
+pytest models/common/tests/modules/attention/test_attention_2d.py \
+       models/common/tests/modules/lm_head/test_lm_head_2d.py -v
+
+# 3. The cheapest new hardware step: qualify the column user selector alone.
+pytest models/common/tests/models/galaxy/test_column_user_selector_wh_galaxy.py -v
+
+# 4. One block per model, against a truncated HF reference.
+pytest models/common/tests/models/llama33_70b_galaxy/test_model_wh_galaxy.py \
+       models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py -v
+
+# 5. Full models. Start with the smoke, then the gates.
+pytest models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py \
+       -v -k "prefill_and_first_decode_token or repeated_requests"
+pytest models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py -v
+
+# 6. Direct demos, including concat-32 prefill and device sampling.
+#    LLAMA33_70B_GALAXY_DEMO_LAYERS=1 iterates in minutes.
+pytest models/common/models/llama33_70b_galaxy/demo.py -v
+pytest models/common/models/qwen3_32b_galaxy/demo.py -v
+```
+
+## Modularity scorecard
+
+| Required item | Evidence | Assessment |
+| --- | --- | --- |
+| New 2D/model files added | Seven shared Galaxy files (`dense_transformer.py` was deleted in Checkpoint 7; `direct_runner.py` and `direct_demo.py` added in Checkpoint 10), ten model-package files including both demos, and eleven test files | Within Milestone B boundaries |
+| Existing shared files changed | Three 2D module changes across two files (two from Checkpoint 4, one from Checkpoint 10) plus their host tests; three shared Galaxy files extended (`recipes.py`, `plans.py`, `collectives.py`); zero runtime files | Every module change is a contract correction required to issue a valid TTNN call |
+| Why config alone was insufficient | `Attention2D` hard-coded a square WO, validated the decode page table against the physical batch instead of the device-local SDPA batch, and passed a by-user page table to an op that requires Q's batch; `LMHead2D` hard-coded a full-width activation. None is expressible through configuration | Minimal, backward-compatible relaxations |
+| 1D module implementation files changed | `git status` shows no `models/common/modules/**/*_1d.py` change | Required value met |
+| Default runtime behavior changed | No `models/common/llm_runtime/**` file changed in any checkpoint | Required value met |
+| 1D regression suites run | None — `ttnn` is not importable in this environment | Outstanding; must run on the Galaxy host |
+| Common-code topology assumptions discovered | Two, both 2D-module-local and both found by reading the TTNN op sources rather than by running anything | Recorded and corrected |
+| Boundary leakage | Concat-32 needed no `Attention2D` change: the injected collectives already receive the recipe identity, and the collective resource keys are invariant to the reshape. Device sampling needed no module change either — the selector is a model-layer collaborator. Both packages still own their graphs; the boundary scan reports zero model-named and zero cross-package imports | Closed |

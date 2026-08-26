@@ -655,15 +655,59 @@ class Attention2D(LightweightModule):
     def _validate_page_table(
         self, name: str, table: Any, binding: KVCacheBinding, users: tuple[int, ...], needed: int
     ) -> None:
+        """Validate a prefill page table, which carries one row per filled user.
+
+        ``paged_fill_cache`` indexes the table by ``batch_idx``, so the
+        device-local table must reach the highest user this request fills.
+        """
+
+        shape = self._page_table_prologue(name, table, binding)
+        if shape is None:
+            return
+        if shape[0] <= max(users):
+            raise ValueError(f"{name} must have one row for every addressed user")
+        self._validate_page_table_capacity(name, table, shape, binding, needed)
+
+    def _validate_decode_page_table(self, table: Any, binding: KVCacheBinding) -> None:
+        """Validate the decode page table against the device-local SDPA batch.
+
+        Decode attends to one mesh column's users on each device, so
+        ``paged_update_cache`` and ``paged_scaled_dot_product_attention_decode``
+        both require the device-local table to carry exactly
+        ``users_per_column`` rows — or, when the table is L1-sharded, that batch
+        repeated once per core. A table sized to the full physical batch is the
+        prefill layout and is rejected here rather than at the first op.
+        """
+
+        name = "page_table"
+        shape = self._page_table_prologue(name, table, binding)
+        if shape is None:
+            return
+        per_column = self.config.users_per_column
+        if shape[0] < per_column or shape[0] % per_column:
+            raise ValueError(
+                f"decode {name} must carry {per_column} device-local rows (or that batch repeated "
+                f"once per core), got {shape}"
+            )
+        self._validate_page_table_capacity(name, table, shape, binding, self.config.max_seq_len)
+
+    def _page_table_prologue(self, name: str, table: Any, binding: KVCacheBinding) -> tuple[int, ...] | None:
+        """Return the table's shape, or ``None`` when the cache is contiguous."""
+
         if binding.metadata is None:
             if table is not None:
                 raise ValueError(f"{name} is only valid with a paged KV cache")
-            return
+            return None
         if table is None:
             raise ValueError(f"{name} is required with a paged KV cache")
         shape = _tensor_shape(name, table)
-        if len(shape) != 2 or shape[0] <= max(users):
-            raise ValueError(f"{name} must have one row for every addressed user")
+        if len(shape) != 2:
+            raise ValueError(f"{name} must be a rank-2 [users, blocks] tensor, got {shape}")
+        return shape
+
+    def _validate_page_table_capacity(
+        self, name: str, table: Any, shape: tuple[int, ...], binding: KVCacheBinding, needed: int
+    ) -> None:
         meta = binding.metadata
         required_blocks = (needed + meta.block_size - 1) // meta.block_size
         if shape[1] < required_blocks or shape[1] > meta.max_num_blocks:
@@ -835,8 +879,7 @@ class Attention2D(LightweightModule):
         if not isinstance(metadata, DecodeMetadata):
             raise TypeError("decode_forward requires DecodeMetadata")
         binding = self._require_cache()
-        users = tuple(range(self.config.max_batch_size))
-        self._validate_page_table("page_table", metadata.page_table, binding, users, self.config.max_seq_len)
+        self._validate_decode_page_table(metadata.page_table, binding)
         position_shape = _tensor_shape("current_positions", metadata.current_positions)
         valid_position_shapes = {
             (self.config.users_per_column,),
@@ -1011,6 +1054,25 @@ class Attention2D(LightweightModule):
                 ttnn.fill_cache(binding.keys, k, user)
                 ttnn.fill_cache(binding.values, v, user)
 
+    def _sdpa_page_table(self, metadata: PrefillMetadata) -> Any:
+        """Return the page table view chunked SDPA can read.
+
+        The prefill page table carries one row per user because
+        ``paged_fill_cache`` indexes it by ``batch_idx``. Chunked SDPA instead
+        requires the table's leading dimension to equal Q's batch, which for a
+        single-row prefill is one, so the addressed user's row is sliced out.
+        A concatenated prefill already matches and is passed through.
+        """
+
+        table = metadata.page_table
+        if len(metadata.user_ids) != 1:
+            return table
+        rows = _tensor_shape("page_table", table)[0]
+        if rows == 1:
+            return table
+        user = metadata.prefix_user_id if metadata.prefix_user_id is not None else metadata.user_ids[0]
+        return self._own(table[user : user + 1, :])
+
     def prefill_forward(self, x: Any, rot_mats: Any, metadata: PrefillMetadata) -> Any:
         self._require_open()
         if not isinstance(metadata, PrefillMetadata):
@@ -1095,7 +1157,7 @@ class Attention2D(LightweightModule):
                     input_tensor_q=q,
                     input_tensor_k=binding.keys,
                     input_tensor_v=binding.values,
-                    page_table_tensor=metadata.page_table,
+                    page_table_tensor=self._sdpa_page_table(metadata),
                     program_config=recipe.sdpa_program_config,
                     compute_kernel_config=recipe.sdpa_kernel_config,
                     memory_config=recipe.sdpa_output_memory_config,

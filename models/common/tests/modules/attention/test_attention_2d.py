@@ -222,7 +222,8 @@ def _paged_binding(model, **overrides):
 
 
 def _page_table(rows=32, columns=64, dtype="uint32"):
-    return _Tensor("page-table", shape=(rows, columns), dtype=dtype, placement="dram")
+    shape = tuple(rows) if isinstance(rows, tuple) else (rows, columns)
+    return _Tensor("page-table", shape=shape, dtype=dtype, placement="dram")
 
 
 @pytest.fixture
@@ -532,12 +533,17 @@ def test_contiguous_cache_shape_and_foreign_mesh_are_rejected():
 @pytest.mark.parametrize(
     ("table", "message"),
     [
-        (_page_table(rows=31), "one row"),
+        # Decode attends to one mesh column's users on each device, so the
+        # device-local table carries users_per_column rows (or that batch once
+        # per core). A 31-row table addresses neither.
+        (_page_table(rows=31), "device-local rows"),
+        (_page_table(rows=4), "device-local rows"),
+        (_page_table(rows=(32, 64)), "rank-2"),
         (_page_table(columns=63), "capacity"),
         (_page_table(dtype="int16"), "dtype"),
     ],
 )
-def test_page_table_contract_fails_before_compute(host_ttnn, table, message):
+def test_decode_page_table_contract_fails_before_compute(host_ttnn, table, message):
     model = Attention2D.from_config(_config())
     model.bind_kv_cache(_paged_binding(model))
     with pytest.raises(ValueError, match=message):
@@ -545,6 +551,36 @@ def test_page_table_contract_fails_before_compute(host_ttnn, table, message):
             _Tensor("x", dtype="act", placement="decode-in"),
             "rot",
             DecodeMetadata(_Tensor("positions", shape=(32,), dtype="uint32"), table),
+        )
+    assert host_ttnn == []
+
+
+@pytest.mark.parametrize("rows", [8, 16, 32])
+def test_decode_page_table_accepts_the_device_local_batch_and_its_core_repeats(host_ttnn, rows):
+    """8 rows is the interleaved table; a multiple is the L1-sharded repeat."""
+
+    model = Attention2D.from_config(_config())
+    model.bind_kv_cache(_paged_binding(model))
+    result = model.decode_forward(
+        _Tensor("x", dtype="act", placement="decode-in"),
+        "rot",
+        DecodeMetadata(_Tensor("positions", shape=(32,), dtype="uint32"), _page_table(rows=rows)),
+    )
+
+    assert result.name == "output"
+    assert "sdpa-decode-paged" in [event[0] for event in host_ttnn]
+
+
+def test_prefill_page_table_must_reach_every_filled_user(host_ttnn):
+    """``paged_fill_cache`` indexes the table by user, unlike decode."""
+
+    model = Attention2D.from_config(_config())
+    model.bind_kv_cache(_paged_binding(model))
+    with pytest.raises(ValueError, match="one row for every addressed user"):
+        model.prefill_forward(
+            _Tensor("x", dtype="act", placement="prefill-in"),
+            "rot",
+            PrefillMetadata(128, (31,), page_table=_page_table(rows=31)),
         )
     assert host_ttnn == []
 
@@ -801,6 +837,44 @@ def test_concat32_paged_cache_maps_source_rows_to_ordered_users(monkeypatch):
     assert slices[:6] == [0, 0, 1, 1, 1, 0]
     assert all(batch_idx == 0 for _, _, batch_idx in fills)
     assert model._intermediates == {}
+
+
+def test_chunked_sdpa_reads_only_the_addressed_users_page_table_row(host_ttnn):
+    """``paged_fill_cache`` indexes the table by user; chunked SDPA cannot.
+
+    Chunked SDPA requires the table's leading dimension to equal Q's batch,
+    which is one for a single-row prefill, so the module slices the addressed
+    row out of the same table the fill indexed.
+    """
+
+    model = Attention2D.from_config(_config())
+    model.bind_kv_cache(_paged_binding(model))
+    model.prefill_forward(
+        _Tensor("x", dtype="act", placement="prefill-in"),
+        "rot",
+        PrefillMetadata(
+            128,
+            (5,),
+            page_table=_page_table(),
+            chunk_page_table=_page_table(),
+            chunk_start=128,
+            prefix_user_id=5,
+        ),
+    )
+
+    tables = [kwargs["page_table_tensor"] for stage, kwargs in host_ttnn if stage == "sdpa-chunked"]
+    assert [table.name for table in tables] == ["page-table-view"]
+    assert model._intermediates == {}
+
+
+def test_concat32_chunked_sdpa_keeps_the_full_page_table():
+    """A concatenated prefill's Q batch already matches the 32-row table."""
+
+    model = Attention2D.from_config(_config())
+    table = _page_table()
+    metadata = PrefillMetadata(128, tuple(range(32)), page_table=table, chunk_start=128, prefix_user_id=0)
+
+    assert model._sdpa_page_table(metadata) is table
 
 
 @pytest.mark.parametrize(
