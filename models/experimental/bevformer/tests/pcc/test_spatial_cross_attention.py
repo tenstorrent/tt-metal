@@ -35,14 +35,19 @@ PRINT_DETAILED_COMPARISON_FLAG = False
 
 
 @pytest.mark.parametrize(
-    "config_name, batch_size, bev_h, bev_w, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
+    "config_name, batch_size, bev_h, bev_w, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio, blank_cams",
     [
-        ("nuscenes_tiny", 1, 30, 30, 0.997, 0.06, 0.5, 0.5),  # NuScenes tiny model - 30x30 BEV grid
-        ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5),  # NuScenes base model - 50x50 BEV grid
-        ("nuscenes_base", 1, 100, 100, 0.999, 0.04, 1.3, 0.5),  # NuScenes base model - 100x100 BEV grid
-        ("nuscenes_base", 1, 200, 200, 0.998, 0.04, 1.3, 0.5),  # NuScenes base model - 200x200 BEV grid
-        ("carla_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5),  # CARLA base model
-        ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5),  # Batch size 2
+        ("nuscenes_tiny", 1, 30, 30, 0.997, 0.06, 0.5, 0.5, ()),  # NuScenes tiny model - 30x30 BEV grid
+        ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, ()),  # NuScenes base model - 50x50 BEV grid
+        ("nuscenes_base", 1, 100, 100, 0.999, 0.04, 1.3, 0.5, ()),  # NuScenes base model - 100x100 BEV grid
+        ("nuscenes_base", 1, 200, 200, 0.998, 0.04, 1.3, 0.5, ()),  # NuScenes base model - 200x200 BEV grid
+        ("carla_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5, ()),  # CARLA base model
+        ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, ()),  # Batch size 2
+        # A camera whose frustum misses the BEV grid entirely sees no valid query. Real nuScenes
+        # geometry produces this; uniform random masking never does. The rebatch slots for such a
+        # camera are all padding, so it is the case that proves padding contributes nothing.
+        ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, ((0, 0),)),  # One camera sees nothing
+        ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 1),)),  # Blank in one batch item only
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
@@ -57,6 +62,7 @@ def test_spatial_cross_attention_forward(
     expected_abs_error,
     expected_rel_error,
     expected_high_error_ratio,
+    blank_cams,
     seed,
 ):
     """Test TTSpatialCrossAttention against PyTorch reference implementation using configurations."""
@@ -106,6 +112,9 @@ def test_spatial_cross_attention_forward(
     num_invalid = int(0.95 * total_points)
     invalid_indices = torch.randperm(total_points)[:num_invalid]
     bev_mask.view(-1)[invalid_indices] = False
+
+    for cam_idx, batch_idx in blank_cams:
+        bev_mask[cam_idx, batch_idx] = False
 
     # Level start index
     indices = spatial_shapes.prod(1).cumsum(0)
