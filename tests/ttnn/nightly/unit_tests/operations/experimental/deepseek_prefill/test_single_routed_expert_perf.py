@@ -45,29 +45,33 @@ _LOW_ISL_MARGIN = 0.08
 # (2026-08-20). Recalibrate on the perf runner (DDR-speed dependent): each case logs an
 # "RT-CAL" line in this dict's format, so one run regenerates the table.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    # isl-32/64 measured on pmilojevic/2607-RE-dram (2026-08-26) with DOWN_SPLIT
-    # disabled; every other entry is main's 2026-08-20 sweep. Recalibrate the whole
-    # table together — re-enabling DOWN_SPLIT moves the <=512 cases by 7-13%.
-    ("kimi_k26", 0): 3_850,
-    ("kimi_k26", 32): 155_927,
-    ("kimi_k26", 64): 161_906,
-    ("kimi_k26", 128): 203_359,
-    ("kimi_k26", 256): 213_359,
-    ("kimi_k26", 512): 266_812,
-    ("kimi_k26", 1024): 377_775,
-    ("kimi_k26", 2048): 650_297,
-    ("kimi_k26", 4096): 1_278_114,
-    ("kimi_k26", 5120): 1_640_953,
-    ("glm_51", 0): 3_783,
-    ("glm_51", 32): 138_528,
-    ("glm_51", 64): 142_413,
-    ("glm_51", 128): 179_029,
-    ("glm_51", 256): 190_571,
-    ("glm_51", 512): 235_365,
-    ("glm_51", 1024): 330_284,
-    ("glm_51", 2048): 568_372,
-    ("glm_51", 4096): 1_112_126,
-    ("glm_51", 5120): 1_423_673,
+    # Device duration in ns per (model, active), x_rm layout: median of 3 sweeps on
+    # a BH p150b (2026-08-26), measured on this branch with DOWN_SPLIT enabled.
+    # Cross-sweep spread is <=0.5% at active >= 1024 and up to 5.9% at 128-512, which
+    # is what _LOW_ISL_MARGIN covers. Each case logs an "RT-CAL" line in this dict's
+    # format, so one run regenerates the table.
+    # ---- kimi_k26 ----
+    ("kimi_k26", 0): 3_967,
+    ("kimi_k26", 32): 140_639,
+    ("kimi_k26", 64): 146_672,
+    ("kimi_k26", 128): 158_390,
+    ("kimi_k26", 256): 178_739,
+    ("kimi_k26", 512): 232_135,
+    ("kimi_k26", 1024): 302_796,
+    ("kimi_k26", 2048): 583_655,
+    ("kimi_k26", 4096): 1_150_847,
+    ("kimi_k26", 5120): 1_443_593,
+    # ---- glm_51 ----
+    ("glm_51", 0): 3_941,
+    ("glm_51", 32): 124_273,
+    ("glm_51", 64): 128_627,
+    ("glm_51", 128): 133_530,
+    ("glm_51", 256): 147_419,
+    ("glm_51", 512): 202_702,
+    ("glm_51", 1024): 265_993,
+    ("glm_51", 2048): 511_046,
+    ("glm_51", 4096): 1_005_872,
+    ("glm_51", 5120): 1_262_780,
 }
 
 
@@ -77,16 +81,17 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
 # sweeps rather than taken from one. Flat to ~256 tokens (the op sits on its DRAM weight-read
 # floor), linear in tokens past that.
 _K3_SITU_EXPECTED_NS: dict[int, int] = {
-    0: 3_782,
-    32: 135_587,
-    64: 136_120,
-    128: 161_884,
-    256: 164_167,
-    512: 220_452,
-    1024: 365_674,
-    2048: 675_674,
-    4096: 1_328_317,
-    5120: 1_675_301,
+    # Same measurement as _EXPECTED_NS: median of 3 sweeps, x_rm, BH p150b (2026-08-26).
+    0: 3_904,
+    32: 123_917,
+    64: 124_408,
+    128: 125_481,
+    256: 131_941,
+    512: 205_372,
+    1024: 356_181,
+    2048: 689_690,
+    4096: 1_361_407,
+    5120: 1_693_771,
 }
 
 # K3's DRAM weight read is 18.58 MB against a ~162 us floor, so its knee sits a token count later
@@ -97,7 +102,7 @@ _K3_KNEE_TOKENS = 512
 
 
 def _margin_for(active: int) -> float:
-    return _CEILING_ONLY if active == 0 else _LOW_ISL_MARGIN if active <= 256 else _MARGIN
+    return _CEILING_ONLY if active == 0 else _LOW_ISL_MARGIN if active <= 512 else _MARGIN
 
 
 def _margin_for_k3(active: int) -> float:
