@@ -6,6 +6,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/debug/dprint.h"
 #include "dev_mem_map.h"
 #include "experimental/kernel_args.h"
 
@@ -25,6 +26,30 @@ void kernel_main() {
     uint32_t results[k_num_results] = {};
 
     dfb.wait_front(num_entries_per_consumer);
+
+#ifdef TRISC_UNPACK
+    {
+        const uint32_t read_ptr_bytes = dfb.get_read_ptr() << cb_addr_shift;
+        volatile tt_l1_ptr uint32_t* const w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_ptr_bytes);
+        // Sampled on this core only: cross-core DPRINT interleaving cannot establish ordering, but
+        // the posted count read here tells us whether wait_front had credits when it returned.
+        // posted < num_entries_per_consumer => wait_front returned without waiting.
+        LocalDFBInterface& intf = get_local_dfb_interface(dfb.get_id());
+        const auto& slot = intf.tc_slots[intf.tc_idx];
+        const uint8_t tc_id = dfb::get_counter_id(slot.packed_tile_counter);
+        DPRINT(
+            "consumer trisc={} mask={:#x} tc_idx={} tc_id={} posted={} cap={} rd_ptr={:#x} w0={:#x} w1={:#x}\n",
+            (uint32_t)ckernel::csr_read<ckernel::CSR::TRISC_ID>(),
+            (uint32_t)intf.tensix_trisc_mask,
+            (uint32_t)intf.tc_idx,
+            (uint32_t)tc_id,
+            (uint32_t)(ckernel::trisc::tile_counters[tc_id].f.posted & 0xFFFFu),
+            (uint32_t)ckernel::trisc::tile_counters[tc_id].f.buf_capacity,
+            read_ptr_bytes,
+            w[0],
+            w[1]);
+    }
+#endif
 
     results[0] = dfb.read_tile_value<uint32_t>(0, 0);
     results[1] = dfb.read_tile_value<uint32_t>(0, 1);

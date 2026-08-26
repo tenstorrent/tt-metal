@@ -45,10 +45,7 @@ namespace m2 = experimental;
 TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     using DataT = std::uint32_t;
 
-    if (this->device().arch() == ARCH::QUASAR) {
-        GTEST_SKIP() << "Quasar read_tile_value / get_tile_address on DFB is under debug; run on WH/BH";
-    }
-    if (MetalContext::instance().rtoptions().get_simulator_enabled()) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DataflowBufferReadTileValue for tt-sim until GH#50135 is resolved";
     }
 
@@ -105,6 +102,16 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
         .data_format_metadata = DataFormat::Float16_b,
     };
 
+    m2::DataMovementHardwareConfig producer_hw;
+    m2::ComputeHardwareConfig consumer_hw;
+    if (device->arch() == ARCH::QUASAR) {
+        producer_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {DFB}};
+        consumer_hw = m2::ComputeGen2Config{};
+    } else {
+        producer_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+        consumer_hw = m2::ComputeGen1Config{};
+    }
+
     m2::KernelSpec producer{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
@@ -122,7 +129,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
                 {"num_producers", num_producers},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
-        .hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0},
+        .hw_config = producer_hw,
     };
 
     m2::KernelSpec consumer{
@@ -136,7 +143,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
               .access_pattern = m2::DFBAccessPattern::STRIDED}},
         .compile_time_args = {{"num_entries_per_consumer", num_entries}},
         .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
-        .hw_config = m2::ComputeGen1Config{},
+        .hw_config = consumer_hw,
     };
 
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
@@ -179,7 +186,9 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     input[words_per_entry + 1] = tile1_val1;
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
 
-    std::vector<DataT> result_init(expected_scalar_reads.size(), 0u);
+    // Sentinel rather than 0: an all-zero host read is indistinguishable from "kernel never wrote".
+    constexpr DataT result_sentinel = 0xDEADBEEFu;
+    std::vector<DataT> result_init(expected_scalar_reads.size(), result_sentinel);
     slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), result_l1_addr, result_init);
 
     LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
