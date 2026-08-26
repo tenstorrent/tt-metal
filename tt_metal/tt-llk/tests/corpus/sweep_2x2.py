@@ -707,6 +707,37 @@ KNOBS = {
     # clamp respectively — the GS-2 row mapping's premise for them is
     # refuted at the current bodies).
     "native-compare": "-mtt-tensix-optimize-native-compare",
+    # GV (pressure-park): post-CC residency admission + LREG tier — the
+    # FX PASS-GAP "invariant-loadi rename/pressure admission" class.
+    # The const-residency CC-canonical peel class stops its candidate
+    # scan at the body's first CC writer, so fresh-body coefficient
+    # materializations inside the lowered v_if region reload every row
+    # (softplus 6 x 2-issue, acosh 23, gelu 19, softsign, sqrt,
+    # atan2 — dump-attributed at ON-28, laneGV evidence).  The knob
+    # admits post-CC candidates whose every consumer is in the audited
+    # lane-predicated set (the const-remat audit; the parked all-lanes
+    # constant-register read refines exactly the lanes the original
+    # fresh predicated load left indeterminate — the invariant pass's
+    # ratified superset-write argument), and on prgm-exhausted hoists
+    # remaining admitted candidates to the same proven programming
+    # point as plain LREG live ranges while the function-wide SSA
+    # pressure model stays within the 8-LREG file.  Fire targets:
+    # softplus-fresh (3 parks + 1 LREG hoist, 36 -> 30 loop words),
+    # gelu-fresh (3 parks, 78 -> 72), trigonometry-fresh (1 park;
+    # L13/L14 TU-claimed + LREG file full = honest ceiling),
+    # softsign-fresh (1 park).  MEASURED (laneGV-evidence-20260825,
+    # BH p150, 3 reps cycle-identical, corr-before-perf 7/7 device +
+    # 7/7 paired CRAQ PASS pinned sim 32489dda; same-session hand
+    # anchors reproduce the booked board cells to 0.1pp):
+    # TILE_LOOP MATH_ISOLATE under the knob — softplus 1319.8 ->
+    # 1172.9 (-11.13%; vs-hand +13.30 -> +0.68), gelu 2787.8 ->
+    # 2642.9 (-5.20%; vs-hand +2.54 -> -2.79 LOSS -> WIN), softsign
+    # 578.8 -> 549.8 (-5.02%; +6.63 -> +1.27), acosh 3198.8 -> 3174.8
+    # (-0.75%; +6.39 -> +5.59).  sqrt-fresh / threshold-fresh /
+    # hardsigmoid-fresh = measured honest no-fire controls
+    # (cycle-identical under the knob; named lreg-file-exhausted / no
+    # admissible candidate).
+    "pressure-park": "-mtt-tensix-optimize-pressure-park",
 }
 
 
@@ -820,6 +851,11 @@ KNOB_MODES = {
     # shorter CC webs).  on-plus while a booking knob; promotion requires
     # an R9 witness and ON-vs-ON attribution ceremony.
     "native-compare": "on-plus",
+    # GV pressure-park: default-off on-plus knob — the residency classes
+    # it widens run in the ON set (const-residency), so attribution is
+    # ON vs ON+flag.  Promotion requires an R9 witness and the ON-vs-ON
+    # attribution ceremony.
+    "pressure-park": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
