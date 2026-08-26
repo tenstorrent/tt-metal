@@ -69,7 +69,7 @@ void kernel_main() {
                     {.offset_bytes = i * page_bytes});
             }
             noc.async_read_barrier();
-            if constexpr (mc.active) {
+            if constexpr (mc.has_receivers) {
                 // src != dst: an in-rect sender takes the loopback path and lands its own copy.
                 pipe.send(src_addr, dst_addr, payload_bytes);
             }
@@ -86,7 +86,7 @@ void kernel_main() {
     } else {
         auto pipe = mc.receiver(noc);
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-            pipe.receive();
+            pipe.receive(blk);
             for (uint32_t i = 0; i < payload_pages; ++i) {
                 noc.async_write(
                     cb_dst_obj,

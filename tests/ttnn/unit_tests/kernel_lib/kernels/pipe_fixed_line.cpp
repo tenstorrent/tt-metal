@@ -27,9 +27,9 @@
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
-    constexpr uint32_t cb = get_compile_time_arg_val(0);  // mcast source (in place) + landing region
-    constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/5>();  // mcast config (CT 1..) + per-core coords (RT 5..)
-    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 6, right after the mcast CT block
+    constexpr uint32_t cb = get_compile_time_arg_val(0);              // mcast source (in place) + landing region
+    constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/4>();              // mcast config (CT 1..) + per-core args (RT 4..)
+    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 8, right after the mcast CT block
     constexpr uint32_t num_blocks = get_compile_time_arg_val(SCALARS + 0);
     constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 1);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 2);
@@ -40,7 +40,6 @@ void kernel_main() {
     const uint32_t input_start_id = get_arg_val<uint32_t>(1);  // this line's first block (sender only)
     const uint32_t output_addr = get_arg_val<uint32_t>(2);
     const uint32_t output_start_id = get_arg_val<uint32_t>(3);  // this core's first DRAM slot
-    const uint32_t is_sender = get_arg_val<uint32_t>(4);        // host's mc.is_sender(core)
 
     constexpr uint32_t payload_bytes = payload_pages * page_bytes;
 
@@ -52,7 +51,7 @@ void kernel_main() {
     cb_obj.reserve_back(payload_pages);  // write_ptr == base == the mcast address (same on every core)
     const uint32_t cb_addr = cb_obj.get_write_ptr();
 
-    if (is_sender) {
+    if (mc.can_send()) {
         // SENDER — built ONCE above the block loop and reused for every staged block. An inactive
         // single-line family has no receivers, so it skips send() below.
         auto pipe = mc.sender(noc);
@@ -66,7 +65,7 @@ void kernel_main() {
                     {.offset_bytes = i * page_bytes});
             }
             noc.async_read_barrier();
-            if constexpr (mc.active) {
+            if constexpr (mc.has_receivers) {
                 pipe.send(cb_addr, cb_addr, payload_bytes);
             }
             for (uint32_t i = 0; i < payload_pages; ++i) {
@@ -80,10 +79,11 @@ void kernel_main() {
             noc.async_write_barrier();
         }
     } else {
+        ASSERT(mc.can_receive());
         // RECEIVER — built ONCE above the block loop and reused every block (no per-block reconstruction).
         auto pipe = mc.receiver(noc);
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-            pipe.receive();
+            pipe.receive(blk);
             for (uint32_t i = 0; i < payload_pages; ++i) {
                 noc.async_write(
                     cb_obj,

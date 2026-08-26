@@ -6,7 +6,7 @@
 
 /**
  * @file mcast_pipe.inl
- * @brief Out-of-line definitions for SenderPipe / ReceiverPipe.
+ * @brief Out-of-line definitions for SenderPipe, ReceiverPipe, and McastArgs.
  *
  * NoC-multicast + semaphore-handshake helper. This file should only be included
  * by mcast_pipe.hpp.
@@ -177,6 +177,11 @@ SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA
     const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         data_ready_.inc_multicast(noc_, r.sx, r.sy, r.ex, r.ey, /*value=*/1, mcast_dests);  // monotone +1
+        if constexpr (ROTATING_SENDER) {
+            // The multicast excludes its source. Advance this core too so every rotating participant's
+            // counter equals the absolute multicast round, including after its own sender turn.
+            data_ready_.up(1);
+        }
     } else {
         // set_multicast broadcasts this core's own cell as the source, so write this round's value
         // first. A core that also receives on this cell leaves it INVALID after a receive, and a
@@ -234,6 +239,7 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
     // PRECONDITION: src_l1 != dst_l1 (send() owns that test, so it can pair the copy with its fence).
     // Issued on the write channel so it settles under the caller's / the pipe's own write accounting;
     // the completion wait belongs to send().
+    ASSERT(src_l1 != dst_l1);
     UnicastEndpoint dst_ep;
     const uint32_t mx = my_x[NOC_ID];
     const uint32_t my = my_y[NOC_ID];
@@ -272,19 +278,21 @@ template <
     uint32_t NUM_SENDERS>
 void ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::receive(
     uint32_t round) {
-    ASSERT(round < NUM_SENDERS);  // (--dev only) the round must index a stored sender coord pair
-    const uint32_t sender_x = coords_[2 * round + 0];
-    const uint32_t sender_y = coords_[2 * round + 1];
+    // `round` is the caller's ABSOLUTE work round, not an index into the coord table: sender
+    // selection wraps every NUM_SENDERS rounds, so a rotating receiver just forwards its loop
+    // counter and never has to reduce it at the call site.
+    const uint32_t sender_index = round % NUM_SENDERS;
+    const uint32_t sender_x = coords_[2 * sender_index + 0];
+    const uint32_t sender_y = coords_[2 * sender_index + 1];
     if constexpr (PRE_HANDSHAKE) {
         // tell the sender "my dest is free / I am ready" (remote atomic inc on its counter)
         consumer_ready_.up(noc_, sender_x, sender_y, 1);
     }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
-        data_ready_.wait_min(++signals_seen_);
+        data_ready_.wait_min(round + 1);
     } else {
         data_ready_.wait(VALID);
         data_ready_.set(INVALID);  // clear this round's flag; next receive()'s ack follows
-        ++signals_seen_;           // unused by the Flag wait; kept in step so either path can follow
     }
 }
 
@@ -296,14 +304,14 @@ template <
     uint32_t NUM_SENDERS>
 uint32_t ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::
     receive_signal(uint32_t round) {
-    ASSERT(round < NUM_SENDERS);  // (--dev only) the round must index a stored sender coord pair
     if constexpr (PRE_HANDSHAKE) {
         // tell the round-th sender "I am ready" (remote atomic inc on its counter)
-        consumer_ready_.up(noc_, coords_[2 * round + 0], coords_[2 * round + 1], 1);
+        const uint32_t sender_index = round % NUM_SENDERS;
+        consumer_ready_.up(noc_, coords_[2 * sender_index + 0], coords_[2 * sender_index + 1], 1);
     }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
-        data_ready_.wait_min(++signals_seen_);
-        return signals_seen_;
+        data_ready_.wait_min(round + 1);
+        return round + 1;
     } else {
         // Flag control signals may carry any non-zero value. Capture it before the single clear so
         // the caller can distinguish the ordinary VALID doorbell from a typed control state.
@@ -314,9 +322,45 @@ uint32_t ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, D
 #endif
         const uint32_t value = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_addr);
         data_ready_.set(INVALID);
-        ++signals_seen_;
         return value;
     }
 }
+
+// =============================================================================
+// McastArgs
+// =============================================================================
+
+namespace detail {
+
+template <uint32_t CT_BASE, uint32_t RT_BASE>
+bool McastArgsImpl<true, CT_BASE, RT_BASE>::should_send(uint32_t round) const {
+    return can_send() && sender_index(round) == get_arg_val<uint32_t>(next_runtime_args_offset() - 1u);
+}
+
+template <uint32_t CT_BASE, uint32_t RT_BASE>
+typename McastArgsImpl<true, CT_BASE, RT_BASE>::SenderPipe McastArgsImpl<true, CT_BASE, RT_BASE>::sender(
+    const Noc& noc) const {
+    ASSERT(can_send());
+    return SenderPipe(noc, rect(), ack_count);
+}
+
+template <uint32_t CT_BASE, uint32_t RT_BASE>
+typename McastArgsImpl<true, CT_BASE, RT_BASE>::ReceiverPipe McastArgsImpl<true, CT_BASE, RT_BASE>::receiver(
+    const Noc& noc) const {
+    ASSERT(can_receive());
+    const uint32_t* coords = reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + (rotating ? 4 : 0)));
+    return ReceiverPipe(noc, coords);
+}
+
+template <uint32_t CT_BASE, uint32_t RT_BASE>
+McastRect<> McastArgsImpl<true, CT_BASE, RT_BASE>::rect() const {
+    return McastRect(
+        get_arg_val<uint32_t>(RT_BASE + 0),
+        get_arg_val<uint32_t>(RT_BASE + 1),
+        get_arg_val<uint32_t>(RT_BASE + 2),
+        get_arg_val<uint32_t>(RT_BASE + 3));
+}
+
+}  // namespace detail
 
 }  // namespace dataflow_kernel_lib

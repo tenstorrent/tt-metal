@@ -49,6 +49,10 @@ struct McastConfig {
     std::optional<std::vector<uint32_t>> sem_ids = std::nullopt;
 };
 
+// Needed for kernels that have the option to skip multicast altogether.
+// TODO: Find a better name and provide a fuller explanation of the optional multicast compile-time encoding.
+std::vector<uint32_t> skip_mcast_compile_time_args();
+
 // Configures independent row or column multicasts over a rectangular receiver grid.
 // Fixed mode selects one sender per line. Rotating mode uses every core in sender_grid, or
 // receiver_grid when sender_grid is omitted.
@@ -106,6 +110,8 @@ private:
     std::vector<uint32_t> noc_ordered_bbox_(const std::vector<std::pair<uint32_t, uint32_t>>& vs) const;
     std::vector<uint32_t> line_rect_(const tt::tt_metal::CoreCoord& core) const;
     std::vector<uint32_t> rotating_rt_(const tt::tt_metal::CoreCoord& core) const;
+    bool is_receiver_(const tt::tt_metal::CoreCoord& core) const;
+    uint32_t sender_round_(const tt::tt_metal::CoreCoord& core) const;
 
     tt::tt_metal::IDevice* device_;
     tt::tt_metal::CoreRangeSet grid_;
@@ -177,6 +183,8 @@ private:
     static std::vector<tt::tt_metal::CoreCoord> senders_from_grid_(const tt::tt_metal::CoreRangeSet& sender_grid);
 
     bool in_rect_(const tt::tt_metal::CoreCoord& core) const;
+    bool is_receiver_(const tt::tt_metal::CoreCoord& core) const;
+    uint32_t sender_round_(const tt::tt_metal::CoreCoord& core) const;
     std::vector<std::pair<uint32_t, uint32_t>> rect_virt_coords_() const;
     std::vector<uint32_t> rect_corners_() const;
     std::vector<uint32_t> rotating_rt_() const;

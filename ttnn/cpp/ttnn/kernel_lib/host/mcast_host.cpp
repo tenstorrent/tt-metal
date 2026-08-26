@@ -12,6 +12,10 @@
 namespace ttnn::kernel_lib::host {
 namespace detail {
 
+constexpr uint32_t CAN_SEND = 1u << 0;
+constexpr uint32_t CAN_RECEIVE = 1u << 1;
+constexpr uint32_t NO_SENDER_ROUND = 0xFFFFFFFFu;
+
 std::pair<uint32_t, uint32_t> virt_coord(tt::tt_metal::IDevice* device, const tt::tt_metal::CoreCoord& logical) {
     const auto worker = device->worker_core_from_logical_core(logical);
     return {static_cast<uint32_t>(worker.x), static_cast<uint32_t>(worker.y)};
@@ -26,6 +30,11 @@ uint32_t mcast_flags(const McastConfig& cfg, std::optional<bool> pre_handshake_o
         flags |= 0x2u;
     }
     return flags;
+}
+
+void append_role_args(std::vector<uint32_t>& args, bool can_send, bool can_receive, uint32_t sender_round) {
+    args.push_back((can_send ? CAN_SEND : 0u) | (can_receive ? CAN_RECEIVE : 0u));
+    args.push_back(sender_round);
 }
 
 std::vector<uint32_t> noc_ordered_bbox(
@@ -47,6 +56,8 @@ std::vector<uint32_t> noc_ordered_bbox(
 }
 
 }  // namespace detail
+
+std::vector<uint32_t> skip_mcast_compile_time_args() { return {0u}; }
 
 Mcast1D::Mcast1D(
     tt::tt_metal::IDevice* device,
@@ -161,6 +172,7 @@ std::vector<tt::tt_metal::SemaphoreDescriptor> Mcast1D::owned_semaphores() const
 std::vector<uint32_t> Mcast1D::compile_time_args(std::optional<bool> pre_handshake) const {
     // TODO: Share this CT argument layout and count with kernel McastArgs.
     return {
+        1u,
         active_ ? 1u : 0u,
         data_ready_id_,
         consumer_ready_id_,
@@ -173,15 +185,18 @@ uint32_t Mcast1D::num_active() const { return ack_count_; }
 
 std::vector<uint32_t> Mcast1D::runtime_args(const tt::tt_metal::CoreCoord& core) const {
     // TODO: Share this RT argument layout and count with McastArgs.
+    std::vector<uint32_t> args;
     if (cfg_.rotating_sender) {
-        return rotating_rt_(core);
+        args = rotating_rt_(core);
+    } else if (is_sender(core)) {
+        args = line_rect_(core);
+    } else {
+        const auto sender = sender_of_(core);
+        const auto virtual_sender = virt_(sender);
+        args = {virtual_sender.first, virtual_sender.second, 0, 0};
     }
-    if (is_sender(core)) {
-        return line_rect_(core);
-    }
-    const auto sender = sender_of_(core);
-    const auto virtual_sender = virt_(sender);
-    return {virtual_sender.first, virtual_sender.second, 0, 0};
+    detail::append_role_args(args, is_sender(core), is_receiver_(core), sender_round_(core));
+    return args;
 }
 
 bool Mcast1D::is_sender(const tt::tt_metal::CoreCoord& core) const {
@@ -321,6 +336,22 @@ std::vector<uint32_t> Mcast1D::rotating_rt_(const tt::tt_metal::CoreCoord& core)
     return runtime_args;
 }
 
+bool Mcast1D::is_receiver_(const tt::tt_metal::CoreCoord& core) const {
+    if (!receiver_grid_.bounding_box().contains(core)) {
+        return false;
+    }
+    return !is_sender(core) || (cfg_.rotating_sender && span_ > 1u);
+}
+
+uint32_t Mcast1D::sender_round_(const tt::tt_metal::CoreCoord& core) const {
+    if (!cfg_.rotating_sender) {
+        return is_sender(core) ? 0u : detail::NO_SENDER_ROUND;
+    }
+    const auto& senders = sender_lines_[line_index_(core)];
+    const auto it = std::find(senders.begin(), senders.end(), core);
+    return it == senders.end() ? detail::NO_SENDER_ROUND : static_cast<uint32_t>(std::distance(senders.begin(), it));
+}
+
 Mcast2D::Mcast2D(
     tt::tt_metal::IDevice* device,
     const tt::tt_metal::CoreRangeSet& mcast_rect,
@@ -426,6 +457,7 @@ std::vector<tt::tt_metal::SemaphoreDescriptor> Mcast2D::owned_semaphores() const
 std::vector<uint32_t> Mcast2D::compile_time_args(std::optional<bool> pre_handshake) const {
     // TODO: Share this CT argument layout and count with McastArgs.
     return {
+        1u,
         active_ ? 1u : 0u,
         data_ready_id_,
         consumer_ready_id_,
@@ -436,14 +468,17 @@ std::vector<uint32_t> Mcast2D::compile_time_args(std::optional<bool> pre_handsha
 
 std::vector<uint32_t> Mcast2D::runtime_args(const tt::tt_metal::CoreCoord& core) const {
     // TODO: Share this RT argument layout and count with McastArgs.
+    std::vector<uint32_t> args;
     if (cfg_.rotating_sender) {
-        return rotating_rt_();
+        args = rotating_rt_();
+    } else if (is_sender(core)) {
+        args = rect_corners_();
+    } else {
+        const auto virtual_sender = detail::virt_coord(device_, sender_);
+        args = {virtual_sender.first, virtual_sender.second, 0, 0};
     }
-    if (is_sender(core)) {
-        return rect_corners_();
-    }
-    const auto virtual_sender = detail::virt_coord(device_, sender_);
-    return {virtual_sender.first, virtual_sender.second, 0, 0};
+    detail::append_role_args(args, is_sender(core), is_receiver_(core), sender_round_(core));
+    return args;
 }
 
 bool Mcast2D::is_sender(const tt::tt_metal::CoreCoord& core) const {
@@ -505,6 +540,21 @@ bool Mcast2D::in_rect_(const tt::tt_metal::CoreCoord& core) const {
     const auto x = static_cast<uint32_t>(core.x);
     const auto y = static_cast<uint32_t>(core.y);
     return x >= rx0_ && x <= rx1_ && y >= ry0_ && y <= ry1_;
+}
+
+bool Mcast2D::is_receiver_(const tt::tt_metal::CoreCoord& core) const {
+    if (!in_rect_(core)) {
+        return false;
+    }
+    return !is_sender(core) || (cfg_.rotating_sender && senders_.size() > 1u);
+}
+
+uint32_t Mcast2D::sender_round_(const tt::tt_metal::CoreCoord& core) const {
+    if (!cfg_.rotating_sender) {
+        return is_sender(core) ? 0u : detail::NO_SENDER_ROUND;
+    }
+    const auto it = std::find(senders_.begin(), senders_.end(), core);
+    return it == senders_.end() ? detail::NO_SENDER_ROUND : static_cast<uint32_t>(std::distance(senders_.begin(), it));
 }
 
 std::vector<std::pair<uint32_t, uint32_t>> Mcast2D::rect_virt_coords_() const {

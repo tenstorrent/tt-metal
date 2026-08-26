@@ -30,7 +30,7 @@ void kernel_main() {
     auto pipe = mc.receiver(noc);
     uint32_t final_round = 0;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
-        final_round = pipe.receive_signal();
+        final_round = pipe.receive_signal(iter);
         if constexpr (control_value == INVALID) {
             ASSERT(final_round == iter + 1);
         } else {
