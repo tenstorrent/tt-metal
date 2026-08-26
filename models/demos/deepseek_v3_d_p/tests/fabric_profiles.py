@@ -26,6 +26,19 @@ def fabric2d_device_params(*, fabric_payload_size=None, **overrides) -> dict:
     return params
 
 
+def fabric_1d_device_params(*, fabric_payload_size=None, **overrides) -> dict:
+    """Unwrapped 1D fabric profile."""
+    params = {
+        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        "fabric_router_config": create_fabric_router_config(
+            max_payload_size=get_max_payload_size() if fabric_payload_size is None else fabric_payload_size
+        ),
+        "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+    }
+    params.update(overrides)
+    return params
+
+
 def torus_y_device_params(*, fabric_payload_size=None, **overrides) -> dict:
     """Fabric2D Ring/Linear profile for an Nx1 mesh."""
     params = {
