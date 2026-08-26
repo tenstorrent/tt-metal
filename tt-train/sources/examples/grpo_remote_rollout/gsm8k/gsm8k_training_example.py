@@ -144,6 +144,22 @@ def extract_tag_answer(text: str) -> Optional[str]:
     return normalize_number(nums[-1]) if nums else None
 
 
+# Snapshot of the per-signal breakdown from the most recent ``gsm8k_reward``
+# call. Read by ``GRPOMonitor.on_step_end`` (fired later in the same step) so
+# every CSV row carries the reward decomposition, not just the summed mean.
+_LAST_REWARD_BREAKDOWN: dict[str, float] = {
+    "xmlcount": float("nan"),
+    "soft_format": float("nan"),
+    "strict_format": float("nan"),
+    "int_reward": float("nan"),
+    "correctness": float("nan"),
+    "frac_correct": float("nan"),
+    "frac_tags_present": float("nan"),
+    "frac_tags_exactly_once": float("nan"),
+    "frac_format_regex": float("nan"),
+}
+
+
 # ---------------------------------------------------------------------------
 # Reward shaping (mirrors data/folder-upload/train_grpo_qwen3_base.py)
 # ---------------------------------------------------------------------------
@@ -200,6 +216,7 @@ def gsm8k_reward(completions: List[str], answer: List[str], **kwargs) -> List[fl
     plus the mean reward so training-side diagnostics stay comparable to the
     ``eval_gsm8k.py`` table."""
     rewards: list[float] = []
+    xmlc_sum = soft_sum = strict_sum = int_sum = corr_sum = 0.0
     n_correct = 0
     n_tags_present = 0
     n_tags_exactly_once = 0
@@ -214,6 +231,12 @@ def gsm8k_reward(completions: List[str], answer: List[str], **kwargs) -> List[fl
         corr = _correctness(pred, gold)
         rewards.append(xmlc + soft + strict + intr + corr)
 
+        xmlc_sum += xmlc
+        soft_sum += soft
+        strict_sum += strict
+        int_sum += intr
+        corr_sum += corr
+
         if corr > 0.0:
             n_correct += 1
         if all(t in text for t in TAG_STRINGS):
@@ -224,6 +247,19 @@ def gsm8k_reward(completions: List[str], answer: List[str], **kwargs) -> List[fl
             n_format_regex += 1
 
     n = max(len(rewards), 1)
+    _LAST_REWARD_BREAKDOWN.update(
+        {
+            "xmlcount": xmlc_sum / n,
+            "soft_format": soft_sum / n,
+            "strict_format": strict_sum / n,
+            "int_reward": int_sum / n,
+            "correctness": corr_sum / n,
+            "frac_correct": n_correct / n,
+            "frac_tags_present": n_tags_present / n,
+            "frac_tags_exactly_once": n_tags_exactly_once / n,
+            "frac_format_regex": n_format_regex / n,
+        }
+    )
     logging.info(
         "[reward] frac_correct=%.3f frac_tags_present=%.3f frac_tags_exactly_once=%.3f "
         "frac_format_regex=%.3f mean_reward=%.3f",
@@ -310,10 +346,22 @@ class WeightSyncCallback:
 class GRPOMonitor:
     """on_step_end CSV/stdout monitor.
 
-    Same schema as ``reverse_text_training_example.GRPOMonitor``; the per-signal
-    reward decomposition is logged inside ``gsm8k_reward`` and does not appear
-    in this CSV to keep the format stable across examples.
+    Extends the standard schema with the per-signal reward decomposition read
+    from ``_LAST_REWARD_BREAKDOWN`` (populated by ``gsm8k_reward`` earlier in
+    the same step).
     """
+
+    _EXTRA_COLS = [
+        "correctness",
+        "xmlcount",
+        "soft_format",
+        "strict_format",
+        "int_reward",
+        "frac_correct",
+        "frac_tags_present",
+        "frac_tags_exactly_once",
+        "frac_format_regex",
+    ]
 
     def __init__(self, output_dir: str) -> None:
         self.file_path = os.path.join(output_dir, "grpo_metrics.csv")
@@ -321,7 +369,9 @@ class GRPOMonitor:
         with open(self.file_path, mode="w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(
-                ["step", "reward", "avg_length", "step_time_s", "step_time_with_weight_updates_s", "generation_time_s"]
+                ["step", "reward", "avg_length"]
+                + self._EXTRA_COLS
+                + ["step_time_s", "step_time_with_weight_updates_s", "generation_time_s"]
             )
 
     def on_train_begin(self, trainer: Any) -> None:
@@ -335,16 +385,23 @@ class GRPOMonitor:
         step_time_s = kwargs.get("step_time_s", float("nan"))
         step_time_and_previous_callbacks_s = kwargs.get("step_time_and_previous_callbacks_s", float("nan"))
         generation_time_s = kwargs.get("generation_time_s", float("nan"))
+        b = _LAST_REWARD_BREAKDOWN
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         print(
             f"[{timestamp}] Step {step} | Reward: {reward:.4f} "
+            f"(corr={b['correctness']:.3f} xml={b['xmlcount']:.3f} soft={b['soft_format']:.3f} "
+            f"strict={b['strict_format']:.3f} int={b['int_reward']:.3f}) "
             f"| Len: {length:.2f} (min {min_length}, max {max_length}) tokens "
             f"| Step: {step_time_s:.2f}s (with updates: {step_time_and_previous_callbacks_s:.2f}s) "
             f"| Gen: {generation_time_s:.2f}s"
         )
         with open(self.file_path, mode="a", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow([step, reward, length, step_time_s, step_time_and_previous_callbacks_s, generation_time_s])
+            writer.writerow(
+                [step, reward, length]
+                + [b[c] for c in self._EXTRA_COLS]
+                + [step_time_s, step_time_and_previous_callbacks_s, generation_time_s]
+            )
 
     def on_before_optimizer_step(self, trainer: Any) -> None:
         pass
