@@ -582,10 +582,9 @@ FORCE_INLINE constexpr size_t get_downstream_edm_interface_index(eth_chan_direct
 // is fixed by the direction pair alone, so a narrow router simply leaves the higher slots absent --
 // X_RING_ONLY gives an E/W-facing router only its opposite, so slots 1 and 2 do not exist there.
 // NOTE (Z-arm invariant): a router with no Z downstream must never index past its downstream array.
-// fwd_dirs<MY_DIR>() always lists Z, so pack_fwd_key() can set the Z bit, but the linear LIVE scan
-// only emits a runtime test for slots with compact index < DOWNSTREAM_EDM_SIZE. Wormhole, which has
-// no Z sender at all, therefore compiles the Z test away entirely. num_z_ports is not visible to
-// the kernel to cross-check against.
+// fwd_dirs<MY_DIR>() always lists Z, but the linear LIVE scan only emits a runtime ACTION_Z test when
+// that slot's compact index is < DOWNSTREAM_EDM_SIZE. Wormhole has no Z sender, so the test is
+// if-constexpr gone. num_z_ports is not visible to the kernel to cross-check against.
 template <size_t DOWNSTREAM_EDM_SIZE, eth_chan_directions DIRECTION>
 constexpr bool dispatch_arm_is_realizable() {
     return get_downstream_edm_interface_index<DIRECTION>() < DOWNSTREAM_EDM_SIZE;
@@ -748,16 +747,17 @@ FORCE_INLINE void forward_to_local_destination(
 // ============================================================================
 // Indexed 2D routing — admit/forward dispatch
 // ============================================================================
-// pack_fwd_key compresses the four non-self eth outputs (fwd_dirs<MY_DIR>) into 4 bits.
-// LOCAL_DELIVER stays outside that key. Admission must succeed for every selected LIVE output
-// before any copy is committed; each selected output then receives an identical packet image,
-// local delivery last.
+// Each LIVE slot tests the action bit for fwd_dirs<MY_DIR>()[slot] directly. pack_fwd_key was
+// the dense 4-bit key for the old 32-arm switch; the linear scan does not need it, and packing
+// on N/S was four ALU ops that then retested ACTION_EAST/WEST. LOCAL_DELIVER stays outside the
+// scan. Admission must succeed for every selected LIVE output before any copy is committed;
+// each selected output then receives an identical packet image, local delivery last.
 //
 // Dispatch is a linear scan over compile-time LIVE slots rather than a 32-arm switch: GCC jump
 // tables for this ELF land in ERISC_APP_KERNEL_DATA at 0xEBE0 (ETH L1, ~8-cycle lw then jr).
 // Slots this router cannot realize (Z on Wormhole, DOR-cleared N/S on intramesh E/W, missing
-// opposite-Y) are if-constexpr gone. Extra packed bits are ignored; there is no refuse path
-// for a mispacked action (that would hang the slot with no SW retry).
+// opposite-Y) are if-constexpr gone. Extra action bits outside LIVE are ignored; there is no
+// refuse path for them (that would hang the slot with no SW retry).
 //
 // Indexed transit consumes no hop program, so no header update runs here.
 
@@ -789,11 +789,11 @@ constexpr uint8_t indexed_live_eth_mask() {
     return live;
 }
 
-// Checks local relay capacity when ld, plus the downstream queue for every LIVE eth bit packed
-// selects. Only UDM mode queues local delivery through a relay interface.
+// Checks local relay capacity when ld, plus the downstream queue for every LIVE direction whose
+// action bit is set. Only UDM mode queues local delivery through a relay interface.
 template <typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE __attribute__((optimize("no-jump-tables"))) bool admit_indexed_dispatch(
-    uint8_t packed,
+    uint8_t action,
     bool ld,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
@@ -804,25 +804,25 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) bool admit_indexed_disp
         ok = !ld || local_relay_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
     }
     if constexpr ((LIVE >> 0) & 1) {
-        if (packed & (1u << 0)) {
+        if (action & IndexedMeshRoutingFields::action_bit(dirs[0])) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[0]>(
                            downstream_edm_interfaces, local_relay_interface);
         }
     }
     if constexpr ((LIVE >> 1) & 1) {
-        if (packed & (1u << 1)) {
+        if (action & IndexedMeshRoutingFields::action_bit(dirs[1])) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[1]>(
                            downstream_edm_interfaces, local_relay_interface);
         }
     }
     if constexpr ((LIVE >> 2) & 1) {
-        if (packed & (1u << 2)) {
+        if (action & IndexedMeshRoutingFields::action_bit(dirs[2])) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[2]>(
                            downstream_edm_interfaces, local_relay_interface);
         }
     }
     if constexpr ((LIVE >> 3) & 1) {
-        if (packed & (1u << 3)) {
+        if (action & IndexedMeshRoutingFields::action_bit(dirs[3])) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[3]>(
                            downstream_edm_interfaces, local_relay_interface);
         }
@@ -830,11 +830,11 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) bool admit_indexed_disp
     return ok;
 }
 
-// One unmodified full-packet copy per LIVE eth bit packed selects. Remote receiver credit is left
-// to the sender step's bubble flow control, and local delivery to the caller.
+// One unmodified full-packet copy per LIVE direction whose action bit is set. Remote receiver
+// credit is left to the sender step's bubble flow control, and local delivery to the caller.
 template <typename DownstreamSenderT, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_dispatch(
-    uint8_t packed,
+    uint8_t action,
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
@@ -843,7 +843,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_di
     constexpr auto dirs = IndexedMeshRoutingFields::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
     const uint16_t payload_size_bytes = packet_start->payload_size_bytes;
     if constexpr ((LIVE >> 0) & 1) {
-        if (packed & (1u << 0)) {
+        if (action & IndexedMeshRoutingFields::action_bit(dirs[0])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[0]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                 packet_start,
@@ -854,7 +854,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_di
         }
     }
     if constexpr ((LIVE >> 1) & 1) {
-        if (packed & (1u << 1)) {
+        if (action & IndexedMeshRoutingFields::action_bit(dirs[1])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[1]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                 packet_start,
@@ -865,7 +865,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_di
         }
     }
     if constexpr ((LIVE >> 2) & 1) {
-        if (packed & (1u << 2)) {
+        if (action & IndexedMeshRoutingFields::action_bit(dirs[2])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[2]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                 packet_start,
@@ -876,7 +876,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_di
         }
     }
     if constexpr ((LIVE >> 3) & 1) {
-        if (packed & (1u << 3)) {
+        if (action & IndexedMeshRoutingFields::action_bit(dirs[3])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[3]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                 packet_start,
@@ -1365,8 +1365,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }
-        // Packed 4-bit eth key (self already dropped). Local delivery stays a separate flag.
-        uint8_t packed = 0;
+        // Decode action is the dispatch word: LIVE slots test action_bit(dirs[slot]). Local
+        // delivery stays a separate flag (bit 5).
+        uint8_t action = 0;
         bool local_deliver = false;
         // Set only when this chip is the mesh's exit for the packet; carries the resolved INTERMESH
         // downstream slot from admission to the forward phase.
@@ -1378,18 +1379,17 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             // need the FABRIC_2D ifdef since the packet header for 1D does not have route_buffer field in it.
             {
                 // Indexed RX path: landing intercept (boundary receivers only) -> decode ->
-                // intermesh-exit intercept -> pack -> linear LIVE admit. No hop program and no
-                // header mutation. pack_fwd_key drops the self bit; extra bits outside LIVE are
-                // ignored. boundary_dir_is_addressable is the only remaining bounds check, because
-                // a bad intermesh exit index walks off the compact array.
+                // intermesh-exit intercept -> linear LIVE admit on action bits. No hop program
+                // and no header mutation. Self is not in fwd_dirs so no arm tests it; extra bits
+                // outside LIVE are ignored. boundary_dir_is_addressable is the only remaining
+                // bounds check, because a bad intermesh exit index walks off the compact array.
                 if constexpr (receiver_channel_is_intermesh_ingress[receiver_channel]) {
                     // Runs before decode, which would otherwise consume stale source-mesh maps. The
                     // landing encode replaces them from this mesh's own vector table.
                     fabric_set_indexed_intermesh_landing_route(packet_header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
                 }
-                const std::uint8_t action =
-                    IndexedMeshRoutingFields::decode_action<static_cast<eth_chan_directions>(my_direction)>(
-                        packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
+                action = IndexedMeshRoutingFields::decode_action<static_cast<eth_chan_directions>(my_direction)>(
+                    packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 // This chip is the exit when the maps say deliver here but the final mesh is
                 // elsewhere. CT-gated so interior routers skip the mesh-id compare.
                 bool intermesh_exit = false;
@@ -1422,10 +1422,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     }
                 } else {
                     local_deliver = (action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) != 0;
-                    packed = IndexedMeshRoutingFields::pack_fwd_key<static_cast<eth_chan_directions>(my_direction)>(
-                        action & IndexedMeshRoutingFields::ACTION_ETH_MASK);
                     can_send_to_all_local_chip_receivers =
-                        admit_indexed_dispatch(packed, local_deliver, downstream_edm_interfaces, local_relay_interface);
+                        admit_indexed_dispatch(action, local_deliver, downstream_edm_interfaces, local_relay_interface);
                 }
             }
 #endif
@@ -1462,9 +1460,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                                 downstream_edm_interfaces[intermesh_egress_index],
                                 trid);
                         } else {
-                            // Same packed key as admission. Local delivery stays outside the scan.
+                            // Same action byte as admission. Local delivery stays outside the scan.
                             forward_indexed_dispatch(
-                                packed, packet_header, cached_routing_fields, downstream_edm_interfaces, trid);
+                                action, packet_header, cached_routing_fields, downstream_edm_interfaces, trid);
                             if (local_deliver) {
                                 forward_to_local_destination<receiver_channel>(
                                     local_relay_interface, packet_header, packet_header->payload_size_bytes, trid);
