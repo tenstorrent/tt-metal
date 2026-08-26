@@ -36,7 +36,7 @@ training_config:
 
   optimizer:
     type: MorehAdamW
-    lr: 2.0e-5
+    lr: 1.0e-5
     beta1: 0.9
     beta2: 0.99
     epsilon: 1.0e-8
@@ -51,12 +51,12 @@ training_config:
     gradient_accumulation_steps: 2    # 2 prompts x 16 completions = 32 per generate call
     logging_steps: 1
     checkpointing: true
-    checkpoint_interval: 100          # produces checkpoint-100 / -200 / -300
-    prompts_to_train: 600             # 300 optimizer steps x 2 prompts per batch
+    checkpoint_interval: 20
+    prompts_to_train: 200             # 100 optimizer steps x 2 prompts per batch
     temperature: 1.0
     max_completion_length: 512
     num_generations: 16
-    warmup_steps: 2
+    warmup_steps: 20
 
 device_config:
   enable_ddp: false
