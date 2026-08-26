@@ -561,7 +561,7 @@ TEST_F(QueryOpConstraintsMockDevice, PublicMatmulWrappersForwardOneDisjointDomai
 // Capture the ttnn-auto-selected program config through the uniform query API
 // ============================================================================
 
-TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
+TEST_F(QueryOpConstraintsMockDevice, MatmulExecutionRecipeCaptured) {
     [[maybe_unused]] ScopedMatmulRegistryMode registry_mode(ttnn::MatmulRegistryMode::Off);
     const auto spec_a = tt::tt_metal::TensorSpec(
         ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
@@ -597,12 +597,15 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
     EXPECT_EQ(out.response.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << out.response.error_message.value_or("none");
 
-    // Captured, and unpacks (above the API) to the concrete matmul config type.
+    // Captured, and unpacks to the complete finalized matmul recipe. A program
+    // config alone is insufficient because registry selection can also change
+    // CKC and duplicated untilize_out state.
     ASSERT_TRUE(out.captured_config.has_value());
-    const auto& captured = std::any_cast<const ttnn::operations::matmul::MatmulProgramConfig&>(*out.captured_config);
+    const auto& captured = std::any_cast<const ttnn::prim::MatmulCapturedRecipe&>(*out.captured_config);
+    EXPECT_FALSE(captured.untilize_out);
 
-    // Cross-check: feeding the captured config back in as an explicit program config reproduces the
-    // op's own kernel footprint — i.e. we captured the config the op actually ran, not an
+    // Cross-check: feeding the captured program and compute-kernel configs back in reproduces the
+    // op's own kernel footprint — i.e. we captured the recipe the op actually ran, not an
     // approximation. This round-trip is the contract every op extractor must satisfy.
     auto verify = ttnn::graph::query_op_constraints_with_initial_state(
         ttnn::matmul,
@@ -614,9 +617,9 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
         false,
         ttnn::L1_MEMORY_CONFIG,
         DataType::BFLOAT16,
-        std::make_optional(captured),  // explicit config = the captured one
+        std::make_optional(captured.program_config),  // explicit program config = the captured one
         std::nullopt,
-        std::nullopt,
+        std::make_optional(captured.compute_kernel_config),
         std::nullopt,
         std::nullopt,
         std::nullopt,
@@ -633,7 +636,7 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
 // Requesting a width-sharded output drives ttnn to auto-select a 1D (multi-cast) matmul program
 // config — a different variant than the interleaved case — and the query still captures it and
 // round-trips it to the same footprint.
-TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
+TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedExecutionRecipeCaptured) {
     // M=512 (16 tiles), K=256 (8 tiles), N=1024 (32 tiles).
     const auto spec_a = tt::tt_metal::TensorSpec(
         ttnn::Shape(ttnn::Array4D{1, 1, 512, 256}),
@@ -678,10 +681,15 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
         << "Error: " << out.response.error_message.value_or("none");
 
     ASSERT_TRUE(out.captured_config.has_value());
-    const auto& captured = std::any_cast<const ttnn::operations::matmul::MatmulProgramConfig&>(*out.captured_config);
+    const auto& captured = std::any_cast<const ttnn::prim::MatmulCapturedRecipe&>(*out.captured_config);
     // A width-sharded output yields the 1D multi-cast config, not the interleaved 2D one.
     EXPECT_TRUE(
-        std::holds_alternative<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(captured));
+        std::holds_alternative<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+            captured.program_config));
+    EXPECT_EQ(
+        captured.untilize_out,
+        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(captured.program_config)
+            .untilize_out);
 
     auto verify = ttnn::graph::query_op_constraints_with_initial_state(
         ttnn::matmul,
@@ -693,9 +701,9 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
         false,
         width_sharded,
         DataType::BFLOAT16,
-        std::make_optional(captured),  // explicit config = the captured one
+        std::make_optional(captured.program_config),  // explicit program config = the captured one
         std::nullopt,
-        std::nullopt,
+        std::make_optional(captured.compute_kernel_config),
         std::nullopt,
         std::nullopt,
         std::nullopt,
