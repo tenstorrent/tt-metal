@@ -446,11 +446,11 @@ def test_warmup_replicates_lane_local_case_and_cache_to_every_lane():
     group.warmup_model_prefill(
         kv_cache=["kv-0", "kv-1"],
         can_sample_on_device=True,
-        enable_trace=True,
+        enable_trace=False,
     )
     group.warmup_model_decode(
         kv_cache=["kv-0", "kv-1"],
-        enable_trace=True,
+        enable_trace=False,
         max_batch_size=4,
         num_blocks=8,
         can_sample_on_device=True,
@@ -463,6 +463,22 @@ def test_warmup_replicates_lane_local_case_and_cache_to_every_lane():
         assert decode["kv_cache"] == f"kv-{lane_idx}"
         assert decode["max_batch_size"] == 2
     assert group.already_warmed_up_prefill
+
+
+def test_traced_warmup_without_coordinators_fails_before_invoking_a_lane(expect_error):
+    lanes = [_Lane(0), _Lane(1)]
+    group = LaneGroupExecutor(lanes)
+
+    with expect_error(RuntimeError, "Every DP lane must expose the trace activation barrier"):
+        group.warmup_model_decode(
+            kv_cache=["kv-0", "kv-1"],
+            enable_trace=True,
+            max_batch_size=4,
+            num_blocks=8,
+            can_sample_on_device=False,
+        )
+
+    assert [lane.calls for lane in lanes] == [[], []]
 
 
 class _DeferredCapture:

@@ -406,10 +406,6 @@ class LaneGroupExecutor:
             operation()
             return
         coordinators = tuple(getattr(lane, "warmup", None) for lane in self.lanes)
-        if all(coordinator is None for coordinator in coordinators):
-            # Lightweight eager/dispatch contract doubles have no coordinator.
-            operation()
-            return
         required = ("defer_capture", "activate_pending_capture", "capture_pending", "trace_activated")
         if any(
             coordinator is None or any(not hasattr(coordinator, name) for name in required)
