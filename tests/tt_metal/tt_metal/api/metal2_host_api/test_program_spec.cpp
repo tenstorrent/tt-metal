@@ -3824,7 +3824,7 @@ TEST_F(ProgramSpecTestGen1, UnresolvedTensorBindingIsNull) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    static_assert(tensor::input_ta.is_null);
+    static_assert(is_null_binding(tensor::input_ta));
 }
 )"};
     BindTensorParameterToKernel(dm_kernel, "nonexistent_tensor", "input_ta");
@@ -3847,7 +3847,7 @@ TEST_F(ProgramSpecTestGen1, UnresolvedDfbBindingIsNull) {
     auto kernel = MakeMinimalGen1DMKernel("kernel");
     kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    static_assert(dfb::accessor.is_null);
+    static_assert(is_null_binding(dfb::accessor));
 }
 )"};
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"nonexistent_dfb"}, "accessor"));
@@ -3870,7 +3870,7 @@ TEST_F(ProgramSpecTestGen1, UnresolvedScratchpadBindingIsNull) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    static_assert(scratch::s.is_null);
+    static_assert(is_null_binding(scratch::s));
 }
 )"};
     dm_kernel.scratchpad_bindings = {KernelSpec::ScratchpadBinding{
@@ -3993,14 +3993,11 @@ TEST_F(ProgramSpecTestGen1, OptionalBindingProbeBuildsWithNullAndReal) {
     // Host-side: both ProgramSpecs validate and lower (null vs real optional DFB/scratchpad).
     // Binding lists are the kernel's arity in both programs; presence is decided only by whether
     // the spec names appear in dataflow_buffers / scratchpads.
-    // Per-resource null token is_null JIT coverage:
+    // Per-resource null token is_null_binding JIT coverage:
     // UnresolvedTensor/Dfb/ScratchpadBindingIsNull.
     //
-    // Construction from a possibly-null name must go through an overload or a function template
-    // so the DataflowBuffer / Scratchpad ctor call is on a parameter. A direct
-    //   if constexpr (!dfb::optional_dfb.is_null) { DataflowBuffer(dfb::optional_dfb); }
-    // is still ill-formed when the symbol is a null type: the discarded branch is non-dependent,
-    // and the deleted null ctor is diagnosed anyway.
+    // Construction from a possibly-null name must go through an overload, a function template,
+    // or with_nullable_token so the DataflowBuffer / Scratchpad ctor call is on a parameter.
     const auto kernel_src = KernelSpec::SourceCode{R"(
 void maybe_use_dfb(DFBBindingToken tok) {
     DataflowBuffer opt(tok);
@@ -4008,13 +4005,11 @@ void maybe_use_dfb(DFBBindingToken tok) {
 }
 void maybe_use_dfb(NullDFBBindingToken) {}
 
-template <typename Tok>
-void maybe_use_scratch(Tok tok) {
-    if constexpr (!tok.is_null) {
-        Scratchpad<uint32_t> pad(tok);
-        (void)pad;
-    }
+void maybe_use_scratch(ScratchpadBindingToken tok) {
+    Scratchpad<uint32_t> pad(tok);
+    (void)pad;
 }
+void maybe_use_scratch(NullScratchpadBindingToken) {}
 
 void kernel_main() {
     DataflowBuffer always(dfb::always);
@@ -4022,11 +4017,14 @@ void kernel_main() {
     maybe_use_dfb(dfb::optional_dfb);
     maybe_use_scratch(scratch::optional_pad);
 
-    auto tok = dfb::optional_dfb;
-    (void)tok;
-    if constexpr (tok.is_null) {
-        // this KernelSpec did not attach dfb::optional_dfb
-    }
+    with_nullable_token(dfb::optional_dfb, [](DFBBindingToken const& token) {
+        DataflowBuffer opt(token);
+        (void)opt;
+    });
+    with_nullable_token(scratch::optional_pad, [](ScratchpadBindingToken const& token) {
+        Scratchpad<uint32_t> pad(token);
+        (void)pad;
+    });
 }
 )"};
 
