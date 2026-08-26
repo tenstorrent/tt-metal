@@ -39,16 +39,16 @@ namespace ckernel {
 // exception on the unpack side because each tile must still be addressed around
 // its exponent section.
 
-template <std::uint32_t full_ct_dim, bool configure_remap>
+template <std::uint32_t full_ct_dim, bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
 #ifdef ARCH_BLACKHOLE
     if constexpr (full_ct_dim == 1) {
         if constexpr (configure_remap) {
-            pack_untilize_init<1, 1>(icb, ocb, call_line);
+            pack_untilize_init<1, 1, is_fp32_dest_acc_en>(icb, ocb, call_line);
         } else {
-            pack_untilize_init_skip_remap<1, 1>(icb, ocb, call_line);
+            pack_untilize_init_skip_remap<1, 1, is_fp32_dest_acc_en>(icb, ocb, call_line);
         }
         return;
     }
@@ -61,46 +61,46 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
     // bias pack_tile into the same CB). Re-enter a known math/pack sync
     // contract so stale dest offset/semaphore state cannot leak into the fast
     // packer.
-    MATH((_llk_math_pack_sync_init_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, DST_ACCUM_MODE>()));
-    PACK((_llk_pack_dest_init_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, DST_ACCUM_MODE>()));
-    UNPACK((llk_unpack_fast_untilize_init(icb, first_unit_dim)));
+    MATH((_llk_math_pack_sync_init_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
+    PACK((_llk_pack_dest_init_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
+    UNPACK((llk_unpack_fast_untilize_init<is_fp32_dest_acc_en>(icb, first_unit_dim)));
     if constexpr (configure_remap) {
         MATH((llk_math_fast_untilize_init()));
     } else {
         MATH((llk_math_fast_untilize_init_skip_remap()));
     }
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_fast_untilize_init<FAST_UNTILIZE_MAX_UNIT_DIM, full_ct_dim>(ocb)));
     PACK((_llk_init_packer_dest_offset_registers_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
 #else
     if constexpr (configure_remap) {
-        pack_untilize_init<full_ct_dim, full_ct_dim>(icb, ocb, call_line);
+        pack_untilize_init<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(icb, ocb, call_line);
     } else {
-        pack_untilize_init_skip_remap<full_ct_dim, full_ct_dim>(icb, ocb, call_line);
+        pack_untilize_init_skip_remap<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(icb, ocb, call_line);
     }
 #endif
 }
 
 // Default fast-untilize init configures BH DEST remap. Use the skip-remap variant
 // only when the caller has already configured remap and no intervening op changes it.
-template <std::uint32_t full_ct_dim>
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_untilize_init_impl<full_ct_dim, true>(icb, ocb, call_line);
+    fast_untilize_init_impl<full_ct_dim, true, is_fp32_dest_acc_en>(icb, ocb, call_line);
 }
 
-template <std::uint32_t full_ct_dim>
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_untilize_init_impl<full_ct_dim, false>(icb, ocb, call_line);
+    fast_untilize_init_impl<full_ct_dim, false, is_fp32_dest_acc_en>(icb, ocb, call_line);
 }
 
-template <std::uint32_t full_ct_dim>
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_untilize_block(
     uint32_t icb, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
 #ifdef ARCH_BLACKHOLE
     if constexpr (full_ct_dim == 1) {
-        pack_untilize_block<1, 1>(icb, 1, ocb, 0);
+        pack_untilize_block<1, 1, is_fp32_dest_acc_en>(icb, 1, ocb, 0);
         return;
     }
 
@@ -112,12 +112,12 @@ ALWI void fast_untilize_block(
 
         MATH((_llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
         UNPACK((llk_unpack_fast_untilize_block(icb, input_tile_index, unit_dim)));
-        MATH((llk_math_fast_untilize_block(0, unit_dim)));
-        MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, DST_ACCUM_MODE>()));
+        MATH((llk_math_fast_untilize_block<is_fp32_dest_acc_en>(0, unit_dim)));
+        MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
 
         PACK((llk_packer_wait_for_math_done()));
         PACK((llk_pack_fast_untilize_block<FAST_UNTILIZE_MAX_UNIT_DIM>(ocb, output_tile_index, unit_dim)));
-        PACK((_llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, DST_ACCUM_MODE>()));
+        PACK((_llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
     } else {
         std::uint32_t tiles_done = 0;
         constexpr std::uint32_t first_unpack_unit_dim = fast_untilize_next_unit_dim(full_ct_dim);
@@ -129,34 +129,35 @@ ALWI void fast_untilize_block(
             const std::uint32_t unit_dim = fast_untilize_next_unit_dim(remaining_tiles);
 
             MATH((_llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
-            UNPACK(
-                (llk_unpack_fast_untilize_block(icb, input_tile_index + tiles_done, unit_dim, prev_unpack_unit_dim)));
-            MATH((llk_math_fast_untilize_block(0, unit_dim)));
-            MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, DST_ACCUM_MODE>()));
+            UNPACK((llk_unpack_fast_untilize_block<is_fp32_dest_acc_en>(
+                icb, input_tile_index + tiles_done, unit_dim, prev_unpack_unit_dim)));
+            MATH((llk_math_fast_untilize_block<is_fp32_dest_acc_en>(0, unit_dim)));
+            MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
 
             PACK((llk_packer_wait_for_math_done()));
             PACK((llk_pack_fast_untilize_block_strided<FAST_UNTILIZE_MAX_UNIT_DIM, full_ct_dim>(
                 ocb, output_tile_index, tiles_done, unit_dim, prev_pack_unit_dim)));
-            PACK((_llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, DST_ACCUM_MODE>()));
+            PACK((_llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
 
             tiles_done += unit_dim;
         }
 
         // Preserve the init-time first-unit MOP invariant for the next stateless block call.
-        UNPACK((llk_unpack_fast_untilize_restore_unit_dim(icb, first_unpack_unit_dim, prev_unpack_unit_dim)));
+        UNPACK((llk_unpack_fast_untilize_restore_unit_dim<is_fp32_dest_acc_en>(
+            icb, first_unpack_unit_dim, prev_unpack_unit_dim)));
     }
 #else
-    pack_untilize_block<full_ct_dim, full_ct_dim>(icb, 1, ocb, 0);
+    pack_untilize_block<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(icb, 1, ocb, 0);
 #endif
 }
 
-template <std::uint32_t full_ct_dim>
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_untilize_uninit(uint32_t ocb) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
 #ifdef ARCH_BLACKHOLE
     if constexpr (full_ct_dim == 1) {
-        pack_untilize_uninit(ocb);
+        pack_untilize_uninit<is_fp32_dest_acc_en>(ocb);
         return;
     }
 
@@ -165,14 +166,14 @@ ALWI void fast_untilize_uninit(uint32_t ocb) {
     // Leave the math/pack semaphore in the mode requested by the kernel so
     // a following LLK does not inherit fast-untilize's private half-sync.
     if constexpr (DST_SYNC_MODE != FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE) {
-        MATH((_llk_math_pack_sync_init_<DST_SYNC_MODE, DST_ACCUM_MODE>()));
+        MATH((_llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>()));
     }
     PACK((llk_init_packer_dest_offset_registers<PackMode::Default>(ocb)));
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_fast_untilize_uninit<FAST_UNTILIZE_MAX_UNIT_DIM, full_ct_dim>(ocb)));
 #else
-    pack_untilize_uninit(ocb);
+    pack_untilize_uninit<is_fp32_dest_acc_en>(ocb);
 #endif
 }
 

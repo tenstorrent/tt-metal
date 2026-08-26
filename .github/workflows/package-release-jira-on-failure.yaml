@@ -2,7 +2,7 @@
 #
 # Watches the "Package and release" workflow; on a failed run it collects the
 # failed jobs and opens (or de-duplicates onto) a Jira issue via
-# create_jira_issue.py.
+# jira_client.py.
 #
 # TODO (specifics to be provided):
 #   - JIRA_ISSUE_TYPE        : issue type (default below: Bug)
@@ -39,7 +39,9 @@ env:
 
 jobs:
   file-jira:
-    # Only when the watched run failed (or a manual test dispatch).
+    # Failed run, or a manual dispatch for testing. The stable check lives in
+    # the collect step below, which resolves the branch from the run itself so
+    # both paths are covered.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
     steps:
@@ -58,6 +60,23 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
+          # Only real releases reach the RELEASE board. Package and release also
+          # runs on main (cron dev release) and on feature branches via dispatch;
+          # those failures are CI noise. Release refs are `stable` and the
+          # version tags, matching release-build-test-publish.yaml.
+          #
+          # Resolved from the run itself rather than the trigger, because
+          # `on.workflow_run.branches` cannot express tags and does not apply to
+          # workflow_dispatch at all. One check, both entry points.
+          BRANCH=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .head_branch)
+          case "$BRANCH" in
+            stable|v[0-9]*) ;;
+            *)
+              echo "::notice::run $RUN_ID is on '$BRANCH', not a release ref; nothing to file."
+              echo "file=false" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+          esac
+
           # Failed job names (optionally filtered to the watched set). Capture
           # first: a gh failure inside <(...) would leave `failed` empty and be
           # read as "nothing to file".
@@ -105,10 +124,12 @@ jobs:
           JIRA_DESCRIPTION: ${{ steps.collect.outputs.description }}
           JIRA_LABELS: "ci-failure,package-and-release"
           # While one issue is open for this pipeline, later failures comment on it.
-          JIRA_DEDUP_LABEL: "package-release-failure"
+          # Scope per commit: re-runs of the same release de-dupe onto one
+          # ticket, a later release failure opens a new one.
+          JIRA_DEDUP_LABEL: "package-release-failure:${{ github.event.workflow_run.head_sha || inputs.run-id }}"
         run: |
           if [ -z "${JIRA_USER_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ]; then
             echo "::notice::JIRA_RELEASE_* secrets not configured; skipping Jira filing."
             exit 0
           fi
-          python3 .github/actions/scripts/create_jira_issue.py
+          python3 .github/actions/scripts/jira_client.py

@@ -64,7 +64,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
 
     LLK_ASSERT(
-        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     llk::san::pack_operand_check(
@@ -89,7 +89,7 @@ inline void llk_matmul_pack(
         !((pack_mode == PackMode::Untilize) && out_of_order_output), "untilize out of order packing is not supported!");
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     LLK_ASSERT(
-        ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     llk::san::pack_operand_check(
