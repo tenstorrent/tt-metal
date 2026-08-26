@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// sdpa_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
-// the consumers still on the legacy API. Until the last of them migrates and
-// this file is retired, changes here likely belong in the fork too.
+// Metal 2.0 fork of compute/sdpa.cpp. The legacy original next to this file still serves
+// RingDistributedSDPADeviceOperation; this fork is bound by SDPAProgramFactory.
 
 #include <cstdint>
 
@@ -14,63 +12,62 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 
 void kernel_main() {
-    constexpr uint32_t B = get_compile_time_arg_val(0);
-    constexpr uint32_t NQH = get_compile_time_arg_val(1);
-    constexpr uint32_t NKH = get_compile_time_arg_val(2);
-    constexpr uint32_t Skt = get_compile_time_arg_val(3);
-    constexpr uint32_t DHt = get_compile_time_arg_val(4);
-    constexpr uint32_t vDHt = get_compile_time_arg_val(5);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(7);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(8);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(9);
+    [[maybe_unused]] constexpr auto B = get_arg(args::B);
+    [[maybe_unused]] constexpr auto NQH = get_arg(args::NQH);
+    [[maybe_unused]] constexpr auto NKH = get_arg(args::NKH);
+    constexpr auto Skt = get_arg(args::Skt);
+    constexpr auto DHt = get_arg(args::DHt);
+    constexpr auto vDHt = get_arg(args::vDHt);
+    constexpr auto Sq_chunk_t = get_arg(args::Sq_chunk_t);
+    constexpr auto q_num_chunks = get_arg(args::q_num_chunks);
+    constexpr auto Sk_chunk_t = get_arg(args::Sk_chunk_t);
+    constexpr auto k_num_chunks = get_arg(args::k_num_chunks);
 
-    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(10);
-    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(11);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(12);
-    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(13);
-    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(14);
-    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(15);
-    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(16);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(17);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(18);
-    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(19);
-    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(20);
-    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(21);
+    constexpr auto qk_in0_block_w = get_arg(args::qk_in0_block_w);
+    constexpr auto qk_subblock_w = get_arg(args::qk_subblock_w);
+    constexpr auto qk_subblock_h = get_arg(args::qk_subblock_h);
+    constexpr auto qk_in0_num_subblocks = get_arg(args::qk_in0_num_subblocks);
+    constexpr auto qk_in1_num_subblocks = get_arg(args::qk_in1_num_subblocks);
+    constexpr auto qk_num_blocks = get_arg(args::qk_num_blocks);
+    constexpr auto out_in0_block_w = get_arg(args::out_in0_block_w);
+    constexpr auto out_subblock_w = get_arg(args::out_subblock_w);
+    constexpr auto out_subblock_h = get_arg(args::out_subblock_h);
+    constexpr auto out_in0_num_subblocks = get_arg(args::out_in0_num_subblocks);
+    constexpr auto out_in1_num_subblocks = get_arg(args::out_in1_num_subblocks);
+    constexpr auto out_num_blocks = get_arg(args::out_num_blocks);
 
-    constexpr uint32_t num_cores = get_compile_time_arg_val(22);
+    [[maybe_unused]] constexpr auto num_cores = get_arg(args::num_cores);
 
-    constexpr bool is_causal = get_compile_time_arg_val(23) == 1;
-    constexpr bool use_provided_mask = get_compile_time_arg_val(24) == 1;
-    constexpr bool use_padded_mask = get_compile_time_arg_val(25) == 1;
-    constexpr bool is_chunked = get_compile_time_arg_val(26) == 1;
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(27);
-    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
-    constexpr bool use_attention_sink = get_compile_time_arg_val(29) == 1;
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(30) == 1;
-    constexpr uint32_t valid_Skt = get_compile_time_arg_val(31);
-    constexpr uint32_t k_partial_col = get_compile_time_arg_val(32);
+    constexpr bool is_causal = get_arg(args::is_causal) == 1;
+    constexpr bool use_provided_mask = get_arg(args::use_provided_mask) == 1;
+    constexpr bool use_padded_mask = get_arg(args::use_padded_mask) == 1;
+    constexpr bool is_chunked = get_arg(args::is_chunked) == 1;
+    constexpr uint32_t scale_fp32 = get_arg(args::scale_fp32);
+    constexpr uint32_t sliding_window_size = get_arg(args::sliding_window_size);
+    constexpr bool use_attention_sink = get_arg(args::use_attention_sink) == 1;
+    constexpr bool use_streaming_compute = get_arg(args::use_streaming_compute) == 1;
+    constexpr uint32_t valid_Skt = get_arg(args::valid_Skt);
+    constexpr uint32_t k_partial_col = get_arg(args::k_partial_col);
     // Zigzag remap flag drives the external remap_q_index call on the flat B*NQH*q_num_chunks range.
-    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(33) == 1;
+    constexpr bool use_zigzag_balancing = get_arg(args::use_zigzag_balancing) == 1;
     // Windowed K-range narrowing: per-Q-chunk [k_lo, k_hi) arrives from the reader over a ctrl CB.
-    constexpr bool use_windowed_narrowing = get_compile_time_arg_val(34) == 1;
+    constexpr bool use_windowed_narrowing = get_arg(args::use_windowed_narrowing) == 1;
 
-    const uint32_t core_id = get_arg_val<uint32_t>(0);
-    const uint32_t num_phases = get_arg_val<uint32_t>(1);
-    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(2);
-    uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(3);
-    uint32_t chunked_q_chunk_offset_phase_2 = 0;
-    if (num_phases == 2) {
-        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(4);
-    }
+    const uint32_t core_id = get_arg(args::core_id);
+    const uint32_t num_phases = get_arg(args::num_phases);
+    const uint32_t use_chunk_start_idx_tensor = get_arg(args::use_chunk_start_idx_tensor);
+    uint32_t chunked_q_chunk_offset_phase_1 = get_arg(args::chunked_q_chunk_offset_phase_1);
+    uint32_t chunked_q_chunk_offset_phase_2 = get_arg(args::chunked_q_chunk_offset_phase_2);
 
-    // Global Q scheduling args follow phase_2 slot.
-    const uint32_t global_q_start = get_arg_val<uint32_t>(5);
-    const uint32_t global_q_count = get_arg_val<uint32_t>(6);
+    // Global Q scheduling args.
+    const uint32_t global_q_start = get_arg(args::global_q_start);
+    const uint32_t global_q_count = get_arg(args::global_q_count);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -78,38 +75,60 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 35;
-    constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
-    constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
-    constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
-    constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
-    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 4);
-    constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
-    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 6);
-    constexpr uint32_t cb_chunk_start_idx = get_compile_time_arg_val(cb_arg_offset + 7);
-    constexpr uint32_t cb_recip_scratch = get_compile_time_arg_val(cb_arg_offset + 8);
-    constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 9);
-    constexpr uint32_t cb_qk_im = get_compile_time_arg_val(cb_arg_offset + 10);
-    constexpr uint32_t cb_out_im_A = get_compile_time_arg_val(cb_arg_offset + 11);
-    constexpr uint32_t cb_out_im_B = get_compile_time_arg_val(cb_arg_offset + 12);
-    constexpr uint32_t cb_max_A = get_compile_time_arg_val(cb_arg_offset + 13);
-    constexpr uint32_t cb_max_B = get_compile_time_arg_val(cb_arg_offset + 14);
-    constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 15);
-    constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 16);
-    constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 17);
-    constexpr uint32_t cb_windowed_k_range = get_compile_time_arg_val(cb_arg_offset + 18);
+    // Named DFB handles. Conditionally-bound buffers alias to a bound placeholder (q_in) where the host
+    // does not bind them; those paths never touch the buffer, so the placeholder is inert.
+    constexpr auto dfb_q_in = dfb::q_in;
+    constexpr auto dfb_k_in = dfb::k_in;
+    constexpr auto dfb_v_in = dfb::v_in;
+    constexpr auto dfb_identity_scale_in = dfb::identity_scale_in;
+    constexpr auto dfb_col_identity = dfb::col_identity;
+    constexpr auto dfb_out = dfb::out;
+    constexpr auto dfb_qk_im = dfb::qk_im;
+    constexpr auto dfb_out_im_A = dfb::out_im_A;
+    constexpr auto dfb_out_im_B = dfb::out_im_B;
+    constexpr auto dfb_max_A = dfb::max_A;
+    constexpr auto dfb_max_B = dfb::max_B;
+    constexpr auto dfb_sum_A = dfb::sum_A;
+    constexpr auto dfb_sum_B = dfb::sum_B;
+    constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
+#ifdef HAS_MASK
+    constexpr auto dfb_mask_in = dfb::mask_in;
+#else
+    constexpr auto dfb_mask_in = dfb::q_in;  // placeholder; mask path inactive
+#endif
+#ifdef USE_ATTENTION_SINK
+    constexpr auto dfb_attention_sink = dfb::attention_sink;
+#else
+    constexpr auto dfb_attention_sink = dfb::q_in;  // placeholder; sink path inactive
+#endif
+#ifdef FLEXIBLE_CHUNKED
+    constexpr auto dfb_chunk_start_idx = dfb::chunk_start_idx_compute;
+#else
+    constexpr auto dfb_chunk_start_idx = dfb::q_in;  // placeholder; chunk-start tensor path inactive
+#endif
+#ifdef USE_STREAMING_COMPUTE
+    constexpr auto dfb_recip_scratch = dfb::recip_scratch;
+#else
+    constexpr auto dfb_recip_scratch = dfb::q_in;  // placeholder; streaming path inactive
+#endif
+#ifdef USE_WINDOWED_NARROWING
+    constexpr auto dfb_windowed_k_range = dfb::windowed_k_range;
+#else
+    constexpr auto dfb_windowed_k_range = dfb::q_in;  // placeholder; narrowing path inactive
+#endif
+
     uint32_t chunked_q_chunk_offset = 0;
-    CircularBuffer cb_chunk_start_idx_obj(cb_chunk_start_idx);
-    CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
-    CircularBuffer cb_mask_in_obj(cb_mask_in);
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_out);
-    matmul_init(cb_q_in, cb_k_in);
+    DataflowBuffer dfb_chunk_start_idx_obj(dfb_chunk_start_idx);
+    DataflowBuffer dfb_identity_scale_in_obj(dfb_identity_scale_in);
+    DataflowBuffer dfb_mask_in_obj(dfb_mask_in);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb_q_in, dfb_k_in, dfb_out);
+    matmul_init(dfb_q_in, dfb_k_in);
 
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {
-            cb_chunk_start_idx_obj.wait_front(1);
-            uint32_t chunk_start_idx = ckernel::read_tile_value(cb_chunk_start_idx, 0, 0);
-            cb_chunk_start_idx_obj.pop_front(1);
+            dfb_chunk_start_idx_obj.wait_front(1);
+            uint32_t chunk_start_idx = ckernel::read_tile_value(dfb_chunk_start_idx, 0, 0);
+            dfb_chunk_start_idx_obj.pop_front(1);
             const uint32_t q_chunk_size = Sq_chunk_t * TILE_HEIGHT;
             chunked_q_chunk_offset_phase_1 = chunk_start_idx / q_chunk_size;
             if (num_phases == 2) {
@@ -123,7 +142,7 @@ void kernel_main() {
         // No row buffers needed; a dedicated 1-tile CB is used as recip scratch.
 
         // Wait once for identity scale; v2 removes per-call waits inside reduce_c_row_group
-        cb_identity_scale_in_obj.wait_front(1);
+        dfb_identity_scale_in_obj.wait_front(1);
 
         // Lightweight-mask context: writer pre-generates either [neginf, causal_diag, partial?]
         // or, for sliding, [neginf, trailing_primary, leading_prev, leading_current, trailing_next, partial?].
@@ -154,7 +173,7 @@ void kernel_main() {
         // A user-provided dense mask is streamed per-chunk by the reader and consumed inside the
         // inner loop — it does not use the writer-generated lightweight palette, so skip this wait.
         if constexpr ((is_causal || sliding_window_size > 0 || k_partial_col > 0) && !use_provided_mask) {
-            cb_mask_in_obj.wait_front(lw_mask_tile_count);
+            dfb_mask_in_obj.wait_front(lw_mask_tile_count);
         }
 
         // Global Q scheduling: sdpa_standard_v2 walks the per-core flat range over
@@ -173,31 +192,31 @@ void kernel_main() {
             out_subblock_h,
             out_subblock_w,
             use_padded_mask,
-            cb_q_in,
-            cb_k_in,
-            cb_v_in,
-            cb_qk_im,
-            cb_identity_scale_in,
-            cb_exp_max_diff,
-            cb_col_identity,
-            cb_recip_scratch,
-            cb_out,  // normalized output goes directly to output CB
-            cb_mask_in,
+            dfb_q_in,
+            dfb_k_in,
+            dfb_v_in,
+            dfb_qk_im,
+            dfb_identity_scale_in,
+            dfb_exp_max_diff,
+            dfb_col_identity,
+            dfb_recip_scratch,
+            dfb_out,  // normalized output goes directly to output CB
+            dfb_mask_in,
             sliding_window_size,
             is_causal,
             use_attention_sink,
-            cb_attention_sink,
+            dfb_attention_sink,
             use_provided_mask,
             use_windowed_narrowing,
-            cb_windowed_k_range>(
+            dfb_windowed_k_range>(
             global_q_count,
             k_num_chunks,
-            cb_out_im_A,
-            cb_out_im_B,
-            cb_max_A,
-            cb_max_B,
-            cb_sum_A,
-            cb_sum_B,
+            dfb_out_im_A,
+            dfb_out_im_B,
+            dfb_max_A,
+            dfb_max_B,
+            dfb_sum_A,
+            dfb_sum_B,
             global_q_start,
             chunked_q_chunk_offset_phase_1,
             lw_mask,
@@ -213,7 +232,7 @@ void kernel_main() {
             lw_mask.neginf_tile_idx = 0;
             lw_mask.causal_diag_tile_idx = 1;
             lw_mask.primary_diag_tile_idx = lw_mask.causal_diag_tile_idx;
-            cb_mask_in_obj.wait_front(2);
+            dfb_mask_in_obj.wait_front(2);
         }
 
         for (uint32_t phase = 0; phase < num_phases; ++phase) {
@@ -227,9 +246,9 @@ void kernel_main() {
             // B*NQH*q_num_chunks chunks; the modulo inside its inner loop extracts the per-head
             // q_chunk from each flat index.
             sdpa_standard<
-                cb_qk_im,
-                cb_identity_scale_in,
-                cb_attention_sink,
+                dfb_qk_im,
+                dfb_identity_scale_in,
+                dfb_attention_sink,
                 Sq_chunk_t,
                 Sk_chunk_t,
                 DHt,
@@ -243,7 +262,7 @@ void kernel_main() {
                 sliding_window_size,
                 use_lightweight_causal_mask,
                 use_windowed_narrowing,
-                cb_windowed_k_range>(
+                dfb_windowed_k_range>(
                 Skt,
                 qk_in0_block_w,
                 qk_subblock_w,
@@ -268,19 +287,19 @@ void kernel_main() {
                 v_chunk_tiles,
                 qk_chunk_tiles,
                 out_chunk_tiles,
-                cb_q_in,
-                cb_k_in,
-                cb_v_in,
-                cb_mask_in,
-                cb_col_identity,
-                cb_out_im_A,
-                cb_out_im_B,
-                cb_max_A,
-                cb_max_B,
-                cb_sum_A,
-                cb_sum_B,
-                cb_exp_max_diff,
-                cb_out,
+                dfb_q_in,
+                dfb_k_in,
+                dfb_v_in,
+                dfb_mask_in,
+                dfb_col_identity,
+                dfb_out_im_A,
+                dfb_out_im_B,
+                dfb_max_A,
+                dfb_max_B,
+                dfb_sum_A,
+                dfb_sum_B,
+                dfb_exp_max_diff,
+                dfb_out,
                 lw_mask,
                 use_zigzag_balancing);
         }
