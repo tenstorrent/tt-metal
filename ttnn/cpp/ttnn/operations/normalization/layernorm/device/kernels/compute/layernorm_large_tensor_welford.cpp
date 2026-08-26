@@ -4,6 +4,8 @@
 
 #include <cstdint>
 
+#include "api/compute/sfpu_binary_bcast.h"
+
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -219,6 +221,10 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 template <
     uint32_t dfb_in,
     uint32_t dfb_inb,
+    uint32_t dfb_in_fp32,
+    uint32_t dfb_inb_fp32,
+    uint32_t dfb_pre_add_fp32,
+    bool fp32_residual_sfpu_finalizer,
     uint32_t dfb_interm_pre_add,
     uint32_t dfb_ex,
     uint32_t dfb_ex2,
@@ -237,6 +243,9 @@ template <
 void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     DataflowBuffer dfb_in_obj(dfb_in);
     DataflowBuffer dfb_inb_obj(dfb_inb);
+    DataflowBuffer dfb_in_fp32_obj(dfb_in_fp32);
+    DataflowBuffer dfb_inb_fp32_obj(dfb_inb_fp32);
+    DataflowBuffer dfb_pre_add_fp32_obj(dfb_pre_add_fp32);
     DataflowBuffer dfb_interm_pre_add_obj(dfb_interm_pre_add);
     DataflowBuffer dfb_ex_obj(dfb_ex);
     DataflowBuffer dfb_ex2_obj(dfb_ex2);
@@ -256,35 +265,77 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     for (auto block : generic::blocks(Wt, blk)) {
         // Materialize x = a + b once in L1. Both statistics passes below reread
         // this block locally; they do not add another traversal of a or b.
-        reconfig_data_format(dfb_in, dfb_inb);
-        add_init(dfb_in, dfb_inb);
         dfb_in_obj.wait_front(block.full_block_size());
         dfb_inb_obj.wait_front(block.full_block_size());
-        tile_regs_acquire();
-        for (auto i : block.local()) {
-            add_tiles(dfb_in, dfb_inb, i, i, i);
-        }
-        tile_regs_commit();
-        dfb_in_obj.pop_front(block.full_block_size());
-        dfb_inb_obj.pop_front(block.full_block_size());
-
         pack_reconfig_data_format(dfb_interm_pre_add);
         dfb_interm_pre_add_obj.reserve_back(block.full_block_size());
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_pre_add_fp32_obj.reserve_back(block.full_block_size());
+        }
         if constexpr (fused_pre_add_replay) {
             // Both FIFO views share backing storage but retain independent state.
             dfb_replay_obj.reserve_back(block.full_block_size());
         }
-        tile_regs_wait();
-        for (auto i : block.local()) {
-            pack_tile(i, dfb_interm_pre_add);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_in_fp32_obj.wait_front(block.full_block_size());
+            dfb_inb_fp32_obj.wait_front(block.full_block_size());
+            copy_tile_to_dst_init_short(dfb_in_fp32);
+            for (uint32_t i = 0; i < block.local().size(); i += 2) {
+                const bool has_second_tile = i + 1 < block.local().size();
+                tile_regs_acquire();
+                copy_tile(dfb_in_fp32, i, 0);
+                copy_tile_to_dst_init_short_with_dt(dfb_in_fp32, dfb_inb_fp32);
+                copy_tile(dfb_inb_fp32, i, 1);
+                if (has_second_tile) {
+                    copy_tile_to_dst_init_short_with_dt(dfb_inb_fp32, dfb_in_fp32);
+                    copy_tile(dfb_in_fp32, i + 1, 2);
+                    copy_tile_to_dst_init_short_with_dt(dfb_in_fp32, dfb_inb_fp32);
+                    copy_tile(dfb_inb_fp32, i + 1, 3);
+                }
+                add_binary_tile_init();
+                add_binary_tile(0, 1, 0);
+                if (has_second_tile) {
+                    add_binary_tile(2, 3, 2);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, dfb_interm_pre_add);
+                if (has_second_tile) {
+                    pack_tile(2, dfb_interm_pre_add);
+                }
+                tile_regs_release();
+                copy_tile_to_dst_init_short_with_dt(dfb_inb_fp32, dfb_in_fp32);
+            }
+            dfb_in_fp32_obj.pop_front(block.full_block_size());
+            dfb_inb_fp32_obj.pop_front(block.full_block_size());
+        } else {
+            reconfig_data_format(dfb_in, dfb_inb);
+            add_init(dfb_in, dfb_inb);
+            tile_regs_acquire();
+            for (auto i : block.local()) {
+                add_tiles(dfb_in, dfb_inb, i, i, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (auto i : block.local()) {
+                pack_tile(i, dfb_interm_pre_add);
+            }
+            tile_regs_release();
         }
-        tile_regs_release();
+        dfb_in_obj.pop_front(block.full_block_size());
+        dfb_inb_obj.pop_front(block.full_block_size());
         dfb_interm_pre_add_obj.push_back(block.full_block_size());
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_pre_add_fp32_obj.push_back(block.full_block_size());
+        }
         if constexpr (fused_pre_add_replay) {
             dfb_replay_obj.push_back(block.full_block_size());
         }
 
         dfb_interm_pre_add_obj.wait_front(block.full_block_size());
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_pre_add_fp32_obj.wait_front(block.full_block_size());
+        }
         if (!block.is_first()) {
             dfb_ex_obj.wait_front(1);
             dfb_ex2_obj.wait_front(1);
@@ -307,8 +358,9 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             copy_tile(dfb_ex2_welford, 0, var_dst);
         }
 
-        reconfig_data_format_srca(dfb_interm_pre_add);
-        transpose_init(dfb_interm_pre_add);
+        constexpr auto dfb_stats_input = fp32_residual_sfpu_finalizer ? dfb_pre_add_fp32 : dfb_interm_pre_add;
+        reconfig_data_format_srca(dfb_stats_input);
+        transpose_init(dfb_stats_input);
         two_pass_stats_init_shifted();
 
         uint32_t block_n = 0;
@@ -316,14 +368,14 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             constexpr uint32_t i = 0;
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
-            transpose_tile(dfb_interm_pre_add, i, input_dst);
+            transpose_tile(dfb_stats_input, i, input_dst);
             two_pass_stats_update_shifted_rows<false, true>(input_dst, 0, rows);
             block_n += rows;
         }
         for (uint32_t i = 1; i < block.size(); ++i) {
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
-            transpose_tile(dfb_interm_pre_add, i, input_dst);
+            transpose_tile(dfb_stats_input, i, input_dst);
             two_pass_stats_update_shifted_rows<false>(input_dst, 0, rows);
             block_n += rows;
         }
@@ -332,7 +384,7 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         for (auto i : block.local()) {
             const uint32_t global_tile = block.to_global(i);
             const uint32_t rows = !is_last_tile_full && global_tile == Wt - 1 ? last_tile_rows : tile_width;
-            transpose_tile(dfb_interm_pre_add, i, input_dst);
+            transpose_tile(dfb_stats_input, i, input_dst);
             two_pass_stats_update_rows<true>(input_dst, 0, rows);
         }
 
@@ -349,6 +401,9 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         tile_regs_commit();
 
         dfb_interm_pre_add_obj.pop_front(block.full_block_size());
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_pre_add_fp32_obj.pop_front(block.full_block_size());
+        }
         if (!block.is_first()) {
             dfb_ex_obj.pop_front(1);
             dfb_ex2_obj.pop_front(1);
@@ -391,8 +446,12 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     copy_tile_to_dst_init_short_with_dt(dfb_ex_welford, dfb_ex2_welford);
     copy_tile(dfb_ex2_welford, 0, var_dst);
     welford_restore_state(mean_dst);
-    two_pass_stats_restore_anchor_from_state(mean_dst);
-    two_pass_stats_finalize_split_mean_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
+    if constexpr (fp32_residual_sfpu_finalizer) {
+        two_pass_stats_finalize_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
+    } else {
+        two_pass_stats_restore_anchor_from_state(mean_dst);
+        two_pass_stats_finalize_split_mean_to_row<false>(mean_dst, reciprocal_lut[W - 1]);
+    }
     tile_regs_commit();
     dfb_ex_obj.pop_front(1);
     dfb_ex2_obj.pop_front(1);
@@ -680,7 +739,10 @@ void kernel_main() {
 #endif
     DataflowBuffer dfb_ex_obj(dfb_ex);
     DataflowBuffer dfb_ex2_obj(dfb_ex2);
+    DataflowBuffer dfb_ex_welford_obj_main(dfb_ex_welford);
+    DataflowBuffer dfb_ex2_welford_obj_main(dfb_ex2_welford);
     DataflowBuffer dfb_ex2pe_obj(dfb_ex2pe);
+    DataflowBuffer dfb_ex2pe_fp32_obj(dfb_ex2pe_fp32);
     DataflowBuffer dfb_x_replay_obj(dfb_x_replay);
     DataflowBuffer dfb_interm_pre_add_obj(dfb_interm_pre_add);
 
@@ -737,6 +799,10 @@ void kernel_main() {
 
         dfb_ex_obj.reserve_back(onetile);
         dfb_ex2_obj.reserve_back(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex_welford_obj_main.reserve_back(onetile);
+            dfb_ex2_welford_obj_main.reserve_back(onetile);
+        }
         tile_regs_wait();
         pack_reconfig_data_format(dfb_ex);
         pack_tile(mean_dst, dfb_ex);
@@ -744,6 +810,10 @@ void kernel_main() {
         tile_regs_release();
         dfb_ex_obj.push_back(onetile);
         dfb_ex2_obj.push_back(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex_welford_obj_main.push_back(onetile);
+            dfb_ex2_welford_obj_main.push_back(onetile);
+        }
 
         // Transpose mean and variance back to
         // columns and pack back to the buffers
@@ -752,15 +822,31 @@ void kernel_main() {
 
         dfb_ex_obj.wait_front(onetile);
         dfb_ex2_obj.wait_front(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex_welford_obj_main.wait_front(onetile);
+            dfb_ex2_welford_obj_main.wait_front(onetile);
+        }
         tile_regs_acquire();
-        transpose_tile(dfb_ex, 0, mean_dst);
-        transpose_tile(dfb_ex2, 0, var_dst);
+        constexpr auto dfb_mean_transpose = fp32_residual_sfpu_finalizer ? dfb_ex_welford : dfb_ex;
+        constexpr auto dfb_var_transpose = fp32_residual_sfpu_finalizer ? dfb_ex2_welford : dfb_ex2;
+        reconfig_data_format_srca(dfb_mean_transpose);
+        transpose_init(dfb_mean_transpose);
+        transpose_tile(dfb_mean_transpose, 0, mean_dst);
+        transpose_tile(dfb_var_transpose, 0, var_dst);
         tile_regs_commit();
         dfb_ex_obj.pop_front(onetile);
         dfb_ex2_obj.pop_front(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex_welford_obj_main.pop_front(onetile);
+            dfb_ex2_welford_obj_main.pop_front(onetile);
+        }
 
         dfb_ex_obj.reserve_back(onetile);
         dfb_ex2_obj.reserve_back(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex_welford_obj_main.reserve_back(onetile);
+            dfb_ex2_welford_obj_main.reserve_back(onetile);
+        }
         tile_regs_wait();
         pack_reconfig_data_format(dfb_ex);
         pack_tile(mean_dst, dfb_ex);
@@ -769,6 +855,10 @@ void kernel_main() {
         tile_regs_release();
         dfb_ex_obj.push_back(onetile);
         dfb_ex2_obj.push_back(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex_welford_obj_main.push_back(onetile);
+            dfb_ex2_welford_obj_main.push_back(onetile);
+        }
 
         // =====================================
         // Calculate 1/(√(Var(X) + ε))
@@ -777,21 +867,36 @@ void kernel_main() {
         add_init(dfb_ex2, dfb_eps);
 
         dfb_ex2_obj.wait_front(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex2_welford_obj_main.wait_front(onetile);
+        }
         tile_regs_acquire();
         add_tiles(dfb_ex2, dfb_eps, 0, 0, dst0);
         rsqrt_tile_init();
         rsqrt_tile(dst0);
         tile_regs_commit();
         dfb_ex2_obj.pop_front(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex2_welford_obj_main.pop_front(onetile);
+        }
 
         dfb_ex2pe_obj.reserve_back(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex2pe_fp32_obj.reserve_back(onetile);
+        }
         tile_regs_wait();
         pack_tile(dst0, dfb_ex2pe);
         tile_regs_release();
         dfb_ex2pe_obj.push_back(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex2pe_fp32_obj.push_back(onetile);
+        }
 
         // broadcasts the tile since dfb_ex2pe is a column vector that contains the important data
         dfb_ex2pe_obj.wait_front(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex2pe_fp32_obj.wait_front(onetile);
+        }
         tile_regs_acquire();
         reconfig_data_format_srca(dfb_ex2pe);
         // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
@@ -800,13 +905,22 @@ void kernel_main() {
         unary_bcast_init<BroadcastType::COL>(dfb_ex2pe);
         unary_bcast<BroadcastType::COL>(dfb_ex2pe, 0, dst0);
         dfb_ex2pe_obj.pop_front(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex2pe_fp32_obj.pop_front(onetile);
+        }
         tile_regs_commit();
 
         dfb_ex2pe_obj.reserve_back(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex2pe_fp32_obj.reserve_back(onetile);
+        }
         tile_regs_wait();
         pack_tile(dst0, dfb_ex2pe);
         tile_regs_release();
         dfb_ex2pe_obj.push_back(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex2pe_fp32_obj.push_back(onetile);
+        }
 
         // =====================================
         // Second pass over the input.
@@ -816,7 +930,13 @@ void kernel_main() {
         //  √(Var(x)+ε)
         // =====================================
         dfb_ex2pe_obj.wait_front(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex2pe_fp32_obj.wait_front(onetile);
+        }
         dfb_ex_obj.wait_front(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex_welford_obj_main.wait_front(onetile);
+        }
 
         // Lockstep the dfb_x_welford alias's read/write pointers with dfb_in's across the eltwise
         // pass. The reader pushes dfb_x_welford in pass 2 to match its pass 1 push (see
@@ -852,14 +972,15 @@ void kernel_main() {
                 dfb_in_obj.pop_front(block.full_block_size());
                 dfb_inb_obj.pop_front(block.full_block_size());
 
-                dfb_interm_pre_add_obj.reserve_back(block.full_block_size());
-                tile_regs_wait();
-                pack_reconfig_data_format(dfb_interm_pre_add);
-                for (auto i : block.local()) {
-                    pack_tile(i, dfb_interm_pre_add);
+            for (auto block : generic::blocks(Wt, blk)) {
+                if constexpr (fused_pre_add_replay) {
+                    dfb_x_replay_obj.wait_front(block.full_block_size());
+                } else {
+                    dfb_in_obj.wait_front(block.full_block_size());
+                    dfb_inb_obj.wait_front(block.full_block_size());
+                    dfb_in_fp32_obj_eltwise.wait_front(block.full_block_size());
+                    dfb_inb_fp32_obj_eltwise.wait_front(block.full_block_size());
                 }
-                tile_regs_release();
-                dfb_interm_pre_add_obj.push_back(block.full_block_size());
 
                 dfb_interm_pre_add_obj.wait_front(block.full_block_size());
                 tile_regs_acquire();
@@ -908,9 +1029,27 @@ void kernel_main() {
             }
             tile_regs_commit();
 
-            if constexpr (!(do_gamma == 1 or do_beta == 1)) {
-                dfb_xmm = dfb_out;
-            }
+                    dfb_interm_pre_add_obj.wait_front(block.full_block_size());
+                    tile_regs_acquire();
+                    reconfig_data_format(dfb_interm_pre_add, dfb_ex);
+                    sub_bcast_cols_compensated_init(dfb_interm_pre_add, dfb_ex);
+                    sub_bcast_cols_compensated(dfb_interm_pre_add, dfb_ex, 0, 0, block.size());
+                    dfb_interm_pre_add_obj.pop_front(block.full_block_size());
+                } else {
+                    tile_regs_acquire();
+                    constexpr auto dfb_normalize_in = fused_pre_add_replay ? dfb_x_replay : dfb_in;
+                    reconfig_data_format(dfb_normalize_in, dfb_ex);
+                    sub_bcast_cols_compensated_init(dfb_normalize_in, dfb_ex);
+                    sub_bcast_cols_compensated(dfb_normalize_in, dfb_ex, 0, 0, block.size());
+                    if constexpr (fused_pre_add_replay) {
+                        dfb_x_replay_obj.pop_front(block.full_block_size());
+                    } else {
+                        dfb_in_obj.pop_front(block.full_block_size());
+                    }
+                    if constexpr (welford_fp32_alias && !fuse_pre_add) {
+                        dfb_x_welford_obj_eltwise.pop_front(block.full_block_size());
+                    }
+                }
 
             pack_reconfig_data_format(dfb_xmm);
             // Sync with writer on full blocks
@@ -931,11 +1070,9 @@ void kernel_main() {
                 DataflowBuffer(dfb_xmm).wait_front(block.full_block_size());
                 mul_bcast_rows_init(dfb_xmm, dfb_gamma);
                 for (auto i : block.local()) {
-                    mul_tiles_bcast_rows(dfb_xmm, dfb_gamma, i, i, i);
+                    mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_ex2pe, 0 /*in_tile_index*/, i);
                 }
                 tile_regs_commit();
-                dfb_gamma_obj.pop_front(block.full_block_size());
-                DataflowBuffer(dfb_xmm).pop_front(block.full_block_size());
 
 #ifndef FUSE_BETA
                 pack_reconfig_data_format(dfb_out);
@@ -987,7 +1124,13 @@ void kernel_main() {
 
         dfb_xmm = dfb::xmm;  // x minus mean
         dfb_ex2pe_obj.pop_front(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex2pe_fp32_obj.pop_front(onetile);
+        }
         dfb_ex_obj.pop_front(onetile);
+        if constexpr (fp32_residual_sfpu_finalizer) {
+            dfb_ex_welford_obj_main.pop_front(onetile);
+        }
     }  // NCHt loop
     // The single eps tile is waited once and reused across all NCHt iterations; pop it at the end
     // so the buffer is left balanced.

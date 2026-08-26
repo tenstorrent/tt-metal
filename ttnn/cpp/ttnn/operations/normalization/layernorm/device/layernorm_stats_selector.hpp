@@ -33,6 +33,13 @@ struct BlackholeStatsSelectorParams {
 // full-affine case.
 constexpr bool use_blackhole_sfpu_stats(const BlackholeStatsSelectorParams& params) {
     const bool has_full_affine = params.has_gamma && params.has_beta;
+    // The tile reducer forms the residual sum through TF32 SrcA/SrcB and can
+    // erase variation below a large shared FP32 offset. The specialised
+    // two-pass residual path keeps pre-add and normalisation in FP32 SFPU.
+    if (params.input_format == tt::DataFormat::Float32 && params.fuse_pre_add && !params.has_gamma &&
+        !params.has_beta && !params.compact_two_pass_fits_in_l1) {
+        return true;
+    }
     if (!params.has_gamma && !params.has_beta && params.input_format == tt::DataFormat::Float16_b) {
         return true;
     }

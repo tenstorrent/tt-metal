@@ -38,6 +38,12 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
     fp32_plain.has_gamma = false;
     fp32_plain.has_beta = false;
 
+    auto fp32_plain_residual_compact = fp32_plain;
+    fp32_plain_residual_compact.fuse_pre_add = true;
+
+    auto fp32_plain_residual_large = fp32_plain_residual_compact;
+    fp32_plain_residual_large.compact_two_pass_fits_in_l1 = false;
+
     auto fp32_residual = default_params();
     fp32_residual.fuse_pre_add = true;
     fp32_residual.padded_width = 2048;
@@ -109,6 +115,8 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
         {"fp32 affine at crossover", default_params(), true},
         {"fp32 affine below crossover", fp32_affine_below, false},
         {"fp32 parameter-free", fp32_plain, false},
+        {"fp32 compact parameter-free residual", fp32_plain_residual_compact, false},
+        {"fp32 large parameter-free residual", fp32_plain_residual_large, true},
         {"fp32 residual affine", fp32_residual, true},
         {"fp32 residual affine below crossover", fp32_residual_below, false},
         {"bf16 affine", bf16_affine, true},

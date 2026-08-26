@@ -725,6 +725,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (welford_fp32_alias) {
         reader.compiler_options.defines.emplace("WELFORD_FP32_ALIAS", "1");
     }
+    if (fp32_residual_sfpu_finalizer) {
+        for (auto cb : {tt::CBIndex::c_7, tt::CBIndex::c_8, tt::CBIndex::c_9, tt::CBIndex::c_10}) {
+            unpack_to_dest_mode[static_cast<std::uint32_t>(cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+        if (fused_pre_add_replay) {
+            unpack_to_dest_mode[static_cast<std::uint32_t>(tt::CBIndex::c_29)] =
+                tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
 
     if (!compute_tilizes) {
         bind_dfb(reader, IN, "in", m2::DFBEndpointType::PRODUCER);

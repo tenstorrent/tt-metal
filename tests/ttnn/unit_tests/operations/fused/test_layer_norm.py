@@ -153,13 +153,49 @@ def test_layer_norm_welford_large_offset(device, width, has_residual):
     assert actual.mean(dim=-1).abs().max() < 0.004
 
 
+@pytest.mark.parametrize("width", [8192, 16384])
+def test_layer_norm_welford_fp32_residual_large_offset(device, width):
+    """Fused FP32 pre-add must preserve variation below a large shared offset."""
+    torch.manual_seed(29)
+    rows = 1024
+    base = 1_000_000.0
+    torch_input = base + 64.0 * torch.randn((rows, width), dtype=torch.float32)
+    torch_residual = base + 64.0 * torch.randn((rows, width), dtype=torch.float32)
+    reference = torch.nn.functional.layer_norm(
+        torch_input.to(torch.float64) + torch_residual.to(torch.float64),
+        [width],
+    )
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_tensor = ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    output = ttnn.layer_norm(
+        input_tensor,
+        residual_input_tensor=residual_tensor,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        recip_tensor=create_recip_tensor(device, width, use_welford=True),
+        compute_kernel_config=compute_kernel_config,
+    )
+    actual = ttnn.to_torch(output).to(torch.float64)
+
+    error = actual - reference
+    assert torch.isfinite(actual).all()
+    assert error.abs().max() < 0.025
+    assert error.abs().mean() < 0.004
+
+
 @pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16)])
 def test_layer_norm_welford_off_default_tile(device, tile_shape, expect_error):
-    """LayerNorm accepts short tiles but rejects unsupported narrow tiles."""
+    """LayerNorm rejects tile shapes unsupported by its CB and LLK layout."""
     torch.manual_seed(23)
-    rows, width = tile_shape[0], 64
+    rows, width = 32, 64
     torch_input = torch.randn((rows, width), dtype=torch.bfloat16)
-    reference = torch.nn.functional.layer_norm(torch_input.to(torch.float32), [width])
 
     input_tensor = ttnn.from_torch(
         torch_input,
@@ -168,20 +204,12 @@ def test_layer_norm_welford_off_default_tile(device, tile_shape, expect_error):
         tile=ttnn.Tile(tile_shape),
         device=device,
     )
-    if tile_shape[1] != 32:
-        with expect_error(RuntimeError, "LayerNorm TILE input requires tile width 32"):
-            ttnn.layer_norm(
-                input_tensor,
-                program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
-                recip_tensor=create_recip_tensor(device, width, use_welford=True),
-            )
-    else:
-        output = ttnn.layer_norm(
+    with expect_error(RuntimeError, "LayerNorm TILE input requires tile shape 32x32"):
+        ttnn.layer_norm(
             input_tensor,
             program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
             recip_tensor=create_recip_tensor(device, width, use_welford=True),
         )
-        assert_output_accuracy(reference, ttnn.to_torch(output), use_welford=True)
 
 
 @pytest.mark.parametrize("h", [32, 42])

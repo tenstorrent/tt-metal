@@ -50,9 +50,11 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         a.layout());
     if (a.layout() == Layout::TILE) {
         TT_FATAL(
-            tile_width == tt::constants::TILE_WIDTH,
-            "LayerNorm TILE input requires tile width {}, got: {}",
+            tile_height == tt::constants::TILE_HEIGHT && tile_width == tt::constants::TILE_WIDTH,
+            "LayerNorm TILE input requires tile shape {}x{}, got: {}x{}",
+            tt::constants::TILE_HEIGHT,
             tt::constants::TILE_WIDTH,
+            tile_height,
             tile_width);
     }
     TT_FATAL(
