@@ -172,13 +172,29 @@ _BF16_DISTRIBUTIONS = ("uniform_01", "normal", "wide_uniform")
 _FP32_DISTRIBUTIONS = ("normal", "wide_uniform", "centered_uniform")
 
 
-def _fuse_distribution_into_shapes(shapes, distributions):
+def _fuse_distribution_into_shapes(shapes, distributions, offset=0):
     """Return (h, w, desc, distribution) rows, rotating `distributions` across `shapes`."""
-    return [(h, w, desc, distributions[i % len(distributions)]) for i, (h, w, desc) in enumerate(shapes)]
+    return [(h, w, desc, distributions[(i + offset) % len(distributions)]) for i, (h, w, desc) in enumerate(shapes)]
 
 
 _SHAPES_BF16 = _fuse_distribution_into_shapes(_SHAPES, _BF16_DISTRIBUTIONS)
-_SHAPES_FP32 = _fuse_distribution_into_shapes(_SHAPES, _FP32_DISTRIBUTIONS)
+# The FP32 rotation is offset by one so the non-tile-aligned 37x41 shape does not land on
+# wide_uniform. That shape is the padding-contamination probe of this group: it is the only one
+# whose logical width is padded inside the reduction dim (41 -> 64, filled with PAD_VALUE by
+# _run_ttnn_layer_norm). A wide-range distribution inflates the near-zero atol enough to absorb the
+# error from normalizing over those padded columns -- the same reason the sharded tests below are
+# restricted to small-range distributions.
+_SHAPES_FP32 = _fuse_distribution_into_shapes(_SHAPES, _FP32_DISTRIBUTIONS, offset=1)
+
+# Guard the property the offset above buys, so that appending a shape to _build_layer_norm_shapes
+# shifts the rotation into a collection error rather than silently weakening padding coverage.
+_WIDE_RANGE_DISTRIBUTIONS = ("wide_uniform",)
+for _rows in (_SHAPES_BF16, _SHAPES_FP32):
+    _unguarded = [desc for _, w, desc, dist in _rows if w % 32 and dist in _WIDE_RANGE_DISTRIBUTIONS]
+    assert not _unguarded, (
+        f"Non-tile-aligned shape(s) {_unguarded} assigned a wide-range distribution, which inflates "
+        f"the near-zero atol enough to hide padding contamination. Adjust the rotation offset."
+    )
 
 _IDS_BF16 = [f"{desc}-{dist}" for _, _, desc, dist in _SHAPES_BF16]
 _IDS_FP32 = [f"{desc}-{dist}" for _, _, desc, dist in _SHAPES_FP32]

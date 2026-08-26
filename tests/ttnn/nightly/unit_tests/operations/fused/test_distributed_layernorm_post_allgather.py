@@ -239,8 +239,14 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
     dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     fp32_enabled = dtype == ttnn.float32  # FP32 requires fp32_dest_acc_en
 
-    entries_before = device.num_program_cache_entries()
-    entries_after_first_run = None
+    # The device is module-scoped, so the cache arrives here already populated -- and every config
+    # this test runs is also a cell of test_layernorm_part_2_with_program_cache above, so the entry
+    # for it always pre-exists. Without clearing, the count below can never change and the assertion
+    # holds no matter what the program cache does. Clear it so the assertion measures this test's
+    # own compilation, per the cache-state guidance in conftest.py's _device_module_impl docstring.
+    # Note: clear_program_cache(), not disable_and_clear_program_cache() -- the latter turns caching
+    # off, so the second run would recompile and the entry count would never reach 1.
+    device.clear_program_cache()
 
     for i in range(2):
         if i > 0:
@@ -256,16 +262,10 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
         run_layernorm_part_2(
             inp_shape, n_devices, is_rmsnorm, dtype, dtype, device, gamma_beta_dtype=dtype, fp32_enabled=fp32_enabled
         )
-        if i == 0:
-            entries_after_first_run = device.num_program_cache_entries()
 
     assert (
-        entries_after_first_run - entries_before <= 1
-    ), f"First run added more than one program cache entry: {entries_before} -> {entries_after_first_run}"
-    assert device.num_program_cache_entries() == entries_after_first_run, (
-        f"Second identical run added a program cache entry: "
-        f"{entries_after_first_run} -> {device.num_program_cache_entries()}"
-    )
+        device.num_program_cache_entries() == 1
+    ), f"Program cache should have exactly one entry, got {device.num_program_cache_entries()}"
 
 
 @pytest.mark.parametrize("input_w", [17, 34, 63])
