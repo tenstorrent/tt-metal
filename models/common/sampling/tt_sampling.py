@@ -678,15 +678,6 @@ class TTSampling(LightweightModule):
         method, `_greedy_col` and `_greedy_col_dims` in favour of `stable=True` becomes a pure win
         once the remaining routes implement a performant stable mode.
 
-        With stable top-k enabled this pass would be redundant, because candidate position and
-        global token id are ordered the same way BY CONSTRUCTION: the gathered buffer is laid out as
-        one contiguous block per device, and `_create_indices_tensors` derives each global id as
-        `local_topk_index + device_id * padded_per_device` from that same layout. Across blocks the
-        two orders therefore agree unconditionally. WITHIN a block they agree only if the per-device
-        top-k emitted its tied maxima in ascending local-index order -- i.e. only with `stable=True`
-        (not requested here for perf), so within a block the tied maxima may arrive in arbitrary
-        order, which is why this pass stays.
-
         KNOWN LIMITATION: this picks the lowest global id among the GATHERED candidates. If a single
         device shard holds more than `max_top_k` (32) maxima tied at the same value, its top-k
         breaks the tie by array position and drops all but 32 of them, so the true lowest-id token
