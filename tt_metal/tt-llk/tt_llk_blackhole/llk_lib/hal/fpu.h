@@ -258,6 +258,43 @@ constexpr bool is_valid(const Pool operation)
            has_valid_dest_row_offset(operation.dest_row_offset) && is_valid(operation.release) && has_valid_index_tracking(operation);
 }
 
+#ifdef ENABLE_LLK_ASSERT
+inline __attribute__((always_inline)) void assert_valid(const Elementwise operation)
+{
+    LLK_ASSERT(is_valid(operation.operation), "FPU elementwise operation must be Add, Subtract, or Multiply");
+    LLK_ASSERT(is_valid(operation.broadcast), "FPU elementwise broadcast must be None, Column, Row, or Scalar");
+    LLK_ASSERT(is_valid(operation.dest_write), "FPU elementwise Dest write mode must be Overwrite or Accumulate");
+    LLK_ASSERT(has_valid_address_modifier(operation.address_modifier), "FPU elementwise address modifier must be in [0, 7]");
+    LLK_ASSERT(has_valid_dest_row_offset(operation.dest_row_offset), "FPU elementwise Dest row offset must fit in ten bits");
+    LLK_ASSERT(is_valid(operation.release), "FPU elementwise source release must be None, SrcA, SrcB, or Both");
+}
+
+inline __attribute__((always_inline)) void assert_valid(const DotProduct operation)
+{
+    LLK_ASSERT(has_valid_address_modifier(operation.address_modifier), "FPU dot-product address modifier must be in [0, 7]");
+    LLK_ASSERT(has_valid_dest_row_offset(operation.dest_row_offset), "FPU dot-product Dest row offset must fit in ten bits");
+    LLK_ASSERT(is_valid(operation.release), "FPU dot-product source release must be None, SrcA, SrcB, or Both");
+}
+
+inline __attribute__((always_inline)) void assert_valid(const MatrixMultiply operation)
+{
+    LLK_ASSERT(is_valid(operation.broadcast), "FPU matrix-multiply broadcast must be None or Row");
+    LLK_ASSERT(has_valid_address_modifier(operation.address_modifier), "FPU matrix-multiply address modifier must be in [0, 7]");
+    LLK_ASSERT(has_valid_dest_row_offset(operation.dest_row_offset), "FPU matrix-multiply Dest row offset must fit in ten bits");
+    LLK_ASSERT(is_valid(operation.release), "FPU matrix-multiply source release must be None, SrcA, SrcB, or Both");
+}
+
+inline __attribute__((always_inline)) void assert_valid(const Pool operation)
+{
+    LLK_ASSERT(is_valid(operation.function), "FPU pool function must be Sum or Maximum");
+    LLK_ASSERT(is_valid(operation.indices), "FPU pool index tracking must be Disabled or Enabled");
+    LLK_ASSERT(has_valid_address_modifier(operation.address_modifier), "FPU pool address modifier must be in [0, 7]");
+    LLK_ASSERT(has_valid_dest_row_offset(operation.dest_row_offset), "FPU pool Dest row offset must fit in ten bits");
+    LLK_ASSERT(is_valid(operation.release), "FPU pool source release must be None, SrcA, SrcB, or Both");
+    LLK_ASSERT(has_valid_index_tracking(operation), "FPU pool index tracking requires Maximum");
+}
+#endif
+
 constexpr std::uint32_t value(const SrcBBroadcast broadcast)
 {
     return static_cast<std::uint32_t>(broadcast);
@@ -364,13 +401,16 @@ constexpr std::uint32_t get_operation()
  * @param operation: Complete elementwise description.
  * @note Use the result where another expander accepts an encoded operation, such as a MOP
  *       or replay configuration.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const Elementwise operation)
 {
-    if (!is_valid(operation))
+#ifdef ENABLE_LLK_ASSERT
+    if (!__builtin_is_constant_evaluated())
     {
-        __builtin_trap();
+        detail::assert_valid(operation);
     }
+#endif
 
     return detail::get_operation(operation);
 }
@@ -388,9 +428,10 @@ inline __attribute__((always_inline)) void run()
 }
 
 /**
- * @brief Validate, encode, and issue a runtime-selected elementwise operation.
+ * @brief Encode and issue a runtime-selected elementwise operation.
  *
  * @param operation: Complete elementwise description.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline __attribute__((always_inline)) void run(const Elementwise operation)
 {
@@ -415,13 +456,16 @@ constexpr std::uint32_t get_operation()
  * @brief Encode a runtime-selected DOTPV dot product without issuing it.
  *
  * @param operation: Complete dot-product description.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const DotProduct operation)
 {
-    if (!is_valid(operation))
+#ifdef ENABLE_LLK_ASSERT
+    if (!__builtin_is_constant_evaluated())
     {
-        __builtin_trap();
+        detail::assert_valid(operation);
     }
+#endif
 
     return detail::get_operation(operation);
 }
@@ -439,9 +483,10 @@ inline __attribute__((always_inline)) void run()
 }
 
 /**
- * @brief Validate, encode, and issue a runtime-selected DOTPV dot product.
+ * @brief Encode and issue a runtime-selected DOTPV dot product.
  *
  * @param operation: Complete dot-product description.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline __attribute__((always_inline)) void run(const DotProduct operation)
 {
@@ -467,13 +512,16 @@ constexpr std::uint32_t get_operation()
  * @brief Encode a runtime-selected MVMUL matrix multiply without issuing it.
  *
  * @param operation: Complete matrix-multiply description.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const MatrixMultiply operation)
 {
-    if (!is_valid(operation))
+#ifdef ENABLE_LLK_ASSERT
+    if (!__builtin_is_constant_evaluated())
     {
-        __builtin_trap();
+        detail::assert_valid(operation);
     }
+#endif
 
     return detail::get_operation(operation);
 }
@@ -491,9 +539,10 @@ inline __attribute__((always_inline)) void run()
 }
 
 /**
- * @brief Validate, encode, and issue a runtime-selected MVMUL matrix multiply.
+ * @brief Encode and issue a runtime-selected MVMUL matrix multiply.
  *
  * @param operation: Complete matrix-multiply description.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline __attribute__((always_inline)) void run(const MatrixMultiply operation)
 {
@@ -519,13 +568,16 @@ constexpr std::uint32_t get_operation()
  * @brief Encode a runtime-selected pool operation without issuing it.
  *
  * @param operation: Complete pool description.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const Pool operation)
 {
-    if (!is_valid(operation))
+#ifdef ENABLE_LLK_ASSERT
+    if (!__builtin_is_constant_evaluated())
     {
-        __builtin_trap();
+        detail::assert_valid(operation);
     }
+#endif
 
     return detail::get_operation(operation);
 }
@@ -543,9 +595,10 @@ inline __attribute__((always_inline)) void run()
 }
 
 /**
- * @brief Validate, encode, and issue a runtime-selected pool operation.
+ * @brief Encode and issue a runtime-selected pool operation.
  *
  * @param operation: Complete pool description.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline __attribute__((always_inline)) void run(const Pool operation)
 {

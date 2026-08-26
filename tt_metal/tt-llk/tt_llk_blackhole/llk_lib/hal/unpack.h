@@ -226,6 +226,36 @@ constexpr bool is_valid(const RowStartCacheFlush operation)
     return is_valid(operation.engine) && is_valid(operation.scope);
 }
 
+#ifdef ENABLE_LLK_ASSERT
+inline __attribute__((always_inline)) void assert_valid(const DataTransfer operation)
+{
+    LLK_ASSERT(is_valid(operation.engine), "UNPACR engine must be Unpacker0 or Unpacker1");
+    LLK_ASSERT(ckernel::is_valid(operation.increments.channel0.y, 2), "UNPACR channel 0 Y increment must be in [0, 3]");
+    LLK_ASSERT(ckernel::is_valid(operation.increments.channel0.z, 2), "UNPACR channel 0 Z increment must be in [0, 3]");
+    LLK_ASSERT(ckernel::is_valid(operation.increments.channel1.y, 2), "UNPACR channel 1 Y increment must be in [0, 3]");
+    LLK_ASSERT(ckernel::is_valid(operation.increments.channel1.z, 2), "UNPACR channel 1 Z increment must be in [0, 3]");
+    LLK_ASSERT(is_valid(operation.context.source), "UNPACR context source must be ThreadDefault, Explicit, or Counter");
+    LLK_ASSERT(ckernel::is_valid(operation.context.configuration_context, 3), "UNPACR configuration context must be in [0, 7]");
+    LLK_ASSERT(operation.context.address_counter_context <= 2u, "UNPACR address-counter context must be in [0, 2]");
+    LLK_ASSERT(is_valid(operation.handoff), "UNPACR source handoff must be Keep or FlipAndSetDataValid");
+    LLK_ASSERT(is_valid(operation.datum_override), "UNPACR datum override must be None or Zero");
+    LLK_ASSERT(is_valid(operation.search), "UNPACR search mode must be DatumRange or Row");
+    LLK_ASSERT(is_valid(operation.accumulation), "UNPACR accumulation action must be Continue or Flush");
+    LLK_ASSERT(has_valid_explicit_context(operation), "UNPACR unpacker-1 explicit configuration context must be in [0, 1]");
+}
+
+inline __attribute__((always_inline)) void assert_valid(const ContextCounterIncrement operation)
+{
+    LLK_ASSERT(is_valid(operation.engine), "UNPACR context-counter engine must be Unpacker0 or Unpacker1");
+}
+
+inline __attribute__((always_inline)) void assert_valid(const RowStartCacheFlush operation)
+{
+    LLK_ASSERT(is_valid(operation.engine), "UNPACR row-start-cache engine must be Unpacker0 or Unpacker1");
+    LLK_ASSERT(is_valid(operation.scope), "UNPACR row-start-cache scope must be CurrentThread or AllEntries");
+}
+#endif
+
 constexpr std::uint32_t value(const Engine engine)
 {
     return static_cast<std::uint32_t>(engine);
@@ -350,13 +380,16 @@ constexpr std::uint32_t get_operation()
  * @param operation: Complete data-transfer description.
  * @note Use the result where another expander accepts an encoded operation, such as a MOP
  *       or replay configuration.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const DataTransfer operation)
 {
-    if (!is_valid(operation))
+#ifdef ENABLE_LLK_ASSERT
+    if (!__builtin_is_constant_evaluated())
     {
-        __builtin_trap();
+        detail::assert_valid(operation);
     }
+#endif
 
     return detail::get_operation(operation);
 }
@@ -374,9 +407,10 @@ inline __attribute__((always_inline)) void run()
 }
 
 /**
- * @brief Validate, encode, and issue a runtime-selected UNPACR data transfer.
+ * @brief Encode and issue a runtime-selected UNPACR data transfer.
  *
  * @param operation: Complete data-transfer description.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline __attribute__((always_inline)) void run(const DataTransfer operation)
 {
@@ -399,13 +433,16 @@ constexpr std::uint32_t get_operation()
  * @brief Encode a runtime-selected canonical UNPACR context-counter increment without issuing it.
  *
  * @param operation: Unpacker whose per-thread configuration context counter advances.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const ContextCounterIncrement operation)
 {
-    if (!is_valid(operation))
+#ifdef ENABLE_LLK_ASSERT
+    if (!__builtin_is_constant_evaluated())
     {
-        __builtin_trap();
+        detail::assert_valid(operation);
     }
+#endif
     return detail::get_operation(operation);
 }
 
@@ -422,9 +459,10 @@ inline __attribute__((always_inline)) void run()
 }
 
 /**
- * @brief Validate, encode, and issue a runtime-selected UNPACR context-counter increment.
+ * @brief Encode and issue a runtime-selected UNPACR context-counter increment.
  *
  * @param operation: Unpacker whose per-thread configuration context counter advances.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline __attribute__((always_inline)) void run(const ContextCounterIncrement operation)
 {
@@ -447,13 +485,16 @@ constexpr std::uint32_t get_operation()
  * @brief Encode a runtime-selected canonical UNPACR row-start-cache flush without issuing it.
  *
  * @param operation: Unpacker and cache-entry scope to flush.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const RowStartCacheFlush operation)
 {
-    if (!is_valid(operation))
+#ifdef ENABLE_LLK_ASSERT
+    if (!__builtin_is_constant_evaluated())
     {
-        __builtin_trap();
+        detail::assert_valid(operation);
     }
+#endif
     return detail::get_operation(operation);
 }
 
@@ -470,9 +511,10 @@ inline __attribute__((always_inline)) void run()
 }
 
 /**
- * @brief Validate, encode, and issue a runtime-selected UNPACR row-start-cache flush.
+ * @brief Encode and issue a runtime-selected UNPACR row-start-cache flush.
  *
  * @param operation: Unpacker and cache-entry scope to flush.
+ * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 inline __attribute__((always_inline)) void run(const RowStartCacheFlush operation)
 {
