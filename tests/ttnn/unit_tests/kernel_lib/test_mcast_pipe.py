@@ -73,9 +73,9 @@ def _run_pipe(
 
     nrx, nry = rx1 - rx0 + 1, ry1 - ry0 + 1
     num_recv = nrx * nry
-    # ttnn.Mcast2D owns the fan-out (from the rect area) and the ack count. num_active=0 => the dense
+    # ttnn.Mcast2D owns the fan-out (from the rect area) and the ack count. ack_count=0 => the dense
     # default (every rect core acks == the fan-out); a test may override to drive the split-count case.
-    num_active = 0 if ack_count is None else ack_count
+    ack_count = 0 if ack_count is None else ack_count
 
     page_bytes = TILE_BYTES
     payload_pages = payload_tiles
@@ -115,7 +115,7 @@ def _run_pipe(
             handshake=pre_handshake,
             data_ready=data_ready_mode,
         ),
-        num_active=num_active,
+        num_active=ack_count,
     )
 
     # ---- CBs (both on union so index->addr map is identical across all cores) ----
@@ -142,7 +142,7 @@ def _run_pipe(
 
     # ---- sender kernel ----
     # CT: [cb_src, cb_dst] + McastArgs block
-    # [active, data_ready, consumer_ready, num_active, flags, rotating_span] + scalars.
+    # [present, active, data_ready, consumer_ready, ack_count, flags, rotating_span] + scalars.
     # pre_handshake + signal are in the mcast block (flags word) now — no separate pre_handshake CT word.
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
@@ -433,7 +433,7 @@ def test_runtime_fanout(device, rect_name):
         payload_tiles=2,
         n_iters=4,
         pre_handshake=False,
-        ack_count=None,  # num_active=0 (dense): ack tracks the runtime fan-out too
+        ack_count=None,  # ack_count=0 (dense): ack tracks the runtime fan-out too
     )
 
 
@@ -441,7 +441,7 @@ def test_runtime_fanout(device, rect_name):
 # Models conv-WS / dram-sharded / conv-1D-weights: the mcast box has cores that RECEIVE the broadcast
 # but do NOT ack. The data fan-out is the full rect area (4); only a subset (2) acks. The sender must
 # wait on the SEPARATE ack count, not the fan-out. A 1x4 box: 2 acking receivers (pre_handshake=true) +
-# 2 non-acking (pre_handshake=false). All 4 receive data; the acking config carries num_active=2 as the
+# 2 non-acking (pre_handshake=false). All 4 receive data; the acking config carries ack_count=2 as the
 # ack count.
 #
 # pre_handshake rides the mcast WIRE, but ONE Mcast2D object serves the whole family (the layernorm
@@ -483,7 +483,7 @@ def _run_split_count(device, payload_tiles, recv_rect=((0, 0), (0, 3)), ack_subs
         ]
     )
 
-    # ONE Mcast2D (handshake=True, num_active=2): the sender waits on 2 acks though it broadcasts to all
+    # ONE Mcast2D (handshake=True, ack_count=2): the sender waits on 2 acks though it broadcasts to all
     # 4 (fan-out == area). Every receiver rides THIS object; the acking vs non-acking split is a per-kernel
     # pre_handshake bit on compile_time_args() below, not a second object.
     mc = ttnn.Mcast2D(device, recv_crs, ttnn.CoreCoord(sx, sy), ttnn.McastConfig(base_sem_id=0), num_active=ack_subset)
@@ -509,7 +509,7 @@ def _run_split_count(device, payload_tiles, recv_rect=((0, 0), (0, 3)), ack_subs
     semaphores = mc.owned_semaphores()
 
     # ---- sender: pre_handshake=true (from mc's wire); fan-out=area(4) from the rect, but the wire's
-    #      num_active=2 is the ack subset the sender waits on (the D2 split-count regression) ----
+    #      ack_count=2 is the ack subset the sender waits on (the D2 split-count regression) ----
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
     sender_ct += [payload_pages, page_bytes, 1, 1]  # one iteration; default guarded source lifetime
@@ -638,7 +638,7 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
 
     # sender kernel (writes its own shard 0)
     # CT: [cb_src, cb_dst] + McastArgs block
-    # [active, data_ready, consumer_ready(UNUSED), num_active, flags, rotating_span].
+    # [present, active, data_ready, consumer_ready(UNUSED), ack_count, flags, rotating_span].
     # handshake=False -> flags pre_handshake bit clear, so the sender/receiver run without the ack.
     sender_ct = [cb_src, cb_dst]
     sender_ct += list(mc.compile_time_args())
@@ -714,179 +714,24 @@ def test_f3_degenerate(device):
     _run_f3(device, rect_len=1, payload_tiles=1, n_iters=1)
 
 
-# ======== ROTATING 2D with an independent sender grid ========
-# A 2x2 receiver rectangle rotates between one sender inside the rectangle and one outside it. The
-# inside sender has fan-out 3 while the outside sender has fan-out 4, so the helper must emit the
-# sender-dependent ACK sentinel and keep the outside sender in the participating set without widening
-# the receiver rectangle.
-def test_rotating_rect_independent_sender_grid(device):
-    receiver_coords = [ttnn.CoreCoord(x, y) for y in range(2) for x in range(2)]
-    sender_coords = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 1)]
-    participant_coords = receiver_coords + [sender_coords[1]]
-    receiver_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
-    sender_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in sender_coords])
-    participant_grid = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
-            ttnn.CoreRange(sender_coords[1], sender_coords[1]),
-        ]
-    )
-
-    mc = ttnn.Mcast2D(
-        device,
-        receiver_grid,
-        sender_coords[0],
-        ttnn.McastConfig(rotating_sender=True),
-        sender_grid=sender_grid,
-    )
-    assert mc.num_senders() == len(sender_coords)
-    assert mc.num_active() == ACK_EQUALS_FANOUT
-    assert mc.num_receivers(sender_coords[0]) == 3
-    assert mc.num_receivers(sender_coords[1]) == 4
-
-    span = len(sender_coords)
-    page_bytes = TILE_BYTES
-    payload = torch.zeros([span, 1, 32, 32], dtype=torch.float32)
-    for sender_round in range(span):
-        payload[sender_round] = float(sender_round + 1)
-    payload = payload.to(torch.bfloat16)
-    input_tensor = ttnn.from_torch(
-        payload, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([len(participant_coords) * span, 1, 32, 32]),
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-        device,
-        ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    cb = 0
-    cbs = [
-        ttnn.CBDescriptor(
-            total_size=page_bytes,
-            core_ranges=participant_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=cb, data_format=ttnn.bfloat16, page_size=page_bytes)
-            ],
-        )
-    ]
-    ct = [cb] + list(mc.compile_time_args()) + [1, page_bytes]
-    ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-
-    sender_rounds = {(core.x, core.y): sender_round for sender_round, core in enumerate(sender_coords)}
-    rt = ttnn.RuntimeArgs()
-    for participant_index, core in enumerate(participant_coords):
-        sender_round = sender_rounds.get((core.x, core.y), 0xFFFFFFFF)
-        input_start = sender_round if sender_round != 0xFFFFFFFF else 0
-        rt[core.x][core.y] = [
-            input_tensor.buffer_address(),
-            input_start,
-            output_tensor.buffer_address(),
-            participant_index * span,
-            sender_round,
-        ] + list(mc.runtime_args(core))
-
-    kernel = ttnn.KernelDescriptor(
-        kernel_source=f"{KERNEL_DIR}/pipe_rotating_line.cpp",
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=participant_grid,
-        compile_time_args=ct,
-        runtime_args=rt,
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    output = ttnn.generic_op(
-        [input_tensor, output_tensor],
-        ttnn.ProgramDescriptor(kernels=[kernel], semaphores=mc.owned_semaphores(), cbs=cbs),
-    )
-
-    torch_out = ttnn.to_torch(output).reshape(len(participant_coords) * span, 1, 32, 32)
-    outside_sender = sender_coords[1]
-    for participant_index, core in enumerate(participant_coords):
-        for sender_round in range(span):
-            if core == outside_sender and sender_round == 0:
-                continue
-            assert torch.equal(
-                torch_out[participant_index * span + sender_round].to(torch.float32),
-                payload[sender_round].to(torch.float32),
-            ), f"core ({core.x},{core.y}) round {sender_round}: rotating 2D payload mismatch"
-
-
-# A rotating sender and receiver share the same Flag semaphore cell. After sending a typed control
-# value, each core receives on that cell in a later round; this catches a sender-local stale value.
-def test_rotating_signal_clears_sender_flag(device):
-    span = 2
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(span - 1, 0))])
-    mc = ttnn.Mcast1D(
-        device,
-        grid,
-        ttnn.Mcast1DShape.PerRow,
-        sender_index=0,
-        config=ttnn.McastConfig(rotating_sender=True),
-    )
-
-    output = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([span * span, 8]),
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        device,
-        ttnn.DRAM_MEMORY_CONFIG,
-    )
-    dummy_input = ttnn.from_torch(
-        torch.zeros([1, 1, 32, 32], dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    cb_result = 0
-    cbs = [
-        ttnn.CBDescriptor(
-            total_size=32,
-            core_ranges=grid,
-            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb_result, data_format=ttnn.uint32, page_size=32)],
-        )
-    ]
-    ct = [cb_result] + list(mc.compile_time_args())
-    ct.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
-    rt = ttnn.RuntimeArgs()
-    for sender_round in range(span):
-        core = ttnn.CoreCoord(sender_round, 0)
-        rt[sender_round][0] = [output.buffer_address(), sender_round] + list(mc.runtime_args(core))
-
-    kernel = ttnn.KernelDescriptor(
-        kernel_source=f"{KERNEL_DIR}/pipe_rotating_signal.cpp",
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=grid,
-        compile_time_args=ct,
-        runtime_args=rt,
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    result = ttnn.generic_op(
-        [dummy_input, output],
-        ttnn.ProgramDescriptor(kernels=[kernel], semaphores=mc.owned_semaphores(), cbs=cbs),
-    )
-
-    actual = ttnn.to_torch(result).reshape(span, span, 8).to(torch.int64)
-    expected = torch.empty([span, span, 8], dtype=torch.int64)
-    for round in range(span):
-        expected[:, round, :] = round + 1
-    assert torch.equal(actual, expected)
-
-
 # ======== ROTATING LINE via the host helper (Mcast1D) + the unified McastArgs decoder ========
 # End-to-end proof of the rotating WIRE (not just the pipe's shared-cell mechanics above):
 # ttnn.Mcast1D(PerRow, rotating_sender=True) emits the semaphores, CT, and the per-core RT block (full-line rect
 # + ordered per-round sender coords); pipe_rotating_line.cpp decodes it with ONE
-# McastArgs<1,5> (owns both arg lists and reads rotating_span from CT) and runs the N-core rotating line --
+# McastArgs<1,4> (owns both arg lists and reads rotating_span from CT) and runs the N-core rotating line --
 # the 1D mirror of block-sharded
 # matmul in0. Each core i holds a distinct constant shard (i+1). Over N rounds core r broadcasts its
 # shard to the whole line; every core records what it saw per round to DRAM. The check
 # output[c*N + r] == shard(r) validates BOTH the data path AND that the receiver indexes the sender
 # coords in the RIGHT ORDER -- a mis-ordered coord list would hand core c shard(r' != r).
-def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_indices=None):
+def _run_rotating_line(
+    device,
+    span,
+    payload_tiles,
+    receiver_span=None,
+    sender_indices=None,
+    data_ready_mode=ttnn.McastDataReady.Flag,
+):
     receiver_span = span if receiver_span is None else receiver_span
     sender_indices = list(range(span)) if sender_indices is None else sender_indices
     assert len(sender_indices) == span
@@ -917,7 +762,13 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
 
     # ---- the host helper owns sems + CT + per-core RT for the rotating line ----
     if sender_indices == list(range(span)) and receiver_span == span:
-        mc = ttnn.Mcast1D(device, receiver_grid, ttnn.Mcast1DShape.PerRow, 0, ttnn.McastConfig(rotating_sender=True))
+        mc = ttnn.Mcast1D(
+            device,
+            receiver_grid,
+            ttnn.Mcast1DShape.PerRow,
+            0,
+            ttnn.McastConfig(rotating_sender=True, data_ready=data_ready_mode),
+        )
     else:
         sender_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(sender, 0), ttnn.CoreCoord(sender, 0)) for sender in sender_indices]
@@ -926,11 +777,11 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
             device,
             receiver_grid,
             ttnn.Mcast1DShape.PerRow,
-            sender_index=0,
-            config=ttnn.McastConfig(rotating_sender=True),
-            sender_grid=sender_grid,
+            0,
+            ttnn.McastConfig(rotating_sender=True, data_ready=data_ready_mode),
+            sender_grid,
         )
-    assert mc.num_senders() == span, f"expected {span} sender rounds, got {mc.num_senders()}"
+    assert mc.compile_time_args()[6] == span, f"expected {span} sender rounds"
     semaphores = mc.owned_semaphores()
 
     cb = 0  # one CB per core: mcast source (in place) + landing region
@@ -944,14 +795,13 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
         ),
     ]
 
-    # CT: [cb] + McastArgs<1,5> block (6 words) + [payload_pages, page_bytes] + TA(in) + TA(out)
-    ct = [cb] + list(mc.compile_time_args()) + [payload_pages, page_bytes]
+    # CT: [cb] + McastArgs<1,4> block (7 words) + [num_rounds, payload_pages, page_bytes] + TA(in) + TA(out)
+    ct = [cb] + list(mc.compile_time_args()) + [span, payload_pages, page_bytes]
     ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
-    # RT: [in_addr, in_start, out_addr, out_start, my_index] + McastArgs<1,5> RT block (rect + coords)
+    # RT: [in_addr, in_start, out_addr, out_start] + McastArgs<1,4> RT block (topology + per-core role)
     rt = ttnn.RuntimeArgs()
-    sender_rounds = {sender: round_id for round_id, sender in enumerate(sender_indices)}
     for X in range(N):
         core = ttnn.CoreCoord(X, 0)
         rt[X][0] = [
@@ -959,7 +809,6 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
             X * payload_pages,
             output_tensor.buffer_address(),
             X * span * payload_pages,
-            sender_rounds.get(X, 0xFFFFFFFF),
         ] + list(mc.runtime_args(core))
 
     k = ttnn.KernelDescriptor(
@@ -994,6 +843,10 @@ def test_rotating_line_smoke(device):
     _run_rotating_line(device, span=2, payload_tiles=1)
 
 
+def test_rotating_line_counter_smoke(device):
+    _run_rotating_line(device, span=2, payload_tiles=1, data_ready_mode=ttnn.McastDataReady.Counter)
+
+
 def test_rotating_line_outside_sender(device):
     _run_rotating_line(device, span=2, payload_tiles=1, receiver_span=2, sender_indices=[0, 2])
 
@@ -1010,95 +863,12 @@ def test_rotating_line(device, span, payload_tiles):
 # the original same-column sender; diagonal placement advances the sender column once per row and
 # wraps at GC. The sender streams `num_blocks` blocks of its row (the matmul K-block loop): each block
 # is staged from DRAM and multicast, and every receiver receives each block. pipe_fixed_line.cpp
-# decodes the wire with ONE McastArgs<1,5> (owns both arg lists; sender() reads its rect off RT,
+# decodes the wire with ONE McastArgs<1,4> (owns both arg lists; sender() reads its rect off RT,
 # receiver().receive() reads the sender coords off RT) and -- because the role is fixed for the whole
 # loop -- builds the pipe ONCE above the block loop. Each (row Y, block b) holds a distinct constant
 # (Y*NB + b + 1);
 # the check output[(Y*GC + X)*NB + b] == block(Y, b) proves the data path across the loop AND that the
 # helper emits the right per-row rect / sender coords for every row independently.
-def test_fixed_line_mixed_degenerate_and_outside_sender(device):
-    receiver_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))])
-    sender_grid = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-            ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(1, 1)),
-        ]
-    )
-    participant_coords = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)]
-    participant_grid = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-            ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
-        ]
-    )
-    mc = ttnn.Mcast1D(
-        device,
-        receiver_grid,
-        ttnn.Mcast1DShape.PerRow,
-        sender_index=0,
-        config=ttnn.McastConfig(),
-        sender_grid=sender_grid,
-    )
-
-    payload = torch.stack([torch.full([1, 32, 32], 1.0), torch.full([1, 32, 32], 2.0)]).to(torch.bfloat16)
-    input_tensor = ttnn.from_torch(
-        payload,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([len(participant_coords), 1, 32, 32]),
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-        device,
-        ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    cb = 0
-    cbs = [
-        ttnn.CBDescriptor(
-            total_size=TILE_BYTES,
-            core_ranges=participant_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=cb, data_format=ttnn.bfloat16, page_size=TILE_BYTES)
-            ],
-        )
-    ]
-    ct = [cb] + list(mc.compile_time_args()) + [1, 1, TILE_BYTES]
-    ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-
-    rt = ttnn.RuntimeArgs()
-    for participant_index, core in enumerate(participant_coords):
-        rt[core.x][core.y] = [
-            input_tensor.buffer_address(),
-            core.y,
-            output_tensor.buffer_address(),
-            participant_index,
-            int(mc.is_sender(core)),
-        ] + list(mc.runtime_args(core))
-
-    kernel = ttnn.KernelDescriptor(
-        kernel_source=f"{KERNEL_DIR}/pipe_fixed_line.cpp",
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=participant_grid,
-        compile_time_args=ct,
-        runtime_args=rt,
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    output = ttnn.generic_op(
-        [input_tensor, output_tensor],
-        ttnn.ProgramDescriptor(kernels=[kernel], semaphores=mc.owned_semaphores(), cbs=cbs),
-    )
-
-    actual = ttnn.to_torch(output).reshape(len(participant_coords), 1, 32, 32)
-    assert torch.equal(actual[0], payload[0])  # self-only row's sender
-    assert torch.equal(actual[1], payload[1])  # active row's receiver
-    assert torch.equal(actual[2], payload[1])  # active row's outside sender
-
-
 def _run_fixed_line(
     device,
     grid_cols,
@@ -1152,7 +922,7 @@ def _run_fixed_line(
             sender_placement=sender_placement,
             config=ttnn.McastConfig(),
         )
-    assert mc.num_senders() == 1, "fixed mode has a single sender per line"
+    assert mc.compile_time_args()[6] == 0, "fixed mode has no rotating span"
     if sender_placement == ttnn.Mcast1DSenderPlacement.Diagonal:
         for Y in range(GR):
             expected_sender = ttnn.CoreCoord((starting_sender_index + Y) % GC, Y)
@@ -1170,12 +940,12 @@ def _run_fixed_line(
         ),
     ]
 
-    # CT: [cb] + McastArgs<1,5> block (6 words) + [num_blocks, payload_pages, page_bytes] + TA(in) + TA(out)
+    # CT: [cb] + McastArgs<1,4> block (7 words) + [num_blocks, payload_pages, page_bytes] + TA(in) + TA(out)
     ct = [cb] + list(mc.compile_time_args()) + [NB, payload_pages, page_bytes]
     ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
-    # RT: [in_addr, in_start, out_addr, out_start, is_sender] + McastArgs<1,5> RT block (sender rect | sender coords)
+    # RT: [in_addr, in_start, out_addr, out_start] + McastArgs<1,4> RT block (topology + per-core role)
     rt = ttnn.RuntimeArgs()
     for Y in range(GR):
         for X in range(GC):
@@ -1185,7 +955,6 @@ def _run_fixed_line(
                 Y * NB * payload_pages,  # row Y's first block (sender only; unused by receivers)
                 output_tensor.buffer_address(),
                 (Y * GC + X) * NB * payload_pages,
-                int(mc.is_sender(core)),
             ] + list(mc.runtime_args(core))
 
     k = ttnn.KernelDescriptor(
@@ -1254,123 +1023,6 @@ def test_fixed_line_diagonal_wraparound(device):
 def test_fixed_line(device, grid_cols, grid_rows, num_blocks, payload_tiles):
     _run_fixed_line(
         device, grid_cols=grid_cols, grid_rows=grid_rows, num_blocks=num_blocks, payload_tiles=payload_tiles
-    )
-
-
-# ======== FIXED LINE, LOOPBACK (src != dst): the sender lands its OWN copy ========
-# _run_fixed_line multicasts in place (src == dst), so SenderPipe never takes the loopback path and
-# the sender's own slot is correct whatever destination rectangle the host emitted. Here the sender
-# stages into a separate CB and multicasts into the landing CB, so an in-line sender only ends up with
-# the payload in its landing CB via loopback -- which requires the rectangle Mcast1D emits to CONTAIN
-# the sender. The sender's own DRAM slot is checked like every other core's, so a rectangle that
-# excludes the sender fails here (and only here).
-def _run_fixed_line_loopback(device, grid_cols, grid_rows, num_blocks, payload_tiles, starting_sender_index):
-    GC, GR, NB = grid_cols, grid_rows, num_blocks
-    page_bytes = TILE_BYTES
-    payload_pages = payload_tiles
-
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GC - 1, GR - 1))])
-
-    in_shape = [GR, NB, 32, 32 * payload_tiles]
-    payload = torch.zeros(in_shape, dtype=torch.float32)
-    for y in range(GR):
-        for b in range(NB):
-            payload[y, b] = float(y * NB + b + 1)
-    payload = payload.to(torch.bfloat16)
-    input_tensor = ttnn.from_torch(
-        payload, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-    out_shape = [GC * GR * NB, 1, 32, 32 * payload_tiles]
-    output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(out_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-    )
-    io_tensors = [input_tensor, output_tensor]
-
-    mc = ttnn.Mcast1D(
-        device,
-        grid,
-        ttnn.Mcast1DShape.PerRow,
-        sender_index=starting_sender_index,
-        config=ttnn.McastConfig(),
-    )
-    semaphores = mc.owned_semaphores()
-
-    # Two DISTINCT CBs: cb_src stages the DRAM block, cb_dst is the multicast landing region. cb_dst
-    # must exist on every core of the line so the one landing address is valid grid-wide.
-    cb_src, cb_dst = 0, 1
-    cbs = [
-        ttnn.CBDescriptor(
-            total_size=payload_pages * page_bytes,
-            core_ranges=grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=cb_src, data_format=ttnn.bfloat16, page_size=page_bytes)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=payload_pages * page_bytes,
-            core_ranges=grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=cb_dst, data_format=ttnn.bfloat16, page_size=page_bytes)
-            ],
-        ),
-    ]
-
-    ct = [cb_src, cb_dst] + list(mc.compile_time_args()) + [NB, payload_pages, page_bytes]
-    ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-
-    rt = ttnn.RuntimeArgs()
-    for Y in range(GR):
-        for X in range(GC):
-            core = ttnn.CoreCoord(X, Y)
-            rt[X][Y] = [
-                input_tensor.buffer_address(),
-                Y * NB * payload_pages,
-                output_tensor.buffer_address(),
-                (Y * GC + X) * NB * payload_pages,
-                int(mc.is_sender(core)),
-            ] + list(mc.runtime_args(core))
-
-    k = ttnn.KernelDescriptor(
-        kernel_source=f"{KERNEL_DIR}/pipe_fixed_line_loopback.cpp",
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=grid,
-        compile_time_args=ct,
-        runtime_args=rt,
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-
-    pd = ttnn.ProgramDescriptor(kernels=[k], semaphores=semaphores, cbs=cbs)
-    output = ttnn.generic_op(io_tensors, pd)
-
-    torch_out = ttnn.to_torch(output).reshape(GC * GR * NB, 32, 32 * payload_tiles)
-    for Y in range(GR):
-        for X in range(GC):
-            is_sender = X == starting_sender_index
-            for b in range(NB):
-                slot = (Y * GC + X) * NB + b
-                who = "SENDER (loopback self-copy)" if is_sender else "receiver"
-                assert torch.equal(
-                    torch_out[slot].to(torch.float32), payload[Y, b].to(torch.float32)
-                ), f"core ({X},{Y}) block {b}, {who}: expected const {Y * NB + b + 1} -> dest-rect / loopback bug"
-    logger.info(
-        f"FIXED-LINE LOOPBACK GC={GC} GR={GR} NB={NB} pt={payload_tiles} sender_col={starting_sender_index}: "
-        f"PASS ({GC * GR * NB} slots correct)"
-    )
-
-
-# Sender column 0 and column GC-1 are the two EDGE placements; an interior column (1) is the third.
-# All three must land the sender's own copy, so all three must emit a rectangle containing the sender.
-@pytest.mark.parametrize("starting_sender_index", [0, 1, 3])
-def test_fixed_line_loopback(device, starting_sender_index):
-    _run_fixed_line_loopback(
-        device,
-        grid_cols=4,
-        grid_rows=2,
-        num_blocks=2,
-        payload_tiles=1,
-        starting_sender_index=starting_sender_index,
     )
 
 

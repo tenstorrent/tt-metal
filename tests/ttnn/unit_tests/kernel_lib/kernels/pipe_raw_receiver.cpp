@@ -42,14 +42,13 @@ void kernel_main() {
 
     // BY HAND: sem ids + pre_handshake + signal are template params; the sender coords (target of this
     // receiver's consumer-ready ack) go to the ReceiverPipe ctor as a non-owning view (NUM_SENDERS
-    // defaults to 1). This array stays alive through every pipe use. receive() then acks/waits the
-    // stored sender each round — no coords passed per call.
+    // defaults to 1). This array stays alive through every pipe use.
     const uint32_t sender_coords[2] = {sender_x, sender_y};
     ReceiverPipe<data_ready_sem_id, pre_handshake != 0, consumer_ready_sem_id, DataReadySignal::Flag> pipe(
         noc, sender_coords);
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
-        pipe.receive();
+        pipe.receive(iter);
     }
 
     cb_dst_obj.push_back(payload_pages);

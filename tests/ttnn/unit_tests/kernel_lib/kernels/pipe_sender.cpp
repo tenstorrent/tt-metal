@@ -20,7 +20,7 @@ void kernel_main() {
     constexpr uint32_t cb_src = get_compile_time_arg_val(0);
     constexpr uint32_t cb_dst = get_compile_time_arg_val(1);
     constexpr auto mc = McastArgs</*CT=*/2, /*RT=*/2>();              // mcast config (CT 2..) + dest rect (RT 2..)
-    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 7, right after the mcast CT block
+    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 9, right after the mcast CT block
     constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 0);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 1);
     constexpr uint32_t num_iters = get_compile_time_arg_val(SCALARS + 2);

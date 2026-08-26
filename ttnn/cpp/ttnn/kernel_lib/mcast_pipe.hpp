@@ -41,7 +41,7 @@
 // re-materialization changes the caller-facing API (renamed/removed type, moved param, changed
 // count/flag semantics — anything that forces a call site rewrite); leave it for internal-only
 // changes.
-#define MCAST_PIPE_API_VERSION 11
+#define MCAST_PIPE_API_VERSION 16
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -156,11 +156,8 @@ public:
 
     // ===== CONTROL channel (a signal with no data block) =====
     // Handle receiver readiness when enabled, then broadcast a control signal.
-    // Flag sends `value`; Counter records one event. Pairs with ReceiverPipe::receive_signal().
+    // Flag sends `value`; Counter records one event. Pairs with ReceiverPipe::receive_signal(round).
     void send_signal(uint32_t value = VALID);
-
-    // Returns whether this core belongs to the receiver rectangle.
-    bool core_in_receiver_rect() const { return in_rect_; }
 
 private:
     // ---- data multicast via the Noc object ----
@@ -213,12 +210,11 @@ public:
     // `sender_coords` contains NUM_SENDERS virtual NoC coordinate pairs and must outlive the pipe.
     explicit ReceiverPipe(const Noc& noc, const uint32_t* sender_coords);
 
-    // Handle receiver readiness when enabled, then wait for data from the sender selected by `round`.
-    // Fixed receivers use round 0; rotating receivers pass the sender's round.
+    // Handle receiver readiness, then wait for data from the sender selected by the absolute work round.
     void receive(uint32_t round = 0);
 
     // Handle receiver readiness when enabled, then wait for a control signal.
-    // Returns the Flag value or consumed Counter event count. Pairs with SenderPipe::send_signal().
+    // Returns the Flag value or round + 1 for Counter. Pairs with SenderPipe::send_signal().
     uint32_t receive_signal(uint32_t round = 0);
 
 private:
@@ -226,8 +222,6 @@ private:
     Semaphore<> data_ready_;
     Semaphore<> consumer_ready_;
     const uint32_t* coords_;  // non-owning sender coord pairs [x0,y0,...]; storage outlives this pipe
-    // Number of data-ready events consumed by this core.
-    uint32_t signals_seen_ = 0;
 };
 
 // =============================================================================
@@ -235,58 +229,107 @@ private:
 // =============================================================================
 // Construct McastArgs with the starting offsets of the host helper's compile-time and runtime arguments.
 // Sender kernels call sender(noc), receiver kernels call receiver(noc), and rotating receivers pass the
-// sender round to receive(round). Guard sender work with `active` when a family may have no receivers.
+// absolute work round to receive(round). Guard sender work with `has_receivers` when a family may have
+// no receivers.
+//
+// can_send() and can_receive() report this core's roles. sender_index(round) maps an absolute work
+// round to a rotating phase, and should_send(round) reports whether that phase belongs to this core.
 //
 // Use next_compile_time_args_offset() and next_runtime_args_offset() to place the next argument
 // decoder after this one.
-template <uint32_t CT_BASE, uint32_t RT_BASE>
-struct McastArgs {
-    // Use `active` to guard sender work and `rotating_span` to size rotating loops.
-    static constexpr uint32_t active = get_compile_time_arg_val(CT_BASE + 0);
-    static constexpr uint32_t data_ready = get_compile_time_arg_val(CT_BASE + 1);
-    static constexpr uint32_t consumer_ready = get_compile_time_arg_val(CT_BASE + 2);
-    static constexpr uint32_t num_active = get_compile_time_arg_val(CT_BASE + 3);
-    static constexpr uint32_t flags = get_compile_time_arg_val(CT_BASE + 4);
-    static constexpr uint32_t rotating_span = get_compile_time_arg_val(CT_BASE + 5);
+namespace detail {
 
+template <uint32_t>
+static constexpr bool dependent_false = false;
+
+template <bool PRESENT, uint32_t CT_BASE, uint32_t RT_BASE>
+struct McastArgsImpl;
+
+template <uint32_t CT_BASE, uint32_t RT_BASE>
+struct McastArgsImpl<true, CT_BASE, RT_BASE> {
+    constexpr McastArgsImpl() = default;
+    static constexpr bool active = true;
+
+    // Use `has_receivers` to guard sender work. The per-core role metadata reports which pipe faces
+    // this kernel instance may construct and its phase within the repeating sender rotation.
+    static constexpr uint32_t has_receivers = get_compile_time_arg_val(CT_BASE + 1);
+    static constexpr uint32_t data_ready = get_compile_time_arg_val(CT_BASE + 2);
+    static constexpr uint32_t consumer_ready = get_compile_time_arg_val(CT_BASE + 3);
+    static constexpr uint32_t ack_count = get_compile_time_arg_val(CT_BASE + 4);
+    static constexpr uint32_t flags = get_compile_time_arg_val(CT_BASE + 5);
+    static constexpr uint32_t rotating_span = get_compile_time_arg_val(CT_BASE + 6);
+
+    // Pipe behaviour lifted off the flags word (host-computed): the caller never spells these.
     static constexpr bool pre_handshake = (flags & 0x1u) != 0u;
     static constexpr DataReadySignal signal =
         ((flags >> 1) & 0x1u) != 0u ? DataReadySignal::Counter : DataReadySignal::Flag;
     static constexpr bool rotating = rotating_span > 0;
 
+    // Sender coord pairs this family carries: 1 for a fixed sender, rotating_span otherwise.
     static constexpr uint32_t num_senders = rotating ? rotating_span : 1u;
 
-    // TODO: Share these CT/RT argument layouts and counts with the host helpers.
+    // Concrete pipe types determined by this argument block.
+    using SenderPipe =
+        dataflow_kernel_lib::SenderPipe<noc_index, data_ready, pre_handshake, consumer_ready, signal, rotating>;
+    using ReceiverPipe =
+        dataflow_kernel_lib::ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders>;
+
+    // TODO: Share these CT/RT argument layouts and counts with the host helpers. The topology payload
+    // is followed by [role flags, sender phase], where a non-sender's phase is UINT32_MAX.
     // Offsets for chaining the next argument decoder.
-    static constexpr uint32_t next_compile_time_args_offset() { return CT_BASE + 6; }
-    static constexpr uint32_t num_runtime_args() { return rotating ? (4u + 2u * rotating_span) : 4u; }
-    static constexpr uint32_t next_runtime_args_offset() { return RT_BASE + num_runtime_args(); }
-
-    // Construct the sender pipe. Guard send() with `active` when the family may be inactive.
-    template <uint8_t NOC_ID = noc_index>
-    SenderPipe<NOC_ID, data_ready, pre_handshake, consumer_ready, signal, rotating> sender(const Noc& noc) const {
-        return SenderPipe<NOC_ID, data_ready, pre_handshake, consumer_ready, signal, rotating>(
-            noc, rect<NOC_ID>(), num_active);
+    static constexpr uint32_t next_compile_time_args_offset() { return CT_BASE + 7; }
+    static constexpr uint32_t next_runtime_args_offset() {
+        return RT_BASE + (rotating ? (6u + 2u * rotating_span) : 6u);
     }
 
-    // Construct the receiver pipe. Fixed receivers use receive(); rotating receivers use receive(round).
-    ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders> receiver(const Noc& noc) const {
-        const uint32_t* coords = reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + (rotating ? 4 : 0)));
-        return ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders>(noc, coords);
-    }
+    // ---- pipe construction: NO behaviour knobs; everything comes from the wire ----
+    // Use these role queries only when one kernel is dispatched across a heterogeneous set of cores
+    // (sender-only, receiver-only, both, or neither) and must decide which pipe faces to construct.
+    // When every dispatched core has a known role, construct that pipe face directly; sender() and
+    // receiver() assert that the runtime role metadata permits it.
+    bool can_send() const { return (get_arg_val<uint32_t>(next_runtime_args_offset() - 2u) & 0x1u) != 0u; }
+    bool can_receive() const { return (get_arg_val<uint32_t>(next_runtime_args_offset() - 2u) & 0x2u) != 0u; }
+    static constexpr uint32_t sender_index(uint32_t round) { return round % num_senders; }
+    bool should_send(uint32_t round) const;
 
-    // Optional topology accessors; sender() and receiver() use these arguments automatically.
-    template <uint8_t NOC_ID = noc_index>
-    McastRect<NOC_ID> rect() const {
-        return McastRect<NOC_ID>(
-            get_arg_val<uint32_t>(RT_BASE + 0),
-            get_arg_val<uint32_t>(RT_BASE + 1),
-            get_arg_val<uint32_t>(RT_BASE + 2),
-            get_arg_val<uint32_t>(RT_BASE + 3));
-    }
+    // Construct the sender pipe. Guard send() with `has_receivers` when the family may be inactive.
+    SenderPipe sender(const Noc& noc) const;
+
+    // Construct the receiver pipe. Pass the absolute work round to receive() or receive_signal().
+    ReceiverPipe receiver(const Noc& noc) const;
+
+    // Receiver view, FIXED: the sender's coords (the target of this receiver's readiness ack).
     uint32_t sender_x() const { return get_arg_val<uint32_t>(RT_BASE + 0); }
     uint32_t sender_y() const { return get_arg_val<uint32_t>(RT_BASE + 1); }
+
+private:
+    McastRect<> rect() const;
 };
+
+template <uint32_t CT_BASE, uint32_t RT_BASE>
+struct McastArgsImpl<false, CT_BASE, RT_BASE> {
+    constexpr McastArgsImpl() = default;
+    static constexpr bool active = false;
+    static constexpr uint32_t has_receivers = 0;
+    static constexpr uint32_t next_compile_time_args_offset() { return CT_BASE + 1; }
+    static constexpr uint32_t next_runtime_args_offset() { return RT_BASE; }
+    bool can_send() const { return false; }
+    bool can_receive() const { return false; }
+    bool should_send(uint32_t) const { return false; }
+
+    void sender(const Noc&) const {
+        static_assert(dependent_false<CT_BASE>, "No multicast on this core; a sender pipe cannot be built");
+    }
+
+    void receiver(const Noc&) const {
+        static_assert(dependent_false<CT_BASE>, "No multicast on this core; a receiver pipe cannot be built");
+    }
+};
+
+}  // namespace detail
+
+template <uint32_t CT_BASE, uint32_t RT_BASE>
+struct McastArgs : detail::McastArgsImpl<(get_compile_time_arg_val(CT_BASE) != 0), CT_BASE, RT_BASE> {};
 
 }  // namespace dataflow_kernel_lib
 
