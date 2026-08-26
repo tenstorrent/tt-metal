@@ -135,7 +135,20 @@ void kernel_main() {
         u::noc_store<1>(std::move(result), out, 0);
 #else
 
+#if defined(MM_BIAS) && defined(MM_BIAS_EPILOGUE)
+        // The bias written where its TIMING is stated. A fused op runs every k-block; the
+        // bias does not, and on the node it reads as though it did. In the epilogue the
+        // spelling matches the semantics, and mm.bias(v).relu() orders the two the same way
+        // matmul(a, b).bias(v).relu() does -- relu(A@B + v). Must agree with the fusion
+        // spelling to the last bit; test_unified_matmul_bias runs both against one
+        // reference.
 #if defined(MM_RELU_EPILOGUE)
+        u::Block result =
+            acc.accumulate(u::matmul<kTransposeB>(a, b), finish, [&](auto mm) { return mm.bias(bias).relu(); });
+#else
+        u::Block result = acc.accumulate(u::matmul<kTransposeB>(a, b), finish, [&](auto mm) { return mm.bias(bias); });
+#endif
+#elif defined(MM_RELU_EPILOGUE)
         // finish-only: relu once, on the completed accumulator
         u::Block result = acc.accumulate(MM_FUSION(a, b), finish, [](auto mm) { return u::relu(mm); });
 #elif defined(MM_RELU_PER_STEP)

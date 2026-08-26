@@ -402,8 +402,26 @@ Block<S> Accumulator<S, Mode>::accumulate(const Node& node, bool finish, Epilogu
             is_fpu_fusion<Fused>::value,
             "an epilogue must return an FPU fusion node -- it receives the matmul node and should "
             "extend its chain, e.g. [](auto mm) { return relu(mm); }");
+
+        // EVALUATED, not just decltype'd, and that is the whole point. The chain is a
+        // type and could be recovered without ever running the lambda -- but an operand
+        // is not: `sum.bias(v)` puts v's circular buffer in a RUNTIME member of the node
+        // it returns. Taking only the type discards it, which made
+        //
+        //     [&](auto sum) { return sum.bias(bias_row).relu(); }
+        //
+        // compile and quietly produce an UNBIASED matmul. It is the natural spelling --
+        // bias belongs to the finished total, so it belongs here rather than on the
+        // fusion -- and it was silently wrong. Measured at 0.49 max error on a bias of
+        // +-0.5, i.e. the whole bias missing.
+        //
+        // The bare node is built with kNoBias rather than {}: a default-constructed one
+        // would carry 0, which is a perfectly good circular buffer index, so an epilogue
+        // that sets no bias would have added CB 0 to every output block.
+        const Bare bare{{}, kNoBias, kNoBias, kNoBias, kNoBias};
+        const auto fused = epilogue(bare);
         Strategy<expr::kind_of_t<Node>>::template run<Mode>(
-            node, acc_storage.cb_id, out_storage.cb_id, reload, finish, typename Fused::chain{});
+            node, acc_storage.cb_id, out_storage.cb_id, reload, finish, typename Fused::chain{}, fused.bias_cb);
     }
 
     reload = !finish;

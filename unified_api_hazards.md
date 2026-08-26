@@ -109,6 +109,57 @@ without a marker are mechanisms the headers document as the caller's responsibil
 23. **`matmul_init`'s `TransposeB` disagreeing with `matmul<Tr>`.** The header documents this
     as uncheckable across two separate calls.
 
+23b. **`.bias()` is the one thing in the FUSION position that does not run per k-block.**
+    The rule `accumulate` documents is that the node runs every k-block and only the
+    epilogue lambda is deferred to `finish`. `.bias()` sits in the node and is nonetheless
+    gated on `finish` in both accumulator modes -- `kBiasFolded` folds it into the last
+    subblock pass, `via_bias` routes it through `bias_finish`. So a reader applying the
+    stated rule predicts `A@B + k_blocks*bias`, which is exactly the wrong answer
+    `test_unified_matmul_bias.py` exists to catch.
+
+    The reason it is a special case rather than an epilogue op: the epilogue is an
+    `expr::UnaryChain`, whose `apply_in_place(slot)` composes unary SFPU ops on ONE DST
+    slot. A bias add needs a second L1 operand, so the epilogue cannot express it at all.
+    `.bias()` is a workaround for that missing capability, and its position in the
+    expression is what makes the workaround invisible.
+
+    Raised by the API's author reading `example_matmul.cpp` and predicting the documented
+    semantics rather than the implemented ones -- which is the strongest possible evidence
+    that the spelling misleads.
+
+    **PARTLY FIXED, and the fix uncovered a second bug.** The first proposed remedy was to
+    let the epilogue take a broadcast operand -- `sum + bcast<Rows>(bias_row)`. That is
+    impossible, and the library already said so: a broadcast's left operand must be a
+    stored buffer because `add_tiles_bcast_rows` reads BOTH operands from circular buffers
+    and neither from DST, while an epilogue runs on DST. The only DST-legal add is the
+    elementwise dest-reuse one, which is why the bias must be row-replicated. Hardware,
+    not spelling.
+
+    What works is the fluent form on the node the epilogue already receives:
+
+        [&](auto sum) { return sum.bias(bias_row).relu(); }
+
+    Every piece existed: `.bias()` is a `MatmulNode` method, `Fluent` supplies `.relu()`,
+    and the unary-on-`MatmulNode` overloads carry `bias_cb` through a chain append. So this
+    COMPILED ALREADY -- and silently produced an unbiased matmul, because `accumulate`
+    only did `decltype(epilogue(declval<Bare>()))`. A chain is a type and survives that; an
+    operand is a runtime member and does not. Measured 0.49312 max error on a +-0.5 bias,
+    i.e. the whole bias missing.
+
+    Fixed by EVALUATING the epilogue rather than only typing it, and threading the operand
+    into the strategy where it already knew how to apply one at finish. Same dest-reuse
+    add, same before-the-chain ordering: `max |epilogue - fusion| = 0.000000` at k_blocks
+    1 and 3, with a relu epilogue, and in L1 mode. The bare node is built with `kNoBias` in
+    every operand slot rather than `{}`, since a default-constructed 0 is a valid buffer
+    index and would have added CB 0 to every output block.
+
+    STILL OPEN: the node spelling remains legal under `accumulate`, so the misleading form
+    is available even though the honest one now exists. Retiring 23b means porting the
+    `accumulate` callers to the epilogue form and then rejecting a node-borne bias there --
+    `.bias()` stays correct for a single-shot `store()`, where there is no epilogue and
+    nothing to mislead about. `test_unified_matmul_bias.py` A/Bs the two spellings and is
+    what makes that port safe; it only means something while both exist.
+
 24. **A new pack path added without `pack_to`.** The class of bug fixed in the bfloat8_b work:
     the packer's output format is per-kernel state a pass must claim, and the fix is a
     convention rather than a constraint.
@@ -341,16 +392,15 @@ device cycles; when it stalled in lightweight mode too, the theory became "about
 device open/close cycles in one shell". Both were wrong, and both were built from real
 observations -- the stall really did happen around the twelfth suite, twice.
 
-The actual cause: **hugepage exhaustion.** Every device open takes hugepages, a hard-killed
-process does not give them back, the driver keeps them, and `tt-smi -r` does not release
-them. After enough killed runs `HugePages_Free` in `/proc/meminfo` reaches 0, and from then
-on every device open falls back and hangs -- first launch, any suite, any assert mode.
+The third theory was **hugepage exhaustion**, on the evidence that `HugePages_Free` was 0.
+That was also wrong, and it is worth recording as wrong because it was the most plausible
+of the three. `HugePages_Free` is 0 on this machine in normal operation: the fallback path
+works, the device opens, and fifteen consecutive suites then ran clean with it still at 0.
 
-    grep HugePages_Free /proc/meminfo        # 0 means this has happened
-
-Each failed long run was killed, which leaked more pages, which made the next run fail
-sooner. That is why the evidence looked like "it stalls at twelve": the budget was
-shrinking each round.
+The actual cause was duller. **A stopped device stays stopped until it is reset**, and each
+failed run was being launched onto the wreckage of the previous one -- plus, once, a stale
+`test_unified_binary.py` left holding the device after a `pkill` killed its parent shell but
+not the child. `tt-smi -r` clears it. That is all it ever was.
 
 **What identified it was stashing the library changes and finding the hang unchanged.** A
 suite that hangs identically with and without your changes is not about your changes. That

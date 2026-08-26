@@ -24,16 +24,13 @@
 #                               suite. Not the default only because lightweight is enough
 #                               to catch a fired assert and cheaper to leave on.
 #
-# DO NOT hard-kill a run. Each device open takes hugepages and a killed process does not
-# give them back -- the driver keeps them, and `tt-smi -r` does NOT release them. Enough
-# kills and HugePages_Free reaches 0, after which EVERY device open falls back and hangs:
-#
-#     grep HugePages_Free /proc/meminfo      # 0 means this has happened
-#
-# The symptom is indistinguishable from a code regression -- suites that passed minutes ago
-# hang from the first launch, in every assert mode, and still hang with the library changes
-# stashed. That last check is what identifies it. Recovering needs the driver reset, not
-# tt-smi. Ctrl-C a run and let it exit; do not kill -9 it.
+# DO NOT hard-kill a run. A stopped device STAYS stopped until reset, so every run launched
+# afterwards fails for a reason that has nothing to do with it -- and `kill -9` on the shell
+# can leave a python child still holding the device, which fails everything until it is
+# found with `pgrep -af test_unified`. The symptom is indistinguishable from a code
+# regression: suites that passed minutes ago hang from the first launch, in every assert
+# mode. Two cheap checks settle it -- `tt-smi -r` and retry, and stash the library changes
+# to see whether the hang survives them. Ctrl-C a run and let it exit.
 #
 # test_unified_negative.py sets its own environment per case and ignores both.
 #
