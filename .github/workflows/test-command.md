@@ -162,6 +162,19 @@ pre-agent-steps:
       printf '%s\n' "$HEAD_REF" > /tmp/gh-aw/agent/pr-head-ref.txt
       printf '%s\n' "$IS_FORK"  > /tmp/gh-aw/agent/pr-is-fork.txt
 
+      # Authoritative copies for the post-agent enforcement step, kept OUTSIDE the
+      # agent-writable mount. The agent sandbox mounts /tmp (and /tmp/gh-aw) rw with
+      # unrestricted bash, so the two files above are model context, not facts — a
+      # prompt-injected agent could rewrite them before the post-step reads them.
+      # ${RUNNER_TEMP}/gh-aw is mounted read-only into the sandbox and other
+      # ${RUNNER_TEMP} paths are not mounted at all, so a sibling directory there is
+      # host-owned for the whole job: written here (before the agent starts), read
+      # only by the enforcement post-step (after it exits).
+      FACTS_DIR="${RUNNER_TEMP:?}/gh-aw-facts"
+      mkdir -p "$FACTS_DIR"
+      printf '%s\n' "$HEAD_REF" > "$FACTS_DIR/pr-head-ref.txt"
+      printf '%s\n' "$IS_FORK"  > "$FACTS_DIR/pr-is-fork.txt"
+
       echo "PR #${PR_NUMBER}: head=${HEAD_REF} fork=${IS_FORK} files=$(wc -l < /tmp/gh-aw/agent/pr-files.txt) diff_lines=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)"
 
 # Deterministic enforcement of *The ref rule* (see the prompt below). The rule is
@@ -182,14 +195,19 @@ pre-agent-steps:
 # step (which materializes /tmp/gh-aw/agent_output.json from the safe-outputs JSONL)
 # and before the artifact upload that the safe_outputs job downloads and dispatches
 # from — so the file rewritten here is exactly the one the dispatcher reads.
+#
+# The head-ref and fork facts are read from ${RUNNER_TEMP}/gh-aw-facts, which the
+# agent sandbox cannot write (see the pre-agent step): the /tmp/gh-aw copies exist
+# only as model context and are treated as untrusted here.
 post-steps:
   - name: Enforce PR head ref on dispatch_workflow items
     if: always()
     run: |
       set -euo pipefail
       OUT=/tmp/gh-aw/agent_output.json
-      REF_FILE=/tmp/gh-aw/agent/pr-head-ref.txt
-      FORK_FILE=/tmp/gh-aw/agent/pr-is-fork.txt
+      FACTS_DIR="${RUNNER_TEMP:?}/gh-aw-facts"
+      REF_FILE="$FACTS_DIR/pr-head-ref.txt"
+      FORK_FILE="$FACTS_DIR/pr-is-fork.txt"
 
       # FAIL CLOSED. The agent artifact upload after this step runs
       # `if: always()`, and the safe_outputs job runs whenever the agent job
