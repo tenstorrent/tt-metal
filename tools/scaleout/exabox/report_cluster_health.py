@@ -34,6 +34,9 @@ from resolve_host_ring_order import (
 )
 
 STORE_ROOT_ENV = "CLUSTER_HEALTH_STORE_ROOT"
+# Shared-store date dirs must be world-writable: mkdir mode is umask-masked,
+# and the first writer of the day otherwise leaves 0755 owned by their uid.
+STORE_DIR_MODE = 0o777
 
 
 def dumps_compact(obj: dict[str, Any]) -> str:
@@ -551,13 +554,41 @@ def _existing_or_conflict(
     return record
 
 
+def _ensure_shared_dir(path: Path) -> None:
+    """Create ``path`` (and missing parents) and chmod each new dir plus the leaf.
+
+    ``Path.mkdir(parents=True, mode=...)`` applies ``mode`` only to the leaf and
+    still masks with umask. Chmod after create so later uids can add files under
+    the same date directory. Existing ancestors are left unchanged. Chmod on a
+    directory we do not own is ignored (OSError) so a 0755 dir owned by someone
+    else still fails at the subsequent write, as before.
+    """
+    missing: list[Path] = []
+    cursor = path
+    while not cursor.exists():
+        missing.append(cursor)
+        parent = cursor.parent
+        if parent == cursor:
+            break
+        cursor = parent
+    for component in reversed(missing):
+        component.mkdir(exist_ok=True)
+    for target in missing + ([path] if path not in missing else []):
+        try:
+            os.chmod(target, STORE_DIR_MODE)
+        except OSError:
+            pass
+
+
 def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
     """Atomically write one file under store_root. Returns the record to print.
 
     Uses an exclusive link (no-clobber). If dest already exists, identical
     content is treated as success; different content is left in place and the
     stdout-only record is returned. On I/O failure, warns and returns the
-    stdout-only record (no record_id).
+    stdout-only record (no record_id). Date directories (and any missing
+    store-root parents this process creates) are chmod'd to STORE_DIR_MODE
+    so a shared store stays writable across users.
     """
     record_id = compute_record_id(
         record["test_type"],
@@ -577,7 +608,7 @@ def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
         validate_record(published, file_written=True)
         payload = dumps_compact(published) + "\n"
         payload_bytes = payload.encode("utf-8")
-        dest_dir.mkdir(parents=True, exist_ok=True)
+        _ensure_shared_dir(dest_dir)
         if dest.exists():
             return _existing_or_conflict(dest, payload_bytes, record, published)
         tmp = dest_dir / f".{record_id}.{os.getpid()}.tmp"
