@@ -56,6 +56,15 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     const uint32_t tiles_per_kv_chunk = attributes.tiles_per_kv_chunk;
     const uint32_t kv_chunk_count = ceil_div(plan.gather_brick_count, tiles_per_kv_chunk);
 
+    // A chunk WIDER than the stride means its bricks do not share a context window, so the mask
+    // cannot be one tile per slot broadcast down the query rows -- each brick needs its own. That
+    // is only reachable via DIFFVAE_NA_UNSAFE_CHUNK today, so this follows the same switch rather
+    // than costing anything on the shipped path.
+    const bool chunk_exceeds_stride = query_tile_rows > 1 && !(config.query_chunk_sites() == config.stride);
+    const char* per_brick_env = std::getenv("DIFFVAE_NA_PER_BRICK_MASK");
+    const bool per_brick_mask = per_brick_env != nullptr ? per_brick_env[0] == '1' : chunk_exceeds_stride;
+    const uint32_t mask_tiles_per_kv_chunk = per_brick_mask ? query_tile_rows * tiles_per_kv_chunk : tiles_per_kv_chunk;
+
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensors.query_tensor.dtype());
     const uint32_t tile_bytes = tt::tile_size(data_format);
     constexpr tt::DataFormat bfloat16_format = tt::DataFormat::Float16_b;
@@ -97,7 +106,8 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // The mask is always bfloat16: the reader writes {0, -inf} bit patterns into it directly.
     // One tile per gather slot, NOT per query row: with one query group per chunk every row
     // shares the window, so the mask broadcasts down the chunk exactly as the reference's does.
-    add_circular_buffer(contract::cb_mask, bfloat16_tile_bytes, tiles_per_kv_chunk * DOUBLE_BUFFERED, bfloat16_format);
+    add_circular_buffer(
+        contract::cb_mask, bfloat16_tile_bytes, mask_tiles_per_kv_chunk * DOUBLE_BUFFERED, bfloat16_format);
     add_circular_buffer(contract::cb_reduce_scalar, bfloat16_tile_bytes, 1, bfloat16_format);
     add_circular_buffer(contract::cb_zero, bfloat16_tile_bytes, 1, bfloat16_format);
     add_circular_buffer(contract::cb_column_identity, bfloat16_tile_bytes, 1, bfloat16_format);
@@ -131,7 +141,13 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // Holds ONE regime's whole mask set. Every chunk in a regime wants the same patterns, so
     // fetching them per chunk re-reads the same tiles from DRAM thousands of times; this keeps
     // them on the core and turns the per-chunk cost into a local copy.
-    if (tensors.interior_mask.has_value()) {
+    // Per-brick masks never read this set -- it holds ONE window's patterns, keyed on the chunk's
+    // regime, which is the wrong window for every brick but the first. Allocating it anyway costs
+    // gather_brick_count tiles of L1 (590 KB at a 288-brick gather) next to a mask CB that per-brick
+    // mode has already made query_tile_rows times bigger, and the reader would copy all of it in
+    // per chunk for nothing.
+    const bool uses_resident_mask = tensors.interior_mask.has_value() && !per_brick_mask;
+    if (uses_resident_mask) {
         add_circular_buffer(contract::cb_resident_mask, bfloat16_tile_bytes, plan.gather_brick_count, bfloat16_format);
     }
 
@@ -148,6 +164,10 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     reader_compile_args[contract::reader_arg::volume_chunks_height] = plan.volume_chunks.height();
     reader_compile_args[contract::reader_arg::volume_chunks_width] = plan.volume_chunks.width();
     reader_compile_args[contract::reader_arg::tiles_per_kv_chunk] = tiles_per_kv_chunk;
+    reader_compile_args[contract::reader_arg::per_brick_mask] = per_brick_mask ? 1u : 0u;
+    const char* memset_env = std::getenv("DIFFVAE_NA_MASK_MEMSET_ONLY");
+    reader_compile_args[contract::reader_arg::mask_memset_only] =
+        (memset_env != nullptr && memset_env[0] == '1') ? 1u : 0u;
     reader_compile_args[contract::reader_arg::kv_chunk_count] = kv_chunk_count;
     reader_compile_args[contract::reader_arg::gather_brick_count] = plan.gather_brick_count;
     reader_compile_args[contract::reader_arg::volume_bricks_time] = plan.volume_bricks.time();
@@ -172,7 +192,15 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     reader_compile_args[contract::reader_arg::resident_time] = resident.time();
     reader_compile_args[contract::reader_arg::resident_height] = resident.height();
     reader_compile_args[contract::reader_arg::resident_width] = resident.width();
-    reader_compile_args[contract::reader_arg::has_interior_mask] = tensors.interior_mask.has_value() ? 1u : 0u;
+    // A stride-1 table is relative; a GNA one is per-regime. The kernel indexes them differently.
+    const bool relative_mask = config.stride.time() == 1 && config.stride.height() == 1 && config.stride.width() == 1;
+    reader_compile_args[contract::reader_arg::relative_mask] = relative_mask ? 1u : 0u;
+    const char* always_env = std::getenv("DIFFVAE_NA_TABLE_ALWAYS");
+    reader_compile_args[contract::reader_arg::table_always] = (always_env != nullptr && always_env[0] == '1') ? 1u : 0u;
+    // The relative table is read straight from DRAM per slot, so it needs no L1 staging -- and
+    // staging is what forced the per-slot fill to be a word loop in the first place.
+    reader_compile_args[contract::reader_arg::has_interior_mask] =
+        (tensors.interior_mask.has_value() && (relative_mask || uses_resident_mask)) ? 1u : 0u;
 
     // Accessor args come after the named block, in the order the reader constructs them.
     tt::tt_metal::TensorAccessorArgs(tensors.query_tensor.buffer()).append_to(reader_compile_args);
@@ -220,6 +248,7 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     compute_compile_args[contract::compute_arg::scores_subblock_count] = tiles_per_kv_chunk / scores_subblock_width;
     compute_compile_args[contract::compute_arg::output_subblock_width] = output_subblock_width;
     compute_compile_args[contract::compute_arg::output_subblock_count] = head_dim_tiles / output_subblock_width;
+    compute_compile_args[contract::compute_arg::mask_subblock_stride] = per_brick_mask ? tiles_per_kv_chunk : 0u;
 
     // ---- kernels ----
     const std::string kernel_directory = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";

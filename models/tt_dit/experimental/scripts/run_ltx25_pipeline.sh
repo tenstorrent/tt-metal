@@ -10,23 +10,27 @@ set -euo pipefail
 # Repo root, four levels up from this script, so the checkout can live anywhere.
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 
-export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
-export LTX25_ROOT=/mnt/MLPerf/huggingface/hub/models--Lightricks--LTX-2.5/snapshots/28dac7acdc1f78a70e98687db261a949754f8941
-export LTX25_DIFFVAE=1
-export HF_HUB_DISABLE_XET=1
+export TT_DIT_CACHE_DIR="${TT_DIT_CACHE_DIR:-$HOME/.cache/tt-dit}"
+# Overridable so a checkout whose weights live elsewhere (e.g. the HF cache) can point at
+# them without editing this file -- the sibling run_ltx25_diffvae.sh already works this way.
+export LTX25_ROOT=${LTX25_ROOT:-/mnt/MLPerf/huggingface/hub/models--Lightricks--LTX-2.5/snapshots/28dac7acdc1f78a70e98687db261a949754f8941}
+export LTX25_DIFFVAE=${LTX25_DIFFVAE:-1}
+export HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}
 
-export NO_PROMPT=1
-export RUN_WARMUP=0
-export LTX_TRACED=0
-export SEED=10
+export NO_PROMPT=${NO_PROMPT:-1}
+export RUN_WARMUP=${RUN_WARMUP:-0}
+export LTX_TRACED=${LTX_TRACED:-0}
+export SEED=${SEED:-10}
 
-export NUM_FRAMES=145
-export HEIGHT=1088
-export WIDTH=1920
-export OUTPUT_PATH="$HOME/ltx25_diffvae_1080p.mp4"
+#export LTX_YUV_EXPORT=1
+
+export NUM_FRAMES=${NUM_FRAMES:-145}
+export HEIGHT=${HEIGHT:-1088}
+export WIDTH=${WIDTH:-1920}
+export OUTPUT_PATH="${OUTPUT_PATH:-$HOME/ltx25_diffvae_1080p.mp4}"
 
 export DIFFVAE_GNA=1
-export DIFFVAE_SLAB_FRAMES=73
+export DIFFVAE_SLAB_FRAMES=${DIFFVAE_SLAB_FRAMES:-73}
 export DIFFVAE_BLOCK=1
 export DIFFVAE_SP_FUSED=1
 export DIFFVAE_STAGES_WSP=1

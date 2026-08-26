@@ -986,7 +986,13 @@ ALWI void matmul_blocks(
     const bool& transpose,
     const bool& add_mask = false,
     const uint32_t& mask_cb = 0,
-    const uint32_t& zero_cb = 0) {
+    const uint32_t& zero_cb = 0,
+    // Tiles to advance the mask per in0 subblock. 0 (the default, and every existing caller)
+    // re-reads the same tiles from the CB front for every in0 subblock -- the right thing when
+    // the mask is uniform down the query rows. Non-zero gives each in0 subblock its own mask
+    // tiles, for callers whose query rows do NOT share a mask. Only meaningful with
+    // in1_num_subblocks == 1, the only shape that indexes the mask as plain [i].
+    const uint32_t& mask_subblock_stride = 0) {
     // precondition: in0_cb has M*K produced
     // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
@@ -1031,12 +1037,16 @@ ALWI void matmul_blocks(
                 in1_index += N;
             }
             if (add_mask) {
-                cb_mask.wait_front(out_subblock_num_tiles);
+                // With a stride the whole per-subblock set has to be resident before the first
+                // subblock indexes into it, so wait for all of it rather than one subblock's worth.
+                cb_mask.wait_front(
+                    mask_subblock_stride == 0 ? out_subblock_num_tiles : in0_num_subblocks * mask_subblock_stride);
+                const uint32_t mask_base = in0_subblock * mask_subblock_stride;
                 cb_zero.wait_front(1);
                 reconfig_data_format(zero_cb, mask_cb);
                 add_init(zero_cb, mask_cb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                    add_tiles(zero_cb, mask_cb, 0, i, i);
+                    add_tiles(zero_cb, mask_cb, 0, mask_base + i, i);
                 }
                 reconfig_data_format(in1_cb, in0_cb);
                 matmul_block_init(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);

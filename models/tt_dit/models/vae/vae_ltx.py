@@ -1610,10 +1610,39 @@ class LTXVideoVAEAdapter:
         # file: a 2.3 monolith has only the conv one, and 2.5 can be decoded either way.
         self._decoder: LTXVideoDecoder | DiffVAEDecoder | None = None
         if diffusion_decoder:
+            # The timing harness builds this decoder W-SHARDED over the mesh (and optionally with
+            # TP-over-heads on the orthogonal axis); the pipeline built it replicated on the
+            # "gather" backend, so none of the sharded fast path could be exercised end to end.
+            # These read the same environment the harness does and fall back to the previous
+            # replicated construction when nothing is set, so an existing pipeline run is
+            # unchanged. DIFFVAE_STAGE5_BACKEND selects the stage-5 executor
+            # ("bricked_sp_w_sharded" for the neighborhood op, "op_sp_w_sharded" for the
+            # reference); DIFFVAE_STAGES_WSP=1 W-shards the deterministic stages too;
+            # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the rows axis.
+            stage5_backend = os.environ.get("DIFFVAE_STAGE5_BACKEND")
+            stages_wsp = os.environ.get("DIFFVAE_STAGES_WSP") == "1"
+            sharded = stage5_backend is not None or stages_wsp
+            tp_axis = 0 if os.environ.get("DIFFVAE_TP_HEADS") == "1" else None
             self._decoder = DiffVAEDecoder(
-                diffvae_config(checkpoint_path), mesh_device=mesh_device, ccl_manager=vae_ccl_manager
+                diffvae_config(checkpoint_path),
+                mesh_device=mesh_device,
+                ccl_manager=vae_ccl_manager,
+                stage5_na3d_backend=(stage5_backend or "op_sp_w_sharded") if sharded else None,
+                stage5_sp_axis=1 if sharded else None,
+                stage5_tp_axis=tp_axis if sharded else None,
+                stages_na3d_backend="op_sp_w_sharded" if stages_wsp else None,
+                stages_sp_axis=1 if stages_wsp else None,
+                stages_tp_axis=tp_axis if stages_wsp else None,
             )
-            logger.info("VAE config: DiffVAE diffusion decoder")
+            if sharded:
+                logger.info(
+                    f"VAE config: DiffVAE diffusion decoder, W-sharded "
+                    f"stage5={stage5_backend or 'op_sp_w_sharded'} "
+                    f"det_stages={'W-sharded' if stages_wsp else 'replicated'} "
+                    f"tp_heads={'on' if tp_axis is not None else 'off'}"
+                )
+            else:
+                logger.info("VAE config: DiffVAE diffusion decoder (replicated)")
         elif self.decoder_blocks:
             self._decoder = LTXVideoDecoder(
                 decoder_blocks=self.decoder_blocks,

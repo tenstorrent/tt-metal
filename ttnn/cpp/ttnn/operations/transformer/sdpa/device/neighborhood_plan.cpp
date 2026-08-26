@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
@@ -216,10 +217,19 @@ void validate_config(const NeighborhoodConfig& config) {
     // every row, so queries would attend to a window that is not theirs and still return
     // plausible video. Hence a hard check rather than a comment.
     if (config.bricks_per_query_chunk() > 1) {
-        require(
-            config.query_chunk_sites() == config.stride,
-            "a multi-brick query chunk must equal the stride exactly, so its bricks form one "
-            "query group sharing one context window");
+        // DIFFVAE_NA_UNSAFE_CHUNK=1 turns this into a PERF PROBE and nothing else. The numbers it
+        // produces are WRONG in exactly the way described above -- every brick in the chunk gets
+        // the first brick's mask, so queries attend to windows that are not theirs -- but the
+        // TIMING is real, and it measures what amortising the gather across a multi-brick chunk
+        // would be worth at stride 1 (175 keys/query today). That is the case for building the
+        // per-brick mask that would make it correct. Never ship a frame rendered with this set.
+        const char* probe = std::getenv("DIFFVAE_NA_UNSAFE_CHUNK");
+        if (probe == nullptr || probe[0] != '1') {
+            require(
+                config.query_chunk_sites() == config.stride,
+                "a multi-brick query chunk must equal the stride exactly, so its bricks form one "
+                "query group sharing one context window");
+        }
     }
 
     const Extent3 resident = config.resident_extent();

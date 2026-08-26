@@ -177,6 +177,70 @@ def configured_stride() -> tuple[int, int, int]:
     return (1, 1, 1)
 
 
+def relative_mask_span(window_extent: int, brick_extent: int) -> tuple[int, int]:
+    """Inclusive range of ``key_brick - query_brick`` a window can reach, on one axis.
+
+    ``key_site - query_site`` must land in ``[-half, window - 1 - half]``, and each site is a
+    brick offset plus a position inside the brick, so the relative BRICK offset is bounded by
+    that range widened by ``brick - 1`` on both ends. 11 over a 2-brick gives [-3, 3]; over a
+    4-brick, [-2, 2] -- 7 * 5 * 5 = 175 tiles for the whole plan.
+
+    Transcribed in ``relative_mask_span`` in neighborhood_reader.cpp; the two MUST agree or the
+    kernel indexes a tile the host never wrote.
+    """
+    half = window_extent // 2
+    low = -((half + brick_extent - 1) // brick_extent)
+    high = (window_extent - 1 - half + brick_extent - 1) // brick_extent
+    return low, high
+
+
+def _build_relative_masks(context_window, brick):
+    """``[1, 1, 32, N * 32]`` indexed by the RELATIVE brick offset ``key_brick - query_brick``.
+
+    At stride 1 an unclamped query centres its own window, so whether a key is visible depends
+    only on ``key_site - query_site``. Both sites are a brick origin plus an offset within the
+    brick, so the whole pattern is a function of the relative BRICK offset alone -- 175 tiles for
+    an 11^3 window on a (2,4,4) brick, against the ~25M tiles the kernel generates per block.
+
+    Indexing by the relative offset rather than the absolute gather slot is also what makes it
+    CORRECT. ``gather_origin - chunk_origin`` is NOT constant: brick-aligning a clamped window
+    origin shifts the phase, giving 75 distinct values at 1080p. A table keyed on the slot is
+    therefore right only for chunks sharing the representative's phase and silently wrong for the
+    rest, which is what put the uploaded table at PCC 0.914 against the torch reference. The
+    relative offset has no such dependence.
+
+    Boundary bricks -- those whose window clamps at a volume edge -- are NOT described here; the
+    kernel keeps generating those, and there is at most one per edge per axis.
+    """
+    import torch
+
+    spans = [relative_mask_span(context_window[a], brick[a]) for a in range(3)]
+    extents = [high - low + 1 for low, high in spans]
+    half = [context_window[a] // 2 for a in range(3)]
+    masks = torch.zeros(1, 1, SITES_PER_BRICK, extents[0] * extents[1] * extents[2] * SITES_PER_BRICK)
+
+    for relative_time in range(spans[0][0], spans[0][1] + 1):
+        for relative_height in range(spans[1][0], spans[1][1] + 1):
+            for relative_width in range(spans[2][0], spans[2][1] + 1):
+                relative = (relative_time, relative_height, relative_width)
+                index = ((relative_time - spans[0][0]) * extents[1] + (relative_height - spans[1][0])) * extents[2] + (
+                    relative_width - spans[2][0]
+                )
+                for row in range(SITES_PER_BRICK):
+                    query_offset = _site_in_brick(row, brick)
+                    for column in range(SITES_PER_BRICK):
+                        key_offset = _site_in_brick(column, brick)
+                        visible = True
+                        for axis in range(3):
+                            delta = relative[axis] * brick[axis] + key_offset[axis] - query_offset[axis]
+                            if not (-half[axis] <= delta <= context_window[axis] - 1 - half[axis]):
+                                visible = False
+                                break
+                        if not visible:
+                            masks[0, 0, row, index * SITES_PER_BRICK + column] = float("-inf")
+    return masks
+
+
 def _query_chunk_bricks(stride: tuple[int, int, int], brick: tuple[int, int, int]) -> tuple[int, int, int]:
     """The largest chunk of bricks that still forms a single query group.
 
@@ -190,6 +254,14 @@ def _query_chunk_bricks(stride: tuple[int, int, int], brick: tuple[int, int, int
     that measured in bricks. A stride that is not a whole number of bricks on some axis simply
     cannot amortise along it, and gets one brick there.
     """
+    # DIFFVAE_NA_CHUNK_BRICKS forces the chunk, decoupling it from the stride. Only meaningful
+    # together with DIFFVAE_NA_UNSAFE_CHUNK=1, which lifts the plan's chunk==stride check: at
+    # stride 1 the queries in a chunk do NOT share a window, so the broadcast mask is wrong and so
+    # is the output. It exists to measure the ceiling -- 175 keys/query at chunk (1,1,1) against
+    # 36 at (2,2,2) -- before paying for the per-brick mask that would make it correct.
+    forced = os.environ.get("DIFFVAE_NA_CHUNK_BRICKS")
+    if forced:
+        return tuple(int(part) for part in forced.split(","))
     return tuple(
         stride_extent // brick_extent if stride_extent % brick_extent == 0 else 1
         for stride_extent, brick_extent in zip(stride, brick)
@@ -230,8 +302,14 @@ def _cached_plan(volume, context_window, stride, brick, device):
     # every gathered brick that straddles the window edge is evaluated per site, per chunk, every
     # block. There are only 27 distinct patterns, they depend on nothing but geometry, and this
     # builds them once and keeps them resident.
+    # At stride 1 the regime table above does not apply: its 27 patterns describe chunks that
+    # share ONE window, which is a GNA property. Every query centres its own window here, so the
+    # pattern is a function of the relative brick offset instead -- see _build_relative_masks.
+    plan["relative_mask"] = stride == (1, 1, 1)
     plan["interior_mask_tensor"] = ttnn.from_torch(
-        _build_regime_masks(volume, context_window, stride, brick, query_chunk_bricks, plan),
+        _build_relative_masks(context_window, brick)
+        if plan["relative_mask"]
+        else _build_regime_masks(volume, context_window, stride, brick, query_chunk_bricks, plan),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -435,9 +513,21 @@ def _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_
         f"gather={first['gather_brick_count']} tiles "
         f"({first['gather_brick_count'] / first['bricks_per_query_chunk']:.2f} keys/query)"
     )
-    # Generated on device: the uploaded regime sets are enumerated against a single shard origin,
-    # and here every shard has its own.
-    first["interior_mask_tensor"] = None
+    # The REGIME sets cannot be uploaded here: they are enumerated against a single shard origin
+    # and every shard has its own, so the sharded path has always generated every tile on device.
+    # The RELATIVE table has no such dependence -- it is a function of the window and the brick
+    # alone (see _build_relative_masks) -- so at stride 1 it uploads once and serves every shard.
+    first["relative_mask"] = stride == (1, 1, 1)
+    first["interior_mask_tensor"] = (
+        ttnn.from_torch(
+            _build_relative_masks(context_window, brick),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        if first["relative_mask"]
+        else None
+    )
     _SHARDED_PLAN_CACHE[key] = first
     return first
 

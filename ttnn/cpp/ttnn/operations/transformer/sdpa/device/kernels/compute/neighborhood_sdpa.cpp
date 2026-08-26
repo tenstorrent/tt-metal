@@ -41,6 +41,11 @@ void kernel_main() {
     // in the chunk shares a single query group, hence a single window -- which is why the mask
     // is one tile per gather slot and broadcasts down the rows rather than being stored per row.
     constexpr uint32_t query_tile_rows = get_compile_time_arg_val(contract::compute_arg::query_tile_rows);
+    // 0 = the broadcast above. tiles_per_kv_chunk = one mask per brick, which a chunk wider than
+    // the stride requires: its bricks each centre a different window.
+    constexpr uint32_t mask_subblock_stride = get_compile_time_arg_val(contract::compute_arg::mask_subblock_stride);
+    constexpr uint32_t mask_tiles_per_kv_chunk =
+        mask_subblock_stride == 0 ? tiles_per_kv_chunk : query_tile_rows * tiles_per_kv_chunk;
 
     CircularBuffer cb_query(contract::cb_query);
     CircularBuffer cb_key(contract::cb_key);
@@ -69,7 +74,7 @@ void kernel_main() {
 
         for (uint32_t kv_chunk_index = 0; kv_chunk_index < kv_chunk_count; ++kv_chunk_index) {
             cb_key.wait_front(tiles_per_kv_chunk * head_dim_tiles);
-            cb_mask.wait_front(tiles_per_kv_chunk);
+            cb_mask.wait_front(mask_tiles_per_kv_chunk);
 
             // scores = Q . K^T, with the additive mask folded in. K arrives as
             // [tiles_per_kv_chunk rows, head_dim_tiles cols], hence transpose.
@@ -91,8 +96,9 @@ void kernel_main() {
                 /*transpose=*/true,
                 /*add_mask=*/true,
                 /*mask_cb=*/contract::cb_mask,
-                /*zero_cb=*/contract::cb_zero);
-            cb_mask.pop_front(tiles_per_kv_chunk);
+                /*zero_cb=*/contract::cb_zero,
+                /*mask_subblock_stride=*/mask_subblock_stride);
+            cb_mask.pop_front(mask_tiles_per_kv_chunk);
 
             // running_max = max(running_max, row_max(scores))
             reduce_c<

@@ -1072,6 +1072,18 @@ class DiffVAEDecoder(Module):
         super().__init__()
         from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config
 
+        # The ~8.5 GB that makes this decoder demand the mesh to itself is the REPLICATED figure:
+        # 78x272x480 sites x 256 channels x 2 B is ~5.2 GB for ONE stage-5 activation with every
+        # chip holding the whole volume. W-sharded over sp (and TP over heads) each chip holds
+        # about an eighth of that, which may well fit beside a resident 22B DiT.
+        #
+        # This matters beyond memory: eviction is what invalidates the transformer's CAPTURED
+        # TRACE, which is why traced + DiffVAE is refused outright under static loading. A sharded
+        # decoder that does not need the mesh to itself never evicts, so both can stay resident and
+        # traced -- the shape a serving loop wants. DIFFVAE_EXCLUSIVE=1 forces the old behaviour.
+        if stage5_sp_axis is not None:
+            self.requires_exclusive_residency = os.environ.get("DIFFVAE_EXCLUSIVE") == "1"
+
         self.config = config
         self.mesh_device = mesh_device
         self._timestep = None

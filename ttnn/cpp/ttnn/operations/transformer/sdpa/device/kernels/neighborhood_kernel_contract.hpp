@@ -84,6 +84,26 @@ enum : uint32_t {
     kv_chunk_count,
     gather_brick_count,
 
+    // 1 = emit one mask tile per (query brick, gather slot) instead of one per slot shared by the
+    // whole chunk. Required once the chunk is wider than the stride, because then the bricks do
+    // not share a window and the broadcast mask silently attends to the wrong one.
+    per_brick_mask,
+
+    // 1 = fill every mask tile with a constant (DIFFVAE_NA_MASK_MEMSET_ONLY). Diagnostic only:
+    // wrong output, but it isolates tile WRITE cost from tile CONTENT cost.
+    mask_memset_only,
+
+    // 1 = the uploaded mask is indexed by the RELATIVE brick offset (key_brick - query_brick)
+    // rather than by (regime, gather slot). That is what a stride-1 mask needs: every query
+    // centres its own window, so the pattern depends only on the relative offset -- and unlike a
+    // regime set it carries no dependence on the gather origin's brick phase or on the shard
+    // origin, so ONE table serves every chunk and every shard.
+    relative_mask,
+
+    // DIFFVAE_NA_TABLE_ALWAYS: skip the per-brick clamping gate. Diagnostic -- edge bricks get
+    // the interior pattern, so the frame is wrong there, but it shows what the gate is costing.
+    table_always,
+
     // The volume and the gather span, measured in bricks -- one brick is one tile row, so
     // these are also tile counts.
     volume_bricks_time,
@@ -146,6 +166,12 @@ enum : uint32_t {
     scores_subblock_count,
     output_subblock_width,
     output_subblock_count,
+
+    // Tiles to advance the mask CB per in0 subblock (= per query tile row = per brick). 0 keeps
+    // the broadcast: every brick re-reads the same mask, which is only right when the chunk's
+    // bricks share one context window. tiles_per_kv_chunk gives each brick its OWN mask, which
+    // is what a chunk wider than the stride needs.
+    mask_subblock_stride,
     COUNT
 };
 }  // namespace compute_arg
