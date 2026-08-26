@@ -59,14 +59,21 @@ uint32_t get_max_l1_space(const Tensor& input_tensor_a);
 
 // One set of buffers, sized for a single block width.
 //
-// The `_multi_core_block[_interleaved]` tilize factories split work into blocks and hand cores one
-// of two block widths (the full width, and a narrower cliff-row width). A block's width fixes the
-// size of the buffers that carry it, and that size is a *correctness* property rather than a
-// performance one: the reader fills a whole block through one raw linear write starting at
-// `get_write_ptr()`, and `cb_push_back` requires the producer to write contiguously -- it only
-// wraps when the write pointer lands exactly on `fifo_limit` ("producer always writes into
-// contiguous memory, it cannot wrap"). A buffer whose size is not an exact multiple of the block
-// pushed into it therefore overruns into its neighbour rather than wrapping.
+// The `_multi_core_block[_interleaved]` tilize and untilize factories split work into blocks and
+// hand cores one of two block widths (the full width, and a narrower cliff-row width). A block's
+// width fixes the size of the buffers that carry it, and that size is a *correctness* property
+// rather than a performance one, because one endpoint of the block buffer walks a whole block as
+// raw contiguous L1 rather than page by page:
+//
+//   * tilize: the reader fills a whole block through one raw linear write starting at
+//     `get_write_ptr()`, and `cb_push_back` requires the producer to write contiguously -- it only
+//     wraps when the write pointer lands exactly on `fifo_limit` ("producer always writes into
+//     contiguous memory, it cannot wrap").
+//   * untilize: the writer takes `get_read_ptr()` once per block and walks the block's rows
+//     forward from it, so the consumer likewise reads a contiguous run and cannot wrap mid-block.
+//
+// Either way, a buffer whose size is not an exact multiple of the block pushed into it overruns
+// into its neighbour instead of wrapping.
 //
 // So each block width gets its own set of buffers, with its own indices, sized for that width,
 // rather than one set of indices re-used at different sizes on disjoint cores (issue #51305). The
@@ -77,10 +84,15 @@ uint32_t get_max_l1_space(const Tensor& input_tensor_a);
 // apply the *same* index and sizing rules -- a private copy can drift and reintroduce the
 // corruption the split prevents.
 struct BlockBufferSet {
-    uint8_t staging_index = 0;  // per-row DRAM-alignment staging buffer (reader-private scratchpad)
-    uint8_t input_index = 0;    // row-major block the reader fills and compute tilizes
-    uint8_t output_index = 0;   // tilized block compute produces and the writer drains
-    uint32_t block_tiles = 0;   // block width in tiles -- the page count of input/output
+    // Per-row DRAM-alignment staging buffer (a reader-private scratchpad). Only the tilize
+    // direction needs it: there the *reader* touches DRAM and must fix up alignment before the
+    // block lands in L1. Untilize reads whole tile pages in and writes sticks out, so it has no
+    // staging buffer and leaves this unset -- `push_buffer_set` then emits only input and output.
+    std::optional<uint8_t> staging_index;
+    uint8_t input_index = 0;   // row-major block the reader fills and compute tilizes (untilize: the
+                               // tilized block the reader fills and compute untilizes)
+    uint8_t output_index = 0;  // block compute produces and the writer drains
+    uint32_t block_tiles = 0;  // block width in tiles -- the page count of input/output
     tt::tt_metal::CoreRangeSet core_ranges;
 
     bool empty() const { return core_ranges.empty(); }
@@ -128,10 +140,12 @@ const BlockBufferSet& buffer_set_for_core(const BlockPlan& plan, const tt::tt_me
 // Union of two core ranges, either of which may be empty.
 tt::tt_metal::CoreRangeSet union_of(const tt::tt_metal::CoreRangeSet& a, const tt::tt_metal::CoreRangeSet& b);
 
-// Append the three CBDescriptors for one buffer set: staging, input, output.
+// Append the CBDescriptors for one buffer set: input, output, and -- only if the set declares a
+// `staging_index` -- the staging buffer ahead of them. `dram_alignment` and `tile_height` size the
+// staging buffer and are unused by a set without one.
 //
-// `tile` is the only factory-specific piece -- a factory that supports non-default tile shapes
-// passes its TileDescriptor so the input/output buffers carry it; one that is fixed to the
+// `tile` is the only other factory-specific piece -- a factory that supports non-default tile
+// shapes passes its TileDescriptor so the input/output buffers carry it; one that is fixed to the
 // standard tile leaves it unset.
 void push_buffer_set(
     tt::tt_metal::ProgramDescriptor& desc,

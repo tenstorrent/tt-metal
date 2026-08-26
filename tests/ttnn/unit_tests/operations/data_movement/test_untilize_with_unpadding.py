@@ -943,3 +943,50 @@ def test_untilize_with_unpadding_sharded_multi_batch_unpadding_regression(
     torch_result = torch_tensor[slices]
 
     assert_equal(result, torch_result)
+
+
+@pytest.mark.parametrize(
+    "padded_shape, output_shape",
+    [
+        ((1, 1, 32, 7328), (1, 1, 30, 7300)),
+        ((1, 1, 128, 7328), (1, 1, 100, 7328)),
+        ((1, 1, 64, 8192), (1, 1, 60, 8192)),
+        ((1, 1, 96, 7392), (1, 1, 90, 7392)),
+        ((1, 1, 160, 6304), (1, 1, 150, 6301)),
+        ((2, 1, 64, 7328), (2, 1, 60, 7328)),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_untilize_with_unpadding_block_per_node_cb_size(
+    device, padded_shape, output_shape, dtype, isolate_program_cache
+):
+    torch.manual_seed(42)
+    dram_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    keep_alive = []
+    entries = None
+    for i in range(2):
+        torch_input = torch.randn(padded_shape, dtype=torch.bfloat16)
+        tt_tiled = ttnn.from_torch(
+            torch_input,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=dram_cfg,
+            device=device,
+        )
+
+        output_end = [d - 1 for d in output_shape]
+        tt_rm = ttnn.untilize_with_unpadding(tt_tiled, output_end, use_multicore=True)
+        keep_alive += [tt_tiled, tt_rm]
+
+        assert tt_rm.layout == ttnn.ROW_MAJOR_LAYOUT
+        torch_golden = torch_input[: output_shape[0], : output_shape[1], : output_shape[2], : output_shape[3]]
+        assert_equal(torch_golden, ttnn.to_torch(tt_rm))
+
+        if i == 0:
+            entries = device.num_program_cache_entries()
+            assert entries >= 1, "the first invocation should have populated the program cache"
+        else:
+            assert (
+                device.num_program_cache_entries() == entries
+            ), "untilize_with_unpadding must reuse the cached program on a cache hit"

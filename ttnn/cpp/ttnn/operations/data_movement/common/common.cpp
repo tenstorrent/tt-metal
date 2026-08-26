@@ -821,18 +821,22 @@ void push_buffer_set(
     //   + dram_alignment    : tail bytes from rounding the DRAM read down to alignment
     //   + dram_alignment    : headroom for aligning the L1 write pointer up to dram_alignment
     //                         (get_write_ptr only guarantees L1 alignment, not DRAM alignment)
-    const uint32_t input_row_bytes = input_single_tile_size / tile_height;
-    const uint32_t temp_cb_size = input_row_bytes * set.block_tiles + 2 * dram_alignment;
+    //
+    // Only the tilize direction has such a reader; an untilize set leaves staging_index unset.
+    if (set.staging_index.has_value()) {
+        const uint32_t input_row_bytes = input_single_tile_size / tile_height;
+        const uint32_t temp_cb_size = input_row_bytes * set.block_tiles + 2 * dram_alignment;
 
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = temp_cb_size,
-        .core_ranges = set.core_ranges,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = set.staging_index,
-            .data_format = input_cb_data_format,
-            .page_size = temp_cb_size,
-        }}},
-    });
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = temp_cb_size,
+            .core_ranges = set.core_ranges,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = *set.staging_index,
+                .data_format = input_cb_data_format,
+                .page_size = temp_cb_size,
+            }}},
+        });
+    }
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = set.block_tiles * input_single_tile_size,
         .core_ranges = set.core_ranges,

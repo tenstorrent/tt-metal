@@ -12,13 +12,14 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr std::uint32_t dfb_id_out0 = 16;
-
     constexpr std::uint32_t total_num_rows = get_compile_time_arg_val(0);
     constexpr std::uint32_t third_dim = get_compile_time_arg_val(1);
     constexpr std::uint32_t tile_height = get_compile_time_arg_val(2);
     constexpr std::uint32_t unpadded_X_size = get_compile_time_arg_val(3);
-    constexpr auto dst_args = TensorAccessorArgs<4>();
+    // The block factories emit one writer instance per buffer set, so the output buffer index is a
+    // compile-time arg rather than a fixed c_16 -- see BlockBufferSet in data_movement/common.
+    constexpr std::uint32_t dfb_id_out0 = get_compile_time_arg_val(4);
+    constexpr auto dst_args = TensorAccessorArgs<5>();
 
     const std::uint32_t dst_addr = get_arg_val<std::uint32_t>(0);
 

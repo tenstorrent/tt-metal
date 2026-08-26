@@ -144,7 +144,7 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             row_size_bytes,
             dram_alignment,
             set.input_index,
-            set.staging_index};
+            *set.staging_index};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
         KernelDescriptor reader_desc;
