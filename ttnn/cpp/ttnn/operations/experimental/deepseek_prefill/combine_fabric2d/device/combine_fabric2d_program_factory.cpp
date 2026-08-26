@@ -257,10 +257,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const auto work_by_stream =
         generate_assignments(ring_chip_ids(args.device, coord, args.axis), my_dg_index(args, coord), args.num_links);
 
-    for (const auto& [stream, self] : placement.at(coord)) {
+    for (const auto& [stream, self] : placement.at(coord).streams) {
         KernelPlan plan = chip_plan;
         plan.stream = stream;
-        const auto& downstream = placement.at(self.downstream_coord).at(stream);
+        const auto& downstream = placement.at(self.downstream_coord).streams.at(stream);
         const auto& work = work_by_stream.at(stream);
 
         tt::tt_metal::KernelDescriptor snd;
@@ -307,6 +307,25 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         tt::tt_metal::KernelDescriptor::RTArgList rt;
         rt.append(rt_raw);
         desc.kernels[snd_id].emplace_runtime_args(self.worker_logical, rt);
+    }
+
+    // One kernel per untilizer group: a group's cores run the same code and differ only by their index in it.
+    for (const auto& group : placement.at(coord).untilizers) {
+        std::set<CoreRange> ranges;
+        for (const auto& core : group) {
+            ranges.insert(CoreRange(core));
+        }
+        tt::tt_metal::KernelDescriptor unt;
+        unt.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
+            "untilizer_combine_fabric2d.cpp";
+        unt.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        unt.core_ranges = CoreRangeSet(ranges);
+        unt.config = tt::tt_metal::DataMovementConfigDescriptor{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::NOC_0,
+        };
+        desc.kernels.push_back(std::move(unt));
     }
 
     return desc;

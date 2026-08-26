@@ -4,6 +4,7 @@
 
 #include "combine_fabric2d_placement.hpp"
 
+#include <algorithm>
 #include <set>
 
 #include <tt-metalium/device.hpp>
@@ -30,7 +31,49 @@ struct WorkerCandidate {
     tt::tt_fabric::FabricNodeId downstream_node{tt::tt_fabric::MeshId{0}, 0};
 };
 
-StreamPlacements decide_device_placement(
+// A group's untilizers go in the columns of the senders they feed, on the rows below every sender: the
+// senders occupy the row nearest the eth cores, so filling downwards keeps a group's traffic inside its own
+// columns and leaves the sender row alone. Columns are cycled so the group spreads across its senders'
+// columns before it takes a second row.
+UntilizerGroups decide_untilizers(
+    const StreamPlacements& streams,
+    std::set<CoreCoord>& taken,
+    const CoreCoord& grid,
+    const tt::tt_fabric::FabricNodeId& who) {
+    std::array<std::vector<std::size_t>, UNTILIZER_GROUPS> columns;
+    std::size_t first_row = 0;
+    for (const auto& [stream, placement] : streams) {
+        columns[untilizer_group_of(stream)].push_back(placement.worker_logical.x);
+        first_row = std::max(first_row, placement.worker_logical.y + 1);
+    }
+
+    UntilizerGroups groups;
+    for (uint32_t g = 0; g < UNTILIZER_GROUPS; g++) {
+        TT_FATAL(!columns[g].empty(), "combine_fabric2d {}: untilizer group {} has no senders to serve", who, g);
+        for (uint32_t i = 0; i < UNTILIZERS_PER_GROUP; i++) {
+            const CoreCoord core{columns[g][i % columns[g].size()], first_row + i / columns[g].size()};
+            TT_FATAL(
+                core.y < grid.y,
+                "combine_fabric2d {}: untilizer {} of group {} lands on row {}, past the {}-row grid",
+                who,
+                i,
+                g,
+                core.y,
+                grid.y);
+            TT_FATAL(
+                taken.insert(core).second,
+                "combine_fabric2d {}: untilizer {} of group {} lands on {}, which is already owned",
+                who,
+                i,
+                g,
+                core);
+            groups[g].push_back(core);
+        }
+    }
+    return groups;
+}
+
+DevicePlacement decide_device_placement(
     ttnn::MeshDevice* mesh, const ttnn::MeshCoordinate& coord, uint32_t axis, uint32_t num_links) {
     auto* dev = mesh->get_device(coord);
     const auto self_node = mesh->get_fabric_node_id(coord);
@@ -102,7 +145,8 @@ StreamPlacements decide_device_placement(
         }
         assign(stream, candidate, worker);
     }
-    return placements;
+    return DevicePlacement{
+        placements, decide_untilizers(placements, taken, mesh->compute_with_storage_grid_size(), self_node)};
 }
 
 }  // namespace
