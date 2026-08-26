@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from itertools import product
 
 import torch
@@ -34,7 +35,22 @@ class WarmupForwardMixin:
         sampling_configs = []
 
         if not greedy_only:
-            for penalties, log_probs in product([True, False], repeat=2):
+            # Full warmup pre-captures every penalties × log_probs permutation so
+            # no on-device-sampling request ever pays a one-time trace-capture
+            # cost on first use. Each permutation is a *separate resident trace*,
+            # though, and for large MoE models the combined trace region can run
+            # into the gigabytes (e.g. Gemma4-26B-A4B). ``TT_LEAN_DECODE_WARMUP``
+            # restricts the sweep to the plain (no-penalty, no-logprob) sampling
+            # config — what a throughput benchmark with default sampling actually
+            # exercises — trading a one-time runtime capture for the rarer
+            # penalty/logprob request shapes in exchange for a much smaller trace
+            # region. Greedy and ``None`` are still captured below.
+            if os.environ.get("TT_LEAN_DECODE_WARMUP"):
+                penalty_logprob_combos = [(False, False)]
+            else:
+                penalty_logprob_combos = list(product([True, False], repeat=2))
+
+            for penalties, log_probs in penalty_logprob_combos:
                 presence_penalty, frequency_penalty, repetition_penalty = None, None, None
 
                 if penalties:
@@ -87,6 +103,7 @@ class WarmupForwardMixin:
         can_sample_on_device,
         read_from_device=True,
         greedy_only: bool = False,
+        skip_trace_precompile: bool = False,
     ):
         """
         This function is called by vLLM
@@ -102,7 +119,7 @@ class WarmupForwardMixin:
 
         for param in sampling_params:
             logger.info(f"Warming up decode for sampling params: {param}")
-            self.decode_forward(
+            decode_kwargs = dict(
                 tokens=tokens,
                 start_pos=start_pos,
                 page_table=page_table,
@@ -111,5 +128,8 @@ class WarmupForwardMixin:
                 read_from_device=read_from_device,
                 sampling_params=param,
             )
+            if skip_trace_precompile:
+                decode_kwargs["skip_trace_precompile"] = True
+            self.decode_forward(**decode_kwargs)
 
         logger.info("Decode warmup completed")

@@ -11,13 +11,14 @@
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
     constexpr auto cb_out = tt::CBIndex::c_2;
-    CircularBuffer exp_cb_out(cb_out);
+    DataflowBuffer exp_cb_out(cb_out);
 
 #if SRC_BCAST
     constexpr auto cb_bcast = tt::CBIndex::c_0;
@@ -36,12 +37,12 @@ void kernel_main() {
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
 #endif
 
-    CircularBuffer exp_cb_bcast(cb_bcast);
-    CircularBuffer exp_cb_llk_post(cb_llk_post);
-    CircularBuffer exp_cb_post_lhs(cb_post_lhs);
-    CircularBuffer exp_cb_post_rhs(cb_post_rhs);
+    DataflowBuffer exp_cb_bcast(cb_bcast);
+    DataflowBuffer exp_cb_llk_post(cb_llk_post);
+    DataflowBuffer exp_cb_post_lhs(cb_post_lhs);
+    DataflowBuffer exp_cb_post_rhs(cb_post_rhs);
 
-    binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
+    compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
@@ -50,7 +51,9 @@ void kernel_main() {
         exp_cb_bcast.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
-        unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
+        reconfig_data_format(cb_bcast, cb_bcast);
+        pack_reconfig_data_format(cb_llk_post);
+        unary_bcast_init<BroadcastType::ROW>(cb_bcast);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(cb_bcast, 0, 0);
@@ -67,10 +70,10 @@ void kernel_main() {
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 #endif
 
-        PREPROCESS(LHS, CircularBuffer(cb_pre_lhs), exp_cb_post_lhs, exp_cb_out, num_tiles_per_cycle);
+        PREPROCESS(LHS, DataflowBuffer(cb_pre_lhs), exp_cb_post_lhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_lhs.wait_front(num_tiles_per_cycle);
 
-        PREPROCESS(RHS, CircularBuffer(cb_pre_rhs), exp_cb_post_rhs, exp_cb_out, num_tiles_per_cycle);
+        PREPROCESS(RHS, DataflowBuffer(cb_pre_rhs), exp_cb_post_rhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_rhs.wait_front(num_tiles_per_cycle);
 
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);

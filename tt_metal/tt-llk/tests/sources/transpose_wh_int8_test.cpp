@@ -3,9 +3,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Faithful reproduction of the compute-API transpose_wh_tile i8 path
-// (tt_metal/hw/inc/api/compute/transpose_wh.h, the dedicated `else if (is_8bit_int)`
-// branch in transpose_wh_init / transpose_wh_init_short):
+// Faithful reproduction of the compute-API transpose_tile i8 path
+// (tt_metal/hw/inc/api/compute/transpose.h, the dedicated `else if (is_8bit_int)`
+// branch in transpose_init):
 // the full 32x32 transpose is performed in the UNPACKER (transpose_of_faces +
 // within_face_16x16_transpose / haloize), and the math thread only does the
 // A2D datacopy that reconstructs the Int8 register datum into DEST. There is no
@@ -34,13 +34,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
-    // Mirror transpose_wh_init i8 branch: acc_to_dest=true, transpose_of_faces=1, within_face_16x16_transpose=1.
+    // Mirror transpose_init i8 branch: acc_to_dest=true, transpose_of_faces=1, within_face_16x16_transpose=1.
     _llk_unpack_A_init_<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE, false /* unpack_to_dest */>(
-        1 /* transpose_of_faces */, 1 /* within_face_16x16_transpose */, FACE_R_DIM, params.num_faces, formats.unpack_A_src, formats.unpack_A_dst);
+        1 /* transpose_of_faces */,
+        1 /* within_face_16x16_transpose */,
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces),
+        formats.unpack_A_src,
+        formats.unpack_A_dst);
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        // Mirror transpose_wh_tile execute else branch: acc_to_dest=false.
+        // Mirror transpose_tile execute else branch: acc_to_dest=false.
         _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false /* unpack_to_dest */>(
             L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
     }

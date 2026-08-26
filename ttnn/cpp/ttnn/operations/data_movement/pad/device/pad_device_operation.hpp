@@ -21,12 +21,13 @@
 #include "ttnn/operations/data_movement/pad/device/pad_tile_multicore_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::prim {
 struct PadDeviceOperation {
     using operation_attributes_t = PadParams;
     using tensor_args_t = PadInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         PadRmReaderWriterMultiCoreProgramFactory,
@@ -49,7 +50,6 @@ struct PadDeviceOperation {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors);
-
 };
 }  // namespace ttnn::prim
 

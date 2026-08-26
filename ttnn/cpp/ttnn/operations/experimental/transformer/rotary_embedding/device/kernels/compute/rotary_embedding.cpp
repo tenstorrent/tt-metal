@@ -8,37 +8,41 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tilize.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles, uint32_t in1_idx) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
+    CircularBuffer cb_out(out_cb);
     // Multiply input by cos
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, in1_idx + 1);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(in1_idx + 1);
 
     tile_regs_acquire();
 #ifdef DECODE_MODE
-    mul_bcast_rows_init_short(in0_cb, in1_cb);
+    mul_bcast_rows_init(in0_cb, in1_cb);
     mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
 #else
-    mul_tiles_init(in0_cb, in1_cb);
+    mul_init(in0_cb, in1_cb);
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
 #endif
     tile_regs_commit();
 
-    cb_pop_front(in0_cb, num_tiles);
+    cb_in0.pop_front(num_tiles);
 #ifndef DECODE_MODE
     // We don't pop in1 in decode which is sin/cos since we don't stream
-    cb_pop_front(in1_cb, num_tiles);
+    cb_in1.pop_front(num_tiles);
 #endif
 
-    cb_reserve_back(out_cb, num_tiles);
+    cb_out.reserve_back(num_tiles);
 
     tile_regs_wait();
     pack_tile(0, out_cb);
     tile_regs_release();
 
-    cb_push_back(out_cb, num_tiles);
+    cb_out.push_back(num_tiles);
 }
 
 template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb>
@@ -54,7 +58,8 @@ ALWI void UNTILIZE_TILES() {
 
 template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb>
 ALWI void TILIZE_ROWS(uint32_t sync_cb) {
-    cb_wait_front(sync_cb, num_tiles);
+    CircularBuffer cb_sync(sync_cb);
+    cb_sync.wait_front(num_tiles);
     compute_kernel_lib::tilize<
         num_tiles,
         in0_cb,
@@ -62,7 +67,7 @@ ALWI void TILIZE_ROWS(uint32_t sync_cb) {
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
-    cb_pop_front(sync_cb, num_tiles);
+    cb_sync.pop_front(num_tiles);
 }
 
 void kernel_main() {
@@ -81,7 +86,15 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(10);
     constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
 
-    cb_wait_front(scalar_cb, onetile);
+    CircularBuffer cb_in(in_cb);
+    CircularBuffer cb_rotated_in(rotated_in_cb);
+    CircularBuffer cb_scalar(scalar_cb);
+    CircularBuffer cb_rotated_in_interm(rotated_in_interm_cb);
+    CircularBuffer cb_cos_interm(cos_interm_cb);
+    CircularBuffer cb_sin_interm(sin_interm_cb);
+    CircularBuffer cb_out(out_cb);
+
+    cb_scalar.wait_front(onetile);
 
     uint32_t updated_cos_cb = cos_cb;
     uint32_t updated_sin_cb = sin_cb;
@@ -93,7 +106,7 @@ void kernel_main() {
     constexpr uint32_t untilized_sin_sync_cb = get_compile_time_arg_val(15);
     constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(16);
     constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(17);
-    binary_op_init_common(sin_cb, scalar_cb, untilized_sin_cb);
+    compute_kernel_hw_startup(sin_cb, scalar_cb, untilized_sin_cb);
     UNTILIZE_TILES<Wt, sin_cb, untilized_sin_cb>();
     UNTILIZE_TILES<Wt, cos_cb, untilized_cos_cb>();
     reconfig_data_format_srca(cos_cb, untilized_sin_cb);
@@ -103,7 +116,7 @@ void kernel_main() {
     updated_cos_cb = retilized_cos_cb;
     updated_sin_cb = retilized_sin_cb;
 #else
-    binary_op_init_common(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
+    compute_kernel_hw_startup(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
 #endif
     uint32_t in1_idx = 0;
     for (uint32_t i = 0; i < num_rows; ++i) {
@@ -115,22 +128,22 @@ void kernel_main() {
                 // Multiply half of the rotated input by scalar (-1)
                 reconfig_data_format(rotated_in_cb, scalar_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb);
-                cb_wait_front(rotated_in_cb, onetile);
+                cb_rotated_in.wait_front(onetile);
 
                 tile_regs_acquire();
-                mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
+                mul_bcast_scalar_init(rotated_in_cb, scalar_cb);
                 mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
                 tile_regs_commit();
 
-                cb_pop_front(rotated_in_cb, onetile);
+                cb_rotated_in.pop_front(onetile);
 
-                cb_reserve_back(rotated_in_interm_cb, onetile);
+                cb_rotated_in_interm.reserve_back(onetile);
 
                 tile_regs_wait();
                 pack_tile(0, rotated_in_interm_cb);
                 tile_regs_release();
 
-                cb_push_back(rotated_in_interm_cb, onetile);
+                cb_rotated_in_interm.push_back(onetile);
                 reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 // Multiply rotated input by sin
@@ -146,27 +159,27 @@ void kernel_main() {
             MUL_TILES(in_cb, updated_cos_cb, cos_interm_cb, onetile, in1_idx);
 
             // Add applied sin/cos tensors
-            cb_wait_front(cos_interm_cb, onetile);
-            cb_wait_front(sin_interm_cb, onetile);
+            cb_cos_interm.wait_front(onetile);
+            cb_sin_interm.wait_front(onetile);
 
             reconfig_data_format_srca(rotated_in_cb, cos_interm_cb);
             pack_reconfig_data_format(cos_interm_cb, out_cb);
 
             tile_regs_acquire();
-            add_tiles_init(cos_interm_cb, sin_interm_cb);
+            add_init(cos_interm_cb, sin_interm_cb);
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
             tile_regs_commit();
 
-            cb_pop_front(cos_interm_cb, onetile);
-            cb_pop_front(sin_interm_cb, onetile);
+            cb_cos_interm.pop_front(onetile);
+            cb_sin_interm.pop_front(onetile);
 
-            cb_reserve_back(out_cb, onetile);
+            cb_out.reserve_back(onetile);
 
             tile_regs_wait();
             pack_tile(0, out_cb);
             tile_regs_release();
 
-            cb_push_back(out_cb, onetile);
+            cb_out.push_back(onetile);
         }
     }
 }

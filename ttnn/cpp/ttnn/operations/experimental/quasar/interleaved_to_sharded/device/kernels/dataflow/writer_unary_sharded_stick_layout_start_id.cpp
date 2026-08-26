@@ -5,26 +5,22 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // run-time args
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t block_height = get_arg_val<uint32_t>(1);
-    const uint32_t block_width_bytes = get_arg_val<uint32_t>(2);
-    const uint32_t padded_block_width_bytes = get_arg_val<uint32_t>(3);
-    const uint32_t start_id = get_arg_val<uint32_t>(4);
-    const uint32_t output_width_in_pages = get_arg_val<uint32_t>(5);
+    const uint32_t block_height = get_arg(args::block_height);
+    const uint32_t block_width_bytes = get_arg(args::block_width_bytes);
+    const uint32_t padded_block_width_bytes = get_arg(args::padded_block_width_bytes);
+    const uint32_t start_id = get_arg(args::start_id);
+    const uint32_t output_width_in_pages = get_arg(args::output_width_in_pages);
 
-    // compile-time args
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out0);
+    DataflowBuffer cb_out(dfb::out);
 
     uint32_t stick_id = start_id;
     cb_out.wait_front(block_height);

@@ -69,7 +69,55 @@ MemoryUsageTracker.clear()
 guard.release()  # Prevent double cleanup when guard is garbage collected
 ```
 
-See [train_nanogpt.py](/tt-train/sources/examples/nano_gpt/train_nanogpt.py) with `--track_memory` flag for a complete example.
+See [train.py](/tt-train/sources/examples/train/train.py) with `--track_memory` flag for a complete example.
+
+### Inline autograd-aware snapshots (`memory_snapshot`)
+
+`MemoryUsageTracker.snapshot(name)` is fine for coarse checkpoints
+(model/optimizer creation, whole forward/backward), but to see memory *inside*
+a model — and on **both** the forward and backward pass — use the autograd-aware
+helper in [`memory_utils.py`](/tt-train/sources/ttml/ttml/common/memory_utils.py):
+
+```python
+from ttml.common.memory_utils import memory_snapshot
+
+# Identity op: returns x unchanged, but records a snapshot labelled
+# fwd_label when the forward runs and bwd_label when its gradient runs.
+x = memory_snapshot(x, "AFTER_ROUTING_FWD", "AFTER_ROUTING_BWD")
+```
+
+- **Enable it** with the env var `TTML_TRACK_MEMORY=1`. When it is unset (or both
+  labels are empty), `memory_snapshot` is a zero-overhead passthrough — it returns
+  `x` directly and inserts **no** node into the autograd graph, so it is safe to
+  leave the calls in production code.
+- It must run inside an active `MemoryUsageTracker.begin_capture()` session (same
+  as manual snapshots) for the labels to be recorded.
+- Labels are auto-suffixed with a global sequence number (`AFTER_ROUTING_FWD__000042`)
+  so snapshots stay unique and ordered even when the same call fires every layer /
+  every step.
+
+#### Model convention
+
+Modules wrap the helper so every snapshot is prefixed by the module and layer,
+which keeps phases greppable in the log. For example the DeepSeek MoE blocks
+(see [`moe.py`](/tt-train/sources/ttml/ttml/models/deepseek/moe.py)) define:
+
+```python
+class MoE(AbstractModuleBase):
+    memory_marker_prefix = "DENSE_MOE"   # SPARSE_MOE / SPARSE_MOE_EP in subclasses
+
+    def _memory_snapshot(self, x, phase):
+        label = f"{self.memory_marker_prefix}_L{self._debug_layer_id}_{phase}"
+        return memory_snapshot(x, f"{label}_FWD", f"{label}_BWD")
+
+    def forward(self, x):
+        x = self._memory_snapshot(x, "START")
+        ...
+        x = self._memory_snapshot(x, "AFTER_ROUTING")   # -> SPARSE_MOE_L3_AFTER_ROUTING_FWD/_BWD
+```
+
+The resulting `*_FWD` / `*_BWD` labels flow straight into the same
+`print_memory_usage()` output and `analyze_memory.py` tooling described below.
 
 ### NO_DISPATCH Mode
 
@@ -198,7 +246,7 @@ python scripts/analyze_memory.py --logs <logfile> [options]
 ```
 
 **Required:**
-- `--logs`: A single log file containing memory usage summaries created by training script ([cpp](/tt-train/sources/examples/nano_gpt/main.cpp) or [python](/tt-train/sources/examples/nano_gpt/train_nanogpt.py)). Note: you can concatenate multiple training logs in one file, it would analyze them separately, and add all of them on the histogram
+- `--logs`: A single log file containing memory usage summaries created by training script ([cpp](/tt-train/sources/examples/nano_gpt/main.cpp) or [python](/tt-train/sources/examples/train/train.py)). Note: you can concatenate multiple training logs in one file, it would analyze them separately, and add all of them on the histogram
 
 **Optional:**
 - `--device_memory`: Device memory in bytes (default: 12GB)

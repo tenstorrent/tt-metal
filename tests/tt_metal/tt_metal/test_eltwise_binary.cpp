@@ -90,7 +90,7 @@ void run_eltwise_binary_test(
     auto binary_reader_kernel = CreateKernel(
         program,
         multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp"
-                  : "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
+                  : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_diff_lengths.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -105,7 +105,7 @@ void run_eltwise_binary_test(
     auto unary_writer_kernel = CreateKernel(
         program,
         multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
-                  : "tt_metal/kernels/dataflow/writer_unary.cpp",
+                  : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -118,7 +118,7 @@ void run_eltwise_binary_test(
         {"ELTWISE_OP", op_id_to_op_define[eltwise_op]}, {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};
     auto eltwise_binary_kernel = CreateKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
         core,
         ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 

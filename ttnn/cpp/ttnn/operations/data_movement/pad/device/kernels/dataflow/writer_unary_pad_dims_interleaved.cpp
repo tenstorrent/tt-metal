@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -22,19 +22,19 @@ void kernel_main() {
     const uint32_t pad_value = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out1 = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_id_out1 = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
     const uint32_t tile_size = get_tile_size(cb_id_out0);
 
     const auto s1 = TensorAccessor(dst_args, dst_addr);
     Noc noc;
-    CircularBuffer cb_out0(cb_id_out0);
-    CircularBuffer cb_out1(cb_id_out1);
+    DataflowBuffer dfb_out0(cb_id_out0);
+    DataflowBuffer dfb_out1(dfb_id_out1);
 
-    cb_out1.reserve_back(1);  // in this kernel we are not pushing anything into CBs, just using the space
+    dfb_out1.reserve_back(1);  // in this kernel we are not pushing anything into CBs, just using the space
 
-    uint32_t pad_buffer_l1_addr = cb_out1.get_write_ptr();
+    uint32_t pad_buffer_l1_addr = dfb_out1.get_write_ptr();
 
     // Fill pad tile with pad value
     volatile tt_l1_ptr uint32_t* pad_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_buffer_l1_addr);
@@ -59,11 +59,11 @@ void kernel_main() {
         for (uint32_t z = 0; z < num_unpadded_Z; z++) {
             for (uint32_t yt = 0; yt < num_unpadded_Yt; yt++) {
                 for (uint32_t xt = 0; xt < num_unpadded_Xt; xt++) {
-                    cb_out0.wait_front(1);
+                    dfb_out0.wait_front(1);
                     noc.async_write(
-                        cb_out0, s1, tile_size, {.offset_bytes = 0}, {.page_id = dst_tile_id, .offset_bytes = 0});
+                        dfb_out0, s1, tile_size, {.offset_bytes = 0}, {.page_id = dst_tile_id, .offset_bytes = 0});
                     noc.async_write_barrier();
-                    cb_out0.pop_front(1);
+                    dfb_out0.pop_front(1);
                     dst_tile_id++;
                 }
                 pad_tiles(num_padded_Xt);

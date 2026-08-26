@@ -1,0 +1,192 @@
+# Sharded layernorm compute kernel.
+# Reference: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp
+#
+# Pipeline: E[x] partial reduce → x-E[x] → (x-E[x])² → Var partial reduce →
+#           Var+eps → rsqrt → normalize → gamma scale → beta bias.
+#
+# Reduce stages fold each block into its first dest tile and accumulate the blocks in L1,
+# so the row statistic spans the full shard width. The global allgather reduce folds away
+# on a single core, so E[x] is read straight from ex_partial where the kernel reads cb_ex_global.
+
+operands:
+  # x: input tensor
+  - name: "x"
+    dims: [32, 1024]
+    format: "Float16_b"
+
+  # scaler for partial reduce (1/W)
+  - name: "scaler"
+    dims: [32, 1024]
+    format: "Float16_b"
+    const_value: 0.0009765625
+
+  # eps — small constant for numerical stability
+  - name: "eps"
+    dims: [32, 1024]
+    format: "Float16_b"
+    const_value: 0.001
+
+  # gamma — per-column scale
+  - name: "gamma"
+    dims: [32, 1024]
+    format: "Float16_b"
+
+  # beta — per-column bias
+  - name: "beta"
+    dims: [32, 1024]
+    format: "Float16_b"
+
+  # intermediates
+  - name: "ex_partial"
+    dims: [32, 1024]
+    format: "Float16_b"
+
+  - name: "xmm"
+    dims: [32, 1024]
+    format: "Float16_b"
+
+  - name: "xmm2"
+    dims: [32, 1024]
+    format: "Float16_b"
+
+  - name: "var_partial"
+    dims: [32, 1024]
+    format: "Float16_b"
+
+  - name: "ex2pe"
+    dims: [32, 1024]
+    format: "Float16_b"
+
+  - name: "normalized"
+    dims: [32, 1024]
+    format: "Float16_b"
+
+  - name: "gamma_out"
+    dims: [32, 1024]
+    format: "Float16_b"
+
+  - name: "output"
+    dims: [32, 1024]
+    format: "Float16_b"
+
+operations:
+  # Step 1: E[x] partial reduce — row-reduce(AVG) the input
+  - math:
+      - type: "Fpu"
+        src_a: "x"
+        src_b: "scaler"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_ROW"
+        reduce_pool: "AVG"
+        reduce_to_tile: true
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "ex_partial"
+        packer: "Packer"
+        pack_l1_accumulation: 1
+
+  # Step 2: x - E[x] — subtract mean (broadcast col)
+  - math:
+      - type: "Fpu"
+        src_a: "x"
+        src_b: "ex_partial"
+        operation: "Elwsub"
+        unpacker: "UnpackerAB"
+        broadcast_type: "COL"
+        broadcast_tile: 0
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+    pack:
+      - output: "xmm"
+        packer: "Packer"
+
+  # Step 3: (x - E[x])^2 — self-multiply
+  - math:
+      - type: "Fpu"
+        src_a: "xmm"
+        src_b: "xmm"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "xmm2"
+        packer: "Packer"
+
+  # Step 4: Var(x) partial reduce — row-reduce(AVG) the squared deviations
+  - math:
+      - type: "Fpu"
+        src_a: "xmm2"
+        src_b: "scaler"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_ROW"
+        reduce_pool: "AVG"
+        reduce_to_tile: true
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "var_partial"
+        packer: "Packer"
+        pack_l1_accumulation: 1
+
+  # Step 5: 1/sqrt(Var + eps) — add eps then rsqrt
+  - math:
+      - type: "Fpu"
+        src_a: "var_partial"
+        src_b: "eps"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        operation: "Rsqrt"
+        iterations: 32
+    block_size: [32, 32]
+    pack:
+      - output: "ex2pe"
+        packer: "Packer"
+
+  # Step 6: (x - E[x]) * 1/sqrt(Var+eps) — normalize (broadcast col)
+  - math:
+      - type: "Fpu"
+        src_a: "xmm"
+        src_b: "ex2pe"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "COL"
+        broadcast_tile: 0
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "normalized"
+        packer: "Packer"
+
+  # Step 7: normalized * gamma — scale (broadcast row)
+  - math:
+      - type: "Fpu"
+        src_a: "normalized"
+        src_b: "gamma"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        math_fidelity: "HiFi4"
+    block_size: [32, 32]
+    pack:
+      - output: "gamma_out"
+        packer: "Packer"
+
+  # Step 8: gamma_out + beta — bias (broadcast row)
+  - math:
+      - type: "Fpu"
+        src_a: "gamma_out"
+        src_b: "beta"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        math_fidelity: "LoFi"
+    block_size: [32, 32]
+    pack:
+      - output: "output"
+        packer: "Packer"

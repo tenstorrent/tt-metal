@@ -300,9 +300,7 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
-    std::uint32_t x_stride = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
-                             : (pack_src_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
-                                                                                             : 1;
+    std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride = FACE_C_DIM * x_stride;
     std::uint32_t w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride;
 
@@ -334,12 +332,8 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
 
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
 {
-    // Stall to avoid clobbering current packer configuration
+    // Stall to avoid clobbering current packer configuration, then enable/disable L1 accumulation
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-
-    // While packing, if all datums of a face are 0s, the packer will automatically set the zflags. For L1 accumulation mode, even if we pack out an entire face
-    // of 0s, because the data we are accumulating with is unknown, we don't want to set the zflags.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Disable_pack_zero_flags_RMW>(pack_l1_acc);
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_RMW>(pack_l1_acc);
 }
 
@@ -560,13 +554,14 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
         TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
     }
 
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>((pack_dst_format & 0x1F) == static_cast<DataFormatType>(DataFormat::Fp8_e4m3) ? 1 : 0);
+    bool is_fp8_e4m3 = (pack_dst_format & 0x1F) == static_cast<DataFormatType>(DataFormat::Fp8_e4m3);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(is_fp8_e4m3);
 
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_pack::TILE_HEADER));
 
     reconfigure_exp_threshold<is_fp32_dest_acc_en>(pack_output_dst_format);
 
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_output_src_format);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
 
     // Set packer strides
     set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
@@ -606,9 +601,18 @@ inline void configure_pack(
     t6_mutex_acquire(mutex::REG_RMW);
 
     // Set Fp8 E4M3 mode for packer
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(((pack_dst_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);
+    bool is_fp8_e4m3 = (pack_dst_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3;
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(is_fp8_e4m3);
 
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_output_src_format);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
+
+    // Establish the no-override baseline for the Dstacc ALU format-select fields (ADDR32=0), consumed
+    // by the packer: clear Dstacc_val/override so the base REG2_Dstacc format programmed above is
+    // used. The SrcA/SrcB override fields in the same word are owned by the math thread
+    // (_llk_math_hw_configure_); the two writers touch disjoint bits and rely on per-byte RMWCIB
+    // atomicity, so this write does not depend on the surrounding REG_RMW mutex for cross-thread safety.
+    constexpr std::uint32_t dstacc_fmt_override_mask = ALU_FORMAT_SPEC_REG_Dstacc_val_MASK | ALU_FORMAT_SPEC_REG_Dstacc_override_MASK;
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_Dstacc_val_ADDR32, 0, dstacc_fmt_override_mask>(0);
 
     // Config RELU
     relu_config_u hw_relu_config;
@@ -673,11 +677,11 @@ inline void select_packer_dest_registers()
 {
     if constexpr (Dst == DstSync::SyncFull)
     {
-        TTI_WRCFG(p_gpr_pack::DEST_OFFSET_LO, p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        TTI_WRCFG(p_gpr_pack::DEST_OFFSET_LO, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
     }
     else
     {
-        TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
     }
     TTI_DMANOP;
     TTI_DMANOP;
@@ -687,12 +691,11 @@ inline void select_packer_dest_registers()
 inline void program_packer_destination(std::uint32_t addr)
 {
     LLK_ASSERT(is_valid_L1_address(addr), "L1 address must be in valid L1 memory region");
-    /*
-       The GPR OUTPUT_ADDR is only used by the packer mop when writing tile headers.
-       Since we do not write tile headers in tt-metal, we do not need to wait for
-       packer to finish or say put a stallwait at this point.
-       We just need to make sure we wait before issuing the WRCFG.
-    */
+    // No packer-drain STALLWAIT is needed before reprogramming the destination: the pack thread issues its
+    // instruction stream in order, so each tile's PACR has already started -- and latched L1_Dest_addr,
+    // sampled at PACR start -- before the next call's WRCFG reprograms it, and the Last=1 PACR that ends each
+    // pack MOP drains the packer and forces the next pack to re-sample L1_Dest_addr. The STALLWAIT below is
+    // only the GPR-producer fence: it ensures the SETDMAREG write to OUTPUT_ADDR retires before WRCFG reads it.
     std::uint32_t new_l1_addr = (1 << 31) | addr;
     TT_SETDMAREG(0, LOWER_HALFWORD(addr), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
     TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));

@@ -4,38 +4,47 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t block_height = get_arg_val<uint32_t>(2);
-    const uint32_t block_width_bytes = get_arg_val<uint32_t>(3);
-    const uint32_t padded_block_width_bytes = get_arg_val<uint32_t>(4);
-    const bool aligned = static_cast<bool>(get_arg_val<uint32_t>(5));
-    const uint32_t aligned_input_width_offset_bytes = get_arg_val<uint32_t>(6);
-    const uint32_t aligned_block_width_bytes = get_arg_val<uint32_t>(7);
-    const uint32_t aligned_offset = get_arg_val<uint32_t>(8);
-    const uint32_t start_id = get_arg_val<uint32_t>(9);
+    const uint32_t block_height = get_arg(args::block_height);
+    const uint32_t block_width_bytes = get_arg(args::block_width_bytes);
+    const uint32_t padded_block_width_bytes = get_arg(args::padded_block_width_bytes);
+    const bool aligned = static_cast<bool>(get_arg(args::aligned));
+    const uint32_t aligned_input_width_offset_bytes = get_arg(args::aligned_input_width_offset_bytes);
+    const uint32_t aligned_block_width_bytes = get_arg(args::aligned_block_width_bytes);
+    const uint32_t aligned_offset = get_arg(args::aligned_offset);
+    const uint32_t start_id = get_arg(args::start_id);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
-    constexpr uint32_t num_trids = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr uint32_t num_trids = get_arg(args::num_trids);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_in0(dfb::in0);
+    // Staging area for the unaligned path is a private node-local L1 scratchpad (scratch::pad),
+    // constructed inside the unaligned branch below. It is NOT a DFB: the reader both fills it
+    // (src->scratch) and drains it (scratch->dest local copy), which would be an unsupported DM
+    // producer+consumer self-loop DFB on Gen2/Quasar.
 
-    const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes);
+    // The source-buffer base address is bound via the tensor parameter (tensor::src). The
+    // legacy reader pre-shifted the base by `aligned_input_width_offset_bytes`; in the typed
+    // model that per-core byte shift becomes the source-side `offset_bytes` on each read.
+    const auto s0 = TensorAccessor(tensor::src);
     uint32_t stick_id = start_id;
     cb_in0.reserve_back(block_height);
     if (aligned) {
         uint32_t dest_off = 0;
         for (uint32_t h = 0; h < block_height; ++h) {
-            noc.async_read(s0, cb_in0, block_width_bytes, {.page_id = stick_id}, {.offset_bytes = dest_off});
+            noc.async_read(
+                s0,
+                cb_in0,
+                block_width_bytes,
+                {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
+                {.offset_bytes = dest_off});
             stick_id++;
             dest_off += padded_block_width_bytes;
         }
@@ -45,8 +54,11 @@ void kernel_main() {
 
         constexpr uint32_t trid_base = 1;
 
-        cb_in1.reserve_back(num_trids);
-        uint32_t scratch_cb_page_size = get_local_cb_interface(cb_id_in1).fifo_page_size;
+        // Private node-local L1 scratchpad (raw memory, no producer/consumer credit semantics).
+        // Total size == num_trids * scratch_cb_page_size (set by the host ScratchpadSpec), so the
+        // per-slot page size is recovered by dividing the total by num_trids.
+        Scratchpad<uint32_t> scratch(scratch::pad);
+        uint32_t scratch_cb_page_size = scratch.size_in_bytes() / num_trids;
         SlotState slot_states[num_trids];
         uint32_t dest_offsets[num_trids];
         uint32_t scratch_offsets[num_trids];
@@ -61,8 +73,8 @@ void kernel_main() {
         UnicastEndpoint self_ep;
         const uint32_t my_noc_x = my_x[noc.get_noc_id()];
         const uint32_t my_noc_y = my_y[noc.get_noc_id()];
-        // Base L1 address of the scratch CB
-        const uint32_t scratch_l1_base = cb_in1.get_write_ptr();
+        // Base L1 address of the scratch region.
+        const uint32_t scratch_l1_base = scratch.get_base_address();
 
         uint32_t dest_off = 0;        // running offset into cb_in0
         uint32_t rows_issued = 0;     // Number of src->scratch transfers started
@@ -73,13 +85,15 @@ void kernel_main() {
                 uint32_t active_trid = trid_base + slot;
 
                 if (slot_states[slot] == SlotState::IDLE && rows_issued < block_height) {
-                    // Start new src->scratch transfer (TRID-tagged).
+                    // Start new src->scratch transfer (TRID-tagged). Destination is the raw L1
+                    // scratchpad slot, addressed directly (no DFB offset semantics).
+                    CoreLocalMem<uint32_t> scratch_dst(scratch_l1_base + scratch_offsets[slot]);
                     noc.async_read<NocOptions::TXN_ID>(
                         s0,
-                        cb_in1,
+                        scratch_dst,
                         aligned_block_width_bytes,
-                        {.page_id = stick_id},
-                        {.offset_bytes = scratch_offsets[slot]},
+                        {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
+                        {.offset_bytes = 0},
                         NocOptVals{.trid = static_cast<uint8_t>(active_trid)});
                     dest_offsets[slot] = dest_off;
                     slot_states[slot] = SlotState::SRC_PENDING;
@@ -117,6 +131,7 @@ void kernel_main() {
                 }
             }
         }
+        // No DFB bookkeeping: the scratchpad is raw L1 with no producer/consumer credits.
     }
     // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads
     UnicastEndpoint self_ep;

@@ -178,19 +178,19 @@ class LogProbsCalculator:
 
         num_devices = self.mesh_device.get_num_devices()
 
-        # Determine the TP dimension: for 2D meshes, logits are sharded across
-        # the larger dimension (TP). For 1D or single-device, use all devices.
-        if self.cluster_shape[0] > 1 and self.cluster_shape[1] > 1:
-            # 2D mesh: TP axis is the larger dimension
-            tp_axis = 0 if self.cluster_shape[0] >= self.cluster_shape[1] else 1
+        # Determine the TP dimension: logits are sharded across the mesh axis that
+        # holds multiple devices. Handles 2D (e.g. 8×4), 1×N (T3K), and N×1 meshes.
+        if num_devices > 1:
+            if self.cluster_shape[0] > 1 and self.cluster_shape[1] > 1:
+                tp_axis = 0 if self.cluster_shape[0] >= self.cluster_shape[1] else 1
+            elif self.cluster_shape[0] > 1:
+                tp_axis = 0
+            else:
+                # num_devices > 1 implies at least one dim > 1; here dim0 == 1 → 1×N (T3K)
+                tp_axis = 1
             num_devices_for_sharding = self.cluster_shape[tp_axis]
             self._all_gather_cluster_axis = tp_axis
-        elif num_devices > 1:
-            # 1D mesh
-            num_devices_for_sharding = num_devices
-            self._all_gather_cluster_axis = None
         else:
-            # Single device
             num_devices_for_sharding = num_devices
             self._all_gather_cluster_axis = None
 
@@ -228,11 +228,9 @@ class LogProbsCalculator:
                 torch.arange(num_devices_for_sharding).unsqueeze(1).expand(num_devices_for_sharding, batch_size)
             )
 
-            if self.cluster_shape[0] > 1 and self.cluster_shape[1] > 1:
+            if self._all_gather_cluster_axis is not None:
                 dims = (0, None) if self._all_gather_cluster_axis == 0 else (None, 0)
                 mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
-            elif num_devices > 1:
-                mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
             else:
                 mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
 
@@ -254,6 +252,37 @@ class LogProbsCalculator:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
+    def release(self) -> None:
+        """Best-effort release of unique calculator-owned tensors."""
+        field_names = (
+            "global_max",
+            "global_exp_sum",
+            "mask",
+            "output_tensor",
+            "topk_logprobs_output",
+            "topk_indices_output",
+        )
+        groups = {}
+        for name in field_names:
+            value = getattr(self, name, None)
+            if value is not None:
+                groups.setdefault(id(value), (value, []))[1].append(name)
+
+        failures = []
+        for value, names in groups.values():
+            try:
+                ttnn.deallocate(value)
+            except BaseException as error:
+                failures.append(error)
+            else:
+                for name in names:
+                    setattr(self, name, None)
+        if failures:
+            primary = failures[0]
+            previous = tuple(getattr(primary, "cleanup_failures", ()))
+            primary.cleanup_failures = previous + tuple(failures[1:])
+            raise primary
+
     def _perform_all_gather(self, tensor: ttnn.Tensor, dim: int, num_links: int, buffer_key: str = None):
         if callable(self._line_all_gather):
             kwargs = {
@@ -269,10 +298,8 @@ class LogProbsCalculator:
         return ttnn.all_gather(
             tensor,
             dim=dim,
-            num_links=num_links,
             memory_config=tensor.memory_config(),
             cluster_axis=self._all_gather_cluster_axis,
-            topology=ttnn.Topology.Linear,
         )
 
     def set_log_probs_mode(

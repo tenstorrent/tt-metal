@@ -8,22 +8,20 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t start_id = get_arg(args::start_id);
 
-    constexpr uint32_t num_writes = get_named_compile_time_arg_val("num_writes");
-    constexpr uint32_t padding_val_packed = get_named_compile_time_arg_val("padding_val_packed");
-    constexpr uint32_t needs_padding = get_named_compile_time_arg_val("needs_padding") == 1;
-    constexpr uint32_t swap_hw = get_named_compile_time_arg_val("swap_hw") == 1;
-    constexpr uint32_t H = get_named_compile_time_arg_val("H");
-    constexpr uint32_t W = get_named_compile_time_arg_val("W");
-    constexpr uint32_t accumulated_outer_dims = get_named_compile_time_arg_val("accumulated_outer_dims");
-    constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("tile_height");
-    constexpr uint32_t TILE_WIDTH = get_named_compile_time_arg_val("tile_width");
-    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr uint32_t num_writes = get_arg(args::num_writes);
+    constexpr uint32_t padding_val_packed = get_arg(args::padding_val_packed);
+    constexpr uint32_t swap_hw = get_arg(args::swap_hw) == 1;
+    constexpr uint32_t H = get_arg(args::H);
+    constexpr uint32_t W = get_arg(args::W);
+    constexpr uint32_t accumulated_outer_dims = get_arg(args::accumulated_outer_dims);
+    constexpr uint32_t TILE_HEIGHT = get_arg(args::tile_height);
+    constexpr uint32_t TILE_WIDTH = get_arg(args::tile_width);
 
     constexpr uint32_t H_p = tt::data_movement::common::round_up<H, TILE_HEIGHT>();
     constexpr uint32_t W_p = tt::data_movement::common::round_up<W, TILE_WIDTH>();
@@ -33,16 +31,16 @@ void kernel_main() {
 
     constexpr uint32_t HtWt = Ht * Wt;
 
-    constexpr uint32_t cb_id_in0 = 0;
-
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(tensor::input);
 
     Noc noc;
-    CircularBuffer cb(cb_id_in0);
-    CircularBuffer cb_padding(tt::CBIndex::c_1);
-    const uint32_t tile_bytes = cb.get_tile_size();
+    DataflowBuffer cb(dfb::in0);
+#ifdef NEEDS_PADDING
+    DataflowBuffer cb_padding(dfb::padding);
+#endif
+    const uint32_t tile_bytes = cb.get_entry_size();
 
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
@@ -69,7 +67,8 @@ void kernel_main() {
         noc.async_read_barrier();
         cb.push_back(onetile);
     }
-    if constexpr (needs_padding) {
+#ifdef NEEDS_PADDING
+    {
         // Add padding
         cb_padding.reserve_back(1);
         uint32_t l1_write_addr = cb_padding.get_write_ptr();
@@ -78,4 +77,5 @@ void kernel_main() {
         tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
         cb_padding.push_back(1);
     }
+#endif
 }

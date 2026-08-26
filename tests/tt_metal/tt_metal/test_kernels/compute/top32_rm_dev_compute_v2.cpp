@@ -5,13 +5,13 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
 
 // DeepSeek Top32 headers — Blackhole only; no WH B0 port exists yet.
 #if defined(TRISC_UNPACK)
 #if defined(ARCH_BLACKHOLE)
-#include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_top32_rm_api.h"
+#include "experimental/llk_unpack_A_top32_rm_api.h"
 #else
 #error "top32_rm_dev_compute_v2: unsupported architecture (Blackhole only)"
 #endif
@@ -19,8 +19,8 @@
 
 #if defined(TRISC_MATH)
 #if defined(ARCH_BLACKHOLE)
-#include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_deepseek_top32_rm.h"
-#include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_top32_rm_api.h"
+#include "sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h"
+#include "experimental/llk_math_top32_rm_api.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #else
 #error "top32_rm_dev_compute_v2: unsupported architecture (Blackhole only)"
@@ -77,12 +77,12 @@ void kernel_main() {
 
     // step 1
     reconfig_data_format_srca(cb_in0);
-    transpose_wh_init_short(cb_in0);
-    transpose_wh_tile(cb_in0, 0, value_offset_tiles);
+    transpose_init(cb_in0);
+    transpose_tile(cb_in0, 0, value_offset_tiles);
 
     reconfig_data_format_srca(cb_in1);
-    transpose_wh_init_short(cb_in1);
-    transpose_wh_tile(cb_in1, 0, index_offset_tiles);
+    transpose_init(cb_in1);
+    transpose_tile(cb_in1, 0, index_offset_tiles);
 
     // step 2
     const uint32_t decreasing = 0;
@@ -101,12 +101,12 @@ void kernel_main() {
     for (uint32_t i = 1; i < num_chunks; i++) {
         // step 3
         reconfig_data_format_srca(cb_in0);
-        transpose_wh_init_short(cb_in0);
-        transpose_wh_tile(cb_in0, i, value_offset_tiles + 1);
+        transpose_init(cb_in0);
+        transpose_tile(cb_in0, i, value_offset_tiles + 1);
 
         reconfig_data_format_srca(cb_in1);
-        transpose_wh_init_short(cb_in1);
-        transpose_wh_tile(cb_in1, i, index_offset_tiles + 1);
+        transpose_init(cb_in1);
+        transpose_tile(cb_in1, i, index_offset_tiles + 1);
 
         // step 4
         MATH(SFPU_UNARY_CALL(

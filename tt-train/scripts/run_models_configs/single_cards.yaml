@@ -1,0 +1,112 @@
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Field descriptions (per model entry):
+#   name:     Display name of model
+#   filename: Prefix for output files. Unique identifier. Changing this might affect dashboard.
+#   binary:   Absolute path to the executable or Python script to run
+#   args:     List of arguments passed to the configured executable or script
+
+models:
+# C++ Models
+  - name: "NanoGPT Shakespeare (C++)"
+    filename: "nanogpt_shakespeare_cpp"
+    binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_char.yaml"
+      - "--track_memory"
+
+  - name: "NanoLlama3 Shakespeare (C++)"
+    filename: "nanollama_shakespeare_cpp"
+    binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3_char.yaml"
+      - "--track_memory"
+
+  - name: "TinyLlama Shakespeare (C++)"
+    filename: "tinyllama_shakespeare_cpp"
+    binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml"
+      - "--track_memory"
+    skip-card:
+      - "n150"
+      - "n300"
+      - "p100"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+      output_file: "data/tokenized_shakespeare_tinyllama"
+
+# Python Models
+  - name: "NanoGPT Shakespeare"
+    filename: "nanogpt_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt_char.yaml"
+      - "--track_memory"
+
+  - name: "NanoLlama3 Shakespeare"
+    filename: "nanollama_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3_char.yaml"
+      - "--track_memory"
+
+  - name: "Nano Deepseek (Char) Shakespeare"
+    filename: "nano_deepseek_char_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nano_deepseek_char.yaml"
+      - "--track_memory"
+
+  - name: "TinyLlama Shakespeare"
+    filename: "tinyllama_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml"
+      - "--track_memory"
+    skip-card:
+      - "n150"
+      - "n300"
+      - "p100"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+      output_file: "data/tokenized_shakespeare_tinyllama"
+
+  - name: "Linear Regression"
+    filename: "linear_regression"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/linear_regression/linear_regression.py"
+    args:
+      - "--track_memory"
+      - "--verbose"
+
+  - name: "Qwen 3 1.7B Shakespeare"
+    filename: "qwen3_1.7b_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_qwen3_17b.yaml"
+      - "--max_steps 500"
+      - "--track_memory"
+    skip-card:
+      - "n150"
+      - "n300"
+      - "p100"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "Qwen/Qwen3-1.7B"
+      output_file: "data/tokenized_shakespeare_qwen3"
+
+  - name: "Tiny Deepseek (Char) Shakespeare"
+    filename: "tiny_deepseek_char_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tiny_deepseek_char.yaml"
+      - "--max_steps 1000"
+      - "--track_memory"
+    skip-card:
+      - "n150"
+      - "n300"
+      - "p100"

@@ -40,6 +40,20 @@ namespace tt::tt_metal {
 using namespace tt;
 using namespace tt::test_utils;
 
+class AnyDispatchSimulatorFixture : public AnyDispatchMeshDeviceFixture {
+protected:
+    void SetUp() override {
+        // Check if simulator mode is enabled
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+            GTEST_SKIP()
+                << "Simulator mode not enabled. Set TT_METAL_SIMULATOR environment variable to run simulator tests.";
+        }
+
+        // Call parent SetUp to initialize devices
+        AnyDispatchMeshDeviceFixture::SetUp();
+    }
+};
+
 class SimulatorFixture : public MeshDeviceFixture {
 protected:
     void SetUp() override {
@@ -56,9 +70,7 @@ protected:
 
 TEST_F(SimulatorFixture, SimulatorDeviceInitialization) {
     // Verify that all devices are properly initialized in simulator mode
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = devices_.at(id);
-
+    for (auto& mesh_device : this->devices_) {
         // Check that device is valid
         EXPECT_NE(mesh_device, nullptr);
 
@@ -74,7 +86,7 @@ TEST_F(SimulatorFixture, SimulatorDeviceInitialization) {
     }
 }
 
-TEST_F(SimulatorFixture, QuasarStaticTlbReadWrite) {
+TEST_F(AnyDispatchSimulatorFixture, QuasarStaticTlbReadWrite) {
     auto& cluster = MetalContext::instance().get_cluster();
     if (cluster.arch() != tt::ARCH::QUASAR) {
         GTEST_SKIP();
@@ -85,8 +97,7 @@ TEST_F(SimulatorFixture, QuasarStaticTlbReadWrite) {
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     constexpr uint32_t value32 = 0xDEADBEEF;
 
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        const auto mesh_device = devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         const ChipId chip_id = mesh_device->get_devices()[0]->id();
         const auto& sdesc = cluster.get_soc_desc(chip_id);
 

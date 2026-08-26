@@ -53,8 +53,26 @@ jobs:
           PLATFORM="${{ inputs.platform }}"
           UBUNTU_VERSION="${PLATFORM#ubuntu-}"
           echo "version=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
+      - name: Capture proxy env for the buildx builder
+        id: proxy-env
+        run: |
+          # This runner's proxy isn't inherited by the isolated buildx builder
+          # (see docker-run/action.yml's forward_civ2_proxy_env_vars).
+          #
+          # Do not set NO_PROXY here. A previous value of "tenstorrent.net"
+          # matched harbor.ci.tenstorrent.net. That made the builder skip
+          # the proxy and connect to Harbor directly, which times out.
+          echo "PROXY_HTTP=${HTTP_PROXY:-${http_proxy:-}}" >> "$GITHUB_ENV"
+          echo "PROXY_HTTPS=${HTTPS_PROXY:-${https_proxy:-}}" >> "$GITHUB_ENV"
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          # network=host: builder uses the runner's own network namespace
+          # instead of the docker-container driver's default bridge.
+          driver-opts: |
+            network=host
+            env.HTTP_PROXY=${{ env.PROXY_HTTP }}
+            env.HTTPS_PROXY=${{ env.PROXY_HTTPS }}
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -102,10 +120,13 @@ jobs:
           UBUNTU_VERSION: ${{ env.UBUNTU_VERSION }}
           PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
           HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
+          PROXY_HTTP: ${{ env.PROXY_HTTP }}
+          PROXY_HTTPS: ${{ env.PROXY_HTTPS }}
         run: |
           set -euo pipefail
           TARGET="${{ inputs.image }}"
-          TOOLS=(ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd sfpi openmpi)
+          # Tool list comes from docker-bake.hcl via get-target-tools.sh
+          TOOLS=($(.github/scripts/get-target-tools.sh "$TARGET"))
           SET=""
           for tool in "${TOOLS[@]}"; do
             tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
@@ -118,17 +139,34 @@ jobs:
           SET+="${TARGET}.args.UBUNTU_VERSION=${UBUNTU_VERSION}"$'\n'
           SET+="${TARGET}.args.PYTHON_VERSION=${PYTHON_VERSION}"$'\n'
           SET+="${TARGET}.args.GIT_REF=${{ github.ref_name || 'main' }}"$'\n'
+          # RUN steps (apt-get, curl, uv pip) need the proxy too. BuildKit
+          # sets these build args in every RUN automatically, no ARG
+          # declaration needed.
+          if [ -n "$PROXY_HTTP" ]; then
+            SET+="${TARGET}.args.HTTP_PROXY=${PROXY_HTTP}"$'\n'
+            SET+="${TARGET}.args.HTTPS_PROXY=${PROXY_HTTPS}"$'\n'
+          fi
           {
             echo "set<<EOF"
             echo "$SET"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+          # Consumed directly by manual-docker-bake.sh (SBOM generator, oras
+          # binary for enrichment), not as a build-stage context.
+          echo "syft-scanner-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')" >> "$GITHUB_OUTPUT"
+          echo "oras-image=$(echo "$TOOL_TAGS" | jq -r '."oras-tag"')" >> "$GITHUB_OUTPUT"
       - name: Build and push (skipped for dry run)
         if: ${{ !inputs.dry-run }}
         uses: ./.github/actions/manual-docker-bake
         with:
           targets: ${{ inputs.image }}
           set-lines: ${{ steps.bake.outputs.set }}
+          syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
+          oras-image: ${{ steps.bake.outputs.oras-image }}
+          # Cheap insurance against transient blips - the actual fix for the
+          # timeouts we hit is the proxy env forwarded above.
+          retries: "2"
+          retry-delay-seconds: "15"
           harbor-prefix: ${{ inputs.harbor-prefix }}
       - name: Get image digest
         if: ${{ !inputs.dry-run }}

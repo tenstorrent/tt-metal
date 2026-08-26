@@ -11,6 +11,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -87,16 +88,30 @@ inline void _bcast_cols_op_()
  * batch and calls once per head into the SAME dest -> dest[col] = sum_h qk[col,h]*w[h], one pack per
  * column instead of per (column, head). cb_qk must be head-major.
  *
+ * Each 16x16 face pair (one face-row) is processed by four ops (two per face; each covers an aligned
+ * 8x16 block). A full 32x32 tile has two face-rows (F0/F1 and F2/F3); a 16x32 tiny tile has a single
+ * face-row (F0/F1).
+ *
  * @tparam eltwise_binary_type: FPU op, values = <ELWSUB/ELWMUL>
  * @param ct_dim: Number of srcA column tiles processed in the block.
+ * @param tensor_shape: Shape of the operand tile (2 faces for 16x32 tiny tiles, 4 faces for full 32x32 tiles).
+ * @param dst_index: Absolute dest tile slot where this block-row's ct_dim tiles begin. Multi-tile-row
+ *                   callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
+ *                   lands on its own dest slots; single-tile-row callers leave it at 0.
  * @note Canonical description of the shared blocked bcast-col mechanism; other files reference this one.
  */
 template <EltwiseBinaryType eltwise_binary_type>
-inline void _llk_math_bcast_cols_reuse_custom_(const std::uint32_t ct_dim = 1)
+inline void _llk_math_bcast_cols_reuse_custom_(
+    const std::uint32_t ct_dim = 1, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
     static_assert(
         eltwise_binary_type == EltwiseBinaryType::ELWMUL || eltwise_binary_type == EltwiseBinaryType::ELWSUB,
         "blocked bcast-col reuse scaffold supports ELWMUL and ELWSUB only");
+
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+
+    // Two faces make up one face-row; a full tile has two of them, a tiny tile one.
+    const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
 
     addr_mod_t {
         .srca = {.incr = 8},
@@ -126,21 +141,25 @@ inline void _llk_math_bcast_cols_reuse_custom_(const std::uint32_t ct_dim = 1)
     // the pair's 2nd op rereads the same srcB face; ADDR_MOD_6 then jumps srcB +24 to the next pair.
     for (std::uint32_t i = 0; i < ct_dim; i++)
     {
-        // face F0 (srcB face 0)
-        _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // 0 -> 8
-        _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_5>(); // 8 -> 0
+        // Position the dest write pointer at the start of this tile's 32x32 dest
+        // slot (stride 64 rows). The packer indexes tiles at the full 32x32 tile
+        // stride regardless of num_faces, so tiles must be written one-per-slot.
+        // The ADDR_MOD dest increments below only advance 32 rows for a 16x32 tiny
+        // tile (num_faces=2) and 64 rows for a full 32x32 tile (num_faces=4); the
+        // per-slot base + counter reset makes both land on the right slot.
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + i);
+        math::clear_dst_reg_addr();
 
-        // face F1 (srcB face 0, reused)
-        _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // 0 -> 8
-        _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_6>(); // 8 -> 32
+        for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
+        {
+            // Even face (F0 / F2): op then rewind srcB by one face (ADDR_MOD_5) so the odd face reads it.
+            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
+            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_5>(); // srcB: 8 -> 0
 
-        // face F2 (srcB face 2)
-        _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // 32 -> 40
-        _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_5>(); // 40 -> 32
-
-        // face F3 (srcB face 2, reused)
-        _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // 32 -> 40
-        _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_6>(); // 40 -> 64, no CLR_A
+            // Odd face (F1 / F3): op then advance srcB +24 (ADDR_MOD_6) to the next face-row / tile.
+            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
+            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_6>(); // srcB: 8 -> 32 (next face-row)
+        }
 
         // Rewind srcB to 0 for the next srcA tile (CLR_A clears srcA's dvalid); srcA keeps advancing.
         TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_AB);
@@ -148,6 +167,9 @@ inline void _llk_math_bcast_cols_reuse_custom_(const std::uint32_t ct_dim = 1)
 
     // Clear srcB dvalid on the way out.
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_AB);
+
+    // Restore the dest base offset so the next op starts from tile slot 0.
+    math::clear_dst_reg_addr();
 }
 
 /**
@@ -158,8 +180,11 @@ inline void _llk_math_bcast_cols_reuse_custom_(const std::uint32_t ct_dim = 1)
  * and calls @ref _llk_math_bcast_cols_reuse_custom_ <ELWMUL> directly.
  *
  * @param ct_dim: Number of srcA column tiles processed in the block.
+ * @param tensor_shape: Shape of the operand tile (2 faces for 16x32 tiny tiles, 4 faces for full 32x32 tiles).
+ * @param dst_index: Absolute dest tile slot where this block-row's ct_dim tiles begin.
  */
-inline void _llk_math_sub_bcast_cols_reuse_custom_(const std::uint32_t ct_dim = 1)
+inline void _llk_math_sub_bcast_cols_reuse_custom_(
+    const std::uint32_t ct_dim = 1, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
-    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWSUB>(ct_dim);
+    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWSUB>(ct_dim, tensor_shape, dst_index);
 }

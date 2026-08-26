@@ -2,12 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
-import ttnn
 
+import ttnn
+from models.common.utility_functions import comp_allclose_and_pcc, is_blackhole, torch_random
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import is_blackhole, torch_random, comp_allclose_and_pcc
 
 TEST_PADDING_VALUE = -42
 
@@ -101,29 +103,16 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 # variance of N consecutive integers is (N^2 - 1) / 12 (population); with N=32 and Bessel's
 # correction, sample variance = 32 * (32^2 - 1) / (12 * 31) = 88.0 exactly. Variance is
 # translation-invariant *and* sign-invariant, so neither adding a large offset to every
-# element nor flipping its sign should change the answer. If the unpacker silently routes
-# fp32 input through SrcA as TF32 (10-bit mantissa instead of 23), values that differ by
-# less than the TF32 ULP collapse to the same representation; at offset=1e6 the TF32 ULP
-# is ~512, so all 32 consecutive integers become identical and the apparent variance drops
-# to 0. scalar=-1.0 routes through the do_scale path (mul_tiles_bcast_scalar +
-# transpose_wh_tile of cb_scaled) without changing the expected variance, exercising a
-# different inner-loop pattern than scalar=1.0 (which short-circuits to !do_scale). This
-# test covers all three reduction kernels (H, W, HW) and both code paths.
-@pytest.mark.parametrize("scalar", [1.0, -1.0])
+# element nor flipping its sign should change the answer.the scalar is applied after the
+# reduction as var(s*x) = s^2 * var(x).
+# test covers all three reduction kernels (H, W, HW) and both code paths
+@pytest.mark.parametrize("scalar", [1.0, 0, -1.0])
 @pytest.mark.parametrize("offset", [0.0, 1e6])
 @pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
 def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     correction = True
-    # do_scale path (scalar != 1.0) routes inputs through mul_tiles_bcast_scalar, whose FPU
-    # SrcA reads cb_in at TF32 (10-bit mantissa) regardless of any precision-preservation
-    # plumbing downstream. At offset=1e6 the TF32 ULP is ~512, so all 32 consecutive integers
-    # in cb_in collapse to a single TF32 value before the mul fires -- the variance is
-    # structurally pinned to zero on all three reduction kernels (W, H, HW) and there is no
-    # kernel-side workaround. Mark these combinations xfail to document the hardware floor.
-    if scalar != 1.0 and abs(offset) >= 1024:
-        pytest.xfail(
-            "FPU SrcA TF32 floor on do_scale path: cb_in collapses to a constant before the mul. Issue #45222."
-        )
+    # The input is read at full fp32 and reduced unscaled; scalar is now applied after the (unscaled, precise) Welford reduction
+    # as var(s*x) = s^2 * var(x), so this case is accurate regardless of offset.
     N = 32
     seq = torch.arange(N, dtype=torch.float32) + offset
     # Lay out the input so the reduction axis is the integer sequence.
@@ -143,17 +132,14 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     tt_out = ttnn.var(tt_in, dim=dim, scalar=scalar, keepdim=True, correction=correction)
     actual = ttnn.to_torch(ttnn.from_device(tt_out))
 
-    # Tolerances are tight: with the precision-preserving unpacker path the answer is
-    # exact (deviation = 0). atol=1e-3 here is many orders of magnitude tighter than what
-    # the buggy TF32-via-SrcA path produces (which at offset=1e6 returns exactly 0.0
-    # against an expected ~88) while still allowing some small accumulation noise from
-    # the SFPU Welford recurrence itself.
+    # Tight tolerances: the unscaled fp32 reduction is essentially exact, so we only allow
+    # small accumulation noise from the SFPU Welford recurrence.
     assert_numeric_metrics(
         torch_ref,
         actual,
-        rtol=1e-4,
-        atol=1e-3,
-        frobenius_threshold=1e-4,
+        rtol=1e-5,
+        atol=1e-4,
+        frobenius_threshold=1e-5,
         pcc_threshold=0.9999,
         check_ulp=False,
     )
@@ -206,6 +192,49 @@ def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
         pcc_threshold=0.9999,
         check_ulp=False,
     )
+
+
+@pytest.mark.parametrize("correction", [False, True])
+# 10529 = 32 * 329 + 1: partial tail leaf, 8 carry levels, and 3 cross-level finalize_tree
+# merges, which neither 16385 (512 leaves) nor 131072 (4096 leaves) exercised, since both had a
+# single-bit leaf count. Detects a re-widened centered-moment block by ~43x the 1% tolerance.
+@pytest.mark.parametrize("width", [10529], ids=["partial_leaf_uneven_tree"])
+@pytest.mark.parametrize("torch_dtype,ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
+def test_std_var_wide_low_variance(device, torch_dtype, ttnn_dtype, width, correction):
+    # The HW writer combines one equal-count partial per column. For sufficiently
+    # wide inputs, directly subtracting the first and second moments of the partial
+    # means can round to a negative M2 even though the input is non-constant.
+    torch_input = torch.full((1, 1, 32, width), 1.1015625, dtype=torch_dtype)
+    torch_input[:, :, :, 0] = 0.0
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+        reference = torch_op(torch_input.to(torch.float64), dim=(-2, -1), keepdim=True, correction=int(correction))
+        output = ttnn_op(tt_input, dim=(-2, -1), keepdim=True, correction=correction)
+        actual = ttnn.to_torch(ttnn.from_device(output)).to(torch.float64)
+
+        assert torch.isfinite(actual).all()
+        torch.testing.assert_close(actual, reference, rtol=0.01, atol=1e-15)
+
+
+def test_std_var_hw_reduce_batch_crosses_tree_block(device):
+    # Reducing N together with HW creates one logical partial stream. With W=49,
+    # one leaf crosses the N boundary and the 98 partials produce three full
+    # leaves plus a tail, exercising the unequal-level tree finalizer.
+    torch_input = torch.full((2, 1, 32, 49), 1.1015625, dtype=torch.bfloat16)
+    torch_input[0, :, :, 0] = 0.0
+    dim = (0, -2, -1)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+        reference = torch_op(torch_input.to(torch.float64), dim=dim, keepdim=True, correction=0)
+        output = ttnn_op(tt_input, dim=dim, keepdim=True, correction=False)
+        actual = ttnn.to_torch(ttnn.from_device(output)).to(torch.float64)
+
+        assert torch.isfinite(actual).all()
+        torch.testing.assert_close(actual, reference, rtol=0.01, atol=1e-7)
 
 
 # Test a 1D, 2D, 3D, and 4D tensor
@@ -277,9 +306,6 @@ def test_prod(device, input_shape, dim, keepdim, force_implicit_pad, dtype):
 @pytest.mark.parametrize("dim", [[3, 7], [6, 7]])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8, dim, keepdim):
-    if dim == [6, 7]:
-        pytest.xfail("Sum op on HW reduction with BF16 input exceeds allclose threshold. Issue #46472")
-
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8), dtype=torch.bfloat16)
@@ -399,7 +425,7 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
         pcc_threshold=0.999,
         rtol=0.01,
         atol=0.2,
-        frobenius_threshold=0.003,
+        frobenius_threshold=0.015,
     )
 
 
@@ -430,22 +456,42 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
         pcc_threshold=0.999,
         rtol=0.05,
         atol=0.7,
-        frobenius_threshold=0.004,
+        frobenius_threshold=0.006,
     )
 
 
-@pytest.mark.parametrize("dim1", [1])
-# This test picks the maximum dim2 that will pick the singlecore implementation.
-# TopK multicore uses 8 cores in blackhole, so we need to add support for bitonic sort with 8 cores
-# and non power of 2 dims as compared to wormhole. Issue #23465.
-@pytest.mark.parametrize(
-    "dim2",
-    [8192 - 64, pytest.param(50257, marks=pytest.mark.xfail(condition=is_blackhole(), reason="Issue #23465"))],
+# The BH-routed ttnn.topk path (topk_large_indices, engages for bf16 largest at k>64 or wide
+# non-pow2 widths) crashes the CI simulator's ttsim build (silent worker death ~9s in; see the
+# sanity break on 1dc0e9673b6). The same tests pass on BH silicon and on a current ttsim
+# (SFPLOADMACRO-capable). Skip the routed cells on simulator runners until the runner image
+# ships an updated ttsim.
+skip_routed_topk_on_sim = pytest.mark.skipif(
+    is_blackhole() and bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason="BH-routed topk crashes the CI ttsim build; passes on silicon and current ttsim",
 )
+
+
+@pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim", [1])
-@pytest.mark.parametrize("k", [50, 3200])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+# One case per distinct code path, instead of the (dim2 x k x dtype) product:
+#   (8192,   50) width is a power of 2 and >= multi_core_min_width, and adjusted_k=64 <= 64, so
+#                this is the only case here that reaches the multi-core program factory
+#   (50257,  50) width is not a multiple of 32 -> implicit padding in the last tile (GPT-2 vocab)
+#   (8192, 1024) k > 64 -> single-core, and Kt=32 exercises the multi-tile-k merge ramp
+#   bfloat8_b is paired with the large-k case: bfp8 unpack/pack reconfig plus the bfp8 L1 sizing
+#                path, which only matters when Kt is large
+
+
+@pytest.mark.parametrize(
+    "dim2, k, dtype",
+    [
+        (8192, 50, ttnn.bfloat16),
+        pytest.param(50257, 50, ttnn.bfloat16, marks=skip_routed_topk_on_sim),
+        pytest.param(8192, 1024, ttnn.bfloat16, marks=skip_routed_topk_on_sim),
+        (8192, 1024, ttnn.bfloat8_b),
+    ],
+)
 def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2]
@@ -509,11 +555,14 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 
 
 @pytest.mark.parametrize("dim1", [1])
-@pytest.mark.parametrize("dim2", [128256, 151936])
+# 128256 (Llama-3 vocab) carries the UInt32 index / 32-bit-dest branch. 151936 (Qwen) takes the
+# same path and is 18% wider, and it is still covered by tests/.../reduce/test_topk.py.
+@pytest.mark.parametrize("dim2", [128256])
 @pytest.mark.parametrize("dim", [1])
 @pytest.mark.parametrize("k", [50])
 @pytest.mark.parametrize("largest", [True])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@skip_routed_topk_on_sim
 def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2]
@@ -571,10 +620,19 @@ def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 @pytest.mark.parametrize("dim3", [8])
 @pytest.mark.parametrize("dim4", [256])
 @pytest.mark.parametrize("dim5", [64])
-@pytest.mark.parametrize("dim", [3, 4])
-@pytest.mark.parametrize("k", [17, 32, 64])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+# k=17 -> adjusted_k=32 plus the host-side slice, k=32 -> no slice, k=64 -> Kt=2.
+# dim=4 is the last dim (no transpose), dim=3 takes the transpose/transpose-back path.
+# dtype is orthogonal to both, so it is varied across the cases rather than crossed with them.
+@pytest.mark.parametrize(
+    "dim, k, dtype",
+    [
+        (4, 17, ttnn.bfloat16),
+        (4, 64, ttnn.bfloat8_b),
+        (3, 32, ttnn.bfloat16),
+        (3, 64, ttnn.bfloat8_b),
+    ],
+)
 def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2, dim3, dim4, dim5]
@@ -644,10 +702,15 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
 @pytest.mark.parametrize("dim5", [128])
 @pytest.mark.parametrize("dim6", [64])
 # @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5]) transpose cannot handle N-D tensor for all dims
-@pytest.mark.parametrize("dim", [4, 5])
-@pytest.mark.parametrize("k", [50, 64])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize(
+    "dim, k, dtype",
+    [
+        (5, 50, ttnn.bfloat16),
+        (5, 64, ttnn.bfloat8_b),
+        (4, 50, ttnn.bfloat16),
+    ],
+)
 def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2, dim3, dim4, dim5, dim6]

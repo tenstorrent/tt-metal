@@ -41,10 +41,10 @@ using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::PageConfig;
-using ::tt::tt_metal::Tensor;
 using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorMemoryLayout;
 using ::tt::tt_metal::TensorSpec;
+using ttnn::Tensor;
 
 int g_world_rank = -1;
 int g_world_size = -1;
@@ -63,9 +63,9 @@ std::vector<uint32_t> make_iter_data(uint32_t iter, size_t volume) {
 tt::tt_metal::distributed::MeshWorkload build_worker_workload(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::H2DStreamService& service,
-    const tt::tt_metal::Tensor& output_tensor,
+    const ttnn::Tensor& output_tensor,
     const CoreRange& worker_cores) {
-    const tt::tt_metal::Tensor& input_tensor = service.get_backing_tensor();
+    const ttnn::Tensor& input_tensor = service.get_backing_tensor();
     auto* input_buf = input_tensor.buffer();
     auto* output_buf = output_tensor.buffer();
     TT_FATAL(input_buf != nullptr, "build_worker_workload: input tensor has no buffer");
@@ -164,7 +164,7 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
 struct CrossProcessCase {
     ttnn::Shape global_shape;
     ttsl::SmallVector<MeshMapperConfig::Placement> placements;
-    uint32_t scratch_cb_size_bytes;
+    uint32_t max_socket_page_size_bytes;
     uint32_t fifo_size_bytes;
     CoreRange worker_cores;
     uint32_t num_iterations;
@@ -186,8 +186,7 @@ void run_owner(
         .mapper = ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements}),
         .socket_buffer_type = BufferType::L1,
         .fifo_size_bytes = cs.fifo_size_bytes,
-        .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
-        .socket_mode = H2DMode::DEVICE_PULL,
+        .max_socket_page_size_bytes = cs.max_socket_page_size_bytes,
         .worker_cores = cs.worker_cores,
         .metadata_size_bytes = 0,
     };
@@ -195,7 +194,7 @@ void run_owner(
 
     const auto& backing = service.get_backing_tensor();
     auto output_tensor =
-        tt::tt_metal::create_device_tensor(backing.tensor_spec(), mesh_device.get(), backing.tensor_topology());
+        ttnn::create_device_tensor(backing.tensor_spec(), mesh_device.get(), backing.tensor_topology());
 
     auto worker_workload = build_worker_workload(mesh_device, service, output_tensor, cs.worker_cores);
 
@@ -240,9 +239,12 @@ void run_owner(
 }
 
 // Rank-1 (connector) body. Holds no MeshDevice — only PCIe writes through
-// each connected H2DSocket.
-void run_connector(const std::string& service_id, uint32_t num_iterations, size_t volume) {
-    auto service = tt::tt_metal::H2DStreamService::connect(service_id, /*timeout_ms=*/30000);
+// each connected H2DSocket. `parallel_host_push` fans each transfer's per-socket
+// writes across host threads (connector-mode pool); the owner verifies identically
+// regardless, so the mode is a connector-local choice needing no cross-rank IPC.
+void run_connector(const std::string& service_id, uint32_t num_iterations, size_t volume, bool parallel_host_push) {
+    auto service = tt::tt_metal::H2DStreamService::connect(
+        service_id, /*timeout_ms=*/30000, /*preprocessor=*/nullptr, parallel_host_push);
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
         auto data = make_iter_data(iter, volume);
         auto bytes = ttsl::Span<const std::byte>(
@@ -395,12 +397,13 @@ TEST_F(CrossProcessH2DStreamServiceFixture, Sweep) {
                                          << " chunk=" << ch.label);
 
                 // Service IDs must agree across ranks; use a deterministic counter.
-                const std::string service_id = "xproc_h2d_stream_" + std::to_string(case_counter++);
+                const int case_idx = case_counter++;
+                const std::string service_id = "xproc_h2d_stream_" + std::to_string(case_idx);
 
                 CrossProcessCase cs{
                     .global_shape = global_shape,
                     .placements = pattern.placements,
-                    .scratch_cb_size_bytes = ch.cb_pages * per_row_bytes,
+                    .max_socket_page_size_bytes = ch.cb_pages * per_row_bytes,
                     .fifo_size_bytes = ch.fifo_pages * per_row_bytes,
                     .worker_cores = worker_cores,
                     .num_iterations = kNumIterations,
@@ -409,7 +412,10 @@ TEST_F(CrossProcessH2DStreamServiceFixture, Sweep) {
                 if (rank_ == 0) {
                     run_owner(mesh_device_, cs, service_id);
                 } else {
-                    run_connector(service_id, kNumIterations, cs.global_shape.volume());
+                    // Interleave serial/parallel connector pushes across the matrix (orthogonal to
+                    // geometry): both ranks derive case_idx identically, so this needs no extra IPC.
+                    const bool parallel_host_push = (case_idx % 2 == 1);
+                    run_connector(service_id, kNumIterations, cs.global_shape.volume(), parallel_host_push);
                 }
             }
         }

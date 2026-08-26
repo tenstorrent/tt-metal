@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
@@ -70,8 +71,8 @@ void kernel_main() {
     constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     Noc noc;
-    CircularBuffer cb_src(cb_id_src);
-    CircularBuffer cb_src_b(cb_id_src_b);
+    DataflowBuffer cb_src(cb_id_src);
+    DataflowBuffer cb_src_b(cb_id_src_b);
 
     constexpr uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_src);
@@ -188,7 +189,7 @@ void kernel_main() {
 
                             noc.async_read(
                                 src_b,
-                                CoreLocalMem<uint32_t>(l1_write_addr_src_b),
+                                cb_src_b,
                                 current_read_len_b,
                                 {.page_id = row_block_b, .offset_bytes = current_chunk_offset},
                                 {});
@@ -219,7 +220,7 @@ void kernel_main() {
 
                             noc.async_read(
                                 src,
-                                CoreLocalMem<uint32_t>(l1_write_addr_src),
+                                cb_src,
                                 current_read_len_a,
                                 {.page_id = row_block_a, .offset_bytes = current_chunk_offset},
                                 {});

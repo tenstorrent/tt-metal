@@ -4,6 +4,7 @@
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run (env vars must be inlined).
 #   model: Model identifier for filtering (workflow_dispatch model selection).
+#   model_family: (optional) Human-facing model family for grouping/reporting (e.g. Llama, Qwen, Gemma). Omit when a test spans multiple families.
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
 #     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
@@ -12,28 +13,171 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: Llama 3.1-8B sweep tests
+# Entries are grouped by model.
+
+# Full Llama-3.1-8B prefill does not fit a single N150 L1, so run a reduced 10-layer smoke for
+# pipeline liveness on N150. Full-model sweep coverage lives on multi-device SKUs. See #44482.
+- name: Llama 3.1-8B seqlen sweep
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-batch-32"
+    pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10
   model: llama3.1-8b
+  model_family: Llama
   skus:
     wh_n150:
-      timeout: 10
+      timeout: 15
       tier: 1
+    bh_p150:
+      timeout: 15
+      tier: 1
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Llama 3.3-70B prefix-caching benchmark
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct MESH_DEVICE=TG
+    pytest --timeout 2280 models/demos/llama3_70b_galaxy/demo/prefix_caching_benchmark.py
+  model: llama3.3-70b
+  model_family: Llama
+  skus:
+    wh_galaxy:
+      timeout: 40
+      tier: 1
+  owner_id: U09LTAPEU2U # Viktor Pus
+  team: models
+
+- name: Llama 3.3-70B seqlen sweep (LoudBox)
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+    pytest --timeout 1440 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
+  model: llama3.3-70b
+  model_family: Llama
+  skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 25
+      tier: 2
+    # bh_quietbox_2 descoped: 70B prefill exceeds Blackhole 4-device L1 (circular-buffer clash). See #48533.
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Qwen3-32B seqlen sweep (LoudBox)
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+    pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
+  model: qwen3-32b
+  model_family: Qwen
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
-- name: Llama 3.3-70B sweep tests
+
+- name: Gemma-3-4B seqlen sweep
   cmd: |
-    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ MESH_DEVICE=TG
-    pytest --timeout 1800 models/demos/llama3_70b_galaxy/demo/prefix_caching_benchmark.py
-  model: llama3.3-70b
+    export HF_MODEL=google/gemma-3-4b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-3-4b-it
+    pytest --timeout 540 models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-seqlen-sweep" --max_seq_len 32768
+  model: gemma-3-4b
+  model_family: Gemma
   skus:
-    wh_galaxy:
-      timeout: 30
+    wh_n150:
+      timeout: 10
+      tier: 2
+    bh_p150:
+      timeout: 10
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+# Model-independent sampling coverage (temperature / top-k / top-p / seed / penalties /
+# batch isolation) on synthetic logits -- no model weights. In the sweep pipeline rather than
+# unit_tier1, which has no wh_n150 headroom left. See #38316.
+- name: Sampling module sweep (common)
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    pytest --timeout 600 models/common/tests/test_tt_sampling.py
+    # Complements the above: SeedManager slot/salt state machine, params broadcast/scatter,
+    # host-level trace bookkeeping. -k drops the log-probs tests, the only ones needing >1 device.
+    pytest --timeout 600 models/common/tests/test_sampling.py -k "not log_probs and not logprobs"
+  model: sampling-common
+  skus:
+    wh_n150:
+      timeout: 12
       tier: 1
-  owner_id: U09LTAPEU2U # Viktor Pus
+    bh_p150:
+      timeout: 10
+      tier: 1
+    # Galaxy (4,8) SKUs disabled: the 32-chip ring fabric fails to initialise on a marginal
+    # ethernet link (Device 24 handshake timeout), and sweep_tier1 has no budget key for
+    # wh_galaxy_perf / bh_galaxy. The (4,8) cases stay in the suite and auto-skip here.
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: TT-Transformers MLP module sweep
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/mlp
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_llmbox:
+      timeout: 24
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers RoPE module sweep
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rope
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_llmbox:
+      timeout: 4
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers RMSNorm module sweep
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rmsnorm
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_llmbox:
+      timeout: 10
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers attention module sweep
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d pytest --tb=short models/common/tests/modules/attention
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_llmbox:
+      timeout: 65
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers embedding module sweep
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d pytest --tb=short models/common/tests/modules/embedding
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_llmbox:
+      timeout: 18
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers LM head module sweep
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d pytest --tb=short models/common/tests/modules/lm_head
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_llmbox:
+      timeout: 10
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models

@@ -7,7 +7,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
+from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig
+from models.demos.t3000.falcon40b.tests.test_utils import load_falcon_reference_model
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -30,10 +31,7 @@ def run_test_falcon_prefill_end_to_end_determinism(
     if generate_weights:
         logger.info("Loading PyTorch Falcon model...")
         model_name = model_location_generator(model_version, model_subdir="Falcon")
-        hugging_face_reference_model = FalconForCausalLM.from_pretrained(
-            model_name, low_cpu_mem_usage=True, num_hidden_layers=num_layers
-        )
-        hugging_face_reference_model.eval()
+        hugging_face_reference_model = load_falcon_reference_model(model_name, num_hidden_layers=num_layers)
         configuration = hugging_face_reference_model.config
         state_dict = hugging_face_reference_model.state_dict()
         logger.info("Done loading PyTorch Falcon model")

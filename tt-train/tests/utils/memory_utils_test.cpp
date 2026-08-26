@@ -4,7 +4,10 @@
 
 #include "utils/memory_utils.hpp"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <array>
 
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
@@ -15,6 +18,9 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
 
 class DISABLED_MemoryUtilsTest : public ::testing::Test {
 protected:
@@ -50,18 +56,18 @@ TEST_F(DISABLED_MemoryUtilsTest, DRAMUsageMatmulInScope) {
         auto shape1 = ttnn::Shape({64, 128});
         auto shape2 = ttnn::Shape({128, 64});
 
-        ttnn::TensorSpec spec1(
+        tt::tt_metal::TensorSpec spec1(
             shape1,
-            ttnn::TensorLayout(
+            tt::tt_metal::TensorLayout(
                 ttnn::DataType::BFLOAT16,
                 ttnn::PageConfig(ttnn::Layout::TILE),
-                ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
-        ttnn::TensorSpec spec2(
+                ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+        tt::tt_metal::TensorSpec spec2(
             shape2,
-            ttnn::TensorLayout(
+            tt::tt_metal::TensorLayout(
                 ttnn::DataType::BFLOAT16,
                 ttnn::PageConfig(ttnn::Layout::TILE),
-                ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+                ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
         auto tensor1 = ttnn::Tensor::from_vector(data1, spec1, device);
         auto tensor2 = ttnn::Tensor::from_vector(data2, spec2, device);
 
@@ -134,30 +140,30 @@ TEST_F(DISABLED_MemoryUtilsTest, DRAMUsageMultipleOperations) {
 
     std::vector<float> data_kqv(1 * 6 * 256 * 64, 4.0F);
 
-    ttnn::TensorSpec spec1(
+    tt::tt_metal::TensorSpec spec1(
         shape1,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
-    ttnn::TensorSpec spec2(
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    tt::tt_metal::TensorSpec spec2(
         shape2,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
-    ttnn::TensorSpec spec3(
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    tt::tt_metal::TensorSpec spec3(
         shape3,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
-    ttnn::TensorSpec spec_kqv(
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    tt::tt_metal::TensorSpec spec_kqv(
         shape_kqv,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
     auto tensor1 = ttnn::Tensor::from_vector(data1, spec1, device);
     auto tensor2 = ttnn::Tensor::from_vector(data2, spec2, device);
     auto tensor3 = ttnn::Tensor::from_vector(data3, spec3, device);
@@ -218,18 +224,18 @@ TEST_F(DISABLED_MemoryUtilsTest, L1Usage) {
         std::vector<float> data(256 * 256, 1.0F);
 
         // Create tensors in DRAM first, then move to L1
-        ttnn::TensorSpec spec1(
+        tt::tt_metal::TensorSpec spec1(
             shape,
-            ttnn::TensorLayout(
+            tt::tt_metal::TensorLayout(
                 ttnn::DataType::BFLOAT16,
                 ttnn::PageConfig(ttnn::Layout::TILE),
-                ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
-        ttnn::TensorSpec spec2(
+                ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+        tt::tt_metal::TensorSpec spec2(
             shape,
-            ttnn::TensorLayout(
+            tt::tt_metal::TensorLayout(
                 ttnn::DataType::BFLOAT16,
                 ttnn::PageConfig(ttnn::Layout::TILE),
-                ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+                ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
         auto tensor1_dram = ttnn::Tensor::from_vector(data, spec1, device);
         auto tensor2_dram = ttnn::Tensor::from_vector(data, spec2, device);
         auto tensor1 = ttnn::to_memory_config(tensor1_dram, ttnn::L1_MEMORY_CONFIG);
@@ -274,7 +280,7 @@ TEST_F(DISABLED_MemoryUtilsTest, L1Usage) {
         // Shard shape: each core gets 4 tiles height x 1 tile width = 128x32 elements
         auto shard_spec = tt::tt_metal::ShardSpec(core_range, {128, 32}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
         auto sharded_memory_config =
-            ttnn::MemoryConfig{ttnn::TensorMemoryLayout::WIDTH_SHARDED, ttnn::BufferType::L1, shard_spec};
+            ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, ttnn::BufferType::L1, shard_spec};
 
         // Create tensors in DRAM first, then move to L1 with width sharding
         auto tensor1_dram = ttml::core::from_vector(data, shape, device, ttnn::TILE_LAYOUT);
@@ -325,12 +331,12 @@ TEST_F(DISABLED_MemoryUtilsTest, SnapshotFeature) {
 
     // Snapshot 1: Simple add operation with small DRAM tensors
     auto shape1 = ttnn::Shape({64, 64});
-    ttnn::TensorSpec spec1(
+    tt::tt_metal::TensorSpec spec1(
         shape1,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
 
     auto tensor1 = ttnn::Tensor::from_vector(data_small, spec1, device);
     auto tensor2 = ttnn::Tensor::from_vector(data_small, spec1, device);
@@ -342,18 +348,18 @@ TEST_F(DISABLED_MemoryUtilsTest, SnapshotFeature) {
     auto shape2a = ttnn::Shape({128, 64});
     auto shape2b = ttnn::Shape({64, 128});
 
-    ttnn::TensorSpec spec2a(
+    tt::tt_metal::TensorSpec spec2a(
         shape2a,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
-    ttnn::TensorSpec spec2b(
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+    tt::tt_metal::TensorSpec spec2b(
         shape2b,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
 
     auto tensor3 = ttnn::Tensor::from_vector(data_medium, spec2a, device);
     auto tensor4 = ttnn::Tensor::from_vector(data_medium, spec2b, device);
@@ -363,12 +369,12 @@ TEST_F(DISABLED_MemoryUtilsTest, SnapshotFeature) {
 
     // Snapshot 3: L1 operation
     auto shape3 = ttnn::Shape({256, 256});
-    ttnn::TensorSpec spec3(
+    tt::tt_metal::TensorSpec spec3(
         shape3,
-        ttnn::TensorLayout(
+        tt::tt_metal::TensorLayout(
             ttnn::DataType::BFLOAT16,
             ttnn::PageConfig(ttnn::Layout::TILE),
-            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
+            ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM)));
 
     auto tensor5_dram = ttnn::Tensor::from_vector(data_large, spec3, device);
     auto tensor6_dram = ttnn::Tensor::from_vector(data_large, spec3, device);
@@ -447,4 +453,91 @@ TEST_F(DISABLED_MemoryUtilsTest, SnapshotFeature) {
     EXPECT_EQ(all_l1_usage[0].first, "add_operation");
     EXPECT_EQ(all_l1_usage[1].first, "matmul_operation");
     EXPECT_EQ(all_l1_usage[2].first, "multiply_l1_operation");
+}
+
+class MemoryUsageTrackerTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+        ttml::utils::MemoryUsageTracker::clear();
+    }
+
+    void TearDown() override {
+        ttml::utils::MemoryUsageTracker::clear();
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(MemoryUsageTrackerTest, DuplicateSnapshotNamesRecordSeparateSegments) {
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    // 64x apart in bytes, so a segment holding the small tensor stays far below the large tensor's
+    // size even with program cache, watcher and LLK assert overhead added on top.
+    constexpr std::array<uint32_t, 2> sides = {64, 512};
+    std::vector<long long> tensor_sizes;
+
+    auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
+
+    for (uint32_t side : sides) {
+        {
+            // Inner scope: the tensor is freed before the snapshot, keeping each segment self-contained.
+            const std::vector<float> data(static_cast<size_t>(side) * side, 1.0F);
+            auto tensor = ttml::core::from_vector(data, ttnn::Shape({side, side}), device);
+            tensor_sizes.push_back(static_cast<long long>(compute_tensor_size(tensor)));
+        }
+        ttml::utils::MemoryUsageTracker::snapshot("repeated");
+    }
+
+    ttml::utils::MemoryUsageTracker::end_capture("unique");
+
+    auto trace_names = ttml::utils::MemoryUsageTracker::get_trace_names();
+    ASSERT_EQ(trace_names.size(), 3);
+    EXPECT_EQ(trace_names[0], "repeated");
+    EXPECT_EQ(trace_names[1], "repeated");
+    EXPECT_EQ(trace_names[2], "unique");
+
+    auto all_dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage_all();
+    ASSERT_EQ(all_dram_usage.size(), trace_names.size());
+    EXPECT_EQ(all_dram_usage[0].first, "repeated");
+    EXPECT_EQ(all_dram_usage[1].first, "repeated");
+    EXPECT_EQ(all_dram_usage[2].first, "unique");
+
+    // Each segment reports its own allocations; overwriting duplicates would make both entries
+    // report the second, larger one.
+    ASSERT_EQ(tensor_sizes.size(), 2);
+    EXPECT_GE(all_dram_usage[0].second.total_allocations, tensor_sizes[0]);
+    EXPECT_LT(all_dram_usage[0].second.total_allocations, tensor_sizes[1]);
+    EXPECT_GE(all_dram_usage[1].second.total_allocations, tensor_sizes[1]);
+    EXPECT_LT(all_dram_usage[0].second.peak, all_dram_usage[1].second.peak);
+
+    auto all_l1_usage = ttml::utils::MemoryUsageTracker::get_l1_usage_all();
+    ASSERT_EQ(all_l1_usage.size(), trace_names.size());
+    EXPECT_EQ(all_l1_usage[0].first, "repeated");
+    EXPECT_EQ(all_l1_usage[1].first, "repeated");
+    EXPECT_EQ(all_l1_usage[2].first, "unique");
+}
+
+TEST_F(MemoryUsageTrackerTest, SingularLookupRejectsDuplicateName) {
+    auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
+    ttml::utils::MemoryUsageTracker::snapshot("repeated");
+    ttml::utils::MemoryUsageTracker::snapshot("repeated");
+    ttml::utils::MemoryUsageTracker::end_capture("unique");
+
+    ASSERT_EQ(ttml::utils::MemoryUsageTracker::get_trace_names().size(), 3);
+
+    // Matching the message, not just the type: find_trace() throws std::runtime_error for both
+    // failure modes, so only the text tells "ambiguous" apart from "not found".
+    EXPECT_THAT(
+        ([] { return ttml::utils::MemoryUsageTracker::get_dram_usage("repeated"); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("'repeated' is ambiguous")));
+    EXPECT_THAT(
+        ([] { return ttml::utils::MemoryUsageTracker::get_l1_usage("repeated"); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("'repeated' is ambiguous")));
+
+    // Unambiguous names still resolve, and a name nobody captured is still rejected.
+    EXPECT_NO_THROW(ttml::utils::MemoryUsageTracker::get_dram_usage("unique"));
+    EXPECT_NO_THROW(ttml::utils::MemoryUsageTracker::get_l1_usage("unique"));
+    EXPECT_THAT(
+        ([] { return ttml::utils::MemoryUsageTracker::get_dram_usage("no_such_trace"); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("'no_such_trace' not found")));
 }

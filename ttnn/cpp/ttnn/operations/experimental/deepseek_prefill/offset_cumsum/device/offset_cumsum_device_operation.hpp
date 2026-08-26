@@ -17,7 +17,7 @@ namespace ttnn::experimental::prim {
 struct OffsetCumsumDeviceOperation {
     using operation_attributes_t = OffsetCumsumParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = std::array<TensorSpec, 3>;
+    using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 3>;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = std::array<Tensor, 3>;
     using program_factory_t = std::variant<OffsetCumsumProgramFactory>;
@@ -26,7 +26,6 @@ struct OffsetCumsumDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim

@@ -2,30 +2,51 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "move_device_operation_types.hpp"
 #include "move_sharded_program_factory.hpp"
 
 #include <cmath>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
+namespace m2 = tt::tt_metal::experimental;
 
-ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+// Metal 2.0 resource names (ProgramSpec scope).
+const m2::KernelSpecName READER{"reader"};
+const m2::TensorParamName INPUT{"input"};
+const m2::TensorParamName OUTPUT{"output"};
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_program_artifacts(
     const MoveOperationAttributes& /*operation_attributes*/,
     const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     using namespace tt::constants;
-    const Tensor& input = tensor_args.input_tensor;
-    Tensor& output = tensor_return_value;
 
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    const Tensor& input = tensor_args.input_tensor;
+    const Tensor& output = tensor_return_value;
+    const auto& input_mt = input.mesh_tensor();
+    const auto& output_mt = output.mesh_tensor();
+
     const auto shard_spec = input.shard_spec().value();
     const auto shard_shape = shard_spec.shape;
     const auto shard_grid = shard_spec.grid;
@@ -36,84 +57,93 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
         input_layout == output.layout() && input_dtype == output.dtype() &&
             shard_shape == output.shard_spec().value().shape && input_shape == output.logical_shape(),
         "Error");
-    const uint32_t src_cb_sharded = tt::CBIndex::c_0;
-    const uint32_t dst_cb_sharded = tt::CBIndex::c_1;
 
+    // total_size_bytes is derived from the tensor spec (aligned size per bank), not from any
+    // storage address, so it is safe to send to the kernel as a runtime arg.
     const uint32_t total_size_bytes = input.buffer()->aligned_size_per_bank();
-    const uint32_t page_size_bytes = input.buffer()->aligned_page_size();
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
-
-    const uint32_t input_buffer_address = src_buffer->address();
-    const uint32_t output_buffer_address = dst_buffer->address();
-
-    const uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;
     TT_FATAL(
-        src_buffer->alignment() == dst_buffer->alignment(),
+        input.buffer()->alignment() == output.buffer()->alignment(),
         "Expected input buffer alignment ({} B) and output buffer alignment ({} B) to be equal",
-        src_buffer->alignment(),
-        dst_buffer->alignment());
-    TT_FATAL(
-        move_chunk_size_bytes % src_buffer->alignment() == 0,
-        "Expected chunk size bytes to move to be {} byte aligned.",
-        src_buffer->alignment());
-    const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
-    const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
+        input.buffer()->alignment(),
+        output.buffer()->alignment());
 
-    ProgramDescriptor desc;
+    //
+    // -------- Build the ProgramSpec --------
+    //
+    // NOTE on the cache-hit hazard this port resolves:
+    // The legacy factory computed move_chunk_size_bytes = (output_addr - input_addr) on the host
+    // and emitted it as a plain runtime-arg scalar, relying on the slow cache-hit path re-running
+    // create_descriptor() to recompute that delta from freshly-allocated buffer addresses.  The
+    // Metal 2.0 factory concept does NOT re-run the factory on a cache hit (it only refreshes
+    // tensor bindings), so a same-spec/different-storage hit would have read a STALE delta and
+    // produced silently-wrong numerics.  We eliminate the host-computed delta entirely: the kernel
+    // reads the input/output resident-shard base addresses from local TensorAccessors (over the
+    // INPUT/OUTPUT tensor bindings, refreshed on cache hit) and recomputes the chunk size in-kernel
+    // as (dst_base - src_base).  Only total_size_bytes (spec-derived, storage-independent) is
+    // delivered as a runtime arg.
 
-    // Sharded src CB: dynamic globally-allocated; framework rebinds on cache hit.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = total_size_bytes,
-        .core_ranges = shard_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src_cb_sharded),
-            .data_format = cb_data_format,
-            .page_size = page_size_bytes,
-        }}},
-        .buffer = src_buffer,
+    m2::ProgramSpec spec;
+    spec.name = "move_sharded";
+
+    // Tensor parameters (src / dst).  Their addresses reach the kernel through the typed binding
+    // channel (refreshed on cache hit); the kernel recovers each resident shard's local L1 base via
+    // a TensorAccessor over these (no borrowed self-loop DFBs, which Metal 2.0 forbids on DM kernels).
+    spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()});
+    spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
+
+    // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit Gen1Config.
+    m2::DataMovementHardwareConfig reader_hw;
+    if (input.device()->arch() == tt::ARCH::QUASAR) {
+        reader_hw = m2::DataMovementGen2Config{};
+    } else {
+        reader_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    }
+    m2::KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/"
+            "reader_unary_local_l1_copy_backwards.cpp",
+        .tensor_bindings =
+            {
+                m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
+                m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
+            },
+        .hw_config = std::move(reader_hw),
+    };
+
+    reader.runtime_arg_schema.runtime_arg_names = m2::Group<std::string>{"total_size_bytes"};
+
+    spec.kernels.push_back(reader);
+
+    spec.work_units.push_back(m2::WorkUnitSpec{
+        .name = "wu",
+        .kernels = {READER},
+        .target_nodes = shard_grid,
     });
 
-    // Sharded dst CB: dynamic globally-allocated; framework rebinds on cache hit.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = total_size_bytes,
-        .core_ranges = shard_grid,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(dst_cb_sharded),
-            .data_format = cb_data_format,
-            .page_size = page_size_bytes,
-        }}},
-        .buffer = dst_buffer,
-    });
+    //
+    // -------- Build the ProgramRunArgs --------
+    //
 
-    std::vector<uint32_t> reader_compile_time_args = {src_cb_sharded, dst_cb_sharded};
+    m2::ProgramRunArgs run_args;
+    m2::KernelRunArgs reader_run_args;
+    reader_run_args.kernel = READER;
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/"
-        "reader_unary_local_l1_copy_backwards.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = shard_grid;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
-
-    // Runtime args derive from the address arithmetic (output_addr - input_addr) and
-    // therefore must be recomputed every call.  We deliberately emit them as plain
-    // scalars (no Buffer* / BufferBinding) so the adapter's resolved bindings stay
-    // empty and the slow cache-hit path runs create_descriptor() again — which
-    // recomputes move_chunk_size_bytes, num_chunks, remainder_chunk_size_bytes
-    // from the freshly-allocated buffer addresses.  CB addresses are still patched
-    // via desc.cbs[*].buffer in apply_descriptor_runtime_args().
     const auto cores = corerange_to_cores(shard_grid, std::nullopt, true);
     for (const auto& core : cores) {
-        reader_desc.emplace_runtime_args(
-            core, {total_size_bytes, num_chunks, move_chunk_size_bytes, remainder_chunk_size_bytes});
+        reader_run_args.runtime_arg_values["total_size_bytes"][core] = total_size_bytes;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
 
-    return desc;
+    run_args.tensor_args.emplace(INPUT, input_mt);
+    run_args.tensor_args.emplace(OUTPUT, output_mt);
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::prim::qsr

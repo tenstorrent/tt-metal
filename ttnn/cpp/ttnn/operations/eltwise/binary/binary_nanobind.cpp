@@ -51,6 +51,60 @@ constexpr auto BINARY_BROADCAST_DOC = R"doc(
         L1 sharded layout is preferred, with no broadcast and matching tensor specs for A, B and C.
 )doc";
 
+constexpr auto kArithmeticFpuDtypes =
+    "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535])";
+constexpr auto kRelationalDtypes =
+    "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]), "
+    "UINT8 "
+    "(cast to UINT16)";
+constexpr auto kFloatAndInt32Dtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32";
+constexpr auto kFloatAndInt32UInt32Dtypes =
+    "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295])";
+constexpr auto kFloatOnlyDtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32";
+constexpr auto kBitwiseShiftDtypes = "INT32, UINT16 (range: [0, 65535]), UINT32 (range: [0, 4294967295])";
+constexpr auto kLogicalRightShiftDtypes = "INT32, UINT32 (range: [0, 4294967295])";
+constexpr auto kMultiplyInplaceDtypes =
+    "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT16 (range: [0, 65535]), UINT32 (range: [0, 4294967295])";
+// DIV policy is float_and_int32 (no UINT16); INT32 is omitted because in-place output keeps the
+// input dtype and INT32 division yields FLOAT32, so only the float-family dtypes are writable in place.
+constexpr auto kDivideInplaceDtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32";
+
+constexpr auto kMixedFloatFamilyFootnote =
+    R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.)doc";
+constexpr auto kSameDtypeRequiredFootnote = R"doc(Operands must have the same dtype.)doc";
+constexpr auto kIscloseMixedDtypeFootnote = R"doc(The only allowed mixed-dtype pair is FLOAT32 with BFLOAT16.)doc";
+constexpr auto kMulDtypeFootnote =
+    R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.
+
+            When one operand is float-family and the other is INT32 or UINT32 (range: [0, 4294967295]), the integer operand is automatically typecast to the float operand's dtype before device execution; output dtype follows the promoted float dtype.)doc";
+constexpr auto kDivideDtypeFootnote =
+    R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.
+
+            UINT32 (range: [0, 4294967295]) is not a natively supported operand dtype. When one operand is float-family and the other is INT32 or UINT32, the integer operand is automatically typecast to the float operand's dtype before device execution; output dtype follows the promoted float dtype.)doc";
+constexpr auto kAdditiveFastApproxPostNote =
+    R"doc(When :attr:`fast_and_approximate_mode` is `True` (default) for bfloat16 datatype, the operation uses the FPU implementation for better performance, with a max error of 1 ULP.
+        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses the SFPU with the result rounded to nearest even (RNE), which matches the golden exactly at a slight perf cost.
+        `False` is only accepted when the output dtype is BFLOAT16, since the accurate path exists to round the bfloat16 result; requesting it for any other output dtype raises an error. Leave the flag unset (or pass `True`) for those.)doc";
+constexpr auto kMultiplyFastApproxPostNote =
+    R"doc(When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
+        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).)doc";
+constexpr auto kDivideFastApproxPostNote =
+    R"doc(When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero.
+        When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero.
+        When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.)doc";
+constexpr auto kDivFastApproxPostNote =
+    R"doc(With INT32 inputs, rounding_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
+        When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero for fast approximation.
+        When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero (accurate mode).)doc";
+constexpr auto kMultiplyInplaceFastApproxPostNote =
+    R"doc(When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
+        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
+        The operation is not supported for INT32 inputs since the outputs are returned as FLOAT32.)doc";
+constexpr auto kDivideInplaceFastApproxPostNote =
+    R"doc(When :attr:`fast_and_approximate_mode` is `True`, the operation uses FPU+SFPU implementation for better performance.
+        When :attr:`fast_and_approximate_mode` is `False` (default), the operation uses SFPU implementation for better accuracy.
+        The operation is not supported for INT32 inputs since the outputs are returned as FLOAT32.)doc";
+
 // Function pointer types for binary operation overload disambiguation
 using BinaryOpTensorScalarFn = Tensor (*)(
     const Tensor&,
@@ -121,7 +175,8 @@ using BinaryUnaryScalarFn = Tensor (*)(
     const std::optional<Tensor>&,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    ttsl::Span<const unary::EltwiseUnaryWithParam>);
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    const std::optional<bool>&);
 using BinaryUnaryTensorFn = Tensor (*)(
     const Tensor&,
     const Tensor&,
@@ -130,7 +185,8 @@ using BinaryUnaryTensorFn = Tensor (*)(
     const std::optional<Tensor>&,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    ttsl::Span<const unary::EltwiseUnaryWithParam>);
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    const std::optional<bool>&);
 using BinaryUnaryMaxScalarFn = Tensor (*)(
     const Tensor&,
     unary::ScalarVariant,
@@ -503,7 +559,9 @@ void bind_binary_unary_operation(
     TensorTensorFn tensor_tensor_fn,
     const std::string& info = ". ",
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = " ") {
+    const std::string& note = " ",
+    const std::string& post_note = " ",
+    bool fast_approx_default = false) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -520,6 +578,7 @@ void bind_binary_unary_operation(
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
+            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `{9}`.
 
 
         Returns:
@@ -541,6 +600,8 @@ void bind_binary_unary_operation(
             If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {6}
+
+        {8}
         )doc",
         std::string(Name),
         "ttnn." + std::string(Name),
@@ -549,7 +610,9 @@ void bind_binary_unary_operation(
         info,
         supported_dtype,
         note,
-        BINARY_BROADCAST_DOC);
+        BINARY_BROADCAST_DOC,
+        post_note,
+        fast_approx_default ? "True" : "False");
 
     ttnn::bind_function<Name>(
         mod,
@@ -564,7 +627,8 @@ void bind_binary_unary_operation(
             nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{})),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+            nb::arg("fast_and_approximate_mode") = fast_approx_default),
         ttnn::overload_t(
             tensor_tensor_fn,
             nb::arg("input_tensor_a"),
@@ -575,7 +639,8 @@ void bind_binary_unary_operation(
             nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{})));
+            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+            nb::arg("fast_and_approximate_mode") = fast_approx_default));
 }
 
 template <ttnn::unique_string Name, typename Fn>
@@ -789,8 +854,76 @@ void bind_binary_composite(
 }
 
 template <ttnn::unique_string Name, typename Fn>
+void bind_situ_glu(nb::module_& mod, const std::string& description, const std::string& math, Fn fn) {
+    auto doc = fmt::format(
+        R"doc(
+        {2}
+
+        .. math::
+            {3}
+
+        Args:
+            gate (ttnn.Tensor): the gate input tensor.
+            up (ttnn.Tensor): the up input tensor.
+            beta1 (float): the softcap beta applied to the gate half. Must be non-zero.
+            beta2 (float): the softcap beta applied to the up half. Must be non-zero.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): the cores every composed step runs on. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub-device whose worker cores to run on, as an alternative to
+                spelling them out in :attr:`sub_core_grids`. Mutually exclusive with it. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+
+            Implemented for Blackhole only.
+
+            Restricting the cores forces the intermediates to the output's memory space, because the
+            L1 placement this picks on a full grid is unsafe next to a concurrently running op. For
+            the same reason a core restriction rejects an interleaved-L1 output, whether asked for
+            through :attr:`memory_config` or inherited from an interleaved-L1 :attr:`input_tensor_a`:
+            such a buffer takes L1 on the cores restricted away. Sharded L1 is accepted -- its shard
+            spec confines it.
+        )doc",
+        std::string(Name),
+        "ttnn." + std::string(Name),
+        description,
+        math);
+
+    ttnn::bind_function<Name>(
+        mod,
+        doc.c_str(),
+        fn,
+        nb::arg("gate"),
+        nb::arg("up"),
+        nb::arg("beta1"),
+        nb::arg("beta2"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
+}
+
+template <ttnn::unique_string Name, typename Fn>
 void bind_binary_composite_with_rtol_atol(
-    nb::module_& mod, const std::string& description, const std::string& math, Fn fn) {
+    nb::module_& mod,
+    const std::string& description,
+    const std::string& math,
+    Fn fn,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -821,17 +954,21 @@ void bind_binary_composite_with_rtol_atol(
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16
+               * - {5}
                  - TILE, ROW_MAJOR
 
             If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
+
+            {6}
         )doc",
 
         std::string(Name),
         "ttnn." + std::string(Name),
         description,
         math,
-        BINARY_BROADCAST_DOC);
+        BINARY_BROADCAST_DOC,
+        supported_dtype,
+        note);
 
     ttnn::bind_function<Name>(
         mod,
@@ -995,7 +1132,8 @@ void bind_div(
     TensorTensorFn tensor_tensor_fn,
     TensorScalarFn tensor_scalar_fn,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = " ") {
+    const std::string& note = " ",
+    const std::string& post_note = " ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -1027,11 +1165,14 @@ void bind_div(
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16
+               * - {4}
                  - TILE, ROW_MAJOR
 
             If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
+            {5}
+
+        {7}
         )doc",
 
         std::string(Name),
@@ -1040,7 +1181,8 @@ void bind_div(
         math,
         supported_dtype,
         note,
-        BINARY_BROADCAST_DOC);
+        BINARY_BROADCAST_DOC,
+        post_note);
 
     auto tensor_tensor_overload = ttnn::overload_t(
         tensor_tensor_fn,
@@ -1075,7 +1217,66 @@ void bind_div(
     ttnn::bind_function<Name>(mod, doc.c_str(), tensor_tensor_overload, tensor_scalar_overload);
 }
 
-// Free functions for multiply and divide with fast_and_approximate_mode
+// Free functions for add, subtract, multiply and divide with fast_and_approximate_mode.
+// They exist purely to move fast_and_approximate_mode to the front of the keyword arguments,
+// matching the binding order used by bind_binary_operation_with_fast_approx.
+#define TTNN_FAST_APPROX_BINDING_WRAPPERS(NAME, TTNN_OP)                                \
+    Tensor NAME##_fast_approx_tensor_scalar(                                            \
+        const Tensor& input_tensor_a,                                                   \
+        unary::ScalarVariant value,                                                     \
+        bool fast_and_approximate_mode,                                                 \
+        const std::optional<const DataType>& dtype,                                     \
+        const std::optional<MemoryConfig>& memory_config,                               \
+        const std::optional<ttnn::Tensor>& output_tensor,                               \
+        ttsl::Span<const unary::EltwiseUnaryWithParam> activations,                     \
+        ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,      \
+        ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,      \
+        const std::optional<CoreRangeSet>& sub_core_grids,                              \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) { \
+        return TTNN_OP(                                                                 \
+            input_tensor_a,                                                             \
+            value,                                                                      \
+            dtype,                                                                      \
+            memory_config,                                                              \
+            output_tensor,                                                              \
+            activations,                                                                \
+            input_tensor_a_activations,                                                 \
+            input_tensor_b_activations,                                                 \
+            fast_and_approximate_mode,                                                  \
+            sub_core_grids,                                                             \
+            sub_device_id);                                                             \
+    }                                                                                   \
+    Tensor NAME##_fast_approx_tensor_tensor(                                            \
+        const Tensor& input_tensor_a,                                                   \
+        const Tensor& input_tensor_b,                                                   \
+        bool fast_and_approximate_mode,                                                 \
+        const std::optional<const DataType>& dtype,                                     \
+        const std::optional<MemoryConfig>& memory_config,                               \
+        const std::optional<ttnn::Tensor>& output_tensor,                               \
+        ttsl::Span<const unary::EltwiseUnaryWithParam> activations,                     \
+        ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,      \
+        ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,      \
+        const std::optional<CoreRangeSet>& sub_core_grids,                              \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) { \
+        return TTNN_OP(                                                                 \
+            input_tensor_a,                                                             \
+            input_tensor_b,                                                             \
+            dtype,                                                                      \
+            memory_config,                                                              \
+            output_tensor,                                                              \
+            activations,                                                                \
+            input_tensor_a_activations,                                                 \
+            input_tensor_b_activations,                                                 \
+            fast_and_approximate_mode,                                                  \
+            sub_core_grids,                                                             \
+            sub_device_id);                                                             \
+    }
+
+TTNN_FAST_APPROX_BINDING_WRAPPERS(add, ttnn::add)
+TTNN_FAST_APPROX_BINDING_WRAPPERS(subtract, ttnn::subtract)
+
+#undef TTNN_FAST_APPROX_BINDING_WRAPPERS
+
 Tensor multiply_fast_approx_tensor_scalar(
     const Tensor& input_tensor_a,
     unary::ScalarVariant value,
@@ -1196,7 +1397,9 @@ void bind_binary_operation_with_fast_approx(
     TensorScalarFn tensor_scalar_fn,
     TensorTensorFn tensor_tensor_fn,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = " ") {
+    const std::string& note = " ",
+    const std::string& post_note = " ",
+    bool fast_approx_default = false) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -1209,7 +1412,7 @@ void bind_binary_operation_with_fast_approx(
             input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
-            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
+            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `{8}`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
@@ -1232,6 +1435,8 @@ void bind_binary_operation_with_fast_approx(
             If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
+
+        {7}
         )doc",
         std::string(Name),
         "ttnn." + std::string(Name),
@@ -1239,7 +1444,9 @@ void bind_binary_operation_with_fast_approx(
         math,
         supported_dtype,
         note,
-        BINARY_BROADCAST_DOC);
+        BINARY_BROADCAST_DOC,
+        post_note,
+        fast_approx_default ? "True" : "False");
 
     ttnn::bind_function<Name>(
         mod,
@@ -1249,7 +1456,7 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("fast_and_approximate_mode") = fast_approx_default,
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
@@ -1263,7 +1470,7 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("fast_and_approximate_mode") = fast_approx_default,
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
@@ -1493,7 +1700,13 @@ void bind_inplace_operation_with_fast_approx(
     TensorScalarFn tensor_scalar_fn,
     TensorTensorFn tensor_tensor_fn,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = " ") {
+    const std::string& note = " ",
+    const std::string& post_note = " ",
+    bool fast_approx_default = false,
+    // Operand keyword names differ across the ops bound here; they are parameterized so each op
+    // keeps the names it already exposed to Python.
+    const char* lhs_arg_name = "input_a",
+    const char* rhs_arg_name = "input_b") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -1506,7 +1719,7 @@ void bind_inplace_operation_with_fast_approx(
             input_tensor_b (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
+            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `{8}`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
             sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to ``None``.
 
@@ -1529,6 +1742,8 @@ void bind_inplace_operation_with_fast_approx(
             If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
+
+        {7}
         )doc",
         std::string(Name),
         "ttnn." + std::string(Name),
@@ -1536,31 +1751,33 @@ void bind_inplace_operation_with_fast_approx(
         math,
         supported_dtype,
         note,
-        BINARY_BROADCAST_DOC);
+        BINARY_BROADCAST_DOC,
+        post_note,
+        fast_approx_default ? "True" : "False");
 
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
         ttnn::overload_t(
             tensor_scalar_fn,
-            nb::arg("input_a"),
-            nb::arg("input_b"),
+            nb::arg(lhs_arg_name),
+            nb::arg(rhs_arg_name),
             nb::kw_only(),
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("fast_and_approximate_mode") = fast_approx_default,
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("sub_device_id") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
-            nb::arg("input_a"),
-            nb::arg("input_b"),
+            nb::arg(lhs_arg_name),
+            nb::arg(rhs_arg_name),
             nb::kw_only(),
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("fast_and_approximate_mode") = fast_approx_default,
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 }
@@ -1595,7 +1812,7 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, BFLOAT8_B, FLOAT32
+               * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32
                  - TILE, ROW_MAJOR
 
             If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
@@ -1671,46 +1888,61 @@ void py_module(nb::module_& mod) {
     export_enum<BinaryOpType>(mod, "BinaryOpType");
     detail::bind_binary_operation<"remainder">(
         mod,
-        R"doc(Computes the remainder of :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes the remainder of :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \mod \mathrm{{input\_tensor\_b}}_i)doc",
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::remainder),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::remainder),
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(BFLOAT16, FLOAT32, INT32)doc");
+        detail::kFloatAndInt32UInt32Dtypes,
+        detail::kSameDtypeRequiredFootnote);
 
-    detail::bind_binary_operation<"add">(
+    detail::bind_binary_operation_with_fast_approx<"add">(
         mod,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::add),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::add),
-        R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
+        &detail::add_fast_approx_tensor_scalar,
+        &detail::add_fast_approx_tensor_tensor,
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote,
+        detail::kAdditiveFastApproxPostNote,
+        /*fast_approx_default*/ true);
 
-    detail::bind_binary_inplace_operation<"add_">(
+    detail::bind_inplace_operation_with_fast_approx<"add_">(
         mod,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
-        static_cast<detail::InplaceScalarFn>(&ttnn::add_),
-        static_cast<detail::InplaceTensorFn>(&ttnn::add_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
+        static_cast<detail::InplaceFastApproxScalarFn>(&ttnn::add_),
+        static_cast<detail::InplaceFastApproxTensorFn>(&ttnn::add_),
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote,
+        detail::kAdditiveFastApproxPostNote,
+        /*fast_approx_default*/ true,
+        /*lhs_arg_name*/ "input_tensor_a",
+        /*rhs_arg_name*/ "input_tensor_b");
 
-    detail::bind_binary_operation<"subtract">(
+    detail::bind_binary_operation_with_fast_approx<"subtract">(
         mod,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::subtract),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::subtract),
-        R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
+        &detail::subtract_fast_approx_tensor_scalar,
+        &detail::subtract_fast_approx_tensor_tensor,
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote,
+        detail::kAdditiveFastApproxPostNote,
+        /*fast_approx_default*/ true);
 
-    detail::bind_binary_inplace_operation<"subtract_">(
+    detail::bind_inplace_operation_with_fast_approx<"subtract_">(
         mod,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
-        static_cast<detail::InplaceScalarFn>(&ttnn::subtract_),
-        static_cast<detail::InplaceTensorFn>(&ttnn::subtract_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
+        static_cast<detail::InplaceFastApproxScalarFn>(&ttnn::subtract_),
+        static_cast<detail::InplaceFastApproxTensorFn>(&ttnn::subtract_),
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote,
+        detail::kAdditiveFastApproxPostNote,
+        /*fast_approx_default*/ true,
+        /*lhs_arg_name*/ "input_tensor_a",
+        /*rhs_arg_name*/ "input_tensor_b");
 
     detail::bind_binary_operation<"eq">(
         mod,
@@ -1719,7 +1951,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::eq),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::eq),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16, UINT8 (cast to UINT16))doc");
+        detail::kRelationalDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_binary_operation<"ne">(
         mod,
@@ -1728,7 +1961,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::ne),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::ne),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16, UINT8 (cast to UINT16))doc");
+        detail::kRelationalDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_binary_operation<"lt">(
         mod,
@@ -1737,8 +1971,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::lt),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::lt),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT8 (cast to UINT16))doc",
-        "INT32 supported only for tensor-tensor.");
+        detail::kRelationalDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_binary_operation<"le">(
         mod,
@@ -1747,8 +1981,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::le),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::le),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT8 (cast to UINT16))doc",
-        "INT32 supported only for tensor-tensor.");
+        detail::kRelationalDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_binary_operation<"gt">(
         mod,
@@ -1757,8 +1991,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::gt),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::gt),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT8 (cast to UINT16))doc",
-        "INT32 supported only for tensor-tensor.");
+        detail::kRelationalDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_binary_operation<"ge">(
         mod,
@@ -1767,8 +2001,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::ge),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::ge),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT8 (cast to UINT16))doc",
-        "INT32 supported only for tensor-tensor.");
+        detail::kRelationalDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_binary_operation<"logical_and">(
         mod,
@@ -1777,8 +2011,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logical_and),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logical_and),
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16)doc",
-        "INT32 supported only for tensor-tensor.");
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_binary_operation<"logical_or">(
         mod,
@@ -1787,7 +2021,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logical_or),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logical_or),
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_binary_operation<"ldexp">(
         mod,
@@ -1796,7 +2031,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::ldexp),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::ldexp),
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kFloatOnlyDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_binary_operation<"logaddexp">(
         mod,
@@ -1805,7 +2041,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logaddexp),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logaddexp),
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kFloatOnlyDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_binary_operation<"logaddexp2">(
         mod,
@@ -1814,7 +2051,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logaddexp2),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logaddexp2),
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kFloatOnlyDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_binary_operation<"squared_difference">(
         mod,
@@ -1823,7 +2061,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::squared_difference),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::squared_difference),
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_binary_operation<"bias_gelu">(
         mod,
@@ -1832,7 +2071,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::bias_gelu),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::bias_gelu),
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kFloatOnlyDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_binary_operation_with_fast_approx<"multiply">(
         mod,
@@ -1840,23 +2080,18 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i)doc",
         &detail::multiply_fast_approx_tensor_scalar,
         &detail::multiply_fast_approx_tensor_tensor,
-        R"doc(BFLOAT16, FLOAT32, INT32, UINT16, UINT32)doc",
-        R"doc(
-        When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
-        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
-        )doc");
+        detail::kArithmeticFpuDtypes,
+        detail::kMulDtypeFootnote,
+        detail::kMultiplyFastApproxPostNote);
     detail::bind_binary_operation_with_fast_approx<"divide">(
         mod,
         R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i / \mathrm{{input\_tensor\_b}}_i))doc",
         &detail::divide_fast_approx_tensor_scalar,
         &detail::divide_fast_approx_tensor_tensor,
-        R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
-        R"doc(
-        When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero.
-        When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handle division by zero.
-        When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.
-        )doc");
+        detail::kFloatAndInt32Dtypes,
+        detail::kDivideDtypeFootnote,
+        detail::kDivideFastApproxPostNote);
 
     detail::bind_binary_operation<"xlogy">(
         mod,
@@ -1864,7 +2099,10 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{output\_tensor}_i = \mathrm{input\_tensor\_a}_i \cdot \log(\mathrm{input\_tensor\_b}_i)
         )doc",
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::xlogy),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::xlogy));
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::xlogy),
+        ". ",
+        detail::kFloatOnlyDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_binary_unary_operation<"rsub">(
         mod,
@@ -1873,7 +2111,10 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryUnaryScalarFn>(&ttnn::rsub),
         static_cast<detail::BinaryUnaryTensorFn>(&ttnn::rsub),
         ". ",
-        R"doc(FLOAT32,BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote,
+        detail::kAdditiveFastApproxPostNote,
+        /*fast_approx_default*/ true);
 
     detail::bind_bitwise_binary_ops_operation<"bitwise_and">(
         mod,
@@ -1882,7 +2123,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_and),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_and),
         ". ",
-        R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
+        detail::kBitwiseShiftDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_bitwise_binary_ops_operation<"bitwise_or">(
         mod,
@@ -1891,7 +2133,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_or),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_or),
         ". ",
-        R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
+        detail::kBitwiseShiftDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_bitwise_binary_ops_operation<"bitwise_xor">(
         mod,
@@ -1900,7 +2143,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_xor),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_xor),
         ". ",
-        R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
+        detail::kBitwiseShiftDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_bitwise_binary_ops_operation<"bitwise_left_shift">(
         mod,
@@ -1909,7 +2153,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_left_shift),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_left_shift),
         ". ",
-        R"doc(INT32, UINT32, UINT16)doc");
+        detail::kBitwiseShiftDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_bitwise_binary_ops_operation<"bitwise_right_shift">(
         mod,
@@ -1918,7 +2163,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_right_shift),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_right_shift),
         ". ",
-        R"doc(INT32, UINT32, UINT16)doc");
+        detail::kBitwiseShiftDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_bitwise_binary_ops_operation<"logical_left_shift">(
         mod,
@@ -1927,7 +2173,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BitwiseScalarFn>(&ttnn::logical_left_shift),
         static_cast<detail::BitwiseTensorFn>(&ttnn::logical_left_shift),
         ". ",
-        R"doc(INT32, UINT32)doc");
+        detail::kBitwiseShiftDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_binary_operation<"logical_right_shift">(
         mod,
@@ -1936,14 +2183,22 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logical_right_shift),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logical_right_shift),
         ". ",
-        R"doc(INT32, UINT32)doc");
+        detail::kLogicalRightShiftDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_binary_composite<"hypot">(
         mod,
         R"doc(Computes hypot :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \sqrt{(\mathrm{input\_tensor\_a}_i^2 + \mathrm{input\_tensor\_b}_i^2)})doc",
         &detail::hypot_composite_wrapper,
-        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+        detail::kFloatOnlyDtypes,
+        detail::kSameDtypeRequiredFootnote);
+
+    detail::bind_situ_glu<"situ_glu">(
+        mod,
+        R"doc(Computes Moonshot's SiTU-GLU activation over the pre-split :attr:`gate` and :attr:`up` tensors.)doc",
+        R"doc(\mathrm{output\_tensor}_i = \left(\verb|beta1| \cdot \tanh(\mathrm{gate}_i / \verb|beta1|) \cdot \sigma(\mathrm{gate}_i)\right) \cdot \left(\verb|beta2| \cdot \tanh(\mathrm{up}_i / \verb|beta2|)\right))doc",
+        &ttnn::situ_glu);
 
     detail::bind_binary_composite<"nextafter">(
         mod,
@@ -1951,21 +2206,23 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{output\_tensor}_i = \begin{cases} \mathrm{next\_float}(\mathrm{input\_tensor\_a}_i, \mathrm{input\_tensor\_b}_i), & \text{if } \mathrm{input\_tensor\_a}_i \neq \mathrm{input\_tensor\_b}_i \\ \mathrm{input\_tensor\_a}_i, & \text{if } \mathrm{input\_tensor\_a}_i = \mathrm{input\_tensor\_b}_i \end{cases}
         )doc",
         &ttnn::nextafter,
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kFloatOnlyDtypes);
 
     detail::bind_binary_unary_max_operation<"minimum">(
         mod,
         R"doc(Computes minimum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         static_cast<detail::BinaryUnaryMaxScalarFn>(&ttnn::minimum),
-        static_cast<detail::BinaryUnaryMaxTensorFn>(&ttnn::minimum));
+        static_cast<detail::BinaryUnaryMaxTensorFn>(&ttnn::minimum),
+        " ",
+        detail::kFloatAndInt32UInt32Dtypes);
 
     detail::bind_binary_composite<"atan2">(
         mod,
         R"doc(Element-wise arctangent of :attr:`input_tensor_a_i` / :attr:`input_tensor_b_i` with consideration of the quadrant. Returns signed angles in radians between the vector (:attr:`input_tensor_b_i`, :attr:`input_tensor_a_i`) and the vector (1, 0).)doc",
         R"doc(\mathrm{output\_tensor}_i = \operatorname{atan2}(\mathrm{input\_tensor\_a}_i, \mathrm{input\_tensor\_b}_i))doc",
         &ttnn::atan2,
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
-        R"doc(The second parameter, :attr:`input_tensor_b`, is the x-coordinate, while the first parameter, :attr:`input_tensor_a`, is the y-coordinate.)doc");
+        detail::kFloatOnlyDtypes,
+        R"doc(The second parameter, :attr:`input_tensor_b`, is the x-coordinate, while the first parameter, :attr:`input_tensor_a`, is the y-coordinate. Operands must have the same dtype.)doc");
 
     detail::bind_binary_operation<"logical_xor">(
         mod,
@@ -1974,7 +2231,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logical_xor),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logical_xor),
         ".",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_inplace_operation<"logical_or_">(
         mod,
@@ -1982,7 +2240,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i)doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::logical_or_),
         static_cast<detail::InplaceTensorFn>(&ttnn::logical_or_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_inplace_operation<"logical_xor_">(
         mod,
@@ -1990,7 +2249,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i)doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::logical_xor_),
         static_cast<detail::InplaceTensorFn>(&ttnn::logical_xor_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_inplace_operation<"logical_and_">(
         mod,
@@ -1998,7 +2258,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i)doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::logical_and_),
         static_cast<detail::InplaceTensorFn>(&ttnn::logical_and_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_binary_gcd_lcm_operation<"gcd">(
         mod,
@@ -2023,21 +2284,23 @@ void py_module(nb::module_& mod) {
         R"doc(Computes addalpha for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \mathrm{{input\_tensor\_a\ + input\_tensor\_b\ * \alpha}})doc",
         &ttnn::addalpha,
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kFloatOnlyDtypes);
 
     detail::bind_binary_with_float_param<"subalpha">(
         mod,
         R"doc(Computes subalpha for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \mathrm{{input\_tensor\_a\ - input\_tensor\_b\ * \alpha}})doc",
         &ttnn::subalpha,
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kFloatOnlyDtypes);
 
     detail::bind_binary_composite_with_rtol_atol<"isclose">(
         mod,
         R"doc(Computes isclose for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. INT32 tensors are typecast to FLOAT32 on device; for integers with magnitude much larger than 2^24 (~1.67e7), that cast can round distinct values to the same float, so the result may differ from ``torch.isclose`` on the original integer tensors.)doc",
         R"doc(\mathrm{output\_tensor} = \begin{cases} 1, & \text{if } |\mathrm{input\_tensor\_a} - \mathrm{input\_tensor\_b}| \leq (\mathrm{atol} + \mathrm{rtol} \times |\mathrm{input\_tensor\_b}|) \\ 0, & \text{otherwise} \end{cases}
         )doc",
-        &ttnn::isclose);
+        &ttnn::isclose,
+        detail::kFloatAndInt32Dtypes,
+        detail::kIscloseMixedDtypeFootnote);
 
     detail::bind_div<"div">(
         mod,
@@ -2070,31 +2333,33 @@ void py_module(nb::module_& mod) {
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
             const std::optional<CoreRangeSet>&,
             const std::optional<tt::tt_metal::SubDeviceId>&>(&ttnn::div),
-        R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
-        R"doc(
-        With INT32 inputs, rounding_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
-        When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero for fast approximation.
-        When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero (accurate mode).
-        )doc");
+        detail::kFloatAndInt32Dtypes,
+        detail::kDivideDtypeFootnote,
+        detail::kDivFastApproxPostNote);
 
     detail::bind_binary_composite_overload<"div_no_nan">(
         mod,
         R"doc(Computes div_no_nan for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         static_cast<detail::BinaryCompositeTensorTensorFn>(&ttnn::div_no_nan),
-        static_cast<detail::BinaryCompositeTensorScalarFn>(&ttnn::div_no_nan));
+        static_cast<detail::BinaryCompositeTensorScalarFn>(&ttnn::div_no_nan),
+        detail::kFloatAndInt32Dtypes,
+        detail::kDivideDtypeFootnote);
 
     detail::bind_binary_composite_overload<"floor_div">(
         mod,
         R"doc(Computes floor division for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         static_cast<detail::BinaryCompositeTensorTensorFn>(&ttnn::floor_div),
-        static_cast<detail::BinaryCompositeTensorScalarFn>(&ttnn::floor_div));
+        static_cast<detail::BinaryCompositeTensorScalarFn>(&ttnn::floor_div),
+        detail::kFloatAndInt32Dtypes,
+        detail::kDivideDtypeFootnote);
 
     detail::bind_binary_unary_max_operation<"maximum">(
         mod,
         R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         static_cast<detail::BinaryUnaryMaxScalarFn>(&ttnn::maximum),
         static_cast<detail::BinaryUnaryMaxTensorFn>(&ttnn::maximum),
-        R"doc(Supported range for :attr:`input_tensor_b` when its of scalar type is [-16777216, 16777216])doc");
+        R"doc(Supported range for :attr:`input_tensor_b` when its of scalar type is [-16777216, 16777216])doc",
+        detail::kFloatAndInt32UInt32Dtypes);
 
     detail::bind_prelu<"prelu">(
         mod,
@@ -2107,10 +2372,10 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_composite<"outer">(
         mod,
-        R"doc(Computes outer for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes the outer product of :attr:`input_tensor_a` and :attr:`input_tensor_b`. The last dim of each input is treated as the vector; any leading dims are batch dims that are right-aligned and broadcast against each other (missing leading dims are treated as 1, and a dim of size 1 expands to match the other input). For inputs of shape :math:`[\ldots, N]` and :math:`[\ldots, M]` the output has shape :math:`[\ldots, N, M]`, equivalent to ``a.unsqueeze(-1) * b.unsqueeze(-2)``.)doc",
         R"doc(\mathrm{output\_tensor} = \mathrm{input\_tensor\_a} \text{ } \otimes \text{ } \mathrm{input\_tensor\_b})doc",
         &ttnn::outer,
-        R"doc(BFLOAT16, FLOAT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32)doc");
 
     detail::bind_polyval<"polyval">(
         mod,
@@ -2126,7 +2391,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}} = \verb|fmod|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         static_cast<detail::BinaryOverloadScalarFn>(&ttnn::fmod),
         static_cast<detail::BinaryOverloadTensorFn>(&ttnn::fmod),
-        R"doc(BFLOAT16, FLOAT32, INT32)doc");
+        detail::kFloatAndInt32Dtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_inplace_operation<"gt_">(
         mod,
@@ -2134,7 +2400,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{input\_tensor\_a}} > \mathrm{{input\_tensor\_b}})doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::gt_),
         static_cast<detail::InplaceTensorFn>(&ttnn::gt_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kRelationalDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_inplace_operation<"ge_">(
         mod,
@@ -2142,7 +2409,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{input\_tensor\_a}} >= \mathrm{{input\_tensor\_b}})doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::ge_),
         static_cast<detail::InplaceTensorFn>(&ttnn::ge_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kRelationalDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_inplace_operation<"lt_">(
         mod,
@@ -2150,7 +2418,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{input\_tensor\_a}} < \mathrm{{input\_tensor\_b}})doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::lt_),
         static_cast<detail::InplaceTensorFn>(&ttnn::lt_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kRelationalDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_inplace_operation<"le_">(
         mod,
@@ -2158,7 +2427,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{input\_tensor\_a}} <= \mathrm{{input\_tensor\_b}})doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::le_),
         static_cast<detail::InplaceTensorFn>(&ttnn::le_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kRelationalDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_inplace_operation<"eq_">(
         mod,
@@ -2166,7 +2436,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{input\_tensor\_a}} == \mathrm{{input\_tensor\_b}})doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::eq_),
         static_cast<detail::InplaceTensorFn>(&ttnn::eq_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kRelationalDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_inplace_operation<"ne_">(
         mod,
@@ -2174,7 +2445,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{input\_tensor\_a}}\: != \mathrm{{input\_tensor\_b}})doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::ne_),
         static_cast<detail::InplaceTensorFn>(&ttnn::ne_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kRelationalDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_inplace_operation<"ldexp_">(
         mod,
@@ -2182,7 +2454,8 @@ void py_module(nb::module_& mod) {
         R"doc(\verb|ldexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::ldexp_),
         static_cast<detail::InplaceTensorFn>(&ttnn::ldexp_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kFloatOnlyDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_inplace_operation<"logaddexp_">(
         mod,
@@ -2190,7 +2463,8 @@ void py_module(nb::module_& mod) {
         R"doc(\verb|logaddexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::logaddexp_),
         static_cast<detail::InplaceTensorFn>(&ttnn::logaddexp_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kFloatOnlyDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_inplace_operation<"logaddexp2_">(
         mod,
@@ -2198,7 +2472,8 @@ void py_module(nb::module_& mod) {
         R"doc(\verb|logaddexp2|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::logaddexp2_),
         static_cast<detail::InplaceTensorFn>(&ttnn::logaddexp2_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kFloatOnlyDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_inplace_operation<"squared_difference_">(
         mod,
@@ -2206,7 +2481,8 @@ void py_module(nb::module_& mod) {
         R"doc(\verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::squared_difference_),
         static_cast<detail::InplaceTensorFn>(&ttnn::squared_difference_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote);
 
     detail::bind_inplace_operation_with_fast_approx<"multiply_">(
         mod,
@@ -2214,32 +2490,29 @@ void py_module(nb::module_& mod) {
         R"doc(\verb|multiply|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         static_cast<detail::InplaceFastApproxScalarFn>(&ttnn::multiply_),
         static_cast<detail::InplaceFastApproxTensorFn>(&ttnn::multiply_),
-        R"doc(BFLOAT16, FLOAT32, UINT16)doc",
-        R"doc(
-        When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
-        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
-        The operation is not supported for INT32 inputs since the outputs are returned as FLOAT32.
-        )doc");
+        detail::kMultiplyInplaceDtypes,
+        detail::kMulDtypeFootnote,
+        detail::kMultiplyInplaceFastApproxPostNote);
     detail::bind_inplace_operation_with_fast_approx<"divide_">(
         mod,
         R"doc(Performs in-place division operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|divide|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         static_cast<detail::InplaceFastApproxScalarFn>(&ttnn::divide_),
         static_cast<detail::InplaceFastApproxTensorFn>(&ttnn::divide_),
-        R"doc(BFLOAT16, FLOAT32, UINT16)doc",
-        R"doc(
-        When :attr:`fast_and_approximate_mode` is `True`, the operation uses FPU+SFPU implementation for better performance.
-        When :attr:`fast_and_approximate_mode` is `False` (default), the operation uses SFPU implementation for better accuracy.
-        The operation is not supported for INT32 inputs since the outputs are returned as FLOAT32.
-        )doc");
+        detail::kDivideInplaceDtypes,
+        detail::kDivideDtypeFootnote,
+        detail::kDivideInplaceFastApproxPostNote);
 
-    detail::bind_inplace_operation<"rsub_">(
+    detail::bind_inplace_operation_with_fast_approx<"rsub_">(
         mod,
         R"doc(Subtracts :attr:`input_a` from :attr:`input_b` in-place and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_b}} - \mathrm{{input\_tensor\_a}})doc",
-        static_cast<detail::InplaceScalarFn>(&ttnn::rsub_),
-        static_cast<detail::InplaceTensorFn>(&ttnn::rsub_),
-        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        static_cast<detail::InplaceFastApproxScalarFn>(&ttnn::rsub_),
+        static_cast<detail::InplaceFastApproxTensorFn>(&ttnn::rsub_),
+        detail::kArithmeticFpuDtypes,
+        detail::kMixedFloatFamilyFootnote,
+        detail::kAdditiveFastApproxPostNote,
+        /*fast_approx_default*/ true);
 
     detail::bind_inplace_operation<"bias_gelu_">(
         mod,
@@ -2247,11 +2520,12 @@ void py_module(nb::module_& mod) {
         R"doc(\verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         static_cast<detail::InplaceScalarFn>(&ttnn::bias_gelu_),
         static_cast<detail::InplaceTensorFn>(&ttnn::bias_gelu_),
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        detail::kFloatOnlyDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_power(
         mod,
-        R"doc(When :attr:`exponent` is a Tensor, supported dtypes are: BFLOAT16, FLOAT32. Both input tensors should be of same dtype.)doc");
+        R"doc(When :attr:`exponent` is a Tensor, both input tensors must have the same dtype from: BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32.)doc");
 }
 
 }  // namespace ttnn::operations::binary

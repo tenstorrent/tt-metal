@@ -207,14 +207,19 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
             const CoreCoord& core = logical_cores[i];
 
             // Runtime arguments for sharded reader
-            KernelDescriptor::CoreRuntimeArgs runtime_args = {
-                input_tensor.buffer()->address(),  // rt_arg[0]: input_buffer_address
-                i * grid_nsticks_per_core          // rt_arg[1]: grid_stick_offset
-            };
-
-            writer_desc.runtime_args.emplace_back(core, runtime_args);
+            writer_desc.emplace_runtime_args(
+                core,
+                {
+                    input_tensor.buffer(),     // rt_arg[0]: input_buffer_address
+                    i * grid_nsticks_per_core  // rt_arg[1]: grid_stick_offset
+                });
             if (enable_split_reader) {
-                writer1_desc.runtime_args.emplace_back(core, runtime_args);
+                writer1_desc.emplace_runtime_args(
+                    core,
+                    {
+                        input_tensor.buffer(),     // rt_arg[0]: input_buffer_address
+                        i * grid_nsticks_per_core  // rt_arg[1]: grid_stick_offset
+                    });
             }
         }
     } else {
@@ -226,18 +231,25 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
                 core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
 
             // Runtime arguments for interleaved reader - expanded row by row
-            KernelDescriptor::CoreRuntimeArgs runtime_args = {
-                input_tensor.buffer()->address(),  // rt_arg[0]: input_buffer_address
-                grid_tensor.buffer()->address(),   // rt_arg[1]: grid_buffer_address
-                grid_sticks,                       // rt_arg[2]: grid_sticks
-                grid_processed                     // rt_arg[3]: grid_processed
-            };
-
-            writer_desc.runtime_args.emplace_back(core, runtime_args);
+            writer_desc.emplace_runtime_args(
+                core,
+                {
+                    input_tensor.buffer(),  // rt_arg[0]: input_buffer_address
+                    grid_tensor.buffer(),   // rt_arg[1]: grid_buffer_address
+                    grid_sticks,            // rt_arg[2]: grid_sticks
+                    grid_processed          // rt_arg[3]: grid_processed
+                });
             if (enable_split_reader) {
                 // For split reader in nearest mode, second writer needs same runtime args
                 // The kernel logic handles the split internally via reader_id
-                writer1_desc.runtime_args.emplace_back(core, runtime_args);
+                writer1_desc.emplace_runtime_args(
+                    core,
+                    {
+                        input_tensor.buffer(),  // rt_arg[0]: input_buffer_address
+                        grid_tensor.buffer(),   // rt_arg[1]: grid_buffer_address
+                        grid_sticks,            // rt_arg[2]: grid_sticks
+                        grid_processed          // rt_arg[3]: grid_processed
+                    });
             }
 
             grid_processed += grid_sticks;

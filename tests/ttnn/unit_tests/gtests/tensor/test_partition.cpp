@@ -31,10 +31,10 @@ namespace ttnn {
 namespace {
 
 using ::testing::SizeIs;
-using ::tt::tt_metal::experimental::xtensor::chunk;
-using ::tt::tt_metal::experimental::xtensor::chunk_ndim;
-using ::tt::tt_metal::experimental::xtensor::concat;
-using ::tt::tt_metal::experimental::xtensor::concat_ndim;
+using ttnn::experimental::xtensor::chunk;
+using ttnn::experimental::xtensor::chunk_ndim;
+using ttnn::experimental::xtensor::concat;
+using ttnn::experimental::xtensor::concat_ndim;
 
 TEST(PartitionTest, ChunkBasicNonDivisible3) {
     // Create a 1D tensor: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -212,7 +212,7 @@ TEST(PartitionTest, EmptyInput) {
 }
 
 TEST(PartitionTest, ChunkDoesNotAccessData) {
-    //  Create a read-protected memory region, and point `tt::stl::Span` to it.
+    //  Create a read-protected memory region, and point `ttsl::Span` to it.
     //  `chunk` should not access the data, and should only calculate offsets and shapes.
     const long page_size = sysconf(_SC_PAGESIZE);
     ASSERT_NE(page_size, -1);
@@ -240,7 +240,7 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     new_action.sa_flags = 0;
     ASSERT_EQ(sigaction(SIGSEGV, &new_action, &old_action), 0);
 
-    tt::stl::Span<const uint8_t> protected_span(static_cast<uint8_t*>(mapped_mem), total_size);
+    ttsl::Span<const uint8_t> protected_span(static_cast<uint8_t*>(mapped_mem), total_size);
     auto xexpr = xt::adapt(
         protected_span.data(), total_size, xt::no_ownership(), std::vector<size_t>(shape.cbegin(), shape.cend()));
 
@@ -261,7 +261,7 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
         for (const auto& chunked_xexpr : chunks) {
             EXPECT_THAT(chunked_xexpr, SizeIs(kDim0Size * page_size));
             EXPECT_EQ(
-                tt::tt_metal::experimental::xtensor::get_shape_from_xarray(chunked_xexpr),
+                ttnn::experimental::xtensor::get_shape_from_xarray(chunked_xexpr),
                 ttnn::Shape({kDim0Size, 1, page_size}));
         }
     } else {

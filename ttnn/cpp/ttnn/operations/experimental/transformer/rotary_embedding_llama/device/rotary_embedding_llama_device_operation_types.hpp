@@ -16,10 +16,10 @@ struct RotaryEmbeddingLlamaParams {
 };
 
 struct RotaryEmbeddingLlamaInputs {
-    tt::tt_metal::Tensor input_tensor;
-    tt::tt_metal::Tensor cos_cache;
-    tt::tt_metal::Tensor sin_cache;
-    tt::tt_metal::Tensor trans_mat;
+    ttnn::Tensor input_tensor;
+    ttnn::Tensor cos_cache;
+    ttnn::Tensor sin_cache;
+    ttnn::Tensor trans_mat;
 };
 
 }  // namespace ttnn::experimental::prim

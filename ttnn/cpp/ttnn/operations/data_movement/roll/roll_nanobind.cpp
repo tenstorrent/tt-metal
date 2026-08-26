@@ -28,20 +28,31 @@ void bind_roll(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            nb::overload_cast<const ttnn::Tensor&, const ttnn::SmallVector<int>&, const ttnn::SmallVector<int>&>(
-                &ttnn::roll),
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const ttsl::SmallVector<int>&,
+                const ttsl::SmallVector<int>&,
+                const std::optional<MemoryConfig>&>(&ttnn::roll),
             nb::arg("input_tensor"),
             nb::arg("shifts"),
-            nb::arg("dim")),
+            nb::arg("dim"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()),
 
         ttnn::overload_t(
-            nb::overload_cast<const ttnn::Tensor&, int, int>(&ttnn::roll),
+            nb::overload_cast<const ttnn::Tensor&, int, int, const std::optional<MemoryConfig>&>(&ttnn::roll),
             nb::arg("input_tensor"),
             nb::arg("shifts"),
-            nb::arg("dim")),
+            nb::arg("dim"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()),
 
         ttnn::overload_t(
-            nb::overload_cast<const ttnn::Tensor&, int>(&ttnn::roll), nb::arg("input_tensor"), nb::arg("shifts")));
+            nb::overload_cast<const ttnn::Tensor&, int, const std::optional<MemoryConfig>&>(&ttnn::roll),
+            nb::arg("input_tensor"),
+            nb::arg("shifts"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement

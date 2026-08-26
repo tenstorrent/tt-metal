@@ -17,7 +17,8 @@ import pytest
 import torch
 from loguru import logger
 
-from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM, resolve_trace_region_size
+from models.tt_transformers.demo.trace_region_config import get_logical_sku, get_supported_trace_region_size
 from tests.scripts.common import get_updated_device_params, run_process_and_get_result
 
 # Constants for device configurations
@@ -134,6 +135,16 @@ class CIv2ModelDownloadUtils_:
             subprocess.run(
                 [
                     "wget",
+                    # LFC is an internal cluster service and must be reached directly. The CIv2
+                    # no_proxy entry for it is scheme-prefixed ("http://...") so it never matches
+                    # the target hostname; without --no-proxy, wget sends the request through the
+                    # restricted egress proxy, which returns 503 for internal hosts.
+                    "--no-proxy",
+                    # LFC occasionally refuses direct connections; wget does not retry connection
+                    # refusals by default, so opt in and back off a few times before giving up.
+                    "--tries=5",
+                    "--retry-connrefused",
+                    "--waitretry=10",
                     "-r",
                     "-nH",
                     "-x",
@@ -295,7 +306,9 @@ def get_tt_cache_path():
 
 @pytest.fixture(scope="function")
 def device_params(request):
-    return getattr(request, "param", {})
+    # Return a copy so the mesh_device fixture can resolve/pop TRACE_MODEL_KEY_PARAM
+    # (using the logical submesh SKU) without mutating the shared parametrize dict.
+    return dict(getattr(request, "param", {}))
 
 
 @pytest.fixture(scope="module")
@@ -547,40 +560,82 @@ def mesh_device(request, silicon_arch_name, device_params):
     try:
         param = request.param
     except (ValueError, AttributeError):
-        # Get number of devices from the system mesh descriptor.
-        param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+        # No explicit parametrization; fall back to the system mesh size resolved below.
+        param = None
+
+    # The mesh that open_mesh_device can actually allocate is bounded by the system mesh exposed
+    # by the control plane, which may be smaller than the number of physical chips. For example,
+    # fabric auto-discovery can downgrade the mesh (e.g. to 2x2) when ethernet/fabric links are
+    # missing or fail to train, even though get_num_devices() still reports all physical chips.
+    # Comparing only against get_num_devices() would let the test proceed and then crash inside
+    # open_mesh_device with a TT_FATAL; also accounting for the system mesh size lets us skip
+    # gracefully on such machines instead.
+    #
+    # Query the system mesh once. A failure here means control-plane / mesh-graph discovery itself
+    # errored (missing descriptor, untrained eth links, control-plane regression, ...). That is an
+    # infrastructure/software fault, not a capacity mismatch, so we must FAIL fixture setup instead
+    # of skipping: turning discovery errors into skips would let a broken machine report false-green
+    # CI with no device path exercised. The confirmed capacity-mismatch case is handled below via
+    # pytest.skip, once the system mesh size is known.
+    try:
+        system_mesh_size = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not query the system mesh descriptor (control-plane/mesh discovery failed): {e}"
+        ) from e
+
+    if param is None:
+        param = system_mesh_size
 
     if isinstance(param, tuple):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
-        # This is a workaround to support skipping tests where configuring mesh devices whose size does not match the physical
-        # number of devices causes the runtime to crash. Theoretically the runtime should support mesh devices smaller than the
-        # number of physical devices, but that hasn't been the case when testing. TODO remove when such behavior is more widely supported.
+        available_num_devices = (
+            system_mesh_size if ttnn.using_distributed_env() else min(ttnn.get_num_devices(), system_mesh_size)
+        )
         if (
             device_params.get("require_exact_physical_num_devices", False)
-            and num_devices_requested != ttnn.get_num_devices()
+            and num_devices_requested != available_num_devices
         ):
             pytest.skip(
-                f"Test requires exact match of requested num devices ({num_devices_requested}) to available physical num devices ({ttnn.get_num_devices()})."
+                f"Test requires exact match of requested num devices ({num_devices_requested}) to available physical num devices ({available_num_devices})."
             )
 
-        if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
+        if num_devices_requested > available_num_devices:
             pytest.skip(
-                f"Requested more devices ({num_devices_requested}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
+                f"Requested more devices ({num_devices_requested}) than available ({available_num_devices}). Test not applicable for machine"
             )
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:
-        if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
-            pytest.skip(
-                f"Requested more devices ({param}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
-            )
+        if not ttnn.using_distributed_env():
+            available_num_devices = min(ttnn.get_num_devices(), system_mesh_size)
+            if param > available_num_devices:
+                pytest.skip(
+                    f"Requested more devices ({param}) than available ({available_num_devices}). Test not applicable for machine"
+                )
         mesh_shape = ttnn.MeshShape(1, param)
 
-    override_trace_region_size = get_supported_trace_region_size(request, param)
-    if override_trace_region_size:
-        device_params["trace_region_size"] = override_trace_region_size
-        logger.info(f"Overriding trace region size to {override_trace_region_size}")
+    # Resolve trace_region_size against the SKU of the submesh actually opened.
+    # TRACE_MODEL_KEY_PARAM is resolved here (not at device_params/collection time) so the
+    # logical SKU reflects request.param/data_parallel/MESH_DEVICE, not the physical cluster.
+    trace_model_key = device_params.pop(TRACE_MODEL_KEY_PARAM, None)
+    if "trace_region_size" in device_params:
+        logger.info(
+            f"Keeping trace_region_size={device_params['trace_region_size']!r} from device_params (already set)"
+        )
+    elif trace_model_key is not None:
+        sku = get_logical_sku(request, param)
+        if sku is None:
+            logger.info(f"No SKU for {param!r}; not setting trace_region_size for model {trace_model_key!r}")
+        else:
+            device_params["trace_region_size"] = resolve_trace_region_size(trace_model_key, sku)
+    else:
+        override_trace_region_size = get_supported_trace_region_size(request, param)
+        if override_trace_region_size is None:
+            logger.info(f"No trace region size for {param!r}")
+        else:
+            device_params["trace_region_size"] = override_trace_region_size
 
     updated_device_params = get_updated_device_params(device_params)
     updated_device_params.pop("require_exact_physical_num_devices", False)
@@ -720,7 +775,15 @@ def bh_2d_mesh_device_context(device_params):
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
-    if ttnn.get_num_devices() == 8:
+
+    # TODO #50463: Revisit MGD path handling
+    if os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
+        mesh_shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=mesh_shape,
+            **updated_device_params,
+        )
+    elif ttnn.get_num_devices() == 8:
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(4, 2),
             **updated_device_params,
@@ -780,14 +843,23 @@ def _check_requires_grid_size(device_or_mesh, marker):
 
 @pytest.fixture(autouse=True)
 def check_requires_grid_size(request):
-    """Autouse fixture: skips the test when it has requires_grid_size mark and device worker grid is too small. Supports device, bh_2d_mesh_device, and mesh_device. Tests only need @pytest.mark.requires_grid_size((x,y)) or @pytest.mark.requires_grid_size(n_cores)."""
-    marker = request.node.get_closest_marker("requires_grid_size")
-    if marker is None:
+    """Autouse fixture: skips the test when it has requires_grid_size mark and device worker grid is too small. Supports device, bh_2d_mesh_device, and mesh_device. Tests only need @pytest.mark.requires_grid_size((x,y)) or @pytest.mark.requires_grid_size(n_cores).
+
+    Enforces *every* requires_grid_size marker on the item, not just the closest
+    one. A parametrized case commonly carries both a function-level default
+    requirement and a stricter per-param requirement (via pytest.param(marks=...));
+    get_closest_marker() would return only one of them and silently drop the other,
+    letting an under-provisioned grid (e.g. a harvested board) run a case that needs
+    more cores. Applying all markers makes the strictest requirement win.
+    """
+    markers = list(request.node.iter_markers("requires_grid_size"))
+    if not markers:
         return
     for name in ("bh_2d_mesh_device", "mesh_device", "device"):
         if name in request.fixturenames:
             device_or_mesh = request.getfixturevalue(name)
-            _check_requires_grid_size(device_or_mesh, marker)
+            for marker in markers:
+                _check_requires_grid_size(device_or_mesh, marker)
             return
     pytest.skip(
         "requires_grid_size mark requires one of: device, bh_2d_mesh_device, mesh_device (none requested by test)"
@@ -889,6 +961,7 @@ ALL_ARCHS = set(
         "grayskull",
         "wormhole_b0",
         "blackhole",
+        "quasar",
     ]
 )
 
@@ -1175,78 +1248,23 @@ def ttnn_graph_report(request):
     """
     Automatically generate graph reports when config enables it.
 
-    Only activates when enable_logging, enable_graph_report, and report_path
-    are all set. Skipped when a graph capture is already active (e.g. a test
-    that manages its own capture).
+    Gates on enable_logging and either enable_graph_report or enable_comparison_mode,
+    then delegates to ``ttnn.graph_report.run_pytest_graph_report_fixture`` for
+    report_path validation, capture lifecycle, and import.
     """
     import ttnn
 
     if not getattr(ttnn.CONFIG, "enable_logging", False):
         yield
         return
-    if not getattr(ttnn.CONFIG, "enable_graph_report", False):
-        yield
-        return
-    report_path = getattr(ttnn.CONFIG, "report_path", None)
-    report_name = getattr(ttnn.CONFIG, "report_name", None)
-    if report_path is None or not report_name or str(report_name).strip() == "":
-        yield
-        return
-    if ttnn.graph.is_graph_capture_active():
+
+    enable_graph_report = getattr(ttnn.CONFIG, "enable_graph_report", False)
+    enable_comparison_mode = getattr(ttnn.CONFIG, "enable_comparison_mode", False)
+    if not enable_graph_report and not enable_comparison_mode:
         yield
         return
 
-    # Ensure we are torn down before device fixtures: request whichever device
-    # the test uses so pytest tears us down first, then the device.
-    if "mesh_device" in request.fixturenames:
-        request.getfixturevalue("mesh_device")
-    if "device" in request.fixturenames:
-        request.getfixturevalue("device")
-
-    report_path = Path(report_path)
-    enable_detailed_buffer_report = getattr(ttnn.CONFIG, "enable_detailed_buffer_report", False)
-
-    if enable_detailed_buffer_report:
-        ttnn.graph.enable_detailed_buffer_tracing()
-
-    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-    try:
-        yield
-    finally:
-        if not ttnn.graph.is_graph_capture_active():
-            logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
-        else:
-            report_path.mkdir(parents=True, exist_ok=True)
-            if ttnn.distributed_context_is_initialized():
-                rank = int(ttnn.distributed_context_get_rank())
-                world_size = int(ttnn.distributed_context_get_size())
-            else:
-                rank, world_size = 0, 1
-            if world_size > 1:
-                json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
-            else:
-                json_path = report_path / "graph_capture.json"
-            ttnn.graph.end_graph_capture_to_file(str(json_path))
-            if ttnn.distributed_context_is_initialized():
-                ttnn.distributed_context_barrier()
-            if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
-                from ttnn.graph_report import import_report
-
-                import_report(report_path, report_path)
-                (report_path / "graph_capture.json").unlink(missing_ok=True)
-                for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
-                    p.unlink(missing_ok=True)
-            if ttnn.distributed_context_is_initialized():
-                ttnn.distributed_context_barrier()
-
-            if world_size > 1:
-                config_path = report_path / f"config_{rank+1}_of_{world_size}.json"
-            else:
-                config_path = report_path / "config.json"
-            ttnn.save_config_to_json_file(config_path)
-
-        if enable_detailed_buffer_report:
-            ttnn.graph.disable_detailed_buffer_tracing()
+    yield from ttnn.graph_report.run_pytest_graph_report_fixture(request)
 
 
 @pytest.fixture(scope="function", autouse=True)

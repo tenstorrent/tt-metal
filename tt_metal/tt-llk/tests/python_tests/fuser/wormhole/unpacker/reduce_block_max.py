@@ -5,35 +5,36 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
-from fuser.fused_loop import FusedLoop, LoopBlockRow
-from fuser.fused_math import ComputeNode
-from fuser.fused_operation import FusedOperation
-from fuser.fused_unpacker import Unpacker
+from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopBlockRow, TileLoop
 
 
 class ReduceBlockMaxUnpacker(Unpacker):
-    loop: FusedLoop = LoopBlockRow()
+    loop: TileLoop = LoopBlockRow()
 
     per_block_init = True
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         ct_dim = block.block_tiles_x
         dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_unpack_AB_reduce_block_max_row_init_<{ct_dim}, {dest_acc}>();\n"
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        return f"_llk_unpack_AB_reduce_block_max_row_init_<{ct_dim}, {dest_acc}, /*respect_trigger=*/false>({tensor_shape});\n"
 
     def unpack(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         buffer_a = compute_unit.src_a.cpp_name
@@ -42,18 +43,18 @@ class ReduceBlockMaxUnpacker(Unpacker):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         return f"_llk_unpack_AB_reduce_block_max_row_uninit_();\n"
 
     def perf_set_valid(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -64,9 +65,9 @@ class ReduceBlockMaxUnpacker(Unpacker):
 
     def perf_clear_valid(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: "ComputeNode",
+        compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -82,8 +83,8 @@ class ReduceBlockMaxUnpacker(Unpacker):
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: ComputeNode = None,
+        compute_unit: FpuNode = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return tensor_a, tensor_b

@@ -5,8 +5,11 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 using std::uint32_t;
 
@@ -18,20 +21,17 @@ void kernel_main() {
     int dst_tile_index = 0;
     int in0_block_tile_index = 0;
 
-    uint32_t batch = get_compile_time_arg_val(0);
-    uint32_t Mt = get_compile_time_arg_val(1);
-    uint32_t Kt = get_compile_time_arg_val(2);
-    uint32_t Nt = get_compile_time_arg_val(3);
+    uint32_t batch = get_arg(args::batch);
+    uint32_t Mt = get_arg(args::Mt);
+    uint32_t Kt = get_arg(args::Kt);
+    uint32_t Nt = get_arg(args::Nt);
 
-    constexpr uint32_t cb_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+    DataflowBuffer in0_cb(dfb::in0);
+    DataflowBuffer in1_cb(dfb::in1);
+    DataflowBuffer out_cb(dfb::out);
 
-    CircularBuffer in0_cb(cb_in0);
-    CircularBuffer in1_cb(cb_in1);
-    CircularBuffer out_cb(cb_out);
-
-    mm_init(cb_in0, cb_in1, cb_out);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in0, dfb::in1, dfb::out);
+    matmul_init(dfb::in0, dfb::in1);
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
@@ -44,7 +44,7 @@ void kernel_main() {
                     in0_cb.wait_front(onetile);
                     in1_cb.wait_front(onetile);
 
-                    matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
+                    matmul_tiles(dfb::in0, dfb::in1, 0, 0, 0);
 
                     in0_cb.pop_front(onetile);
                     in1_cb.pop_front(onetile);
@@ -55,7 +55,7 @@ void kernel_main() {
                 out_cb.reserve_back(onetile);
 
                 tile_regs_wait();
-                pack_tile(0, cb_out);
+                pack_tile(0, dfb::out);
                 tile_regs_release();
 
                 out_cb.push_back(onetile);

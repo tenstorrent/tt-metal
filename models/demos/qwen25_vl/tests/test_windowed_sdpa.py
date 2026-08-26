@@ -226,11 +226,11 @@ def test_windowed_sdpa_basic(
         cu_window_seqlens_tt = ttnn.from_torch(
             pt_cu_window_seqlens, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
         )
-        output_tt = ttnn.transformer.windowed_scaled_dot_product_attention(
+        output_tt = ttnn.transformer.scaled_dot_product_attention(
             q_tt,
             k_tt,
             v_tt,
-            cu_window_seqlens_tt,
+            is_causal=False,
             scale=0.1,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -244,6 +244,7 @@ def test_windowed_sdpa_basic(
                 q_chunk_size=qk_chunk_size,
                 k_chunk_size=qk_chunk_size,
             ),
+            cu_window_seqlens=cu_window_seqlens_tt,
         )
 
         # Convert back to torch for verification

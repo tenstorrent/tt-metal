@@ -55,7 +55,7 @@ void kernel_main() {
     const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eps = get_arg_val<uint32_t>(arg_idx++);
-    generate_bcast_col_scalar(cb_eps, eps);
+    generate_bcast_col_scalar(CircularBuffer(cb_eps), eps);
 
     const auto src_a = TensorAccessor(src_args, src_addr);
     const auto src_stats = TensorAccessor(stats_args, stats_addr);

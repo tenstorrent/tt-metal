@@ -91,7 +91,8 @@ AttnMatmulDeviceOperation::spec_return_value_t AttnMatmulDeviceOperation::comput
         N = args.num_tokens.value();
     }
     Shape shape({1, ashape[1], ashape[2], N});
-    return TensorSpec(shape, TensorLayout(args.output_dtype, PageConfig(Layout::TILE), args.output_mem_config));
+    return tt::tt_metal::TensorSpec(
+        shape, TensorLayout(args.output_dtype, PageConfig(Layout::TILE), args.output_mem_config));
 }
 
 AttnMatmulDeviceOperation::tensor_return_value_t AttnMatmulDeviceOperation::create_output_tensors(
@@ -101,29 +102,6 @@ AttnMatmulDeviceOperation::tensor_return_value_t AttnMatmulDeviceOperation::crea
     }
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input_tensor_a.device());
-}
-
-ttsl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    TT_FATAL(
-        is_device_tensor(tensor_args.input_tensor_a),
-        "Unexpected Tensor type {}",
-        tensor_args.input_tensor_a.storage_type());
-    TT_FATAL(
-        is_device_tensor(tensor_args.input_tensor_b),
-        "Unexpected Tensor type {}",
-        tensor_args.input_tensor_b.storage_type());
-    return operation::hash_operation<AttnMatmulDeviceOperation>(
-        args,
-        args.transpose_hw,
-        args.output_mem_config,
-        args.output_dtype,
-        tensor_args.input_tensor_a.dtype(),
-        tensor_args.input_tensor_a.memory_config(),
-        tensor_args.input_tensor_a.padded_shape(),  // drives CB total_size (Kt = padded_shape[-1] / TILE_WIDTH)
-        tensor_args.input_tensor_b.dtype(),
-        tensor_args.input_tensor_b.memory_config(),
-        tensor_args.input_tensor_b.padded_shape());
 }
 
 }  // namespace ttnn::experimental::prim

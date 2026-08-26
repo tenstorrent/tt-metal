@@ -21,7 +21,7 @@ constexpr uint32_t onetile = 1U;
 void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
-    binary_op_init_common(cb_dkpe_in, cb_dkpe_in, cb_dkpe_out);
+    compute_kernel_hw_startup(cb_dkpe_in, cb_dkpe_in, cb_dkpe_out);
 
     for (uint32_t block = 0U; block < num_blocks; ++block) {
         // DST registers 0..Tr-1 hold the running head-axis sum across the block;

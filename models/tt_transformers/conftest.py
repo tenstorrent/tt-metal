@@ -10,7 +10,9 @@ import ttnn
 
 @pytest.fixture
 def device_params(request, galaxy_type):
-    # Get param dict passed in from test parametrize (or default to empty dict)
+    # Get param dict passed in from test parametrize (or default to empty dict).
+    # Any TRACE_MODEL_KEY_PARAM is left in place; the mesh_device fixture resolves it
+    # to trace_region_size using the logical submesh SKU.
     params = getattr(request, "param", {}).copy()
 
     mesh_device = {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4), "P150x8": (1, 8)}.get(
@@ -22,8 +24,13 @@ def device_params(request, galaxy_type):
         if is_single_device:
             params["fabric_config"] = None
         elif params["fabric_config"] == True:
-            params["fabric_config"] = (
-                ttnn.FabricConfig.FABRIC_1D_RING if galaxy_type == "6U" else ttnn.FabricConfig.FABRIC_1D
-            )
+            cluster_type = ttnn.cluster.get_cluster_type()
+            if cluster_type == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY:
+                # The 8x4 decode path uses Ring collectives along both mesh axes.
+                params["fabric_config"] = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+            else:
+                params["fabric_config"] = (
+                    ttnn.FabricConfig.FABRIC_1D_RING if galaxy_type == "6U" else ttnn.FabricConfig.FABRIC_1D
+                )
 
     return params

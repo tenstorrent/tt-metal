@@ -4,31 +4,31 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t block_height_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t block_width_tiles = get_arg_val<uint32_t>(2);
-    const uint32_t unpadded_block_height_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t unpadded_block_width_tiles = get_arg_val<uint32_t>(4);
-    const uint32_t output_width_tiles = get_arg_val<uint32_t>(5);  // input width in tiles - block width in tiles
-    const uint32_t block_num_tiles = get_arg_val<uint32_t>(6);     // block_height_tiles * block_width_tiles
-    const uint32_t start_id_offset = get_arg_val<uint32_t>(7);
-    const uint32_t start_id_base = get_arg_val<uint32_t>(8);
+    const uint32_t block_height_tiles = get_arg(args::block_height_tiles);
+    const uint32_t block_width_tiles = get_arg(args::block_width_tiles);
+    const uint32_t unpadded_block_height_tiles = get_arg(args::unpadded_block_height_tiles);
+    const uint32_t unpadded_block_width_tiles = get_arg(args::unpadded_block_width_tiles);
+    const uint32_t output_width_tiles =
+        get_arg(args::output_width_tiles);                            // input width in tiles - block width in tiles
+    const uint32_t block_num_tiles = get_arg(args::block_num_tiles);  // block_height_tiles * block_width_tiles
+    const uint32_t start_id_offset = get_arg(args::start_id_offset);
+    const uint32_t start_id_base = get_arg(args::start_id_base);
     const uint32_t start_id = start_id_base + start_id_offset;
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-
     // single-tile ublocks
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
+    const uint32_t tile_bytes = DataflowBuffer(dfb::out).get_entry_size();
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    // The destination-buffer base address is bound via the tensor parameter (tensor::dst),
+    // replacing the legacy buffer-address RTA slot 0.
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer cb_out(dfb::out);
 
     const uint32_t padded_width_diff = (block_width_tiles - unpadded_block_width_tiles) * tile_bytes;
 
@@ -38,7 +38,8 @@ void kernel_main() {
     for (uint32_t h = 0; h < unpadded_block_height_tiles; h++) {
         uint32_t tile_id = row_start_tile_id;
         for (uint32_t w = 0; w < unpadded_block_width_tiles; w++) {
-            noc.async_write(cb_out, s, tile_bytes, {.offset_bytes = l1_read_offset}, {.page_id = tile_id});
+            noc.async_write(
+                cb_out, s, tile_bytes, {.offset_bytes = l1_read_offset}, {.page_id = tile_id, .offset_bytes = 0});
             tile_id++;
             l1_read_offset += tile_bytes;
         }

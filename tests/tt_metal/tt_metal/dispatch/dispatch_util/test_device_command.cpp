@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
-#include <tt-metalium/vector_aligned.hpp>
+#include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include <utility>
 #include <vector>
 
@@ -16,25 +17,25 @@
 
 namespace tt::tt_metal {
 
-TEST(DeviceCommandTest, AddDispatchWait) {
+TEST(DeviceCommandTest, CPU_AddDispatchWait) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_wait();
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
-    command.add_dispatch_wait(0, 0, 0, 0);
+    command.add_dispatch_wait(0, 0, 0, 0, 0);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchWaitWithPrefetchStall) {
+TEST(DeviceCommandTest, CPU_AddDispatchWaitWithPrefetchStall) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_wait_with_prefetch_stall();
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
-    command.add_dispatch_wait_with_prefetch_stall(0, 0, 0, 0);
+    command.add_dispatch_wait_with_prefetch_stall(0, 0, 0, 0, 0);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddPrefetchRelayLinear) {
+TEST(DeviceCommandTest, CPU_AddPrefetchRelayLinear) {
     DeviceCommandCalculator calculator;
     calculator.add_prefetch_relay_linear();
 
@@ -43,7 +44,7 @@ TEST(DeviceCommandTest, AddPrefetchRelayLinear) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddData) {
+TEST(DeviceCommandTest, CPU_AddData) {
     DeviceCommandCalculator calculator;
     calculator.add_data(32);
 
@@ -53,7 +54,7 @@ TEST(DeviceCommandTest, AddData) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchWriteLinear) {
+TEST(DeviceCommandTest, CPU_AddDispatchWriteLinear) {
     {
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_linear<false, false>(5);
@@ -90,7 +91,7 @@ TEST(DeviceCommandTest, AddDispatchWriteLinear) {
     }
 }
 
-TEST(DeviceCommandTest, AddDispatchGoSignalMcast) {
+TEST(DeviceCommandTest, CPU_AddDispatchGoSignalMcast) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_go_signal_mcast();
 
@@ -99,7 +100,7 @@ TEST(DeviceCommandTest, AddDispatchGoSignalMcast) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddNotifyDispatchSGoSignalCmd) {
+TEST(DeviceCommandTest, CPU_AddNotifyDispatchSGoSignalCmd) {
     DeviceCommandCalculator calculator;
     calculator.add_notify_dispatch_s_go_signal_cmd();
 
@@ -108,7 +109,7 @@ TEST(DeviceCommandTest, AddNotifyDispatchSGoSignalCmd) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchSetNumWorkerSems) {
+TEST(DeviceCommandTest, CPU_AddDispatchSetNumWorkerSems) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_set_num_worker_sems();
 
@@ -117,7 +118,21 @@ TEST(DeviceCommandTest, AddDispatchSetNumWorkerSems) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchSetGoSignalNocData) {
+TEST(DeviceCommandTest, CPU_AddDispatchSetSubDeviceWorkerCounts) {
+    constexpr uint32_t num_sub_devices = 3;
+    std::array<uint32_t, num_sub_devices> workers_per_sub_device = {4, 7, 2};
+
+    DeviceCommandCalculator calculator;
+    calculator.add_dispatch_set_sub_device_worker_counts(num_sub_devices);
+
+    HostMemDeviceCommand command(calculator.write_offset_bytes());
+    command.add_dispatch_set_sub_device_worker_counts(
+        ttsl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()),
+        DispatcherSelect::DISPATCH_MASTER);
+    EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
+}
+
+TEST(DeviceCommandTest, CPU_AddDispatchSetGoSignalNocData) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_set_go_signal_noc_data(5);
 
@@ -127,7 +142,7 @@ TEST(DeviceCommandTest, AddDispatchSetGoSignalNocData) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchSetWriteOffsets) {
+TEST(DeviceCommandTest, CPU_AddDispatchSetWriteOffsets) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_set_write_offsets(CQ_DISPATCH_MAX_WRITE_OFFSETS);
 
@@ -137,7 +152,7 @@ TEST(DeviceCommandTest, AddDispatchSetWriteOffsets) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchTerminate) {
+TEST(DeviceCommandTest, CPU_AddDispatchTerminate) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_terminate();
 
@@ -146,7 +161,7 @@ TEST(DeviceCommandTest, AddDispatchTerminate) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchWritePaged) {
+TEST(DeviceCommandTest, CPU_AddDispatchWritePaged) {
     {
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_paged<false>(1, 5);
@@ -168,7 +183,7 @@ TEST(DeviceCommandTest, AddDispatchWritePaged) {
     }
 }
 
-TEST(DeviceCommandTest, AddPrefetchRelayPaged) {
+TEST(DeviceCommandTest, CPU_AddPrefetchRelayPaged) {
     DeviceCommandCalculator calculator;
     calculator.add_prefetch_relay_paged();
 
@@ -177,7 +192,7 @@ TEST(DeviceCommandTest, AddPrefetchRelayPaged) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddPrefetchRelayPagedPacked) {
+TEST(DeviceCommandTest, CPU_AddPrefetchRelayPagedPacked) {
     DeviceCommandCalculator calculator;
     calculator.add_prefetch_relay_paged_packed(1);
 
@@ -193,7 +208,7 @@ class WritePackedCommandTest : public ::testing::Test {};
 using TestTypes = testing::Types<CQDispatchWritePackedMulticastSubCmd, CQDispatchWritePackedUnicastSubCmd>;
 TYPED_TEST_SUITE(WritePackedCommandTest, TestTypes);
 
-TYPED_TEST(WritePackedCommandTest, AddDispatchWritePacked) {
+TYPED_TEST(WritePackedCommandTest, CPU_AddDispatchWritePacked) {
     {
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_packed<TypeParam>(2, 5, 100, /*no_stride*/ false);
@@ -218,7 +233,7 @@ TYPED_TEST(WritePackedCommandTest, AddDispatchWritePacked) {
     }
 }
 
-TEST(DeviceCommandTest, AddDispatchWritePackedLarge) {
+TEST(DeviceCommandTest, CPU_AddDispatchWritePackedLarge) {
     {
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_packed_large(1);
@@ -236,14 +251,14 @@ TEST(DeviceCommandTest, AddDispatchWritePackedLarge) {
         std::vector<CQDispatchWritePackedLargeSubCmd> sub_cmds(1);
 
         uint8_t data[4] = {};
-        std::vector<tt::stl::Span<const uint8_t>> data_collection{{data, 4}};
+        std::vector<ttsl::Span<const uint8_t>> data_collection{{data, 4}};
         command.add_dispatch_write_packed_large(
             CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN, 0, 1, sub_cmds, data_collection, nullptr);
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
     }
 }
 
-TYPED_TEST(WritePackedCommandTest, RandomAddDispatchWritePacked) {
+TYPED_TEST(WritePackedCommandTest, CPU_RandomAddDispatchWritePacked) {
     srand(0);
     for (size_t i = 0; i < 100; i++) {
         DeviceCommandCalculator calculator;

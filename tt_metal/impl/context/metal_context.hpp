@@ -94,10 +94,12 @@ public:
     get_env();
 
     dispatch_core_manager& get_dispatch_core_manager();
+    const DispatchCoreConfig& get_dispatch_core_config() const { return dispatch_core_config_; }
     internal::ServiceCoreManager& get_service_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
+
     const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
-    const DispatchMemMap& dispatch_mem_map(const CoreType& core_type) const;  // DispatchMemMap for specific core type.
+
     inspector::Data* get_inspector_data() const {
         return inspector_data_.get();
     }
@@ -117,7 +119,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         const tt_metal::DispatchCoreConfig& dispatch_core_config,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
         bool init_profiler = true,
         bool initialize_fabric_and_dispatch_fw = true);
@@ -185,7 +187,7 @@ public:
     void on_dispatch_timeout_detected();
 
 private:
-    friend class tt::stl::Indestructible<MetalContext>;
+    friend class ttsl::Indestructible<MetalContext>;
 
     // Construct MetalContext to use the given MetalEnv and assign it context id. The MetalEnv must not be
     // destroyed while its associated MetalContext instance is alive.
@@ -250,7 +252,7 @@ private:
     std::unique_ptr<RiscFirmwareInitializer> risc_firmware_initializer_;
     std::unordered_set<InitializerKey> risc_fw_init_done_;
 
-    std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
+    std::unique_ptr<DispatchMemMap> dispatch_mem_map_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
     // This not only allows consumers to set active command queue for a thread

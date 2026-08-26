@@ -5,10 +5,12 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/quasar/binary_ng/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tuple>
 #include <tt-metalium/program_descriptors.hpp>
 namespace ttnn::operations::experimental::quasar::binary_ng {
 
@@ -27,14 +29,14 @@ enum class SubtileBroadcastType {
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w);
 
 struct BinaryNgDeviceOperation {
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
         std::optional<unary::ScalarVariant> scalar;
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
@@ -54,7 +56,48 @@ struct BinaryNgDeviceOperation {
         Layout input_layout_b = Layout::TILE;
         Layout output_layout = Layout::TILE;
 
-        ttsl::hash::hash_t to_hash() const;
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "binary_op_type",
+            "lhs_activations",
+            "rhs_activations",
+            "post_activations",
+            "memory_config",
+            "dtype",
+            "compute_kernel_config",
+            "sub_core_grids",
+            "subtile_broadcast_type",
+            "is_sfpu",
+            "is_quant_op",
+            "is_where_op",
+            "input_layout_a",
+            "input_layout_b",
+            "output_layout",
+            "equal_nan",
+            "scalar",
+            "rtol",
+            "atol");
+        auto attribute_values() const {
+            return std::make_tuple(
+                binary_op_type,
+                lhs_activations,
+                rhs_activations,
+                (is_where_op || is_quant_op) ? ttsl::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
+                memory_config,
+                get_dtype(),
+                compute_kernel_config,
+                sub_core_grids,
+                subtile_broadcast_type,
+                is_sfpu,
+                is_quant_op,
+                is_where_op,
+                input_layout_a,
+                input_layout_b,
+                output_layout,
+                equal_nan,
+                scalar,
+                rtol,
+                atol);
+        }
         DataType get_dtype() const;
     };
 
@@ -71,12 +114,33 @@ struct BinaryNgDeviceOperation {
             tensor_return_value_t& c);
     };
 
-    using program_factory_t = std::variant<ProgramFactory>;
+    // Metal 2.0 / DataflowBuffer factory. Emits a ProgramSpec + ProgramRunArgs (instead of a
+    // ProgramDescriptor) for the slice that matches_metal_v2_slice() admits: ADD, no broadcast,
+    // TILE 32x32, fully height/block-sharded L1, bf8/bf16, optional fused RELU, in-place (the
+    // ResNet50 residual config). The DFB path is arch-portable: CB-backed on Wormhole/Blackhole,
+    // overlay-backed on Quasar. `select_program_factory` routes a matching op here; every other case
+    // falls through to `ProgramFactory`. See binary_ng_metal_v2_factory.cpp.
+    struct ProgramFactoryMetalV2 {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& c);
+    };
+
+    using program_factory_t = std::variant<ProgramFactory, ProgramFactoryMetalV2>;
+
+    // Returns ProgramFactoryMetalV2{} when the op matches the Metal 2.0 slice; ProgramFactory{}
+    // otherwise.
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    // True iff (attributes, tensor_args) match the Metal 2.0 factory's supported slice. Shared by
+    // select_program_factory.
+    static bool matches_metal_v2_slice(const operation_attributes_t&, const tensor_args_t&);
+
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 

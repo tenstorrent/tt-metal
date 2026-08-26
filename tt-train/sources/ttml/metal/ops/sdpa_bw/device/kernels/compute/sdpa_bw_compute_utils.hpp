@@ -20,7 +20,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/transpose.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 #include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
 
@@ -78,12 +78,12 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
 
     const uint32_t working_reg = 0;
 
-    init_bcast<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(
-        cb_attention_weights, cb_intermediates, cb_attention_weights);
+    compute_kernel_hw_startup(cb_attention_weights, cb_intermediates, cb_attention_weights);
+    bcast_init<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(cb_attention_weights, cb_intermediates);
 
     reconfig_data_format(cb_attention_weights, cb_intermediates);
     tile_regs_acquire();
-    sub_bcast_cols_init_short(cb_attention_weights, cb_intermediates);
+    sub_bcast_cols_init(cb_attention_weights, cb_intermediates);
     sub_tiles_bcast_cols(cb_attention_weights, cb_intermediates, /* tile_idx */ 0, /* tile_idx */ 0, working_reg);
 
     sdpa_exp_tile_init();
@@ -133,8 +133,9 @@ inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint
     cb_wait_front(cb_input, onetile);
 
     tile_regs_acquire();
-    transpose_wh_init(cb_input, cb_transpose_wh);
-    transpose_wh_tile(cb_input, /* tile idx */ 0, /* reg idx */ 0);
+    reconfig_data_format_srca(cb_input);
+    transpose_init(cb_input);
+    transpose_tile(cb_input, /* tile idx */ 0, /* reg idx */ 0);
     tile_regs_commit();
 
     cb_reserve_back(cb_transpose_wh, onetile);
@@ -164,7 +165,7 @@ void compute_u_scalar_row(
     const uint32_t scaler_bits,
     const uint32_t cb_u_scaler_output) {
     const uint32_t accum_register = 0;
-    // using binary_tiles_init function instead of specific mul_tiles_init() because specific one doesn't support
+    // using binary_tiles_init function instead of specific mul_init() because specific one doesn't support
     // accumulation to dest regs
     reconfig_data_format(cb_grad_output, cb_attn_output);
     binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(cb_grad_output, cb_attn_output, /*acc_to_dest*/ true);
@@ -269,7 +270,7 @@ void compute_grad_scores(
 
     tile_regs_acquire();
     reconfig_data_format(cb_grad_attn_weights, cb_u_scalar_row);
-    sub_bcast_cols_init_short(cb_grad_attn_weights, cb_u_scalar_row);
+    sub_bcast_cols_init(cb_grad_attn_weights, cb_u_scalar_row);
     sub_tiles_bcast_cols(
         cb_grad_attn_weights,
         cb_u_scalar_row,

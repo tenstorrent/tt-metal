@@ -55,6 +55,7 @@ set_target_properties(
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/api)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/data_movement)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/debug_tools)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/deployment)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/device)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/context)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch)
@@ -80,6 +81,7 @@ add_custom_target(
         unit_tests_per_core_allocation
         unit_tests_data_movement
         unit_tests_debug_tools
+        unit_tests_deployment
         unit_tests_inspector
         unit_tests_device
         unit_tests_context
@@ -106,8 +108,12 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    test_kernels/*
-    perf_microbenchmark/routing/kernels/*
+    test_kernels/*.cpp
+    test_kernels/*.hpp
+    test_kernels/*.h
+    test_kernels/*.inc
+    perf_microbenchmark/routing/kernels/*.cpp
+    perf_microbenchmark/routing/kernels/*.hpp
 )
 target_sources(
     metalium_test_files

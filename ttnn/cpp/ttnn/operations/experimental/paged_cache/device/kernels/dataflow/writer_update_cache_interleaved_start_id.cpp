@@ -97,6 +97,8 @@ void kernel_main() {
                 const uint32_t block_offset = block_row_tile * Wt;
                 cache_id = block_start_id + block_offset;
 
+                // Page-table value consumed; pop to balance the wait above.
+                cb_page_table.pop_front(1);
             } else {
                 const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
                 const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
@@ -104,6 +106,9 @@ void kernel_main() {
             }
             cache_tile_offset_B = update_idx % TILE_HEIGHT * Wbytes;
         }
+        // The index value is consumed on both the skip and update paths; the reader pushes
+        // cb_index unconditionally, so pop it here (outside the skip branch) to balance the wait.
+        cb_index.pop_front(1);
     }
 
     cb_untilized_input.wait_front(Wt);  // input tensor

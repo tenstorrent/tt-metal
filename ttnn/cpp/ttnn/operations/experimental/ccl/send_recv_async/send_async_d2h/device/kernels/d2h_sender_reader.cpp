@@ -5,8 +5,12 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/tensor/noc_traits.h"
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -60,24 +64,26 @@ void kernel_main() {
     auto input_addr_gen_args = TensorAccessorArgs<input_args_cta_idx, input_args_crta_idx>();
     auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr);
 
+    Noc noc_obj;
+    CircularBuffer cb_scratch(scratch_cb_id);
+
     // The scratch CB is reserved once at kernel startup; nothing else produces/consumes
     // it so we treat it as a single-page L1 staging region.
-    uint32_t scratch_addr = get_write_ptr(scratch_cb_id);
+    uint32_t scratch_addr = cb_scratch.get_write_ptr();
 
     for (uint32_t page_index = 0; page_index < num_pages; ++page_index) {
         // Block until the host has freed space in the FIFO for one page worth of data.
         socket_reserve_pages(sender_socket, 1);
 
         // Read this page of the input tensor (L1 or DRAM) into the local L1 scratch.
-        auto src_noc_addr = input_addr_gen.get_noc_addr(page_index);
-        noc_async_read<page_size>(src_noc_addr, scratch_addr, page_size);
-        noc_async_read_barrier();
+        noc_obj.async_read(input_addr_gen, CoreLocalMem<uint8_t>(scratch_addr), page_size, {.page_id = page_index}, {});
+        noc_obj.async_read_barrier();
 
         // Push the staged page out to pinned host memory via PCIe.
         write_page_to_pcie(pcie_xy_enc, scratch_addr, pcie_data_addr_base + sender_socket.write_ptr, page_size);
         // Flush so the bytes_sent update below is observed by host after the data has
         // committed to the PCIe ordering domain.
-        noc_async_writes_flushed();
+        noc_obj.async_writes_flushed();
 
         socket_push_pages(sender_socket, 1);
         socket_notify_receiver(sender_socket);
@@ -85,5 +91,5 @@ void kernel_main() {
     }
 
     update_socket_config(sender_socket);
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

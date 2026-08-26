@@ -171,7 +171,7 @@ keys. Common values:
 | WH Galaxy         | `wh_galaxy` / `wh_galaxy_perf` |
 | BH P150           | `bh_p150`                   |
 | BH P300           | `bh_p300` (LFC-mode — see [Blackhole weight-cache modes](#blackhole-weight-cache-modes)) |
-| BH QuietBox 2     | `bh_quietbox_2` (2× P300)   |
+| BH QuietBox 2     | `bh_quietbox_2` (2× P300; `yyz4-mnt-models` cache mode — see [Blackhole weight-cache modes](#blackhole-weight-cache-modes)) |
 | BH Galaxy         | `bh_galaxy` / `bh_galaxy_perf` |
 
 > **Blackhole status:** BH SKUs are first-class citizens of the 3-tier
@@ -179,8 +179,8 @@ keys. Common values:
 > `models/model_ci_tiers.md`, the registry yamls, and the relevant
 > workflow `model:` dropdowns the same way you'd add WH rows — but
 > read [Blackhole weight-cache modes](#blackhole-weight-cache-modes)
-> first if your model targets BH P300 (LFC) or any of the local-disk
-> runners.
+> first if your model targets BH P300 (LFC), BH QuietBox 2
+> (`yyz4-mnt-models`), or any of the local-disk runners.
 
 ---
 
@@ -189,8 +189,7 @@ keys. Common values:
 If your model is currently running in any of:
 
 - `tests/pipeline_reorg/t3k_e2e_tests.yaml`,
-  `t3k_unit_tests.yaml`, `t3k_demo_tests.yaml`, `t3k_perf_tests.yaml`,
-  `t3k_integration_tests.yaml`
+  `t3k_unit_tests.yaml`, `t3k_integration_tests.yaml`
 - `tests/pipeline_reorg/galaxy_*_tests.yaml`
 - `tests/pipeline_reorg/blackhole_demo_tests.yaml`
 - single-card / standalone workflow files
@@ -290,23 +289,45 @@ the LFC exception (BH P300).
 ## Blackhole weight-cache modes
 
 Different BH runners host their model-weight cache in different places.
-The mapping lives in [`.github/blackhole_demo_systems.yaml`](../.github/blackhole_demo_systems.yaml)
+The mapping lives as a `weights-cache-mode` field on each SKU entry in
+[`.github/sku_config.yaml`](../.github/sku_config.yaml)
 and is consumed by [`models-e2e-tests-impl.yaml`](../.github/workflows/models-e2e-tests-impl.yaml)
 / [`models-unit-tests-impl.yaml`](../.github/workflows/models-unit-tests-impl.yaml)
 when each tier job spins up its container.
 
+The table below mirrors `.github/sku_config.yaml` — check that file for the
+authoritative mapping before relying on it.
+
 | `weights-cache-mode` | Host source mounted at `/mnt/MLPerf/huggingface` | Used by SKUs |
 |---|---|---|
-| `cloud-mlperf` | `/mnt/MLPerf/huggingface` (shared NFS) | `bh_p150`, `bh_loudbox`, `bh_deskbox`, BH Galaxy SKUs, all WH SKUs |
-| `local-disk` | `/localdev/blackhole_demos/huggingface_data` (per-runner) | `bh_quietbox_2`, `bh_llmbox`, `bh_p150_perf` |
-| `lfc` | (no mount — weights fetched at job start) | `bh_p300`, `bh_p150b_civ2` |
+| `cloud-mlperf` | `/mnt/MLPerf/huggingface` (shared NFS) | `bh_p150`, `bh_loudbox` |
+| `yyz4-mnt-models` | `/mnt/models/huggingface` (YYZ4 Exabox NFS mount) | `bh_quietbox_2`, `bh_quietbox_2_iommu` |
+| `local-disk` | `/localdev/blackhole_demos/huggingface_data` (per-runner) | `bh_p150_perf` |
+| `lfc` | `/localdev/blackhole_demos/huggingface_data` (per-runner, `:rw`; not pre-populated — see below) | `bh_p300`, `bh_p300_viommu`, `bh_p150b_civ2` |
+| *(field absent)* | `/mnt/MLPerf` — the **whole tree**, not just `huggingface` | all WH SKUs, BH Galaxy, `bh_p100*`, `bh_sc*`, and every other SKU with no `weights-cache-mode` |
+
+The `(field absent)` fallback mounts the whole `/mnt/MLPerf` tree rather than
+just the `huggingface` subdirectory, which is what preserves access to
+`/mnt/MLPerf/tt_dnn-models` for the WH entries that still read from it.
 
 For most BH SKUs you don't need to do anything special — the standard
 `HF_MODEL=<org>/<name>` + `TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/<org>/<name>`
 pattern works because the impl yaml maps the host cache into the
 canonical path.
 
-**Exception: LFC-mode SKUs (`bh_p300`).** The cache is not pre-populated
+> **Note on the `tt_cache` org separator:** two forms are in use —
+> nested (`tt_cache/<org>/<name>`) and double-dash
+> (`tt_cache/<org>--<name>`). This is **not** a WH-vs-BH split; it is a
+> per-model artifact of how that model's cache was first populated, and
+> it stays with the model across SKUs. Gemma-4 and GPT-OSS use
+> double-dash on WH and BH alike (`tt_cache/google--gemma-4-E2B-it` on
+> `wh_n150`, `tt_cache/openai--gpt-oss-20b` on `wh_llmbox_perf`), while
+> Llama and Qwen use the nested form on both (including on
+> `bh_quietbox_2`). Copy whichever form the entry you are porting
+> already used, or the job pays a full cold-cache weight conversion on
+> every run.
+
+**Exception: LFC-mode SKUs (`bh_p300`, `bh_p300_viommu`, `bh_p150b_civ2`).** The cache is not pre-populated
 on these runners; the test job must pull the weights itself at the
 start of each run. Bundle the `wget` into the test's `cmd:` (not into
 the workflow yaml — keep SKU-specific behavior co-located with the
@@ -341,11 +362,10 @@ checkpoint directory) rather than the `<org>/<name>` hub id, because
 the LFC cache is laid out as a flat checkpoint tree, not the HF hub
 cache structure.
 
-If you add a new BH SKU that isn't covered above, register its
-cache mode in `.github/blackhole_demo_systems.yaml` before adding tier
-yaml entries for it — otherwise the impl yaml will fall back to the
-default mount and the job will fail at container start on hosts
-without `/mnt/MLPerf`.
+If you add a new BH SKU that isn't covered above, add a `weights-cache-mode`
+field to its entry in `.github/sku_config.yaml` before adding tier yaml
+entries for it — otherwise the impl yaml will fall back to the default mount
+and the job will fail at container start on hosts without `/mnt/MLPerf`.
 
 ---
 
@@ -477,12 +497,46 @@ an outdated target.
 
 Every tiered model is expected to declare:
 
-- **Accuracy** target (top1 / top5 token-matching against a reference).
+- **Accuracy** target (`top1` / `top5`). For LLMs these are token-matching
+  against a reference; for vision classifiers they are classification
+  accuracy from the same run that measures throughput.
 - **Performance** target (`prefill_time_to_token` in seconds,
-  `decode_t/s/u`, `decode_t/s`, with a `decode_tolerance` for slack).
+  `decode_t/s/u`, `decode_t/s` for LLMs; `fps` for vision classifiers),
+  each with a tolerance for slack.
 
 **Tier 3 models are exempt from perf targets** (the perf fields can be
 omitted or set to `{}`), but accuracy targets still apply.
+
+### Tolerances
+
+**Tolerances are fractions in `[0.0, 1.0]`, not multipliers.** 15% slack
+is `0.15`, not `1.15`. Anything outside that range is a hard validation
+error (`tolerance '<name>' outside [0.0, 1.0]`), so a multiplier-style
+value fails the job rather than silently widening the band.
+
+Resolution order for a given metric, first match wins:
+
+1. `<metric>_tolerance` — slashes normalized to underscores, so both
+   `decode_t/s/u_tolerance` and `decode_t_s_u_tolerance` work.
+2. `tolerance` — a generic fallback applying to every metric in the entry.
+3. `DEFAULT_PERF_TOLERANCE` (`0.15`) from
+   [`models/demos/utils/model_targets.py`](./demos/utils/model_targets.py).
+
+Put each tolerance next to the metric it modifies, but note the blocks are
+**not** scopes: the validator flattens `perf` and `accuracy` into one dict
+(with `accuracy` applied last, so it wins on a name clash). A generic
+`tolerance:` therefore applies to perf and accuracy metrics alike no matter
+which block it sits in — prefer per-metric keys when the two need different
+slack. Pick each from how noisy the metric actually is: throughput on
+shared CI hosts drifts far more than correctness does, so accuracy is
+typically held an order of magnitude tighter than perf.
+
+> **Watch the key name.** Any key ending in `_tolerance` is accepted
+> without complaint — the validator skips it instead of rejecting it as an
+> unknown metric — but only the exact names above are ever *read*. A
+> plausible-looking `decode_tolerance` is silently ignored and the metric
+> quietly falls back to the `0.15` default. If a tolerance does not seem
+> to take effect, check the key spells out the full metric name.
 
 ### Entry schema
 
@@ -500,10 +554,11 @@ targets:
               prefill_time_to_token: 0.136   # seconds
               decode_t/s/u: 16.30
               decode_t/s: 521.6              # = batch_size * decode_t/s/u
-              decode_tolerance: 1.15         # 15% slack on decode_t/s/u
+              decode_t/s/u_tolerance: 0.15   # fraction, NOT a multiplier: 0.15 == 15% slack
             accuracy:
               top1: 96.0                     # percent
               top5: 100.0
+              top1_tolerance: 0.01           # 1% slack
             owner_id: U03XXXXXXXX
             team: models
 ```
@@ -539,6 +594,88 @@ add a `status: TODO` entry with empty `perf: {}` / `accuracy: {}` and
 populate it after the first CI run. The resolver skips TODO entries
 by default so the test doesn't fail on missing numbers, but the
 entry is on the books so it's not forgotten.
+
+### Trace region sizes
+
+Trace buffer sizes live in [`models/model_trace_region_sizes.yaml`](./model_trace_region_sizes.yaml).
+Add a `(model, SKU)` block with `trace_region_size: <bytes>` whenever a
+demo or test needs a specific reserved trace region. Unconfigured `(model,
+SKU)` pairs are **not** an error: [`resolve_trace_region_size`](./demos/utils/trace_region_sizes.py)
+logs an info message and falls back to `TRACE_REGION_SIZE_DYNAMIC` (`0`,
+dynamic allocation). Add an explicit entry when a model needs a fixed
+reserved size rather than dynamic allocation.
+
+- **Model keys** — same short kebab-case + `aliases` convention as `model_targets.yaml`.
+- **SKU keys** — canonical names (`wh_n150`, `wh_llmbox_perf`, `bh_p150`, …); legacy labels like `T3K` / `P150x4` / `wh_llmbox` / `bh_galaxy` resolve via `normalize_sku` in [`model_targets.py`](./demos/utils/model_targets.py).
+- **`tt_transformers`** — `get_supported_trace_region_size` in [`demo/trace_region_config.py`](./tt_transformers/demo/trace_region_config.py) loads from the YAML automatically when `HF_MODEL` is set (root [`conftest.py`](../conftest.py) applies the override on `mesh_device`).
+- **Other demos** — call `resolve_trace_region_size(model_name, get_current_device_sku_name())` from [`demos/utils/trace_region_sizes.py`](./demos/utils/trace_region_sizes.py).
+
+#### Galaxy and other bypass demos
+
+Galaxy e2e/sweep jobs use **different** trace sizes than the matching
+`tt_transformers` model on the same SKU. Do not reuse the tt_transformers
+key — add a separate model block, e.g.:
+
+| Model key | SKU | Notes |
+|---|---|---|
+| `llama3.3-70b-galaxy` | `wh_galaxy_perf` | Full e2e / prefix-caching (216 580 672 bytes) |
+| `llama3.3-70b-galaxy-decode` | `wh_galaxy_perf` | Decode-only benchmarks (23 887 872 bytes) |
+| `llama3.3-70b-galaxy-qwen` | `wh_galaxy_perf` | Qwen-on-galaxy stack |
+| `qwen3-32b-galaxy` | `wh_galaxy_perf` | Galaxy e2e (102 000 000 bytes) |
+| `qwen3-32b-galaxy-decode` | `wh_galaxy_perf` | Galaxy decode benchmarks |
+
+For pytest demos that open a device via the shared `device_params` /
+`mesh_device` fixtures, pass the YAML model key through parametrize instead
+of hardcoding bytes:
+
+```python
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ..., TRACE_MODEL_KEY_PARAM: "llama3.3-70b-galaxy"}],
+    indirect=True,
+)
+```
+
+The `mesh_device` fixture pops `TRACE_MODEL_KEY_PARAM` and resolves it to
+`trace_region_size` at device-open time, using the SKU of the **logical
+submesh** actually opened (derived from the mesh shape / `data_parallel` /
+`MESH_DEVICE`) — not the physical cluster. This matters for runs that open a
+sub-slice of a larger machine (e.g. a `1x4` slice of a Galaxy, or
+`MESH_DEVICE=N300` on a T3K).
+
+For demos that open a device directly (no shared fixture), use
+`build_trace_device_params(model_key)`:
+
+```python
+from models.demos.utils.trace_region_sizes import build_trace_device_params
+
+device_params = build_trace_device_params("deepseek-v3")
+```
+
+#### Dynamic allocation (`trace_region_size: 0`)
+
+Dynamic allocation lets the runtime size trace buffers at launch instead of
+reserving a fixed region. It is the **default** for any `(model, SKU)` pair
+not present in the YAML (resolution logs an info message and returns
+`TRACE_REGION_SIZE_DYNAMIC`). A model can also opt in explicitly by setting
+`trace_region_size: 0` (see `deepseek-v3`); use the named constant
+`TRACE_REGION_SIZE_DYNAMIC` from `trace_region_sizes.py` when referencing the
+value in code or comments. Do **not** assign `trace_region_size = …` in demo
+code — always go through the resolver or `build_trace_device_params`.
+
+#### CI coverage test
+
+[`models/tt_transformers/tests/test_trace_region_sizes.py`](./tt_transformers/tests/test_trace_region_sizes.py)
+checks that every tiered CI job that sets `HF_MODEL` (including per-SKU
+`hf_model` placeholders in device-perf entries) resolves to a valid size —
+either an explicit YAML entry or the dynamic-allocation fallback (`0`). Run
+locally (without hardware):
+
+```bash
+pytest models/tt_transformers/tests/test_trace_region_sizes.py --noconftest -v
+```
 
 ---
 
@@ -581,4 +718,4 @@ pipeline filtered to your tier + type + the new `model:` identifier
 | `.github/time_budget.yaml` | Verify or extend the budget for the SKU you target. |
 | Legacy `t3k_*` / `galaxy_*` / `blackhole_demo_tests.yaml` | **Remove** any old entries for this model — duplicate scheduling wastes runners and produces conflicting signal. |
 | `models/model_targets.yaml` | Add (model, SKU, batch_size) entries with perf + accuracy targets. |
-| `.github/blackhole_demo_systems.yaml` | Only if you're adding a brand-new BH SKU — register its weight-cache mode here before adding tier yaml entries. |
+| `.github/sku_config.yaml` | Only if you're adding a brand-new BH SKU — add a `weights-cache-mode` field to its SKU entry before adding tier yaml entries. |

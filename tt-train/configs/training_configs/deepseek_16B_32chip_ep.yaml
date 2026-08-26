@@ -1,0 +1,36 @@
+training_config:
+  project_name: "tt_train_deepseek_16B_32chip_ep"
+  seed: 5489
+  batch_size: 8
+  num_epochs: 1
+  max_steps: 20
+  use_clip_grad_norm: false
+  data_path: "${TT_METAL_RUNTIME_ROOT}/tt-train/data/shakespeare_deepseek.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/moe/deepseek_16B.yaml"
+  optimizer:
+    type: AdamW
+    lr: 0.0001
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    stochastic_rounding: true
+
+device_config:
+  # A single Blackhole Galaxy (32 chips) as DP=4 x TP=8.
+  # Set TT_MESH_GRAPH_DESC_PATH to a 4x8 mesh graph descriptor, e.g.
+  # tt-train/configs/mgd/bh_galaxy_4_8_line_line.textproto.
+  # Attention / dense MLP / LM head shard across the "tp" axis (TP=8); MoE uses
+  # SparseMoEEP (64 routed experts partitioned across that same tp axis ->
+  # 8 experts/chip). The batch is data-parallel across the "dp" axis (DP=4),
+  # so batch_size must be >= 4.
+  mesh_shape: [4, 8]
+  enable_tp: true
+  enable_ddp: true
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0

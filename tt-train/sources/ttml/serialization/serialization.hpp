@@ -16,8 +16,8 @@ class OptimizerBase;
 namespace ttml::serialization {
 class FlatBufferFile;
 
-void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const tt::tt_metal::Tensor& tensor);
-void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, tt::tt_metal::Tensor& tensor);
+void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const ttnn::Tensor& tensor);
+void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, ttnn::Tensor& tensor);
 
 void write_autograd_tensor(
     FlatBufferFile& file, std::string_view name, const ttml::autograd::TensorPtr& tensor, bool save_grads = false);

@@ -32,7 +32,7 @@ struct ApplyDeviceDelayDeviceOperation {
 
     // Return a minimal dummy tensor since the infrastructure doesn't support void
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 
     // Mandatory methods
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

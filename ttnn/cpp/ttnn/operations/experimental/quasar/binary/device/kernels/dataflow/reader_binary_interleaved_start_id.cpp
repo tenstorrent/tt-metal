@@ -10,6 +10,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -35,8 +36,8 @@ void kernel_main() {
 #endif
 
     Noc noc;
-    CircularBuffer cb0(cb_id_in0);
-    CircularBuffer cb1(cb_id_in1);
+    DataflowBuffer cb0(cb_id_in0);
+    DataflowBuffer cb1(cb_id_in1);
 
 #ifdef IN0_SHARDED
     cb0.reserve_back(num_tiles);

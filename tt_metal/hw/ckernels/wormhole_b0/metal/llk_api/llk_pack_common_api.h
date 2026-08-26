@@ -6,6 +6,7 @@
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "internal/circular_buffer_interface.h"
+#include "llk_assert.h"
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
@@ -127,10 +128,10 @@ inline void llk_pack_dest_section_done() {
  *
  * @tparam pack_mode   Packer program mode.
  * @tparam diagonal    Whether to use diagonal packing.
- * @param  pack_output Output circular buffer / operand index (defaults to 16).
+ * @param  pack_output Output circular buffer / operand index.
  */
 template <PackMode pack_mode = PackMode::Default, bool diagonal = false>
-inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 16) {
+inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
@@ -145,10 +146,10 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @tparam pack_mode           Packer program mode.
- * @param  pack_output         Output circular buffer / operand index (defaults to 16).
+ * @param  pack_output         Output circular buffer / operand index.
  */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
+inline void llk_pack_dest_init(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
@@ -170,36 +171,6 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
-    const bool narrow_tile = get_output_narrow_tile(output_id);
-
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
-        num_faces,
-        partial_face,
-        narrow_tile);
-}
-
-/**
- * @deprecated Face geometry is now derived from the new output's CB metadata. Use the metadata-based
- * llk_pack_reconfig_data_format(const std::uint32_t new_output) overload instead. This overload is retained
- * only for backwards compatibility and will be removed.
- *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
- * @param  new_output          Output circular buffer / operand index to reconfigure the packer for.
- * @param  face_r_dim          Face height in rows.
- * @param  num_faces           Number of faces per tile.
- */
-template <bool is_fp32_dest_acc_en>
-[[deprecated(
-    "Face geometry is now derived from the output CB metadata; use the "
-    "llk_pack_reconfig_data_format(const std::uint32_t) overload instead.")]] inline void
-llk_pack_reconfig_data_format_disaggregated(
-    const std::uint32_t new_output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
-    const std::uint32_t output_id = get_output_id(new_output);
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 

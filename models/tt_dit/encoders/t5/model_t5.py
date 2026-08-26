@@ -199,11 +199,15 @@ class T5RMSNorm(RMSNorm):
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return super().forward(x, compute_kernel_config=self.compute_kernel_config)
+        x_f32 = ttnn.typecast(x, ttnn.float32)
+        x_normed = super().forward(x_f32, compute_kernel_config=self.compute_kernel_config)
+        return ttnn.typecast(x_normed, ttnn.bfloat16)
 
     def reference(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        variance = ttnn.mean(ttnn.pow(x, 2), dim=-1, keepdim=True)
-        x_normed = x * ttnn.rsqrt(variance + self.norm_eps)
+        x_f32 = ttnn.typecast(x, ttnn.float32)
+        variance = ttnn.mean(ttnn.pow(x_f32, 2), dim=-1, keepdim=True, compute_kernel_config=self.compute_kernel_config)
+        x_normed = x_f32 * ttnn.rsqrt(variance + self.norm_eps)
+        x_normed = ttnn.typecast(x_normed, ttnn.bfloat16)  # cast before weight mul to match reference implementation
         return self.weight.data * x_normed
 
 
@@ -257,7 +261,7 @@ class T5DenseGatedActDense(Module):
             in_features=self.config.embed_dim,
             out_features=self.config.ff_dim,
             bias=False,
-            activation_fn="gelu",
+            activation_fn="gelu_tanh",
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
         )
@@ -349,6 +353,14 @@ class T5Attention(Module):
         self.head_dim = config.embed_dim // self.num_heads
         self.use_relative_position_bias = use_relative_position_bias
 
+        self.hifi4_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
         self.q_proj = ColParallelLinear(
             in_features=self.embed_dim,
             out_features=self.embed_dim,
@@ -423,7 +435,9 @@ class T5Attention(Module):
         scores = ttnn.matmul(q, k)
 
         scores = scores + position_bias
-        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.layer_norm.compute_kernel_config)
+        scores = ttnn.typecast(scores, ttnn.float32)
+        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.hifi4_compute_config)
+        attn_weights = ttnn.typecast(attn_weights, ttnn.bfloat16)
         attn_output = ttnn.matmul(attn_weights, v)
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
 

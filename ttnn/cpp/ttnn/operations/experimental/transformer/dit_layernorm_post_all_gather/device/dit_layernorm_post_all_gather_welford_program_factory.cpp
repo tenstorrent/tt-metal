@@ -235,7 +235,7 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
         "conversion.");
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
-    // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode). For those, setting
+    // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode). For those, setting
     // the flag preserves the full 23-mantissa fp32 by bypassing SrcA.
     // c_1 (stats) is consumed only by copy_tile inside combine_welford_partials.
     // Set the flag so the per-row mean/M2 recombine reads full mantissa.

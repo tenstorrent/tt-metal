@@ -21,6 +21,7 @@ tt_dtype_to_torch_dtype = {
     ttnn.uint8: torch.uint8,
     ttnn.uint16: torch.uint16,
     ttnn.uint32: torch.uint32,
+    ttnn.int8: torch.int8,
     ttnn.int32: torch.int32,
     ttnn.float32: torch.float,
     ttnn.bfloat16: torch.bfloat16,
@@ -37,14 +38,62 @@ tt_dtype_to_np_dtype = {
     ttnn.uint8: np.ubyte,
     ttnn.uint16: np.uint16,
     ttnn.uint32: np.uint32,
+    ttnn.int8: np.byte,
     ttnn.int32: np.int32,
     ttnn.float32: np.float32,
     ttnn.bfloat8_b: np.float32,
     ttnn.bfloat4_b: np.float32,
 }
 
-TORCH_INTEGER_DTYPES = [torch.int16, torch.int32, torch.int64, torch.uint16, torch.uint32, torch.uint64, torch.uint8]
-NP_INTEGER_DTYPES = [np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
+TORCH_INTEGER_DTYPES = [
+    torch.int8,
+    torch.int16,
+    torch.int32,
+    torch.int64,
+    torch.uint16,
+    torch.uint32,
+    torch.uint64,
+    torch.uint8,
+]
+NP_INTEGER_DTYPES = [np.byte, np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
+
+
+def make_disjoint_dram_core_range_set(device):
+    num_dram_banks = device.dram_grid_size().x
+    first_range_end = 2 if num_dram_banks == 7 else 1
+    return ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(first_range_end, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(num_dram_banks - 1, 0)),
+        }
+    )
+
+
+def make_full_dram_core_range_set(device):
+    num_dram_banks = device.dram_grid_size().x
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
+
+
+# DRAM core grids that can only be built once a device is available are referenced from
+# `@pytest.mark.parametrize` by a stable string key instead of by the factory callable
+# itself, so that every pytest-xdist worker collects an identical set of test IDs.
+# (A bare function object renders as `<function ... at 0x...>`, whose address differs per
+# worker process, which makes xdist abort with "different tests were collected".)
+DRAM_GRID_FACTORIES = {
+    "disjoint_dram": make_disjoint_dram_core_range_set,
+    "full_dram": make_full_dram_core_range_set,
+}
+
+
+def resolve_dram_grid(grid, device):
+    """Resolve a parametrized `grid` value into a concrete `ttnn.CoreRangeSet`.
+
+    String values are looked up in `DRAM_GRID_FACTORIES` and built for `device`;
+    already-concrete `CoreRangeSet` values are returned unchanged.
+    """
+    if isinstance(grid, str):
+        return DRAM_GRID_FACTORIES[grid](device)
+    return grid
 
 
 def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
@@ -177,10 +226,15 @@ def assert_with_ulp(
 
     The error is measured using the following formula:
     ``
-        | expected - actual | / ULP(expected)
+        | actual - expected | / ULP(expected)
     ``
 
     Where ULP(expected) returns, for each element, the length of a single Unit of Least Precision (ULP).
+
+    ``expected_result`` is the reference (golden) tensor and ``actual_result`` is the tensor under test.
+    On failure the message reports the worst element as ``|calculated <actual> - golden <expected>| /
+    ULP(golden)``, i.e. the first printed operand is ``actual_result`` and the divisor is the ULP of
+    ``expected_result``.
 
 
     Args:
@@ -257,6 +311,42 @@ def assert_with_ulp(
     ulp_passed, ulp_message = comp_ulp(expected_result, actual_result, ulp_threshold, allow_nonfinite)
     assert ulp_passed, ulp_message
     return ulp_passed, ulp_message
+
+
+def ulp_distance(a: torch.Tensor, b: torch.Tensor, treat_zero_signs_equal: bool = True) -> torch.Tensor:
+    """Per-element integer ULP distance for matching-dtype BF16 or FP32 tensors.
+
+    Maps each value's sign-magnitude bit pattern to a monotonic int (negatives
+    -> all_ones - bits, positives -> bits + sign_bit) so float ordering is
+    preserved by int subtraction; per-element ULP = |mono(a) - mono(b)|.
+
+    Differs from ``comp_ulp`` (which divides by ``ulp(golden)``) in two ways:
+      * Integer-valued across power-of-2 boundaries (``comp_ulp`` can return
+        fractional ULPs there because ``ulp(a)`` differs above vs below the
+        boundary).
+      * Optionally treats +0 and -0 as 0 ULP apart -- they are numerically
+        equal per IEEE 754, and some Tenstorrent SFPU pack/convert paths
+        canonicalise -0 to +0, so the 1-ULP gap the bit mapping would
+        otherwise report is an artefact.
+    """
+    assert a.dtype == b.dtype, f"dtype mismatch: {a.dtype} vs {b.dtype}"
+    if a.dtype == torch.bfloat16:
+        bits_dtype, wider_dtype, sign_mask, all_mask = torch.int16, torch.int32, 0x8000, 0xFFFF
+    elif a.dtype == torch.float32:
+        bits_dtype, wider_dtype, sign_mask, all_mask = torch.int32, torch.int64, 0x80000000, 0xFFFFFFFF
+    else:
+        raise ValueError(f"ulp_distance: unsupported dtype {a.dtype}; only bfloat16 and float32 are supported")
+
+    a_bits = a.contiguous().view(bits_dtype).to(wider_dtype) & all_mask
+    b_bits = b.contiguous().view(bits_dtype).to(wider_dtype) & all_mask
+    a_mono = torch.where((a_bits & sign_mask) != 0, all_mask - a_bits, a_bits + sign_mask)
+    b_mono = torch.where((b_bits & sign_mask) != 0, all_mask - b_bits, b_bits + sign_mask)
+    diff = (a_mono - b_mono).abs()
+    if treat_zero_signs_equal:
+        magnitude_mask = all_mask ^ sign_mask
+        both_zero = ((a_bits & magnitude_mask) == 0) & ((b_bits & magnitude_mask) == 0)
+        diff = torch.where(both_zero, torch.zeros_like(diff), diff)
+    return diff
 
 
 def measure_ulp_with_near_zero_atol(
@@ -812,3 +902,111 @@ def assert_numeric_metrics(
         assert overall_passed, full_message
     else:
         return overall_passed, full_message
+
+
+def assert_div_by_zero_outputs(
+    golden_tensor: torch.Tensor, device_tensor: torch.Tensor, *, ulp_threshold: int = 3
+) -> None:
+    """Assert correctness of divide-by-zero outputs (golden assumed all-±inf after zero-replacement).
+
+    Three-part check:
+    1. Non-finite position mask matches exactly.
+    2. Inf sign matches where both sides are inf.
+    3. ULP safety net on any finite elements (not reached under current parametrization
+       when the numerator contains no zeros and divisor is 0.0).
+    """
+    g_nonfinite = ~torch.isfinite(golden_tensor)
+    d_nonfinite = ~torch.isfinite(device_tensor)
+    assert torch.equal(g_nonfinite, d_nonfinite), "Non-finite positions differ between golden and device"
+    both_inf = torch.isinf(golden_tensor) & torch.isinf(device_tensor)
+    if both_inf.any():
+        assert torch.equal(
+            torch.sign(golden_tensor[both_inf]),
+            torch.sign(device_tensor[both_inf]),
+        ), "Inf sign mismatch between golden and device"
+    finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(device_tensor)
+    if finite_mask.any():
+        # Safety net: not reached when golden is all ±inf after zero replacement.
+        assert_with_ulp(golden_tensor[finite_mask], device_tensor[finite_mask], ulp_threshold=ulp_threshold)
+
+
+# ---------------------------------------------------------------------------
+# Sharded memory-config helpers (shared by universal-input TM test suites)
+# ---------------------------------------------------------------------------
+
+_DTYPE_ELEM_SIZE = {
+    ttnn.bfloat16: 2,
+    ttnn.float32: 4,
+    ttnn.uint32: 4,
+    ttnn.int32: 4,
+    ttnn.uint16: 2,
+    ttnn.uint8: 1,
+    ttnn.bfloat8_b: 1,
+}
+
+
+def _divisible_grid_1d(total_dim, max_cores, step):
+    """Return the largest n <= max_cores such that total_dim % (n * step) == 0."""
+    for n in range(max_cores, 0, -1):
+        if total_dim % (n * step) == 0:
+            return n
+    raise ValueError(f"No valid 1D grid size for total_dim={total_dim}, max_cores={max_cores}, step={step}")
+
+
+def make_sharded_memory_config(device, shape, strategy, layout, dtype=ttnn.bfloat16, buffer_type=ttnn.BufferType.L1):
+    """Create a valid sharded MemoryConfig for `shape` on `device`.
+
+    For TILE layout the shard dims must be tile-aligned (multiples of 32).
+    For ROW_MAJOR, shard_width * element_size must be a multiple of the
+    recommended L1 alignment (64 bytes today), so the shard-width step is
+    derived from the `dtype` argument.
+
+    `buffer_type` defaults to L1 (via create_sharded_memory_config). Pass
+    ttnn.BufferType.DRAM to build an equivalent DRAM-sharded config.
+    """
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = grid.x, grid.y
+    tile_h, tile_w = 32, 32
+
+    shape_for_memcfg = list(shape)
+    if layout == ttnn.TILE_LAYOUT and len(shape) >= 2:
+        padded_h_dim = ((shape[-2] + tile_h - 1) // tile_h) * tile_h
+        padded_w_dim = ((shape[-1] + tile_w - 1) // tile_w) * tile_w
+        total_h = padded_h_dim
+        for d in shape[:-2]:
+            total_h *= d
+        total_w = padded_w_dim
+        shape_for_memcfg[-2] = padded_h_dim
+        shape_for_memcfg[-1] = padded_w_dim
+    else:
+        total_h = 1
+        for d in shape[:-1]:
+            total_h *= d
+        total_w = shape[-1]
+
+    step_h = tile_h if layout == ttnn.TILE_LAYOUT else 1
+    recommended_alignment_bytes = 64
+    element_size = _DTYPE_ELEM_SIZE.get(dtype, 2)
+    rm_step_w = max(1, recommended_alignment_bytes // element_size)
+    step_w = tile_w if layout == ttnn.TILE_LAYOUT else rm_step_w
+
+    if strategy == ttnn.ShardStrategy.HEIGHT:
+        ny = _divisible_grid_1d(total_h, max_y, step_h)
+        core_grid = ttnn.CoreGrid(y=ny, x=1)
+    elif strategy == ttnn.ShardStrategy.WIDTH:
+        nx = _divisible_grid_1d(total_w, max_x, step_w)
+        core_grid = ttnn.CoreGrid(y=1, x=nx)
+    else:  # BLOCK
+        ny = _divisible_grid_1d(total_h, max_y, step_h)
+        nx = _divisible_grid_1d(total_w, max_x, step_w)
+        core_grid = ttnn.CoreGrid(y=ny, x=nx)
+
+    l1_cfg = ttnn.create_sharded_memory_config(
+        shape=shape_for_memcfg,
+        core_grid=core_grid,
+        strategy=strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    if buffer_type == ttnn.BufferType.L1:
+        return l1_cfg
+    return ttnn.MemoryConfig(l1_cfg.memory_layout, buffer_type, l1_cfg.shard_spec)

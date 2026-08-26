@@ -16,7 +16,7 @@ from ttnn.model_preprocessing import (
     preprocess_model_parameters,
     fold_batch_norm2d_into_conv2d,
 )
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
 
 
 def custom_preprocessor(model, name):
@@ -270,7 +270,7 @@ def test_uniad_bottle_neck_layer3(device, reset_seeds, model_location_generator)
     )
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
 
-    assert_with_pcc(torch_output, ttnn_output, 0.88)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
@@ -503,5 +503,16 @@ def test_uniad_resnet(device, reset_seeds, model_location_generator):
         )
         ttnn_output_final = torch.permute(ttnn_output_final, (0, 3, 1, 2))
 
-        # We have a issue on this, issue - https://github.com/tenstorrent/tt-metal/issues/26185
-        _, x = assert_with_pcc(torch_output[i], ttnn_output_final, 0.16)
+        # Threshold reflects the bf16 + device-DCN accuracy of the full
+        # backbone on random input — error accumulates across all stages and
+        # is worst on the DCN stages (3/4). Measured per-output PCC on
+        # Blackhole p150b (TT_DCN_DEVICE=1), 2026-06-01:
+        #   out[0] stage2 (512ch, no DCN): 0.933
+        #   out[1] stage3 (1024ch, DCN):   0.886   <- min, drives the floor
+        #   out[2] stage4 (2048ch, DCN):   0.906
+        # The single-bottleneck test (test_uniad_bottle_neck_layer3) hits 0.99
+        # because it has no cross-stage accumulation; the e2e (test_uniad) hits
+        # sdc_traj 0.998 on real images, so this random-input floor is the
+        # harshest view. 0.85 guards against regression below today's level
+        # without re-introducing the old vacuous 0.16 (see issue #26185).
+        _, x = assert_with_pcc(torch_output[i], ttnn_output_final, 0.85)

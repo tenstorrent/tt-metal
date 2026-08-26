@@ -49,7 +49,7 @@ def register_ttnn_cpp_unary_function(unary_function):
             "ceil": torch.ceil,
             "gez": lambda x: torch.ge(x, 0),
             "gtz": lambda x: torch.gt(x, 0),
-            "i0": torch.i0,
+            "i0": torch.special.i0,
             "identity": torch.clone,
             "isfinite": torch.isfinite,
             "isinf": torch.isinf,
@@ -193,6 +193,20 @@ for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
 
 
+def _golden_function_gelu(input_tensor, *args, variant=None, fast_and_approximate_mode=False, **kwargs):
+    import torch
+
+    # Only variant=Tanh changes the *mathematical* function; the legacy
+    # fast_and_approximate_mode=True is the LUT approximation of exact GELU
+    # (~1% absolute error), which can't be modelled as a closed form — fall
+    # back to exact GELU as the reference for it too.
+    approximate = "tanh" if variant == ttnn.GeluVariant.Tanh else "none"
+    return torch.nn.functional.gelu(input_tensor, approximate=approximate)
+
+
+ttnn.attach_golden_function(ttnn.gelu, golden_function=_golden_function_gelu)
+
+
 def _golden_function_asin(input_tensor_a, *args, device, **kwargs):
     import torch
 
@@ -256,6 +270,15 @@ def _golden_function_reciprocal(input_tensor_a, *args, device, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.reciprocal, golden_function=_golden_function_reciprocal)
+
+
+def _golden_function_i1(input_tensor_a, *args, **kwargs):
+    import torch
+
+    return torch.special.i1(input_tensor_a)
+
+
+ttnn.attach_golden_function(ttnn.i1, golden_function=_golden_function_i1)
 
 
 def _golden_function_pow(input_tensor_a, exponent, *args, **kwargs):
@@ -607,6 +630,15 @@ def _golden_function_celu(input_tensor_a, *args, alpha=1.0, **kwargs):
 ttnn.attach_golden_function(ttnn.celu, golden_function=_golden_function_celu)
 
 
+def _golden_function_softcap(input_tensor_a, beta, *args, **kwargs):
+    import torch
+
+    return beta * torch.tanh(input_tensor_a.to(torch.float32) / beta)
+
+
+ttnn.attach_golden_function(ttnn.softcap, golden_function=_golden_function_softcap)
+
+
 def torch_reglu(input_tensor, *args, **kwargs):
     import torch
 
@@ -815,5 +847,6 @@ def _golden_function_alt_complex_rotate90(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.alt_complex_rotate90, golden_function=_golden_function_alt_complex_rotate90)
 
 SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
+GeluVariant = ttnn._ttnn.operations.unary.GeluVariant
 
 __all__ = []

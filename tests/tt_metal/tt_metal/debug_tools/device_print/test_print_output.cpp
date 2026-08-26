@@ -5,8 +5,136 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+
 using namespace tt;
 using namespace tt::tt_metal;
+
+namespace {
+
+// The one kernel source used by more than one test in this file: several tests print a
+// per-iteration message from many RISCs at once and count the results.
+constexpr const char* kPrintIterationsKernel = "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp";
+
+// DM0 (ISR) and DM1 (remapper) are reserved for the runtime, so user kernels get DM2..DM7. The HAL
+// registers all 8 DM processors and has no concept of the reservation, so this is the one number
+// that cannot be queried.
+constexpr uint32_t kQuasarReservedDmThreads = 2;
+
+// Quasar Tensix node topology, derived from the HAL rather than hardcoded.
+struct QuasarNodeTopology {
+    uint32_t user_dm_threads;
+    uint32_t compute_engines;
+    uint32_t triscs_per_engine;
+
+    uint32_t compute_processors() const { return compute_engines * triscs_per_engine; }
+};
+
+// Quasar only: the HAL flattens compute processors, registering 4 engines x 4 TRISCs as 16 entries,
+// so the engine count is the quotient of the processor count and the per-engine firmware-binary
+// count. Same derivation as tt_metal/impl/debug/debug_helpers.hpp:349.
+QuasarNodeTopology GetQuasarNodeTopology() {
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t tensix_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const auto dm_class = static_cast<uint32_t>(HalProcessorClassType::DM);
+    const auto compute_class = static_cast<uint32_t>(HalProcessorClassType::COMPUTE);
+
+    const uint32_t triscs_per_engine = hal.get_processor_class_num_fw_binaries(tensix_idx, compute_class);
+    return QuasarNodeTopology{
+        .user_dm_threads =
+            hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, dm_class) - kQuasarReservedDmThreads,
+        .compute_engines =
+            hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, compute_class) / triscs_per_engine,
+        .triscs_per_engine = triscs_per_engine,
+    };
+}
+
+// The node these tests place kernels on. Any Tensix worker will do -- what is being tested is that
+// every RISC *within one node* prints concurrently without interleaving.
+constexpr experimental::NodeCoord kDefaultPrintNode{0, 0};
+
+// A Quasar print-storm program: `dm_threads` user DM threads and `compute_engines` Tensix engines on
+// `node`, all running `kernel_path`. Pass 0 for either count to omit that kernel.
+//
+// Kernel contract: `kernel_path` takes exactly one runtime vararg, its iteration count, read with
+// get_arg_val<uint32_t>(0). Neither KernelSpec declares a named runtime-arg schema, so the vararg
+// section starts at index 0 -- which is what lets the same kernel source also run unchanged on the
+// classic Wormhole/Blackhole path.
+experimental::ProgramSpec MakeQuasarPrintSpec(
+    std::string_view kernel_path,
+    uint32_t dm_threads,
+    uint32_t compute_engines,
+    const experimental::NodeCoord& node = kDefaultPrintNode) {
+    experimental::ProgramSpec spec{.name = "dprint_concurrent"};
+    experimental::Group<experimental::KernelSpecName> placed;
+
+    if (dm_threads > 0) {
+        spec.kernels.push_back(experimental::KernelSpec{
+            .unique_id = experimental::KernelSpecName{"dm_print"},
+            .source = std::filesystem::path{kernel_path},
+            .num_threads = dm_threads,
+            .hw_config = experimental::DataMovementGen2Config{},
+            .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = 1},
+        });
+        placed.push_back(experimental::KernelSpecName{"dm_print"});
+    }
+    if (compute_engines > 0) {
+        spec.kernels.push_back(experimental::KernelSpec{
+            .unique_id = experimental::KernelSpecName{"compute_print"},
+            .source = std::filesystem::path{kernel_path},
+            .num_threads = compute_engines,
+            .hw_config = experimental::ComputeGen2Config{},
+            .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = 1},
+        });
+        placed.push_back(experimental::KernelSpecName{"compute_print"});
+    }
+
+    spec.work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = placed, .target_nodes = node}};
+    return spec;
+}
+
+// A single compute kernel on `node`, portable across generations. Gen1 runs it on TRISC0/1/2; Gen2
+// runs it on one Tensix engine's TRISCs. Both satisfy the tests that only assert on printed strings.
+experimental::ProgramSpec MakeComputePrintSpec(
+    tt::ARCH arch, std::string_view kernel_path, const experimental::NodeCoord& node = kDefaultPrintNode) {
+    experimental::ComputeHardwareConfig hw_config;
+    if (arch == tt::ARCH::QUASAR) {
+        hw_config = experimental::ComputeGen2Config{};
+    } else {
+        hw_config = experimental::ComputeGen1Config{};
+    }
+
+    const experimental::KernelSpecName name{"compute_print"};
+    return experimental::ProgramSpec{
+        .name = "dprint_compute",
+        .kernels = {experimental::KernelSpec{
+            .unique_id = name,
+            .source = std::filesystem::path{kernel_path},
+            .num_threads = 1,
+            .hw_config = hw_config,
+        }},
+        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {name}, .target_nodes = node}},
+    };
+}
+
+// Gives every kernel in the spec its iteration count as vararg 0. The node is read back out of the
+// spec so it cannot drift from the one the kernels were placed on.
+experimental::ProgramRunArgs MakeIterationArgs(const experimental::ProgramSpec& spec, uint32_t iterations) {
+    const auto& node = std::get<experimental::NodeCoord>(spec.work_units.front().target_nodes);
+
+    experimental::ProgramRunArgs args;
+    for (const auto& kernel : spec.kernels) {
+        args.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = kernel.unique_id,
+            .advanced_options = experimental::AdvancedKernelRunArgs{.runtime_varargs = {{node, {iterations}}}},
+        });
+    }
+    return args;
+}
+
+}  // namespace
 
 class DevicePrintOutputFixture : public DevicePrintFixture {
 public:
@@ -113,7 +241,7 @@ TEST_F(DevicePrintOutputFixture, PrintManyIterations) {
         messages.push_back("Test iteration: " + std::to_string(i));
     }
 
-    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp", messages, runtime_args);
+    TestOutput(kPrintIterationsKernel, messages, runtime_args);
 }
 
 // Test that printing from multiple RISCs on the same core works and doesn't interleave messages.
@@ -132,17 +260,13 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = Program();
-        workload.add_program(device_range, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range);
 
-        constexpr CoreCoord core = {0, 0};
         // Quasar prints from many more concurrent RISCs (22 on this test) than WH/BH (5).
         // 1000 × 22 = 22k contended prints take well over 10 minutes on the RTL emulator,
         // so reduce the iteration count on Quasar. The race-detection signal does not require
         // a large count — even a small number of iterations with high concurrency exposes any
         // memory-ordering bugs immediately, and the assertion is per-iteration.
-        const uint32_t iterations_count = (mesh_device->arch() == tt::ARCH::QUASAR) ? 100u : 1000u;
+        const uint32_t iterations_count = (mesh_device->arch() == tt::ARCH::QUASAR) ? 10u : 1000u;
         std::vector<uint32_t> runtime_args = {iterations_count};
 
         // Per-arch expected number of distinct RISCs printing concurrently on the same core.
@@ -151,39 +275,26 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
         int risc_count_per_iter = 0;
 
         if (mesh_device->arch() == tt::ARCH::QUASAR) {
-            // Quasar QuasarDataMovementConfig/QuasarComputeConfig don't have a runtime-args path
-            // hooked up yet; pass the iteration count as a compile-time arg instead. Use a
-            // kernel variant that reads get_compile_time_arg_val(0).
-            std::vector<uint32_t> compile_args = {iterations_count};
+            // One DM kernel covering all 6 user DM threads in the cluster (DM0/DM1 reserved), plus one
+            // compute kernel covering all 4 Tensix engines × 4 TRISCs = 16 baby-RISCs.
+            const auto topology = GetQuasarNodeTopology();
+            auto spec = MakeQuasarPrintSpec(kPrintIterationsKernel, topology.user_dm_threads, topology.compute_engines);
+            Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+            experimental::SetProgramRunArgs(program, MakeIterationArgs(spec, iterations_count));
+            workload.add_program(device_range, std::move(program));
 
-            // Single DM kernel covering all 6 user DM threads in the cluster (DM0/DM1 reserved).
-            CreateKernel(
-                program_,
-                "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations_compile_time.cpp",
-                core,
-                experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = experimental::quasar::QUASAR_NUM_DM_CORES_PER_CLUSTER - 2,
-                    .compile_args = compile_args,
-                });
-
-            // Single compute kernel covering all 4 Tensix engines × 4 TRISCs = 16 baby-RISCs.
-            CreateKernel(
-                program_,
-                "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations_compile_time.cpp",
-                core,
-                experimental::quasar::QuasarComputeConfig{
-                    .num_threads_per_cluster = experimental::quasar::QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER,
-                    .compile_args = compile_args,
-                });
-
-            risc_count_per_iter = (experimental::quasar::QUASAR_NUM_DM_CORES_PER_CLUSTER - 2) +
-                                  (experimental::quasar::QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER *
-                                   experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+            risc_count_per_iter = static_cast<int>(topology.user_dm_threads + topology.compute_processors());
         } else {
+            Program program = Program();
+            workload.add_program(device_range, std::move(program));
+            auto& program_ = workload.get_programs().at(device_range);
+
+            constexpr CoreCoord core = {0, 0};
+
             // WH/BH: BRISC
             auto kernel_handle = CreateKernel(
                 program_,
-                "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+                kPrintIterationsKernel,
                 core,
                 DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
@@ -192,18 +303,14 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
             // NCRISC
             kernel_handle = CreateKernel(
                 program_,
-                "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+                kPrintIterationsKernel,
                 core,
                 DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
             SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
 
             // TRISC0 (Unpack), TRISC1 (Math), TRISC2 (Pack)
-            kernel_handle = CreateKernel(
-                program_,
-                "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
-                core,
-                ComputeConfig{});
+            kernel_handle = CreateKernel(program_, kPrintIterationsKernel, core, ComputeConfig{});
 
             SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
 
@@ -238,6 +345,89 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
     }
 }
 
+// All-workers variant of PrintConcurrentAllRiscs: run the same per-iteration print kernel on EVERY
+// Tensix worker core (the full compute grid) to stress the DevicePrintDispatch worker-L1 -> DRAM
+// aggregation under maximum concurrency. The single-core variant never exercises the multi-core
+// aggregation path; this one does. Each iteration value must appear EXACTLY
+// risc_count_per_iter * num_worker_cores times: fewer => the aggregation dropped data, more =>
+// it duplicated data. Run with TT_METAL_DEVICE_PRINT=1 to route through the DRAM aggregation path.
+TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscsAllWorkers) {
+    size_t device_counter = 0;
+    for (auto& mesh_device : this->devices_) {
+        if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
+            continue;  // WH/BH only.
+        }
+        device_counter++;
+
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = Program();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        // Cover the entire compute grid (every usable worker core).
+        CoreCoord grid = mesh_device->compute_with_storage_grid_size();
+        CoreRange all_cores({0, 0}, {grid.x - 1, grid.y - 1});
+        const uint32_t num_cores = grid.x * grid.y;
+
+        // 1000 iters x 5 riscs x ~110 cores produces enough output (~11 MB) to wrap the 1 MB DRAM
+        // aggregation ring many times — this is what exercises the ring full/empty boundary and the
+        // backpressure/drain path that previously dropped data. DPRINT_AW_ITERS overrides it for
+        // heavier manual stress.
+        uint32_t iterations_count = 1000u;
+        if (const char* env = std::getenv("DPRINT_AW_ITERS")) {
+            iterations_count = static_cast<uint32_t>(std::max(1, atoi(env)));
+        }
+        std::vector<uint32_t> runtime_args = {iterations_count};
+
+        // BRISC
+        auto kernel_handle = CreateKernel(
+            program_,
+            kPrintIterationsKernel,
+            all_cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        SetRuntimeArgs(program_, kernel_handle, all_cores, runtime_args);
+
+        // NCRISC
+        kernel_handle = CreateKernel(
+            program_,
+            kPrintIterationsKernel,
+            all_cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        SetRuntimeArgs(program_, kernel_handle, all_cores, runtime_args);
+
+        // TRISC0 (Unpack), TRISC1 (Math), TRISC2 (Pack)
+        kernel_handle = CreateKernel(program_, kPrintIterationsKernel, all_cores, ComputeConfig{});
+        SetRuntimeArgs(program_, kernel_handle, all_cores, runtime_args);
+
+        const int risc_count_per_iter =
+            static_cast<int>(MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::TENSIX));
+
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+
+        // Count how many times each iteration value appears across the whole grid. Each value must
+        // appear exactly risc_count_per_iter * num_cores times: fewer => the DRAM aggregation dropped
+        // data, more => it duplicated data.
+        std::fstream log_file;
+        ASSERT_TRUE(OpenFile(dprint_file_name, log_file, std::fstream::in));
+        std::vector<int> counts(iterations_count, 0);
+        std::string line;
+        while (getline(log_file, line)) {
+            int iter = -1;
+            if (sscanf(line.c_str(), "Test iteration: %d", &iter) == 1 && iter >= 0 && iter < (int)counts.size()) {
+                counts[iter]++;
+            }
+        }
+        const int expected_count = risc_count_per_iter * static_cast<int>(num_cores) * static_cast<int>(device_counter);
+        for (int i = 0; i < (int)counts.size(); i++) {
+            EXPECT_EQ(counts[i], expected_count)
+                << "Iteration " << i << " appeared " << counts[i] << " times (expected " << expected_count << ")";
+        }
+    }
+}
+
 // Quasar-only race-detection variant of PrintConcurrentAllRiscs that uses *only the rocket-core
 // DMs* (DM2..DM7). Isolates whether the contention bug is within a single rocket-core group, or
 // requires the mix of rocket + baby-risc contenders.
@@ -252,23 +442,14 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentRocketRiscs) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = Program();
-        workload.add_program(device_range, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range);
 
-        constexpr CoreCoord core = {0, 0};
         const uint32_t iterations_count = 5;
-        std::vector<uint32_t> compile_args = {iterations_count};
 
-        constexpr int kNumUserDms = experimental::quasar::QUASAR_NUM_DM_CORES_PER_CLUSTER - 2;
-        CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations_compile_time.cpp",
-            core,
-            experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = kNumUserDms,
-                .compile_args = compile_args,
-            });
+        const auto topology = GetQuasarNodeTopology();
+        auto spec = MakeQuasarPrintSpec(kPrintIterationsKernel, topology.user_dm_threads, /*compute_engines=*/0);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        experimental::SetProgramRunArgs(program, MakeIterationArgs(spec, iterations_count));
+        workload.add_program(device_range, std::move(program));
 
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();
@@ -286,7 +467,7 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentRocketRiscs) {
                 counts[iter]++;
             }
         }
-        const int expected_count = kNumUserDms * static_cast<int>(device_counter);
+        const int expected_count = static_cast<int>(topology.user_dm_threads) * static_cast<int>(device_counter);
         for (int i = 0; i < static_cast<int>(counts.size()); i++) {
             EXPECT_EQ(counts[i], expected_count)
                 << "Iteration " << i << " appeared " << counts[i] << " times (expected " << expected_count << " times)";
@@ -308,25 +489,14 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentBabyRiscs) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = Program();
-        workload.add_program(device_range, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range);
 
-        constexpr CoreCoord core = {0, 0};
         const uint32_t iterations_count = 5;
-        std::vector<uint32_t> compile_args = {iterations_count};
 
-        constexpr int kNumTensixEngines = experimental::quasar::QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER;
-        // unpack + math + pack + extra
-        constexpr int kTriscsPerEngine = experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
-        CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations_compile_time.cpp",
-            core,
-            experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = kNumTensixEngines,
-                .compile_args = compile_args,
-            });
+        const auto topology = GetQuasarNodeTopology();
+        auto spec = MakeQuasarPrintSpec(kPrintIterationsKernel, /*dm_threads=*/0, topology.compute_engines);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        experimental::SetProgramRunArgs(program, MakeIterationArgs(spec, iterations_count));
+        workload.add_program(device_range, std::move(program));
 
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();
@@ -344,7 +514,7 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentBabyRiscs) {
                 counts[iter]++;
             }
         }
-        const int expected_count = kNumTensixEngines * kTriscsPerEngine * static_cast<int>(device_counter);
+        const int expected_count = static_cast<int>(topology.compute_processors()) * static_cast<int>(device_counter);
         for (int i = 0; i < static_cast<int>(counts.size()); i++) {
             EXPECT_EQ(counts[i], expected_count)
                 << "Iteration " << i << " appeared " << counts[i] << " times (expected " << expected_count << " times)";
@@ -442,6 +612,21 @@ TEST_F(DevicePrintOutputFixture, PrintStringTypes) {
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_string_types.cpp", messages);
 }
 
+// Type names are extracted from __PRETTY_FUNCTION__ at compile time and resolved from the ELF on the
+// host, same as CTSTR. int/float are used over uint32_t/int8_t, whose spelling is typedef-dependent.
+TEST_F(DevicePrintOutputFixture, PrintTypeName) {
+    std::vector<std::string> messages = {
+        "builtin type: int",
+        "struct type: test::deep::Foo",
+        "enum type: test::deep::Bar",
+        "template type: test::deep::Wrapper<int>",
+        "decltype: float",
+        "with value: float = 1",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_type_name.cpp", messages);
+}
+
 TEST_F(DevicePrintOutputFixture, PrintReorder) {
     std::vector<std::string> messages = {
         "u16_1: 16 u16_2: 32 u32_1: 1 u32_2: 2 u32_3: 4 u32_4: 8",
@@ -473,16 +658,10 @@ TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = Program();
-        workload.add_program(device_range, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range);
 
-        constexpr CoreCoord core = {0, 0};
-        CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/device_print/print_inline_function.cpp",
-            core,
-            ComputeConfig{});
+        auto spec = MakeComputePrintSpec(
+            mesh_device->arch(), "tests/tt_metal/tt_metal/test_kernels/device_print/print_inline_function.cpp");
+        workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
 
         RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();
@@ -562,4 +741,31 @@ TEST_F(DevicePrintOutputFixture, PrintCallstackCurrent) {
         "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_helper.cpp",
         /* present */ {"CALLSTACK_BEGIN", "kernel_main", "CALLSTACK_END"},
         /* absent */ {"current"});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackTailCallUnambiguous) {
+    GTEST_SKIP() << "Fix unwinding of tail calls #47666";
+
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_tailcall_unambiguous.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "leaf", "mid", "top", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"..."});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackTailCallResolvable) {
+    GTEST_SKIP() << "Fix unwinding of tail calls #47666";
+
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_tailcall_resolvable.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "left_top", "left", "fork_func", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"right", "right_top", "..."});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackTailCallUnresolvable) {
+    GTEST_SKIP() << "Fix unwinding of tail calls #47666";
+
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_tailcall_unresolvable.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "leaf", "...", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"left", "right"});
 }

@@ -26,6 +26,7 @@
 #include "api/compute/lcm.h"
 #include "api/compute/binary_comp.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
@@ -33,21 +34,21 @@ void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
-    CircularBuffer cb_in0(tt::CBIndex::c_0);
-    CircularBuffer cb_in1(tt::CBIndex::c_1);
-    CircularBuffer cb_out0(tt::CBIndex::c_2);
+    DataflowBuffer cb_in0(tt::CBIndex::c_0);
+    DataflowBuffer cb_in1(tt::CBIndex::c_1);
+    DataflowBuffer cb_out0(tt::CBIndex::c_2);
 #ifdef SFPU_OP_INIT_PRE_IN0_0
-    CircularBuffer cb_inp0(tt::CBIndex::c_3);
+    DataflowBuffer cb_inp0(tt::CBIndex::c_3);
 #else
-    CircularBuffer cb_inp0 = cb_in0;
+    DataflowBuffer cb_inp0 = cb_in0;
 #endif
 #ifdef SFPU_OP_INIT_PRE_IN1_0
-    CircularBuffer cb_inp1(tt::CBIndex::c_4);
+    DataflowBuffer cb_inp1(tt::CBIndex::c_4);
 #else
-    CircularBuffer cb_inp1 = cb_in1;
+    DataflowBuffer cb_inp1 = cb_in1;
 #endif
 
-    unary_op_init_common(cb_in0.get_cb_id(), cb_out0.get_cb_id());
+    unary_op_init_common(cb_in0.get_id(), cb_out0.get_id());
 
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
@@ -55,7 +56,7 @@ void kernel_main() {
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 #if PRE_SCALE
-        copy_tile_to_dst_init_short(cb_in0.get_cb_id());  // need to copy from CB to DST to be able to run sfpu math
+        copy_tile_to_dst_init_short(cb_in0.get_id());  // need to copy from CB to DST to be able to run sfpu math
 #endif
 
 #ifdef SFPU_OP_INIT_PRE_IN0_0
@@ -65,14 +66,14 @@ void kernel_main() {
         tile_regs_acquire();
         SFPU_OP_INIT_PRE_IN0_0
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_in0.get_cb_id(), i, i);  // copy from c_in[0] to DST[0]
+            copy_tile(cb_in0.get_id(), i, i);  // copy from c_in[0] to DST[0]
             SFPU_OP_FUNC_PRE_IN0_0
         }
         tile_regs_commit();
 
         tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, cb_inp0.get_cb_id());  // DST[0]->cb
+            pack_tile(i, cb_inp0.get_id());  // DST[0]->cb
         }
         tile_regs_release();
 
@@ -87,14 +88,14 @@ void kernel_main() {
         tile_regs_acquire();
         SFPU_OP_INIT_PRE_IN1_0
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_in1.get_cb_id(), i, i);  // copy from c_in[0] to DST[0]
+            copy_tile(cb_in1.get_id(), i, i);  // copy from c_in[0] to DST[0]
             SFPU_OP_FUNC_PRE_IN1_0
         }
         tile_regs_commit();
 
         tile_regs_wait();
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, cb_inp1.get_cb_id());  // DST[0]->cb
+            pack_tile(i, cb_inp1.get_id());  // DST[0]->cb
         }
         tile_regs_release();
 
@@ -107,13 +108,13 @@ void kernel_main() {
 
         tile_regs_acquire();
         tile_regs_wait();
-        copy_tile_to_dst_init_short_with_dt(cb_inp1.get_cb_id(), cb_inp0.get_cb_id());
+        copy_tile_to_dst_init_short_with_dt(cb_inp1.get_id(), cb_inp0.get_id());
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_inp0.get_cb_id(), i, i * 2);
+            copy_tile(cb_inp0.get_id(), i, i * 2);
         }
-        copy_tile_to_dst_init_short_with_dt(cb_inp0.get_cb_id(), cb_inp1.get_cb_id());
+        copy_tile_to_dst_init_short_with_dt(cb_inp0.get_id(), cb_inp1.get_id());
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            copy_tile(cb_inp1.get_cb_id(), i, i * 2 + 1);
+            copy_tile(cb_inp1.get_id(), i, i * 2 + 1);
 
 #ifdef BINOP_INIT
             BINOP_INIT
@@ -184,7 +185,7 @@ void kernel_main() {
 #ifdef SFPU_OP_CHAIN_0
             SFPU_OP_CHAIN_0
 #endif
-            pack_tile(i * 2, cb_out0.get_cb_id());
+            pack_tile(i * 2, cb_out0.get_id());
         }
         tile_regs_commit();
         tile_regs_release();

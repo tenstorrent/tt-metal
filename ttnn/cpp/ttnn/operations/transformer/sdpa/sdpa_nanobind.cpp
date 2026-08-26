@@ -15,6 +15,8 @@
 #include <nanobind/stl/vector.h>
 
 #include "sdpa.hpp"
+#include "sparse_sdpa.hpp"
+#include "sparse_sdpa_msa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -34,6 +36,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
+    std::size_t logical_l,
     const SDPAProgramConfig& program_config,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
@@ -50,7 +53,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool is_balanced,
     bool is_cross,
     std::optional<uint32_t> kv_cache_batch_idx,
-    std::optional<uint32_t> kv_actual_isl) {
+    std::optional<uint32_t> kv_actual_isl,
+    const std::optional<ttnn::Tensor>& attention_sink,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -65,6 +72,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         persistent_output_buffer_v,
         joint_strategy,
         logical_n,
+        logical_l,
         program_config,
         dim,
         multi_device_global_semaphore,
@@ -81,7 +89,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         compute_kernel_config,
         strategy,
         kv_cache_batch_idx,
-        kv_actual_isl);
+        kv_actual_isl,
+        attention_sink,
+        sliding_window_size,
+        persistent_output_buffer_joint_k,
+        persistent_output_buffer_joint_v);
     return outputs;
 }
 
@@ -105,7 +117,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
     bool use_column_major_ccl,
     bool is_balanced,
     std::optional<uint32_t> kv_cache_batch_idx,
-    std::optional<uint32_t> kv_actual_isl) {
+    std::optional<uint32_t> kv_actual_isl,
+    const std::optional<ttnn::Tensor>& slot_id,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
+    std::optional<uint32_t> kv_cache_num_layers,
+    std::optional<uint32_t> kv_cache_layer_idx) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     return ttnn::transformer::ring_mla(
@@ -128,7 +144,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
         compute_kernel_config,
         strategy,
         kv_cache_batch_idx,
-        kv_actual_isl);
+        kv_actual_isl,
+        slot_id,
+        kv_actual_isl_tensor,
+        kv_cache_num_layers,
+        kv_cache_layer_idx);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -242,7 +262,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<PagedCacheGeometryOverride> paged_cache_geometry) {
     if (chunk_start_idx_tensor_opt.has_value()) {
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
@@ -253,7 +274,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             scale,
             memory_config,
             program_config,
-            compute_kernel_config);
+            compute_kernel_config,
+            paged_cache_geometry);
     }
     if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
@@ -269,12 +291,18 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
         scale,
         memory_config,
         program_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        paged_cache_geometry);
 }
 
 }  // namespace
 
 void bind_sdpa(nb::module_& mod) {
+    nb::enum_<ttnn::transformer::SparseKVFormat>(mod, "SparseKVFormat")
+        .value("BF16", ttnn::transformer::SparseKVFormat::BF16)
+        .value("FP8_E4M3", ttnn::transformer::SparseKVFormat::FP8_E4M3)
+        .value("SCALED_FP8", ttnn::transformer::SparseKVFormat::SCALED_FP8);
+
     const auto* const doc =
         R"doc(
         Causal scaled dot product attention. This API mimics the PyTorch API of the same name.
@@ -296,6 +324,7 @@ void bind_sdpa(nb::module_& mod) {
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
+            cu_window_seqlens (ttnn.Tensor, optional): Defaults to `None`. 1D int32/uint32 ROW_MAJOR tensor of cumulative window boundaries [0, w1, w1+w2, ..., s]. When provided, computes block-diagonal (windowed) attention where each token attends only within its window; the mask is built on-device. Non-causal; mutually exclusive with attn_mask/is_causal/sliding_window_size.
 
 
         Returns:
@@ -318,7 +347,113 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("attention_sink") = nb::none());
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("cu_window_seqlens") = nb::none());
+
+    ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Sparse MLA prefill (DeepSeek DSA), Blackhole single-chip. softmax(Q@Kᵀ·scale masked)@V over the
+        top-k selected latents per query token; V = kv[..., :v_dim]. Masking is baked into `indices`
+        (0xFFFFFFFF = masked; sentinels are a contiguous tail). Inputs are ROW-MAJOR DRAM-interleaved.
+        K_DIM (the q/kv head dim) is taken from the tensors.
+
+        Args:
+            q (ttnn.Tensor):       [1, H, S, K_DIM] bf16 or fp8_e4m3 (H a multiple of 32)
+            kv (ttnn.Tensor):      [1, 1, T, K_DIM] bf16/raw fp8, or one packed scaled-FP8 row per token;
+                                   interpretation is selected only by `kv_format`, never inferred from width.
+                                   The packed DSA row is [512 FP8 | 4 FP32 scales | 64 BF16 RoPE] = 656 bytes.
+                                   When cache_batch_idx is set, B may exceed 1 and kv may be ND-sharded.
+            indices (ttnn.Tensor): [1, 1, S, TOPK] uint32
+            v_dim (int):           width of V (leading v_dim cols of the K_DIM-wide cache); the output width.
+
+        Keyword args:
+            kv_format (SparseKVFormat): explicit physical/logical format of `kv`.
+            scale (float, optional): defaults to K_DIM**-0.5.
+            k_chunk_size (int): defaults to 128 (must divide TOPK, multiple of 32).
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            cache_batch_idx (int, optional): select the batch slot of a shared [B, 1, T, K_DIM] kv cache.
+                It is a dynamic runtime arg, so changing the slot does not recompile. Changing T also reuses the
+                program for a plain interleaved cache, but recompiles for sharded or block-cyclic caches.
+            block_cyclic_sp_axis (int, optional): when set (with block_cyclic_chunk_local), `indices` are NATURAL
+                token positions and kv is stored block-cyclic across an SP-sharded cache; the kernel remaps each
+                index natural->physical page on the fly (no host reorder needed). This is the MESH axis the cache
+                was striped over: `sp` is read from the mesh shape on that axis (the op derives it, so it cannot
+                disagree with the device). T % sp == 0 required. Both must be set together.
+            block_cyclic_chunk_local (int, optional): the per-shard chunk length (chunk_size_global / sp).
+                Required iff block_cyclic_sp_axis is set. Cross-checked against q's per-chip seq length: must be
+                q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
+        Returns:
+            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
+        )doc",
+        &ttnn::transformer::sparse_sdpa,
+        nb::arg("q").noconvert(),
+        nb::arg("kv").noconvert(),
+        nb::arg("indices").noconvert(),
+        nb::arg("v_dim"),
+        nb::kw_only(),
+        nb::arg("kv_format"),
+        nb::arg("scale") = nb::none(),
+        nb::arg("k_chunk_size") = 128,
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("cache_batch_idx") = nb::none(),
+        nb::arg("block_cyclic_sp_axis") = nb::none(),
+        nb::arg("block_cyclic_chunk_local") = nb::none());
+
+    ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        MSA block-sparse prefill (MiniMax Sparse Attention), Blackhole single-chip.
+        Attends the block_size-token K/V blocks named in `indices`; -1 (0xFFFFFFFF) sentinels mask a contiguous
+        tail. Block selection bounds causality to block granularity; pass `chunk_start_idx` to additionally
+        enforce a token-level causal mask on the diagonal block (required for correct causal prefill). RoPE and
+        QK-norm are applied upstream.
+
+        Args:
+            q (ttnn.Tensor):       [1, H, S, d] bf16 | fp8_e4m3 ROW_MAJOR.
+                                   H must be divisible by n_kv; H/n_kv may be 16 or a multiple of 32.
+            k (ttnn.Tensor):       [B, n_kv, T, d] TILE bf16|bfloat8_b (B>1 only when indexed)
+            v (ttnn.Tensor):       [B, n_kv, T, v_dim] TILE bf16|bfloat8_b
+            indices (ttnn.Tensor): [1, n_kv, S, TOPK] uint32 block-ids (-1 = sentinel, contiguous tail).
+                                   Each row must contain a valid block, and valid block ids must be < T / block_size.
+
+        Keyword args:
+            scale (float, optional): defaults to d to the power of -0.5.
+            block_size (int): KV block size in tokens; defaults to 128. Must be a multiple of 32 and divide T.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional). fp8 q requires fp32_dest_acc_en.
+            cache_batch_idx (int, optional): select the batch slot of a shared [B, n_kv, T, feature_dim] K/V cache.
+                It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
+            chunk_start_idx (int, optional): global position of query row 0. When set, enforces a token-level
+                causal mask on the diagonal block (the query's own block); toggling set/unset (None vs int)
+		selects a different cached program. Requires bf16 q; fp8 q with this set is rejected.
+            cluster_axis (int, optional): SP mesh axis used to derive the per-device chunk_start
+                (chunk_start_idx + rank*S) under sequence parallelism. Host-side only.
+            block_cyclic_sp_axis (int, optional): when set (with block_cyclic_chunk_local), the K/V cache is
+                striped block-cyclic across SP on this mesh axis; the gather remaps each logical block id to its
+                physical block in-kernel (invP), so no host reorder is needed. sp is read from the mesh.
+            block_cyclic_chunk_local (int, optional): per-shard chunk length (chunk_size_global / sp). Required
+                iff block_cyclic_sp_axis is set; cross-checked against q (must equal q_isl or tp*q_isl).
+
+        Returns:
+            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
+
+        Additional preconditions: d and v_dim must be multiples of 32; TOPK times 4 and output row bytes must meet
+        device DRAM alignment.
+        )doc",
+        &ttnn::transformer::sparse_sdpa_msa,
+        nb::arg("q").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
+        nb::arg("indices").noconvert(),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("block_size") = 128,
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("cache_batch_idx") = nb::none(),
+        nb::arg("chunk_start_idx") = nb::none(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("block_cyclic_sp_axis") = nb::none(),
+        nb::arg("block_cyclic_chunk_local") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(
@@ -361,6 +496,11 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            paged_cache_geometry (PagedCacheGeometryOverride, optional): Geometry override for
+                an HMA-shared paged cache. When the K/V cache was allocated for a different
+                layer's view, pass this call's view with both `block_size` and `num_kv_heads`
+                set; Q drives head_dim and the per-block element count must be invariant.
+                Defaults to the cache's declared shape.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -381,7 +521,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale").noconvert() = nb::none(),
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
-        nb::arg("compute_kernel_config").noconvert() = nb::none());
+        nb::arg("compute_kernel_config").noconvert() = nb::none(),
+        nb::arg("paged_cache_geometry").noconvert() = nb::none());
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two
@@ -459,6 +600,10 @@ void bind_sdpa(nb::module_& mod) {
             persistent_output_buffer_v (ttnn.Tensor): Persistent buffer for gathered V tensor.
             joint_strategy (str): Strategy for joint attention. Must be "rear".
             logical_n (int): The logical sequence length N before sharding across devices.
+            logical_l (int, optional): The full prompt (joint) sequence length L before sharding.
+                Pass the full L when joint_tensor_q/k/v are sharded L/P per device.
+                The op infers the sharded path when per-device joint seq == logical_l / ring_size.
+                If 0 (default) or omitted, behaves as the replicated path (backward-compatible).
             program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
@@ -480,6 +625,19 @@ void bind_sdpa(nb::module_& mod) {
             kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
                 When passed, enables KV-pad-aware rotation and derives current valid tokens as
                 logical_n - kv_actual_isl.
+            attention_sink (ttnn.Tensor, optional): Per-query-head attention sink with logical shape
+                [1 x nqh x 1 x 1], sharded across the tensor-parallel head axis and replicated across
+                the sequence-parallel ring. The ring-attention sink path requires BF16, streaming
+                compute, causal separate-K/V attention, and supports both full-causal and
+                sliding-window attention. Defaults to None.
+            sliding_window_size (int, optional): Causal attention window in tokens. The ring reader and
+                compute kernels prune K chunks outside the window. Ring attention currently supports the
+                GPT-OSS specialization: a 128-token window, local 8Q:1K:1V heads with D64, BF16 Q,
+                BFP8_B K/V, SP4 production or SP8 test topology, and chunked prefill without joint tokens.
+            persistent_output_buffer_joint_k (ttnn.Tensor, optional): Persistent buffer for the
+                gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
+            persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
+                gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -495,8 +653,8 @@ void bind_sdpa(nb::module_& mod) {
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dv].
-              - The attention output for the joint Q/K/V shape    [b x nh x L x dv].
-              - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L) x 1]
+              - The attention output for the joint Q/K/V shape [b x nh x L/num_devices x dv] (or [b x nh x L x dv] on the replicated path).
+              - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L/num_devices) x 1]
         )doc";
 
     ttnn::bind_function<"ring_joint_scaled_dot_product_attention", "ttnn.transformer.">(
@@ -514,6 +672,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("persistent_output_buffer_v").noconvert(),
         nb::arg("joint_strategy"),
         nb::arg("logical_n"),
+        nb::arg("logical_l") = 0,
         nb::arg("program_config").noconvert(),
         nb::arg("scale") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
@@ -530,7 +689,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("is_balanced").noconvert() = false,
         nb::arg("is_cross").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
-        nb::arg("kv_actual_isl").noconvert() = nb::none());
+        nb::arg("kv_actual_isl").noconvert() = nb::none(),
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("persistent_output_buffer_joint_k").noconvert() = nb::none(),
+        nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
@@ -595,7 +758,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("use_column_major_ccl") = false,
         nb::arg("is_balanced").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
-        nb::arg("kv_actual_isl").noconvert() = nb::none());
+        nb::arg("kv_actual_isl").noconvert() = nb::none(),
+        nb::arg("slot_id").noconvert() = nb::none(),
+        nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
+        nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two

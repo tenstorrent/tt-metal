@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt-metalium/experimental/internal/blitz_decode_pipeline.hpp"
+#include "internal/blitz_decode_pipeline.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -304,6 +304,7 @@ ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bo
     // Collect ALL unclaimed nodes; the directly-connected pair may not be the first ones found.
     auto mesh_0_coord_range = mesh_graph.get_coord_range(mesh_ids[0]);
     std::vector<tt::tt_fabric::FabricNodeId> unclaimed_mesh_0_nodes;
+    unclaimed_mesh_0_nodes.reserve(mesh_0_coord_range.shape().mesh_size());
     for (const auto& coord : mesh_0_coord_range) {
         auto chip_id = mesh_graph.coordinate_to_chip(mesh_ids[0], coord);
         tt::tt_fabric::FabricNodeId fn(mesh_ids[0], chip_id);

@@ -26,6 +26,10 @@ QWEN3_32B = "Qwen/Qwen3-32B"
 _slow = pytest.mark.slow
 
 
+def _sub_core_grids_for_32_users():
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})
+
+
 def _list_collected_sampling_cases() -> list[pytest.param]:
     """
     Collected from TTTv1 demo runs (Phase B of test_case_collection.md).
@@ -140,7 +144,6 @@ class TestSampling1DDevice:
         sampler.load_device_buffers()
         assert sampler._device_buffers_loaded
         assert isinstance(sampler._index_offsets, ttnn.Tensor)
-        assert isinstance(sampler._local_indices, ttnn.Tensor)
         assert isinstance(sampler._seeds, ttnn.Tensor)
         assert isinstance(sampler._user_ids, ttnn.Tensor)
 
@@ -169,14 +172,14 @@ class TestSampling1DDevice:
         ), f"Argmax mismatch: got {tokens_flat[:5]} vs expected {expected_flat[:5]}"
 
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_error_on_partial_params(self, ttnn_mesh_device, vocab_size):
+    def test_error_on_partial_params(self, ttnn_mesh_device, vocab_size, expect_error):
         """k provided but not p/temp → ValueError."""
         sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         logits_host = torch.randn(1, 1, 32, vocab_size, dtype=torch.bfloat16)
         logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
         k_tt = ttnn.from_torch(torch.ones(32), device=ttnn_mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        with pytest.raises(ValueError, match="k, p, temp must all be provided"):
+        with expect_error(ValueError, "k, p, temp must all be provided"):
             sampler.decode_forward(logits_tt, k=k_tt)
 
     @pytest.mark.parametrize("vocab_size", [1024])
@@ -199,23 +202,22 @@ class TestSampling1DDevice:
     # ------------------------------------------------------------------
 
     def test_bind_strategy_ccl_introspection_with_kwargs(self, ttnn_mesh_device):
-        """_bind_strategy correctly detects buffer_key/dtype support on line_all_gather."""
+        """_bind_strategy correctly detects buffer_key support on line_all_gather."""
         from dataclasses import replace
 
         sampler = Sampling1D(vocab_size=1024, mesh_device=ttnn_mesh_device)
 
         class MockCCL:
-            def line_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
+            def line_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None):
                 return tensor
 
         sampler.config = replace(sampler.config, tt_ccl=MockCCL())
         sampler._bind_strategy()
 
         assert sampler._line_all_gather_supports_buffer_key
-        assert sampler._line_all_gather_supports_dtype
 
     def test_bind_strategy_ccl_introspection_no_kwargs(self, ttnn_mesh_device):
-        """_bind_strategy detects when line_all_gather does NOT support buffer_key/dtype."""
+        """_bind_strategy detects when line_all_gather does NOT support buffer_key."""
         from dataclasses import replace
 
         sampler = Sampling1D(vocab_size=1024, mesh_device=ttnn_mesh_device)
@@ -228,7 +230,6 @@ class TestSampling1DDevice:
         sampler._bind_strategy()
 
         assert not sampler._line_all_gather_supports_buffer_key
-        assert not sampler._line_all_gather_supports_dtype
 
     def test_bind_strategy_ccl_introspection_exception(self, ttnn_mesh_device):
         """_bind_strategy handles TypeError from inspect.signature gracefully (lines 125-126)."""
@@ -249,20 +250,19 @@ class TestSampling1DDevice:
             sampler._bind_strategy()
 
         assert not sampler._line_all_gather_supports_buffer_key
-        assert not sampler._line_all_gather_supports_dtype
 
     # ------------------------------------------------------------------
     # Error paths (lines 178, 186)
     # ------------------------------------------------------------------
 
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_error_all_none_no_force_argmax(self, ttnn_mesh_device, vocab_size):
+    def test_error_all_none_no_force_argmax(self, ttnn_mesh_device, vocab_size, expect_error):
         """decode_forward with all-None k/p/temp when allow_force_argmax=False → ValueError (line 178)."""
         sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         logits_host = torch.randn(1, 1, 32, vocab_size, dtype=torch.bfloat16)
         logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
 
-        with pytest.raises(ValueError, match="allow_force_argmax is False"):
+        with expect_error(ValueError, "allow_force_argmax is False"):
             sampler.decode_forward(logits_tt)
 
     @pytest.mark.parametrize("vocab_size", [1024])
@@ -282,7 +282,7 @@ class TestSampling1DDevice:
 
     @pytest.mark.parametrize("vocab_size", [1024])
     def test_perform_all_gather_with_mock_ccl(self, ttnn_mesh_device, vocab_size):
-        """_perform_all_gather passes buffer_key/dtype kwargs when line_all_gather supports them."""
+        """_perform_all_gather passes the buffer_key kwarg when line_all_gather supports it."""
         B, K = 32, 32
         sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         sampler.load_device_buffers()
@@ -295,7 +295,6 @@ class TestSampling1DDevice:
 
         sampler._line_all_gather = mock_line_ag
         sampler._line_all_gather_supports_buffer_key = True
-        sampler._line_all_gather_supports_dtype = True
 
         test_tensor = ttnn.from_torch(
             torch.zeros(1, 1, B, K, dtype=torch.bfloat16),
@@ -312,12 +311,10 @@ class TestSampling1DDevice:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             num_links=1,
             buffer_key="TEST_KEY",
-            dtype=ttnn.bfloat16,
         )
 
         assert result is test_tensor
         assert captured_kwargs.get("buffer_key") == "TEST_KEY"
-        assert captured_kwargs.get("dtype") == ttnn.bfloat16
 
     # ------------------------------------------------------------------
     # from_model_args model_config branches (lines 406-408, 416-419)
@@ -419,7 +416,7 @@ class TestSampling1DDevice:
         assert isinstance(resolved.index_offsets, LazyBuffer)
         assert resolved.index_offsets.device is ttnn_mesh_device  # filled in by resolve_lazy_buffer
 
-    def test_rejects_galaxy(self, ttnn_mesh_device):
+    def test_rejects_galaxy(self, ttnn_mesh_device, expect_error):
         """from_model_args should reject 2D (Galaxy) topologies."""
 
         class FakeMesh:
@@ -435,7 +432,7 @@ class TestSampling1DDevice:
             start_core = ttnn.CoreCoord(0, 0)
             max_top_k = 32
 
-        with pytest.raises(ValueError, match="1D mesh topologies"):
+        with expect_error(ValueError, "1D mesh topologies"):
             Sampling1D.from_model_args(FakeMesh(), None, MockArgs())
 
 
@@ -675,6 +672,107 @@ def test_sampling1d_argmax_vs_reference(ttnn_mesh_device):
     assert torch.equal(
         tokens_host, expected
     ), f"argmax path mismatch:\n  got:      {tokens_host[:8]}\n  expected: {expected[:8]}"
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 8)], ids=["1x8"], indirect=True)
+def test_sampling1d_qwen3_32b_uses_compact_tail_mask(ttnn_mesh_device):
+    sampler = Sampling1D(vocab_size=152064, valid_vocab_size=151936, mesh_device=ttnn_mesh_device)
+    sampler.load_device_buffers()
+
+    assert sampler._invalid_vocab_mask is None
+    assert isinstance(sampler._invalid_vocab_tail_mask, ttnn.Tensor)
+    assert sampler._invalid_vocab_tail_width == 128
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 8)], ids=["1x8"], indirect=True)
+def test_sampling1d_topk_masks_qwen3_32b_padded_tail(ttnn_mesh_device):
+    B = 32
+    valid_vocab_size = 151936
+    padded_vocab_size = 152064
+    sampler = Sampling1D(vocab_size=padded_vocab_size, valid_vocab_size=valid_vocab_size, mesh_device=ttnn_mesh_device)
+
+    logits_host = torch.full((1, 1, B, padded_vocab_size), -1.0, dtype=torch.bfloat16)
+    logits_host[..., valid_vocab_size:] = 0.0
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+
+    cluster_shape = tuple(ttnn_mesh_device.shape)
+    k, p, temp = _make_sampling_params(
+        ttnn_mesh_device, B, k_val=1, p_val=0.0, temp_val=1.0, cluster_shape=cluster_shape
+    )
+    tokens_tt, _ = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp)
+    tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
+
+    assert torch.all(tokens_host < valid_vocab_size)
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 8)], ids=["1x8"], indirect=True)
+def test_sampling1d_padded_tail_with_sub_core_grids_runs(ttnn_mesh_device):
+    B = 32
+    valid_vocab_size = 151936
+    padded_vocab_size = 152064
+    sub_core_grids = _sub_core_grids_for_32_users()
+    sampler = Sampling1D(
+        vocab_size=padded_vocab_size,
+        valid_vocab_size=valid_vocab_size,
+        mesh_device=ttnn_mesh_device,
+        sub_core_grids=sub_core_grids,
+        sub_core_grid_topk=sub_core_grids,
+        start_core=ttnn.CoreCoord(0, 0),
+    )
+    sampler.load_device_buffers()
+
+    logits_host = torch.full((1, 1, B, padded_vocab_size), -1.0, dtype=torch.bfloat16)
+    logits_host[..., valid_vocab_size:] = 0.0
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+
+    cluster_shape = tuple(ttnn_mesh_device.shape)
+    k, p, temp = _make_sampling_params(
+        ttnn_mesh_device, B, k_val=1, p_val=0.0, temp_val=1.0, cluster_shape=cluster_shape
+    )
+
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    worker_sub_device = ttnn.SubDevice([sub_core_grids])
+    sub_device_manager = ttnn_mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    stall_group_set = False
+    manager_loaded = False
+    try:
+        ttnn_mesh_device.load_sub_device_manager(sub_device_manager)
+        manager_loaded = True
+        ttnn_mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+        stall_group_set = True
+
+        tokens_tt, _ = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp)
+        tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
+
+        assert torch.all(tokens_host < valid_vocab_size)
+    finally:
+        if stall_group_set:
+            ttnn_mesh_device.reset_sub_device_stall_group()
+        if manager_loaded:
+            ttnn_mesh_device.clear_loaded_sub_device_manager()
+        ttnn_mesh_device.remove_sub_device_manager(sub_device_manager)
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 8)], ids=["1x8"], indirect=True)
+def test_sampling1d_argmax_slices_qwen3_32b_padded_tail(ttnn_mesh_device):
+    B = 32
+    valid_vocab_size = 151936
+    padded_vocab_size = 152064
+    sampler = Sampling1D(
+        vocab_size=padded_vocab_size,
+        valid_vocab_size=valid_vocab_size,
+        mesh_device=ttnn_mesh_device,
+        allow_force_argmax=True,
+    )
+
+    logits_host = torch.full((1, 1, B, padded_vocab_size), -1.0, dtype=torch.bfloat16)
+    logits_host[..., valid_vocab_size:] = 0.0
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+
+    tokens_tt, _ = sampler.decode_forward(logits_tt)
+    tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
+
+    assert torch.all(tokens_host < valid_vocab_size)
 
 
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
@@ -1398,11 +1496,10 @@ def test_sampling1d_logprobs_topk(ttnn_mesh_device):
 
     The old single-token logprob path only computes on multi-device shards with
     num_devices ∈ {8, 32} (T3K 1×8). On 1×1/1×2 the calculator returns None even when enabled.
-    On 1×8, with k=1/p=0/temp=1 the sampled token is the argmax, so its logprob must match
-    torch.log_softmax(logits)[argmax].
+    On 1×8, the returned logprob must match torch.log_softmax(logits)[sampled_token] within
+    bf16 reduction tolerance. PCC is intentionally not used here because the k=1 random-bf16 case
+    is near-constant and can degenerate to zero variance on device.
     """
-    from models.common.utility_functions import comp_pcc
-
     torch.manual_seed(42)
     B = 32
     vocab_size = 32768  # divisible by 8
@@ -1425,17 +1522,16 @@ def test_sampling1d_logprobs_topk(ttnn_mesh_device):
 
     assert log_probs is not None, "logprobs must be computed on a 1×8 mesh when enabled"
 
-    # output_tensor is replicated across devices; read a single device copy → shape (1,1,1,B)
-    lp_host = ttnn.to_torch(ttnn.get_device_tensors(log_probs)[0]).reshape(-1)[:B].float()
+    # output_tensor shape (1,1,1,B), replicated across devices — match test_sampling.py read path
+    mesh_composer = ttnn.ConcatMeshToTensor(ttnn_mesh_device, dim=3)
+    lp_host = ttnn.to_torch(log_probs, mesh_composer=mesh_composer)[:, :, 0, :B].reshape(-1).float()
     tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
 
     # Reference: log_softmax over the full vocab (fp32), indexed at the sampled token.
     ref_log_softmax = torch.log_softmax(logits_host.float().squeeze(), dim=-1)  # [B, V]
     ref_lp = ref_log_softmax[torch.arange(B), tokens_host]
-
-    passing, pcc_msg = comp_pcc(ref_lp, lp_host, pcc=0.99)
-    print(f"\n  logprobs PCC (V={vocab_size}, mesh={cluster_shape}): {pcc_msg}")
-    assert passing, f"logprobs PCC below threshold: {pcc_msg}"
+    max_abs_error = torch.max(torch.abs(ref_lp - lp_host)).item()
+    assert max_abs_error <= 5e-2, f"logprobs max abs error {max_abs_error:.6f} exceeds bf16 tolerance"
 
 
 # ==============================================================================

@@ -46,14 +46,15 @@ std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_de
               continue;
           }
 
+          tunnels_from_mmio.reserve(all_eth_connections.at(mmio_chip_id).size());
           for (const auto& [eth_chan, connected_chip_chan] : all_eth_connections.at(mmio_chip_id)) {
               const auto& other_chip_id = std::get<0>(connected_chip_chan);
               if (device_ids.contains(other_chip_id)) {
                   device_ids.erase(other_chip_id);
                   std::vector<ChipId> first_stop = {other_chip_id};
                   auto it = std::find(tunnels_from_mmio.begin(), tunnels_from_mmio.end(), first_stop);
-                  TT_ASSERT(it == tunnels_from_mmio.end(), "Duplicate first tunnel stop found.");
-                  tunnels_from_mmio.push_back(first_stop);
+                  TT_FATAL(it == tunnels_from_mmio.end(), "Duplicate first tunnel stop found.");
+                  tunnels_from_mmio.push_back(std::move(first_stop));
               }
           }
 
@@ -82,16 +83,16 @@ std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_de
                   "Detected ethernet connections did not match expected device connectivity, try re-running tt-topology.");
           }
 
-          TT_ASSERT(!tunnels_from_mmio.empty(), "Must have at least 1 tunnel from MMIO Device.");
+          TT_FATAL(!tunnels_from_mmio.empty(), "Must have at least 1 tunnel from MMIO Device.");
           uint32_t tunnel_depth = tunnels_from_mmio[0].size();
           for (auto& dev_vec : tunnels_from_mmio) {
-              TT_ASSERT(dev_vec.size() == tunnel_depth, "All tunnels must have same depth.");
+              TT_FATAL(dev_vec.size() == tunnel_depth, "All tunnels must have same depth.");
               if (dev_vec.size() > MAX_TUNNEL_DEPTH) {
                   dev_vec.resize(MAX_TUNNEL_DEPTH);
               }
               dev_vec.insert(dev_vec.begin(), mmio_chip_id);
           }
-          tunnels_from_mmio_device.insert({mmio_chip_id, tunnels_from_mmio});
+          tunnels_from_mmio_device.insert({mmio_chip_id, std::move(tunnels_from_mmio)});
       }
 
       return tunnels_from_mmio_device;

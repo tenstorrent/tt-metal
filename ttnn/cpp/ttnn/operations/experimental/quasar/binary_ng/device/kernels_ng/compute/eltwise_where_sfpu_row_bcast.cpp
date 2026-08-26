@@ -11,6 +11,7 @@
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -22,7 +23,7 @@ void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
-    CircularBuffer exp_cb_out(cb_out);
+    DataflowBuffer exp_cb_out(cb_out);
 
 #if SRC_BCAST
     constexpr auto cb_bcast = cb_in0;
@@ -37,23 +38,25 @@ void kernel_main() {
     constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
 
-    CircularBuffer exp_cb_in0(cb_in0);
-    CircularBuffer exp_cb_in1(cb_in1);
-    CircularBuffer exp_cb_bcast(cb_bcast);
-    CircularBuffer exp_cb_llk_post(cb_llk_post);
-    CircularBuffer exp_cb_left(cb_left);
-    CircularBuffer exp_cb_right(cb_right);
+    DataflowBuffer exp_cb_in0(cb_in0);
+    DataflowBuffer exp_cb_in1(cb_in1);
+    DataflowBuffer exp_cb_bcast(cb_bcast);
+    DataflowBuffer exp_cb_llk_post(cb_llk_post);
+    DataflowBuffer exp_cb_left(cb_left);
+    DataflowBuffer exp_cb_right(cb_right);
 
     unary_op_init_common(cb_in0, cb_out);
     BINARY_SFPU_INIT
 
+    compute_kernel_hw_startup(cb_bcast, cb_llk_post);
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         exp_cb_in0.wait_front(num_tiles_per_cycle);
         exp_cb_in1.wait_front(num_tiles_per_cycle);
 
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
-        unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
+        reconfig_data_format(cb_bcast, cb_bcast);
+        unary_bcast_init<BroadcastType::ROW>(cb_bcast);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(cb_bcast, 0, 0);

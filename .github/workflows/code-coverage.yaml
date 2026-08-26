@@ -27,6 +27,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -35,22 +36,22 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: CodeCoverage
-      build-wheel: true
-      tracy: true
+      build-inplace-wheel: true
+      tracy: false
       skip-tt-train: false
       platform: "Ubuntu 22.04"
       enable-lto: false
 
   run-ttnn-tests:
     needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/ttnn-post-commit.yaml
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     secrets: inherit
     with:
       enabled-skus: "wh_n300_civ2"
       docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      merge-gate-call: false
       collect-coverage: true
 
   run-metal-runtime-tests:

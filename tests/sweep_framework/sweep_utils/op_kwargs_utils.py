@@ -119,8 +119,21 @@ def _is_named_tensor_kwarg(key: str, all_keys: Set[str]) -> bool:
 
 
 def _is_memory_config_dict(value: Any) -> bool:
-    """Check if a value looks like a memory config dict."""
-    return isinstance(value, dict) and ("memory_layout" in value or "buffer_type" in value)
+    """Check if a value looks like a memory config dict.
+
+    Handles the flat form ({"memory_layout": ..., "buffer_type": ...}) and the
+    serialized wrapper form ({"type": "...MemoryConfig", "data": {"memory_layout":
+    ...}}). Without the wrapper case, a sharded input_*_memory_config serialized
+    in wrapper form falls through parse_dict_value and is dropped to None, then
+    silently degrades to DRAM-interleaved (memory_config mismatch vs master)."""
+    if not isinstance(value, dict):
+        return False
+    if "memory_layout" in value or "buffer_type" in value:
+        return True
+    if "MemoryConfig" in str(value.get("type", "")):
+        return True
+    data = value.get("data")
+    return isinstance(data, dict) and ("memory_layout" in data or "buffer_type" in data)
 
 
 def _is_compute_kernel_config_dict(value: Any) -> bool:
@@ -227,11 +240,44 @@ def _parse_unary_op(value: Any) -> Any:
         return value
 
 
+def _is_unary_with_param_dict(value: Any) -> bool:
+    """Check for a UnaryWithParam dict {type: 'UnaryWithParam', value: 'UnaryWithParam(op_type=UnaryOpType::SILU, ...)'}."""
+    return isinstance(value, dict) and value.get("type") == "UnaryWithParam"
+
+
+def _parse_unary_with_param(value: Any) -> Any:
+    """Parse a UnaryWithParam dict to a ttnn.UnaryWithParam (the form eltwise
+    ops' ``activations`` kwarg expects). Format:
+    ``UnaryWithParam(op_type=UnaryOpType::SILU)`` or with ``param=<float>``."""
+    if not _is_unary_with_param_dict(value):
+        return value
+    import re as _re
+
+    s = str(value.get("value", ""))
+    m = _re.search(r"UnaryOpType::(\w+)", s)
+    if not m:
+        return value
+    try:
+        import ttnn as _ttnn
+
+        op = getattr(_ttnn.UnaryOpType, m.group(1))
+        pm = _re.search(r"param\s*[=:]\s*(-?\d+\.?\d*(?:[eE]-?\d+)?)", s)
+        if pm:
+            return _ttnn.UnaryWithParam(op, float(pm.group(1)))
+        return _ttnn.UnaryWithParam(op)
+    except (ImportError, AttributeError, ValueError):
+        return value
+
+
 def _maybe_parse_unary_list(value: Any) -> Any:
-    """If value is a list of UnaryOpType dicts, convert each element."""
+    """If value is a list of UnaryOpType or UnaryWithParam dicts, convert each."""
     if isinstance(value, list) and value and all(_is_unary_op_dict(v) for v in value):
         parsed = [_parse_unary_op(v) for v in value]
-        # Return parsed list only if every element converted to an enum
+        if all(not isinstance(p, dict) for p in parsed):
+            return parsed
+    # Fused-activation lists carry UnaryWithParam dicts (e.g. add/mul activations).
+    if isinstance(value, list) and value and all(_is_unary_with_param_dict(v) for v in value):
+        parsed = [_parse_unary_with_param(v) for v in value]
         if all(not isinstance(p, dict) for p in parsed):
             return parsed
     return value
@@ -484,3 +530,73 @@ def extract_named_tensor_kwargs(kwargs: Dict[str, Any], tensor_name: str) -> Opt
         "memory_config": kwargs.get(f"{tensor_name}_memory_config"),
         "tensor_placement": kwargs.get(f"{tensor_name}_tensor_placement"),
     }
+
+
+def comp_pcc_chunked(golden, calculated, pcc_threshold=0.99, chunk=8 * 1024 * 1024):
+    """Exact Pearson PCC via single-pass streaming float64 sums — O(chunk) memory.
+
+    The standard comp_pcc clones both tensors, builds several full-size NaN/Inf
+    boolean masks, and runs a float64 corrcoef; for ~1e9-element tensors that
+    exhausts host RAM (the device op itself is fine). This accumulates the same
+    correlation statistics in fixed-size chunks without materializing full-size
+    intermediates, so it validates arbitrarily large outputs.
+    """
+    import math
+
+    import torch
+
+    g = golden.reshape(-1)
+    c = calculated.reshape(-1)
+    if c.dtype != g.dtype:
+        try:
+            c = c.to(g.dtype)
+        except Exception:
+            pass
+    n = int(g.numel())
+    Sg = Sc = Sgg = Scc = Sgc = 0.0
+    cnt = 0
+    for i in range(0, n, chunk):
+        gg = g[i : i + chunk].to(torch.float64)
+        cc = c[i : i + chunk].to(torch.float64)
+        m = torch.isfinite(gg) & torch.isfinite(cc)
+        if not bool(m.all()):
+            gg = gg[m]
+            cc = cc[m]
+        Sg += float(gg.sum())
+        Sc += float(cc.sum())
+        Sgg += float((gg * gg).sum())
+        Scc += float((cc * cc).sum())
+        Sgc += float((gg * cc).sum())
+        cnt += int(gg.numel())
+    if cnt == 0:
+        return True, 1.0
+    cov = cnt * Sgc - Sg * Sc
+    vg = cnt * Sgg - Sg * Sg
+    vc = cnt * Scc - Sc * Sc
+    if vg <= 0.0 or vc <= 0.0:
+        both_const = vg <= 0.0 and vc <= 0.0
+        return both_const, (1.0 if both_const else 0.0)
+    p = cov / math.sqrt(vg * vc)
+    p = max(-1.0, min(1.0, p))
+    return (p >= pcc_threshold), p
+
+
+def check_with_pcc_safe(expected, actual, pcc=0.99, large_numel=100_000_000):
+    """Drop-in for check_with_pcc that avoids host OOM on very large tensors.
+
+    Below `large_numel` elements it defers to the standard check_with_pcc; above
+    it, it uses the streaming comp_pcc_chunked (which the ~1e9-element linear /
+    multiply outputs need — the full-tensor PCC OOMs/crashes the host).
+    """
+    from tests.ttnn.utils_for_testing import check_with_pcc
+
+    if tuple(expected.shape) != tuple(actual.shape):
+        return (
+            False,
+            f"list(expected_pytorch_result.shape)={list(expected.shape)} vs "
+            f"list(actual_pytorch_result.shape)={list(actual.shape)}",
+        )
+    if expected.numel() <= large_numel:
+        return check_with_pcc(expected, actual, pcc)
+    ok, p = comp_pcc_chunked(expected, actual, pcc)
+    return (ok, f"PCC: {p}")

@@ -22,6 +22,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     string_similarity_score,
 )
 from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 
 @dataclass
@@ -421,7 +422,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     ((32, 2048), (16, 8192), (1, 128 * 1024)),
     ids=("short_context", "long_context", "128k_context"),
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 14227456}], indirect=True)
+@pytest.mark.parametrize("device_params", [{TRACE_MODEL_KEY_PARAM: "llama3.1-70b-legacy"}], indirect=True)
 def test_LlamaModel_demo(
     # model args
     implementation,

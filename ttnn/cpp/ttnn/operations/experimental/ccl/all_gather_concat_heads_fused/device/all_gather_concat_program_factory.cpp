@@ -234,6 +234,7 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
 
     llama_config llama_configuration;
     std::vector<CoreRange> q_cores_vector;
+    q_cores_vector.reserve(ring_core_ranges.size());
     uint32_t range_count = 0;
     for (auto cr : ring_core_ranges) {
         q_cores_vector.push_back(cr);
@@ -398,7 +399,9 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
     log_trace(tt::LogOp, "output_cores_this_device: {}", output_cores_this_device);
 
     std::vector<uint32_t> nlp_local_core_x;
+    nlp_local_core_x.reserve(llama_configuration.num_cores_input_tensor);
     std::vector<uint32_t> nlp_local_core_y;
+    nlp_local_core_y.reserve(llama_configuration.num_cores_input_tensor);
     for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
         auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[k]);
         nlp_local_core_x.push_back(this_core.x);
@@ -492,9 +495,13 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
 
         auto sem_mcast_ranges = CoreRangeSet(llama_configuration.semaphore_mcast_ranges);
         std::vector<uint32_t> mcast_start_x;
+        mcast_start_x.reserve(sem_mcast_ranges.ranges().size());
         std::vector<uint32_t> mcast_start_y;
+        mcast_start_y.reserve(sem_mcast_ranges.ranges().size());
         std::vector<uint32_t> mcast_end_x;
+        mcast_end_x.reserve(sem_mcast_ranges.ranges().size());
         std::vector<uint32_t> mcast_end_y;
+        mcast_end_y.reserve(sem_mcast_ranges.ranges().size());
 
         for (const auto& range : sem_mcast_ranges.ranges()) {
             auto start_core = mesh_device->worker_core_from_logical_core(range.start_coord);
@@ -547,7 +554,9 @@ AllGatherConcatMeshWorkloadFactory::cached_program_t AllGatherConcatMeshWorkload
         // the upper half of the tile and rest are in the lower half of tile.
         const auto& core = cores[i];
         std::vector<uint32_t> input_cores_x;
+        input_cores_x.reserve(llama_configuration.num_cores_input_tensor);
         std::vector<uint32_t> input_cores_y;
+        input_cores_y.reserve(llama_configuration.num_cores_input_tensor);
         std::array<uint32_t, 8> kernel_core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
         std::array<uint32_t, 8> kernel_core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
         for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {

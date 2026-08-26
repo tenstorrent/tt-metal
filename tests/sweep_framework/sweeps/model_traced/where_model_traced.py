@@ -95,6 +95,9 @@ def run(
 
     # Pre-allocate output tensor if the master config recorded one
     output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
+    # Initialised unconditionally: the traced-output block below is conditional, and the gather
+    # references this, so leaving it unbound raises UnboundLocalError on every vector that skips it.
+    ot_placement = None
     if output_tensor_info and output_tensor_info.get("shape"):
         ot_shape = tuple(output_tensor_info["shape"])
         ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
@@ -215,7 +218,11 @@ def run(
         # Op call
         start_time = start_measuring_time()
         output_tensor = ttnn.where(condition_tensor, input_tensor_b, input_tensor_c, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor,
+            device if is_mesh_device else None,
+            scatter_placement=(ot_placement or input_a_tensor_placement) if is_mesh_device else None,
+        )
         e2e_perf = stop_measuring_time(start_time)
     elif is_tensor_scalar:
         # Mixed: tensor true_value + scalar false_value
@@ -293,7 +300,11 @@ def run(
 
         start_time = start_measuring_time()
         output_tensor = ttnn.where(condition_tensor, input_tensor_b, scalar_false, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor,
+            device if is_mesh_device else None,
+            scatter_placement=(ot_placement or input_a_tensor_placement) if is_mesh_device else None,
+        )
         e2e_perf = stop_measuring_time(start_time)
 
         from tests.sweep_framework.sweep_utils.mesh_tensor_utils import reconcile_golden_to_actual
@@ -338,7 +349,11 @@ def run(
         # Op call
         start_time = start_measuring_time()
         output_tensor = ttnn.where(condition_tensor, scalar_true, scalar_false, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor,
+            device if is_mesh_device else None,
+            scatter_placement=(ot_placement or input_a_tensor_placement) if is_mesh_device else None,
+        )
         e2e_perf = stop_measuring_time(start_time)
 
     # Comparison

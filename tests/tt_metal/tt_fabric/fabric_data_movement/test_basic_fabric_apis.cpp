@@ -79,7 +79,7 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> PrepareBuffer(
 }
 
 void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_mesh = false) {
-    CoreCoord logical_core = {0, 0};
+    tt::tt_metal::CoreCoord logical_core = {0, 0};
     const auto& devices = fixture->get_devices();
     const size_t NUM_DEVICES = devices.size();
     bool invalid_test_scenario = !is_multi_mesh && NUM_DEVICES < 2;
@@ -94,7 +94,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
         const auto& src_device = devices[src_idx];
         auto src_fabric_node_id =
-            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
+            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_device_ids()[0]);
         uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
 
         uint32_t result_size = NUM_DEVICES * sizeof(uint32_t);
@@ -114,7 +114,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
         // Add mesh_id and chip_id pairs for all destinations
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =
-                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());
+                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_device_ids()[0]);
             runtime_args.push_back(*dst_fabric_node_id.mesh_id);  // dst_mesh_id
             runtime_args.push_back(dst_fabric_node_id.chip_id);   // dst_chip_id
         }
@@ -129,16 +129,16 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
     }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        fixture->RunProgramNonblocking(devices[src_idx], programs[src_idx]);
+        fixture->RunProgramNonblocking(devices[src_idx], std::move(programs[src_idx]));
     }
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        fixture->WaitForSingleProgramDone(devices[src_idx], programs[src_idx]);
+        fixture->WaitForSingleProgramDone(devices[src_idx]);
     }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
         const auto& src_device = devices[src_idx];
         auto src_fabric_node_id =
-            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
+            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_device_ids()[0]);
 
         std::vector<uint32_t> result_data;
         tt::tt_metal::distributed::ReadShard(
@@ -148,7 +148,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
             tt::tt_metal::distributed::MeshCoordinate({0, 0}));
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =
-                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());
+                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_device_ids()[0]);
             uint32_t actual_direction = result_data[dst_idx];
             if (src_fabric_node_id == dst_fabric_node_id) {
                 // Self-routing should return INVALID_DIRECTION
@@ -181,7 +181,7 @@ void RunSetUnicastRouteTest(
     }
 
     // Select appropriate logical core based on core type - this will be device-specific
-    std::vector<CoreCoord> logical_cores(NUM_DEVICES);
+    std::vector<tt::tt_metal::CoreCoord> logical_cores(NUM_DEVICES);
     for (size_t dev_idx = 0; dev_idx < NUM_DEVICES; dev_idx++) {
         if (core_type == HalProgrammableCoreType::IDLE_ETH) {
             // Use first available IDLE_ETH core for each device
@@ -203,8 +203,7 @@ void RunSetUnicastRouteTest(
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Get mesh shape to determine if it's 2D fabric
-    auto src_fabric_node_id =
-        control_plane.get_fabric_node_id_from_physical_chip_id(devices[0]->get_devices()[0]->id());
+    auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(devices[0]->get_device_ids()[0]);
     auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
@@ -225,7 +224,7 @@ void RunSetUnicastRouteTest(
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
         const auto& src_device = devices[src_idx];
         auto src_fabric_node_id =
-            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
+            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_device_ids()[0]);
         uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
 
         uint32_t result_size = NUM_DEVICES * RESULT_SIZE_PER_DEVICE * sizeof(uint32_t);
@@ -247,7 +246,7 @@ void RunSetUnicastRouteTest(
         // Add mesh_id and chip_id pairs for all destinations
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =
-                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());
+                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_device_ids()[0]);
             runtime_args.push_back(*dst_fabric_node_id.mesh_id);  // dst_mesh_id
             runtime_args.push_back(dst_fabric_node_id.chip_id);   // dst_chip_id
         }
@@ -280,34 +279,27 @@ void RunSetUnicastRouteTest(
     }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        fixture->RunProgramNonblocking(devices[src_idx], programs[src_idx]);
+        fixture->RunProgramNonblocking(devices[src_idx], std::move(programs[src_idx]));
     }
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        fixture->WaitForSingleProgramDone(devices[src_idx], programs[src_idx]);
+        fixture->WaitForSingleProgramDone(devices[src_idx]);
     }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
         const auto& src_device = devices[src_idx];
         auto src_fabric_node_id =
-            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
+            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_device_ids()[0]);
 
         uint32_t result_size = NUM_DEVICES * RESULT_SIZE_PER_DEVICE * sizeof(uint32_t);
         std::vector<uint32_t> result_data;
 
-        // Use tt_metal detail API to read from device L1 memory directly
-        // Note: This is experimental and bypasses safety checks
         CoreType read_core_type = (core_type == HalProgrammableCoreType::IDLE_ETH) ? CoreType::ETH : CoreType::WORKER;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            src_device->get_devices()[0],
-            logical_cores[src_idx],
-            result_addrs[src_idx],
-            result_size,
-            result_data,
-            read_core_type);
+        tt::tt_metal::slow_dispatch::ReadFromL1(
+            *src_device, logical_cores[src_idx], result_addrs[src_idx], result_size, result_data, read_core_type);
 
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =
-                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());
+                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_device_ids()[0]);
             if (!is_2d_fabric && std::abs(
                                      static_cast<long>(src_fabric_node_id.chip_id) -
                                      static_cast<long>(dst_fabric_node_id.chip_id)) >= MAX_CHIPS_LOWLAT_1D) {
@@ -344,8 +336,7 @@ std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> GenerateAllValid
     }
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto src_fabric_node_id =
-        control_plane.get_fabric_node_id_from_physical_chip_id(devices[0]->get_devices()[0]->id());
+    auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(devices[0]->get_device_ids()[0]);
     auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
 
     uint32_t ns_dim = mesh_shape[0];
@@ -926,11 +917,11 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode7) {
 }
 
 // Helper to generate all worker coordinate pairs in the compute grid (sender coord == receiver coord)
-std::vector<std::pair<CoreCoord, CoreCoord>> GetAllWorkerCoordPairs(CoreCoord grid_size) {
-    std::vector<std::pair<CoreCoord, CoreCoord>> pairs;
+std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord>> GetAllWorkerCoordPairs(tt::tt_metal::CoreCoord grid_size) {
+    std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreCoord>> pairs;
     for (size_t x = 0; x < grid_size.x; x++) {
         for (size_t y = 0; y < grid_size.y; y++) {
-            CoreCoord coord{x, y};
+            tt::tt_metal::CoreCoord coord{x, y};
             pairs.push_back({coord, coord});
         }
     }
@@ -939,7 +930,7 @@ std::vector<std::pair<CoreCoord, CoreCoord>> GetAllWorkerCoordPairs(CoreCoord gr
 
 // UDM Mode Worker Coordinate Tests - test fabric communication with all workers simultaneously
 TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteAllWorkerCoords) {
-    auto grid_size = get_devices()[0]->get_devices()[0]->compute_with_storage_grid_size();
+    auto grid_size = get_devices()[0]->compute_with_storage_grid_size();
     auto all_worker_pairs = GetAllWorkerCoordPairs(grid_size);
     log_info(tt::LogTest, "Testing {} worker pairs for write operations", all_worker_pairs.size());
     for (uint32_t dst : {5u, 6u, 7u}) {
@@ -950,7 +941,7 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteAllWorkerCoords) 
 }
 
 TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllWorkerCoords) {
-    auto grid_size = get_devices()[0]->get_devices()[0]->compute_with_storage_grid_size();
+    auto grid_size = get_devices()[0]->compute_with_storage_grid_size();
     auto all_worker_pairs = GetAllWorkerCoordPairs(grid_size);
     log_info(tt::LogTest, "Testing {} worker pairs for read operations", all_worker_pairs.size());
     for (uint32_t dst : {5u, 6u, 7u}) {
@@ -964,7 +955,7 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteAllWorkerCoordsDu
     if (arch_ == tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Dual RISC test does not support wormhole";
     }
-    auto grid_size = get_devices()[0]->get_devices()[0]->compute_with_storage_grid_size();
+    auto grid_size = get_devices()[0]->compute_with_storage_grid_size();
     auto all_worker_pairs = GetAllWorkerCoordPairs(grid_size);
     log_info(tt::LogTest, "Testing {} worker pairs for write operations", all_worker_pairs.size());
     for (uint32_t dst : {5u, 6u, 7u}) {
@@ -978,7 +969,7 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllWorkerCoordsDua
     if (arch_ == tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Dual RISC test does not support wormhole";
     }
-    auto grid_size = get_devices()[0]->get_devices()[0]->compute_with_storage_grid_size();
+    auto grid_size = get_devices()[0]->compute_with_storage_grid_size();
     auto all_worker_pairs = GetAllWorkerCoordPairs(grid_size);
     log_info(tt::LogTest, "Testing {} worker pairs for read operations", all_worker_pairs.size());
     for (uint32_t dst : {5u, 6u, 7u}) {

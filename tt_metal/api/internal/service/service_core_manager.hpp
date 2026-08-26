@@ -14,6 +14,7 @@
 
 namespace tt::tt_metal {
 class IDevice;
+class MetalContext;
 class MetalEnvImpl;
 using DeviceAddr = uint64_t;
 }  // namespace tt::tt_metal
@@ -86,9 +87,9 @@ class ServiceCoreManagerImpl;
 //
 class ServiceCoreManager {
 public:
-    // Constructed by MetalContext. Stores a reference to the MetalEnvImpl that owns the cluster,
-    // rtoptions and hal it queries (mirrors dispatch_core_manager).
-    explicit ServiceCoreManager(MetalEnvImpl& env);
+    // Constructed by MetalContext. Stores MetalEnvImpl (cluster/rtoptions/hal) and the owning
+    // MetalContext (for sibling accessors such as get_dispatch_core_manager).
+    ServiceCoreManager(MetalEnvImpl& env, MetalContext& ctx);
     ~ServiceCoreManager();
 
     // Returns dispatch-column cores not yet allocated to FD infra or claimed as service cores.
@@ -133,6 +134,12 @@ public:
     // Allocates top-down (from L1_END downward) so service buffers and CBs (which grow up
     // from DEFAULT_UNRESERVED) stay in disjoint zones — same convention as worker-core L1 buffers.
     DeviceAddr allocate_l1(IDevice* device, CoreCoord core, size_t size);
+    // Reserve [addr, L1_top) in this core's allocator so a later allocate_l1() won't hand out an
+    // address overlapping externally-owned L1 at the top of the core (e.g. MeshSocket config /
+    // data-FIFO buffers the device allocator placed there; both allocators grow top-down from
+    // L1_END independently and would otherwise collide). Must be called before any allocate_l1()
+    // on this core. TT_FATALs if addr is at/above the range top or the span is already allocated.
+    void reserve_l1_to_top(IDevice* device, CoreCoord core, DeviceAddr addr);
     void deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr);
     size_t bytes_available(IDevice* device, CoreCoord core) const;
 

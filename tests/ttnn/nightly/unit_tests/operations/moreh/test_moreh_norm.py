@@ -17,6 +17,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
 )
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def make_torch_tensors(input_shape, dim, keepdim=False, *, dtype=torch.float32):
     """
@@ -59,6 +62,16 @@ def torch_norm(
     """
     if is_linalg_vector_norm:
         torch_output = torch.linalg.vector_norm(torch_input, ord=p, dim=dim, keepdim=keepdim)
+    elif not keepdim and dim is not None and dim != []:
+        # The deprecated torch.norm mishandles keepdim=False for some orders (e.g. p=0)
+        # when the reduction collapses to a scalar, raising
+        # "output with shape [] doesn't match the broadcast shape [1]". keepdim=True is
+        # unaffected, so reduce with keepdim and squeeze the reduced dims ourselves.
+        torch_output = torch.norm(torch_input, p=p, dim=dim, keepdim=True)
+        reduce_dims = [dim] if isinstance(dim, int) else list(dim)
+        rank = torch_input.dim()
+        for d in sorted((d % rank for d in reduce_dims), reverse=True):
+            torch_output = torch_output.squeeze(d)
     else:
         torch_output = torch.norm(torch_input, p=p, dim=dim, keepdim=keepdim)
     torch_input_grad = None
@@ -240,6 +253,11 @@ def run_moreh_norm_output_mode(
 
     actual_output = ttnn.operations.moreh.norm(ttnn_input, **kwargs)
     actual_output = ttnn.to_torch(actual_output)
+
+    # For a rank-1 input reduced with keepdim=False the torch reference is rank-0 ([]) while
+    # the ttnn output keeps a trailing dim ([1]); they are the same scalar. Match shapes so the
+    # comparison doesn't trip torch's "shape [] doesn't match broadcast shape [1]" error.
+    expected_output = expected_output.reshape(actual_output.shape)
 
     passing, out = comp_allclose(expected_output, actual_output, rtol=rtol, atol=atol)
     logger.info(f"output's {out}")
@@ -539,6 +557,8 @@ def test_moreh_norm_callback(dim_rtol_atol, keepdim, device, is_linalg_vector_no
     """
     torch.manual_seed(2024)
     dim, rtol, atol = dim_rtol_atol
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_norm(
@@ -675,6 +695,8 @@ def test_moreh_norm_backward_callback(dim_rtol_atol, keepdim, device, is_linalg_
     """
     torch.manual_seed(2024)
     dim, rtol, atol = dim_rtol_atol
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_norm_backward(

@@ -12,7 +12,7 @@ namespace ttnn::experimental::prim {
 struct AllReduceAsyncDeviceOperation {
     using operation_attributes_t = AllReduceAsyncParams;
     using tensor_args_t = AllReduceAsyncInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<AllReduceAsyncMeshWorkloadFactory>;
@@ -24,8 +24,6 @@ struct AllReduceAsyncDeviceOperation {
     static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
@@ -47,6 +45,7 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
     std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
-    bool use_optimal_ccl_for_llama);
+    bool use_optimal_ccl_for_llama,
+    bool fp32_dest_acc = false);
 
 }  // namespace ttnn::prim

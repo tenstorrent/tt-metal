@@ -12,6 +12,15 @@ import ttnn
 from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
 
 
+def get_hf_visual(model):
+    """Return the HF vision tower.
+
+    transformers 5.x nests the vision tower under ``model.model.visual`` (``Qwen2_5_VLModel``);
+    4.x exposed it directly as ``model.visual``. Accept either.
+    """
+    return model.visual if hasattr(model, "visual") else model.model.visual
+
+
 def merge_vision_tokens(
     input_ids,
     input_embeds,

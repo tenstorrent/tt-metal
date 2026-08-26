@@ -40,15 +40,15 @@ inline void _calculate_tanh_(const int iterations)
 template <bool APPROXIMATION_MODE>
 inline void _init_tanh_()
 {
-    std::uint32_t imm0;
-    std::uint32_t imm1;
-    std::uint32_t imm2;
-    imm0 = 0x1DFF; // 0.90625*x
-    imm1 = 0x481A; // 0.09375*x + 0.8125
-    imm2 = 0xFF00; // 1
-    _sfpu_load_imm16_(0, imm0);
-    _sfpu_load_imm16_(1, imm1);
-    _sfpu_load_imm16_(2, imm2);
+    // Load the 3 fp16b LUT coefficients into LReg0-2 via sfpi. Each imm16 is loaded as an
+    // unsigned 16-bit value (right-justified, MSBs zeroed), matching the original
+    // _sfpu_load_imm16_ -> TT_SFPLOADI mod0==2 path that _calculate_tanh_'s lut() reads back.
+    //   imm0 = 0x1DFF -> 0.90625*x
+    //   imm1 = 0x481A -> 0.09375*x + 0.8125
+    //   imm2 = 0xFF00 -> 1
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(static_cast<std::uint16_t>(0x1DFF));
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(static_cast<std::uint16_t>(0x481A));
+    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(static_cast<std::uint16_t>(0xFF00));
 }
 
 } // namespace sfpu

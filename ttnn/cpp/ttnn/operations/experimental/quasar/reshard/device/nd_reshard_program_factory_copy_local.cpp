@@ -4,25 +4,41 @@
 
 #include "ttnn/operations/experimental/quasar/reshard/device/nd_reshard_program_factory_copy_local.hpp"
 
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include "tt-metalium/host_api.hpp"
+#include <filesystem>
+#include <numeric>
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
+#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
+namespace {
+
+// Names for the copy-local-shard factory (role-prefixed for unity-build hygiene).
+const TensorParamName COPY_LOCAL_INPUT{"copy_local_input"};
+const TensorParamName COPY_LOCAL_OUTPUT{"copy_local_output"};
+const KernelSpecName COPY_LOCAL_BRISC{"copy_local_brisc"};
+const KernelSpecName COPY_LOCAL_NCRISC{"copy_local_ncrisc"};
+
+}  // namespace
+
 template <bool local_is_input>
-ProgramDescriptor NdReshardCopyLocalShardFactory<local_is_input>::create_descriptor(
+ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is_input>::create_program_artifacts(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
     auto& output = output_tensor;
 
+    const auto& input_mt = input.mesh_tensor();
+    const auto& output_mt = output.mesh_tensor();
+
     auto* input_buffer = input.buffer();
     auto* output_buffer = output.buffer();
-
-    const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
-    const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
 
     // Choose buffer and aligned page size based on local_is_input flag
     auto* local_buffer = local_is_input ? input_buffer : output_buffer;
@@ -78,59 +94,114 @@ ProgramDescriptor NdReshardCopyLocalShardFactory<local_is_input>::create_descrip
         uint32_t output_page_size = output_buffer->page_size();
         base_page_size = std::gcd(input_page_size, output_page_size);
     }
-    auto compile_time_args = input_accessor_args.get_compile_time_args();
-    output_accessor_args.append_to(compile_time_args);
-    compile_time_args.push_back(aligned_page_size);
-    compile_time_args.push_back(other_aligned_page_size);
-    compile_time_args.push_back(static_cast<uint32_t>(local_is_input));
-    compile_time_args.push_back(logical_width);
-    compile_time_args.push_back(source_width);
-    compile_time_args.push_back(destination_width);
-    compile_time_args.push_back(base_page_size);
 
-    ProgramDescriptor desc;
-
-    KernelDescriptor brisc_desc;
-    brisc_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    brisc_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/reshard/device/kernels/nd_reshard_copy_local_shards.cpp";
-    brisc_desc.core_ranges = grid;
-    brisc_desc.config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_0,
-        .noc = NOC::RISCV_0_default,
+    // Tensor parameters replace the legacy TensorAccessorArgs CTA plumbing and the
+    // input/output Buffer-base CRTA bindings. Both kernels (brisc + ncrisc) bind both.
+    Group<TensorParameter> tensor_parameters = {
+        TensorParameter{.unique_id = COPY_LOCAL_INPUT, .spec = input_mt.tensor_spec()},
+        TensorParameter{.unique_id = COPY_LOCAL_OUTPUT, .spec = output_mt.tensor_spec()},
     };
-    brisc_desc.compile_time_args = compile_time_args;
 
-    KernelDescriptor ncrisc_desc;
-    ncrisc_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    ncrisc_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/reshard/device/kernels/nd_reshard_copy_local_shards.cpp";
-    ncrisc_desc.core_ranges = grid;
-    ncrisc_desc.config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_1,
-        .noc = NOC::RISCV_1_default,
+    // Shared CTAs for both kernels.
+    const KernelSpec::CompileTimeArgs compile_time_args = {
+        {"src_page_size", aligned_page_size},
+        {"dst_page_size", other_aligned_page_size},
+        {"is_reader", static_cast<uint32_t>(local_is_input)},
+        {"logical_width", logical_width},
+        {"src_width", source_width},
+        {"dst_width", destination_width},
+        {"transfer_size", base_page_size},
     };
-    ncrisc_desc.compile_time_args = std::move(compile_time_args);
 
-    // Common runtime args: [input_addr, output_addr, num_shards, shard_id_stride]
-    // arg 0 / arg 1 are the buffer base addresses (binding via Buffer*).
-    brisc_desc.emplace_common_runtime_args({input_buffer, output_buffer, num_shards, shard_id_stride});
-    ncrisc_desc.emplace_common_runtime_args({input_buffer, output_buffer, num_shards, shard_id_stride});
+    const std::filesystem::path kernel_source(
+        "ttnn/cpp/ttnn/operations/experimental/quasar/reshard/device/kernels/nd_reshard_copy_local_shards.cpp");
 
-    // Per-core unique runtime args: [start_shard_id]
-    // brisc copies shards [0, num_data_cores*2, num_data_cores*4, num_data_cores*6, ...]
-    // ncrisc copies shards [num_data_cores, num_data_cores*3, num_data_cores*5, num_data_cores*7, ...]
+    auto make_tensor_bindings = []() {
+        return Group<TensorBinding>{
+            TensorBinding{.tensor_parameter_name = COPY_LOCAL_INPUT, .accessor_name = "src"},
+            TensorBinding{.tensor_parameter_name = COPY_LOCAL_OUTPUT, .accessor_name = "dst"},
+        };
+    };
+
+    // Preserve the legacy explicit RISCV_0 / NOC RISCV_0_default placement.
+    DataMovementHardwareConfig brisc_hw;
+    if (input.device()->arch() == tt::ARCH::QUASAR) {
+        brisc_hw = DataMovementGen2Config{};
+    } else {
+        brisc_hw = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+        };
+    }
+    KernelSpec brisc{
+        .unique_id = COPY_LOCAL_BRISC,
+        .source = kernel_source,
+        .tensor_bindings = make_tensor_bindings(),
+        .compile_time_args = compile_time_args,
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"first_shard_id"}, .common_runtime_arg_names = {"num_shards", "shard_id_stride"}},
+        .hw_config = std::move(brisc_hw),
+    };
+
+    // Preserve the legacy explicit RISCV_1 / NOC RISCV_1_default placement.
+    DataMovementHardwareConfig ncrisc_hw;
+    if (input.device()->arch() == tt::ARCH::QUASAR) {
+        ncrisc_hw = DataMovementGen2Config{};
+    } else {
+        ncrisc_hw = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+        };
+    }
+    KernelSpec ncrisc{
+        .unique_id = COPY_LOCAL_NCRISC,
+        .source = kernel_source,
+        .tensor_bindings = make_tensor_bindings(),
+        .compile_time_args = compile_time_args,
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"first_shard_id"}, .common_runtime_arg_names = {"num_shards", "shard_id_stride"}},
+        .hw_config = std::move(ncrisc_hw),
+    };
+
+    // Common runtime args (broadcast to all nodes).
+    ProgramRunArgs::KernelRunArgs brisc_run_args{.kernel = COPY_LOCAL_BRISC};
+    ProgramRunArgs::KernelRunArgs ncrisc_run_args{.kernel = COPY_LOCAL_NCRISC};
+    brisc_run_args.common_runtime_arg_values = {{"num_shards", num_shards}, {"shard_id_stride", shard_id_stride}};
+    ncrisc_run_args.common_runtime_arg_values = {{"num_shards", num_shards}, {"shard_id_stride", shard_id_stride}};
+
+    // Per-core unique runtime args: [first_shard_id]
+    // brisc copies shards [0, num_data_cores*2, num_data_cores*4, ...]
+    // ncrisc copies shards [num_data_cores, num_data_cores*3, num_data_cores*5, ...]
     uint32_t start_shard_id = 0;
     for (const auto& core : cores_vec) {
-        brisc_desc.emplace_runtime_args(core, {start_shard_id});
-        ncrisc_desc.emplace_runtime_args(core, {start_shard_id + shard_id_stride / 2});
+        brisc_run_args.runtime_arg_values["first_shard_id"][core] = start_shard_id;
+        ncrisc_run_args.runtime_arg_values["first_shard_id"][core] = start_shard_id + shard_id_stride / 2;
         ++start_shard_id;
     }
 
-    desc.kernels.push_back(std::move(brisc_desc));
-    desc.kernels.push_back(std::move(ncrisc_desc));
+    ProgramSpec spec{
+        .name = "nd_reshard_copy_local_shards",
+        .kernels = {std::move(brisc), std::move(ncrisc)},
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units =
+            {
+                WorkUnitSpec{.name = "wu", .kernels = {COPY_LOCAL_BRISC, COPY_LOCAL_NCRISC}, .target_nodes = grid},
+            },
+    };
 
-    return desc;
+    ProgramRunArgs run_args{
+        .kernel_run_args = {std::move(brisc_run_args), std::move(ncrisc_run_args)},
+        .tensor_args =
+            {
+                {COPY_LOCAL_INPUT, input_mt},
+                {COPY_LOCAL_OUTPUT, output_mt},
+            },
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 // Explicit template instantiations

@@ -24,7 +24,8 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
+    const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
@@ -39,7 +40,11 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    // Geometry override for an HMA-shared paged cache. Q drives head_dim; supply this
+    // call's view (block_size + num_kv_heads) when the cache was allocated for a different
+    // layer. nullopt ⇒ cache shape.
+    std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt);
 
 /// Flexible: chunk start index in device tensor [1] (int32). Read at runtime; use for trace.
 ttnn::Tensor chunked_scaled_dot_product_attention(
@@ -51,7 +56,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<float> scale = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    std::optional<operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
@@ -76,6 +82,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
+    std::size_t logical_l,
     operations::transformer::SDPAProgramConfig program_config,
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -92,7 +99,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
-    std::optional<uint32_t> kv_actual_isl = std::nullopt);
+    std::optional<uint32_t> kv_actual_isl = std::nullopt,
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
+    std::optional<uint32_t> sliding_window_size = std::nullopt,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k = std::nullopt,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,
@@ -114,7 +125,19 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
-    std::optional<uint32_t> kv_actual_isl = std::nullopt);
+    std::optional<uint32_t> kv_actual_isl = std::nullopt,
+    // Trace-safe metadata path: when set (both together), the per-chunk scalars (kv_cache_batch_idx /
+    // kv_actual_isl / logical_n) are read on-device from these two 1-element uint32 DRAM tensors instead
+    // of being baked into the program, so one captured ttnn trace replays across chunks. slot_id holds
+    // the cache-user slot (was metadata[0]); kv_actual_isl_tensor holds the prior valid global KV length
+    // (was metadata[1]).
+    const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
+    // (user, layer)-major KV-cache batch dim (metadata path only). The readers compute the cache slot
+    // on-device as slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx (mirrors
+    // update_padded_kv_cache). Resolve to 1/0 when nullopt -> slot = slot_id[0] (existing behavior).
+    std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
 
 struct ExecuteExpRingJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(

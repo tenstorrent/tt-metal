@@ -334,21 +334,31 @@ struct p_sfpu
     constexpr static std::uint32_t LCONST_1    = 10;
     constexpr static std::uint32_t LCONST_neg1 = 11;
 
+    // LREG destination index 12-15 captures the instruction into Load Macro
+    // Instruction register 4-7 instead of executing it.
+    constexpr static std::uint32_t MACRO_CAPTURE_INSTR4 = 12;
+    constexpr static std::uint32_t MACRO_CAPTURE_INSTR5 = 13;
+    constexpr static std::uint32_t MACRO_CAPTURE_INSTR6 = 14;
+    constexpr static std::uint32_t MACRO_CAPTURE_INSTR7 = 15;
+
     struct sfpmem
     {
         // SFPLOAD/SFPSTORE InstrMod format-select codes (Tensix SFPU ISA, SFPLOAD/SFPSTORE table).
-        // Signed integers are sign-magnitude in HW; the ISA names them SMAG<N> — this enum uses
-        // INT<N> (INT32 = ISA SMAG32, INT16 = SMAG16, INT8 = SMAG8).
+        // Signed integers are sign-magnitude in HW; the ISA names them SMAG<N> — those are the
+        // primary names here, with INT<N> kept as legacy LLK aliases.
         constexpr static std::uint32_t DEFAULT =
             0b0000; // format is determined by combination of SrcB exponent width of ALU_FORMAT_SPEC_REG and also ACC_CTRL_SFPU_Fp32
         constexpr static std::uint32_t FP16A      = 0b0001; // fp16 (fp16_a)
         constexpr static std::uint32_t FP16B      = 0b0010; // bfloat (fp16_b)
         constexpr static std::uint32_t FP32       = 0b0011; // fp32 (MOD_FP32 in the register file)
-        constexpr static std::uint32_t INT32      = 0b0100; // signed int32, sign-magnitude (ISA SMAG32)
-        constexpr static std::uint32_t INT8       = 0b0101; // signed int8, sign-magnitude (ISA SMAG8)
+        constexpr static std::uint32_t SMAG32     = 0b0100; // signed int32, sign-magnitude (ISA SMAG32)
+        constexpr static std::uint32_t INT32      = SMAG32; // legacy LLK name for SMAG32
+        constexpr static std::uint32_t SMAG8      = 0b0101; // signed int8, sign-magnitude (ISA SMAG8)
+        constexpr static std::uint32_t INT8       = SMAG8;  // legacy LLK name for SMAG8
         constexpr static std::uint32_t UINT16     = 0b0110; // unsigned int16
         constexpr static std::uint32_t HI16       = 0b0111; // half-word access, value in the upper 16 bits
-        constexpr static std::uint32_t INT16      = 0b1000; // signed int16, sign-magnitude (ISA SMAG16)
+        constexpr static std::uint32_t SMAG16     = 0b1000; // signed int16, sign-magnitude (ISA SMAG16)
+        constexpr static std::uint32_t INT16      = SMAG16; // legacy LLK name for SMAG16
         constexpr static std::uint32_t LO16       = 0b1001; // half-word access, value in the lower 16 bits
         constexpr static std::uint32_t STACK_MODE = 0b1010; // SMAG32 via the SFPU stack pointer
         constexpr static std::uint32_t UINT8      = 0b1011; // unsigned int8
@@ -408,9 +418,30 @@ struct p_sfpu
         constexpr static std::uint32_t RoundZero  = 0x2;
     };
 
-    // TO DO: Clean up if needed #44713
-    // Needed for exp_tile() to be architecture agnostic
+    // bfloat16 encoding of 1.0. Used by the architecture-agnostic exp_tile() API;
+    // Quasar currently accepts only this unscaled value.
     constexpr static std::uint32_t kCONST_1_FP16B = 0x3F80;
+};
+
+struct p_sfpconfig
+{
+    // SFPCONFIG config_dest register indices (Tensix SFPU ISA, SFPCONFIG table).
+    constexpr static std::uint32_t MACRO_INSTR0      = 0x0; // Load Macro Instruction 0
+    constexpr static std::uint32_t MACRO_INSTR1      = 0x1; // Load Macro Instruction 1
+    constexpr static std::uint32_t MACRO_INSTR2      = 0x2; // Load Macro Instruction 2
+    constexpr static std::uint32_t MACRO_INSTR3      = 0x3; // Load Macro Instruction 3
+    constexpr static std::uint32_t MACRO_SEQ0        = 0x4; // Load Macro Sequence 0
+    constexpr static std::uint32_t MACRO_SEQ1        = 0x5; // Load Macro Sequence 1
+    constexpr static std::uint32_t MACRO_SEQ2        = 0x6; // Load Macro Sequence 2
+    constexpr static std::uint32_t MACRO_SEQ3        = 0x7; // Load Macro Sequence 3
+    constexpr static std::uint32_t MACRO_CTRL        = 0x8; // Load Macro Control
+    constexpr static std::uint32_t LUT_CONST_LREG9   = 0x9; // LUT constant lreg[9]
+    constexpr static std::uint32_t LUT_CONST_LREG10  = 0xA; // LUT constant lreg[10]
+    constexpr static std::uint32_t PROG_CONST_LREG11 = 0xB; // Programmable constant lreg[11]
+    constexpr static std::uint32_t PROG_CONST_LREG12 = 0xC; // Programmable constant lreg[12]
+    constexpr static std::uint32_t PROG_CONST_LREG13 = 0xD; // Programmable constant lreg[13]
+    constexpr static std::uint32_t PROG_CONST_LREG14 = 0xE; // Programmable constant lreg[14]
+    constexpr static std::uint32_t SFPU_CTRL         = 0xF; // SFPU Control Register
 };
 
 struct p_cleardvalid
@@ -504,6 +535,20 @@ struct p_sfpnonlinear
     constexpr static std::uint32_t SQRT_MODE  = 0x3;
     constexpr static std::uint32_t EXP_MODE   = 0x4;
     constexpr static std::uint32_t TANH_MODE  = 0x5;
+};
+
+// SFPSWAP instruction modes (mode-to-int mapping matches the Blackhole reference).
+struct p_sfpswap
+{
+    constexpr static std::uint32_t UNCONDITIONALLY = 0;
+    constexpr static std::uint32_t ALL_ROWS_MAX    = 1;
+    constexpr static std::uint32_t ROWS_01_MAX     = 2;
+    constexpr static std::uint32_t ROWS_02_MAX     = 3;
+    constexpr static std::uint32_t ROWS_03_MAX     = 4;
+    constexpr static std::uint32_t ROW_0_MAX       = 5;
+    constexpr static std::uint32_t ROW_1_MAX       = 6;
+    constexpr static std::uint32_t ROW_2_MAX       = 7;
+    constexpr static std::uint32_t ROW_3_MAX       = 8;
 };
 
 } // namespace ckernel

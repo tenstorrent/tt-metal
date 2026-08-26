@@ -305,12 +305,13 @@ ExpRingJointSDPAResultSpec ExpRingJointSDPADeviceOperation::compute_output_specs
     stats_shape[2] = (input.padded_shape()[2] + joint_padded_seq) * 2;
 
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             input.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        TensorSpec(stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+        tt::tt_metal::TensorSpec(
+            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
 ExpRingJointSDPAResult ExpRingJointSDPADeviceOperation::create_output_tensors(
@@ -321,34 +322,6 @@ ExpRingJointSDPAResult ExpRingJointSDPADeviceOperation::create_output_tensors(
         create_device_tensor(output_specs[EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.input_q.device()),
         create_device_tensor(output_specs[EXP_RING_JOINT_SDPA_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
     };
-}
-
-tt::stl::hash::hash_t ExpRingJointSDPADeviceOperation::compute_program_hash(
-    const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
-    std::vector<Tensor> input_tensors = {
-        tensor_args.input_q,
-        tensor_args.input_k,
-        tensor_args.input_v,
-    };
-    // Joint tensors are optional; presence (and thus tensor count) distinguishes the cache key.
-    if (tensor_args.joint_q.has_value()) {
-        input_tensors.push_back(tensor_args.joint_q.value());
-        input_tensors.push_back(tensor_args.joint_k.value());
-        input_tensors.push_back(tensor_args.joint_v.value());
-    }
-    input_tensors.push_back(tensor_args.gathered_k);
-    input_tensors.push_back(tensor_args.gathered_v);
-    return tt::tt_metal::operation::hash_operation<ExpRingJointSDPADeviceOperation>(
-        input_tensors,
-        args.joint_strategy,
-        args.scale,
-        args.logical_n,
-        args.ring_size,
-        args.compute_kernel_config,
-        args.program_config,
-        args.dim,
-        args.num_links,
-        args.cluster_axis);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADeviceOperation::create_op_performance_model(

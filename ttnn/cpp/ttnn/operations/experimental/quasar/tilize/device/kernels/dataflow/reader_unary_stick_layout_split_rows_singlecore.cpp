@@ -5,40 +5,37 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
-#include "api/core_local_mem.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Constexpr
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t tile_height = 32;
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    const uint32_t num_tiles_per_block = get_arg_val<uint32_t>(3);
-    const uint32_t block_width_size = get_arg_val<uint32_t>(4);
-    const uint32_t num_full_blocks_in_row = get_arg_val<uint32_t>(5);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(8);
+    const auto num_sticks = get_arg(args::num_sticks);
+    const auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
+    const auto block_width_size = get_arg(args::block_width_size);
+    const auto num_full_blocks_in_row = get_arg(args::num_full_blocks_in_row);
+    const auto start_stick_id = get_arg(args::start_stick_id);
 
-    constexpr auto src_tensor_args = TensorAccessorArgs<1>();
-
-    const auto s = TensorAccessor(src_tensor_args, src_addr);
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(dfb::in);
 
     uint32_t stick_ids[tile_height];
     uint32_t stick_offset = 0;
 
     auto read_tiles = [&](const uint32_t& num_tiles, const uint32_t& width_size) {
         cb_in0.reserve_back(num_tiles);
-        uint32_t l1_write_addr = cb_in0.get_write_ptr();
         for (uint32_t k = 0; k < tile_height; k++) {
-            CoreLocalMem<uint32_t> dst(l1_write_addr);
             noc.async_read(
-                s, dst, width_size, {.page_id = stick_ids[k], .offset_bytes = stick_offset}, {.offset_bytes = 0});
-            l1_write_addr += width_size;
+                s,
+                cb_in0,
+                width_size,
+                {.page_id = stick_ids[k], .offset_bytes = stick_offset},
+                {.offset_bytes = k * width_size});
         }
         stick_offset += width_size;
         noc.async_read_barrier();

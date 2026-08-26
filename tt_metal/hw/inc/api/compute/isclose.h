@@ -74,6 +74,6 @@ ALWI void isclose_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, uin
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isclose_binary_tile_init() { MATH((SFPU_BINARY_INIT(isclose))); }
+ALWI void isclose_binary_tile_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(isclose, sfpu::isclose_init))); }
 
 }  // namespace ckernel

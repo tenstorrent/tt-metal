@@ -1,0 +1,12 @@
+# tt-nn-validation-smoke (deb) for PR gate.
+#
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
+# For max allowed timeout refer to .github/time_budget.yaml (ttnn -> pr_gate).
+
+- name: ttnn validation smoke
+  cmd: /usr/bin/tt-nn-validation-smoke
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  team: ttnn
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev

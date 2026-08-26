@@ -17,7 +17,7 @@ namespace ttnn::prim::qsr {
 struct InterleavedToShardedDeviceOperation {
     using operation_attributes_t = InterleavedToShardedParams;
     using tensor_args_t = InterleavedToShardedInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     using program_factory_t = std::variant<InterleavedToShardedProgramFactory>;
@@ -30,9 +30,6 @@ struct InterleavedToShardedDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 

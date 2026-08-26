@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
@@ -70,8 +71,8 @@ void kernel_main() {
     constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     Noc noc;
-    CircularBuffer cb_src(cb_id_src);
-    CircularBuffer cb_src_b(cb_id_src_b);
+    DataflowBuffer cb_src(cb_id_src);
+    DataflowBuffer cb_src_b(cb_id_src_b);
 
     constexpr uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_src);
@@ -180,32 +181,28 @@ void kernel_main() {
                             copy_one_element<element_size>(l1_write_addr_src, scratch_l1_addr);
                             FILL_TILE_WITH_FIRST_COLUMN_RM(l1_write_addr_src, current_chunk_elements);
 
-                            uint32_t curr_l1_b = l1_write_addr_src_b;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_b = row_block_b + k * s_h_b;
                                 noc.async_read(
                                     src_b,
-                                    CoreLocalMem<uint32_t>(curr_l1_b),
+                                    cb_src_b,
                                     current_read_len_b,
                                     {.page_id = row_idx_b, .offset_bytes = current_chunk_offset},
-                                    {});
-                                curr_l1_b += current_chunk_bytes;
+                                    {.offset_bytes = k * current_chunk_bytes});
                             }
                             noc.async_read_barrier();
 
                             FILL_TILE_WITH_FIRST_ROW_RM(l1_write_addr_src, current_chunk_elements, limit);
 #else
                             const uint32_t current_read_len_a = align(current_chunk_bytes, alignment_a);
-                            uint32_t curr_l1_a = l1_write_addr_src;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_a = row_block_a + k * s_h_a;
                                 noc.async_read(
                                     src,
-                                    CoreLocalMem<uint32_t>(curr_l1_a),
+                                    cb_src,
                                     current_read_len_a,
                                     {.page_id = row_idx_a, .offset_bytes = current_chunk_offset},
-                                    {});
-                                curr_l1_a += current_chunk_bytes;
+                                    {.offset_bytes = k * current_chunk_bytes});
                             }
                             noc.async_read_barrier();
 

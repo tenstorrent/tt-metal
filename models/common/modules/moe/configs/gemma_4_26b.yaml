@@ -4,9 +4,25 @@ cluster_axis: 0
 batch_per_device: 32
 hidden_size: 2816
 select_experts_k: 8
-num_routed_experts: 64
+num_routed_experts: 128
 num_shared_experts: 0
 has_bias: false
+
+# gate (routing front-end): n_group 1 = generalized op (ungrouped) / 8 = deepseek op (grouped top-8).
+# Gemma4 router = linear → softmax(all) → top-8 → renormalize. TTMoEGate covers exactly that
+# (score_func=softmax ≡ softmax-front + renorm, the global Z cancels; routed_scaling_factor=1.0 → no
+# scalar scale). 128 experts → padded to the op's 256-face.
+n_group: 1
+score_func: softmax
+routed_scaling_factor: 1.0
+
+# REMINDER — Gemma4's gate has steps TTMoEGate does NOT cover (caller must apply, see modular_gemma4.py
+# Gemma4TextRouter.forward):
+#   step 1: RMSNorm(hidden) (with_scale=False) — before this gate
+#   step 2: hidden *= self.scale[hidden] * hidden_size**-0.5 — a learned per-dim input scale × 1/√hidden
+#   step 6b: top_k_weights *= per_expert_scale[selected] — a learned PER-EXPERT output scale ([num_experts]),
+#            NOT a scalar, so it can't be folded into routed_scaling_factor.
+gate_notes: "Gemma4: TTMoEGate does steps 3-6a (linear→softmax→top8→renorm). MISSING upstream: RMSNorm + per-dim input scale (×1/√hidden); MISSING downstream: per-expert output scale per_expert_scale[selected] (not a scalar). SOFTMAX kept POST-topk (softmax-over-selected, the default softmax_position) — mathematically ≡ the model's softmax-over-all→top8→renorm (global Z cancels, no bias); set softmax_position: pre for the literal front softmax (numerically-stable exp over all experts)."
 
 compute:
   intermediate_size: 704

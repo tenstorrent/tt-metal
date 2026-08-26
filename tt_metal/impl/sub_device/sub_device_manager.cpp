@@ -10,6 +10,7 @@
 #include <sub_device_types.hpp>
 #include <tt_align.hpp>
 #include <tt_stl/span.hpp>
+#include <algorithm>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -28,7 +29,7 @@
 #include "distributed/mesh_trace.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include "vector_aligned.hpp"
+#include "impl/dispatch/vector_aligned.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
@@ -47,7 +48,7 @@ static_assert(
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
 SubDeviceManager::SubDeviceManager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
+    ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++), sub_devices_(sub_devices.begin(), sub_devices.end()), device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     context_id_ = extract_context_id(device);
@@ -61,7 +62,7 @@ SubDeviceManager::SubDeviceManager(
 }
 
 SubDeviceManager::SubDeviceManager(
-    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, ttsl::Span<const SubDevice> sub_devices) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     device_(device),
@@ -150,6 +151,15 @@ std::shared_ptr<MeshTraceBuffer> SubDeviceManager::get_trace(const MeshTraceId& 
     return nullptr;
 }
 
+DeviceAddr SubDeviceManager::get_max_trace_high_water_mark() const {
+    DeviceAddr max_high_water_mark = 0;
+    for (const auto& trace_entry : trace_buffer_pool_) {
+        const auto& trace_buffer = trace_entry.second;
+        max_high_water_mark = std::max(max_high_water_mark, trace_buffer->dram_high_water_mark);
+    }
+    return max_high_water_mark;
+}
+
 bool SubDeviceManager::has_allocations() const {
     for (const auto& allocator : sub_device_allocators_) {
         if (allocator && allocator->get_num_allocated_buffers() > 0) {
@@ -163,7 +173,7 @@ DeviceAddr SubDeviceManager::local_l1_size() const { return local_l1_size_; }
 
 const std::vector<SubDeviceId>& SubDeviceManager::get_sub_device_stall_group() const { return sub_device_stall_group_; }
 
-void SubDeviceManager::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void SubDeviceManager::set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) {
     TT_FATAL(!sub_device_ids.empty(), "sub_device_ids to stall must not be empty");
     for (const auto& sub_device_id : sub_device_ids) {
         TT_FATAL(

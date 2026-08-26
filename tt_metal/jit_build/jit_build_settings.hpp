@@ -6,36 +6,71 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace tt::tt_metal {
 
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
 //
-// The CRTA buffer is laid out as three back-to-back sections:
-//   [ user-named CRTAs | TensorBinding section | vararg CRTAs ]
+// The CRTA buffer is laid out as four back-to-back sections:
+//   [ user-named CRTAs | TensorBinding section | Scratchpad section | vararg CRTAs ]
 //
-// Sections 1 and 2 are fixed-size at spec-resolution time. This struct records their
-// sizes (and the resulting vararg section start offset) so consumers don't have to
-// re-derive them by walking the binding handles.
+// Sections 1–3 are fixed-size at spec-resolution time. This struct records their sizes (and the
+// resulting vararg section start offset) so consumers don't have to re-derive them by walking the
+// binding handles.
 //
 // Section 2 (TensorBinding) is variable-size: each binding contributes
 // (1 + num_runtime_field_crta_words) words — the always-present base-address word, plus
 // any runtime accessor fields the TensorParameter opted into (currently: shape, for
 // sharded TensorParameters with dynamic_tensor_shape=true).
+//
+// Section 3 (Scratchpad) holds one base-address word per scratchpad binding. The address is
+// allocated by the framework at program-compile time (not user-supplied), and patched into the
+// buffer then. It sits BEFORE varargs so each binding's absolute CRTA offset is fixed at codegen
+// time (varargs are open-ended / runtime-counted, so a section after them would not be).
 struct KernelCrtaLayout {
     // Section 1 size, in words. Equals the number of user-named CRTAs.
     uint32_t num_named_words = 0;
     // Section 2 size, in words. Equals the sum-over-bindings of (1 + num_runtime_field_crta_words).
     uint32_t binding_section_words = 0;
-    // Start offset of section 3 (varargs), in words.
+    // Section 3 size, in words. Equals the number of scratchpad bindings (one address word each).
+    uint32_t scratchpad_section_words = 0;
+    // Start offset of section 4 (varargs), in words.
     // Stored (not computed on demand) so it can be set from a known value at spec resolution
     // and asserted against the derived sum if a consumer wants belt-and-suspenders verification.
     uint32_t vararg_section_offset = 0;
 };
+
+////////////////////////////////////////////////////////////
+// Blaze-only experimental named args
+// Removal is tracked by issue #50953
+// Dispatch type for named runtime args — determines which device-side accessor to use.
+enum class RuntimeArgDispatch : uint8_t {
+    COMMON,   // get_common_arg_val (shared across all cores)
+    PER_CORE  // get_arg_val (unique per core)
+};
+
+// Entry in the named runtime arg namespace map.
+// length == 1: emits constexpr Arg (scalar).
+// length > 1:  emits constexpr ArrayArg (array of contiguous slots).
+struct NamedRuntimeArgEntry {
+    std::string field;
+    uint32_t index;
+    uint32_t length = 1;
+    RuntimeArgDispatch dispatch;
+};
+
+// Namespace → [entries] map for named runtime arg header generation.
+using NamedRuntimeArgNamespaces = std::map<std::string, std::vector<NamedRuntimeArgEntry>>;
+
+// Namespace → [(field, value)] map for named compile-time arg header generation.
+using NamedCTArgNamespaces = std::map<std::string, std::vector<std::pair<std::string, uint32_t>>>;
+////////////////////////////////////////////////////////////
 
 // Abstract base class for kernel specialization
 // Higher levels of the SW derive from this and fill in build details not known to the build system
@@ -48,6 +83,10 @@ public:
     virtual std::string_view get_compiler_opt_level() const = 0;
     // Returns the linker optimization level
     virtual std::string_view get_linker_opt_level() const = 0;
+    // Returns true when this kernel opted into RISC-V Vector (Zve32f) code generation for its
+    // TRISC2 (pack) compile (ComputeConfig::enable_trisc2_rvv). Default off: the build recipe
+    // is byte-identical to a build without this knob.
+    virtual bool get_trisc2_rvv_enabled() const { return false; }
 
     // Called to process the user defines
     virtual void process_defines(std::function<void(const std::string& define, const std::string& value)>) const = 0;
@@ -58,12 +97,12 @@ public:
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const = 0;
 
     // Called to process the user kernel resource bindings (Metal 2.0 APIs)
-    //  - DFB accessors
-    //  - Semaphore accessors
-    //  - Tensor accessors
-    virtual void process_dataflow_buffer_local_accessor_handles(
+    //  - DFB bindings
+    //  - Semaphore bindings
+    //  - Tensor bindings
+    virtual void process_dataflow_buffer_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
-    virtual void process_semaphore_local_accessor_handles(
+    virtual void process_semaphore_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
@@ -82,6 +121,14 @@ public:
                                                     uint32_t cta_offset,
                                                     uint32_t addr_crta_offset,
                                                     uint32_t num_runtime_field_crta_words)>) const {}
+
+    // Scratchpad binding callback emits the codegen-relevant fields:
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
+    //  - size_bytes: the scratchpad's per-node size, emitted as the binding token's compile-time size
+    //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
+    //    scratchpad's (framework-allocated) L1 base address
+    virtual void process_scratchpad_binding_handles(
+        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
 
     // Named RTA/CRTA schema (Metal 2.0 APIs).
     // The order of names determines the byte offset of each arg within the named-args
@@ -102,6 +149,19 @@ public:
     // which matches the legacy-kernel case where the buffer has only varargs.
     virtual KernelCrtaLayout get_crta_layout() const { return {}; }
 
+    // Metal 2.0: length of the CTA-vararg prefix in positional compile_time_args.
+    // Default 0 for non–Metal 2.0 kernels.
+    virtual uint32_t get_compile_time_vararg_count() const { return 0; }
+
+    ////////////////////////////////////////////////////////////
+    // Blaze-only experimental named args
+    // Removal is tracked by issue #50953
+    // Called to process named runtime arg namespaces for generated header (blaze_rt_args:: namespace).
+    // Default no-op so Kernel subclasses that don't use named args compile unchanged.
+    virtual void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const {}
+    // Called to process named compile-time arg namespaces for generated header (blaze_ct_args:: namespace).
+    virtual void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const {}
+    ////////////////////////////////////////////////////////////
     // Called to process additional include paths (e.g., kernel source directory for relative includes)
     virtual void process_include_paths(const std::function<void(const std::string& path)>&) const {}
 

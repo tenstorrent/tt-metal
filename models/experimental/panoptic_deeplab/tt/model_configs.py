@@ -365,6 +365,16 @@ class ModelOptimisations:
         self.optimiser.setup_resnet_activation_fusion()
         self.optimiser.setup_resnet_conv1_deallocation()
 
+        # Accumulate the K reduction in SRAM (packer_l1_acc) for the deep bottleneck 1x1 reduce/expand
+        # convolutions. These stride-1 1x1 layers are lowered to matmul with a large reduction split
+        # across many K-blocks; packer accumulation keeps that accumulation in fp32 while avoiding the
+        # cross-block DEST reload. res4/res5 sit at 32x64 spatial resolution, so the resident fp32
+        # accumulation buffer fits in SRAM here (unlike the large-spatial early stages).
+        for stage, num_blocks in (("res4", 6), ("res5", 3)):
+            for block in range(num_blocks):
+                for conv in ("conv1", "conv3"):
+                    self.register_layer_override(f"{stage}.{block}.{conv}", packer_l1_acc=True)
+
     def setup_aspp(self):
         """
         Setup ASPP configurations for all 5 branches.
@@ -379,6 +389,12 @@ class ModelOptimisations:
         must have deallocate_activation=False to preserve the backbone output.
         """
         self.optimiser.setup_aspp()
+
+        # Accumulate the K reduction in SRAM (packer_l1_acc) for the 1x1 ASPP convolutions, which are
+        # lowered to matmul with a large K split across blocks (see setup_resnet_backbone). At 32x64
+        # resolution the resident fp32 accumulation buffer fits in SRAM.
+        for path in ("aspp.convs.0", "aspp.project"):
+            self.register_layer_override(path, packer_l1_acc=True)
 
     def setup_decoder(self, iteration_index: int = 0):
         """

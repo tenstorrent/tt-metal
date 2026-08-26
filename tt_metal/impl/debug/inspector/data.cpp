@@ -45,6 +45,8 @@ Data::Data(std::optional<int> rank, ContextId context_id) :
     context_id(context_id), logger(MetalContext::instance().rtoptions().get_inspector_log_path(), rank) {
     // Initialize RPC server if enabled
     const auto& rtoptions = MetalContext::instance().rtoptions();
+    mesh_buffer_logging_enabled = rtoptions.get_inspector_log_mesh_buffers();
+    runtime_entries_logging_enabled = rtoptions.get_inspector_log_runtime_entries();
     if (rtoptions.get_inspector_rpc_server_enabled()) {
         try {
             int port = rtoptions.get_inspector_rpc_server_port();
@@ -287,6 +289,12 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
     // Populate RPC response with build environment info for all devices
     auto result_build_envs = results.initBuildEnvs(build_envs_info.size());
     const auto fw_compile_hash = this->fw_compile_hash.load(std::memory_order_acquire);
+    const auto tensix_fw_launch_addr_value = [] {
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const auto tensix_core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        return hal.get_jit_build_config(tensix_core_type_idx, 0, 0).fw_launch_addr_value;
+    }();
+
     size_t i = 0;
     for (const auto& build_env : build_envs_info) {
         auto item = result_build_envs[i++];
@@ -296,10 +304,11 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
         build_info.setBuildKey(build_env.build_key);
         build_info.setFirmwarePath(build_env.firmware_root_path);
         build_info.setFwCompileHash(fw_compile_hash);
-        // Surface whether DRAM programmable RISC cores are enabled (Blackhole only)
-        // This reflects the runtime option used when initializing HAL on silicon.
+        // Surface whether DRAM programmable RISC cores are enabled (Blackhole only).
+        // Reflects what the HAL registered at init; see MetalEnvImpl for the enable conditions.
         build_info.setDramProgrammableCoresEnabled(
-            tt::tt_metal::MetalContext::instance().rtoptions().get_enable_blackhole_dram_programmable_cores());
+            tt::tt_metal::MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM));
+        build_info.setTensixFwLaunchAddrValue(tensix_fw_launch_addr_value);
     }
 }
 
@@ -356,6 +365,7 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
 
 void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results) {
     auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    auto& cluster = tt_metal::MetalContext::instance().get_cluster();
     auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
 
     auto chips_builder = results.initChips(device_ids.size());
@@ -368,11 +378,15 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
         std::vector<std::pair<uint32_t, uint32_t>> active_eth_xy;
         std::vector<std::pair<uint32_t, uint32_t>> idle_eth_xy;
 
-        for (const CoreCoord& logical_core : control_plane.get_active_ethernet_cores(device_id)) {
+        const auto active_eth_cores = control_plane.get_active_ethernet_cores(device_id);
+        active_eth_xy.reserve(active_eth_cores.size());
+        for (const CoreCoord& logical_core : active_eth_cores) {
             active_eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
-        for (const CoreCoord& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
+        const auto idle_eth_cores = control_plane.get_inactive_ethernet_cores(device_id);
+        idle_eth_xy.reserve(idle_eth_cores.size());
+        for (const CoreCoord& logical_core : idle_eth_cores) {
             idle_eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
@@ -386,6 +400,18 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
         };
         set_coords([&blocks](size_t n) { return blocks.initActiveEth(n); }, active_eth_xy);
         set_coords([&blocks](size_t n) { return blocks.initIdleEth(n); }, idle_eth_xy);
+
+        // DRAM cores Metal manages (TRANSLATED coords), reported only when DRAM programmable cores are
+        // available. get_metal_dram_cores omits the syseng-owned NOC0 worker endpoints (CMFW DRAM
+        // telemetry), where Metal runs no DRISC firmware, so tools dump only these cores.
+        std::vector<std::pair<uint32_t, uint32_t>> dram_cores_xy;
+        if (MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+            for (const auto& dram_core :
+                 cluster.get_soc_desc(device_id).get_metal_dram_cores(CoordSystem::TRANSLATED)) {
+                dram_cores_xy.emplace_back(dram_core.x, dram_core.y);
+            }
+        }
+        set_coords([&chip_entry](size_t n) { return chip_entry.initDramCores(n); }, dram_cores_xy);
     }
 }
 
@@ -645,6 +671,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(inspector_rpc_server_port);
     RT(inspector_capture_tensor_specs);
     RT(inspector_log_runtime_entries);
+    RT(inspector_log_mesh_buffers);
     RT_CUSTOM("inspector_log_path", rt.get_inspector_log_path().string());
     RT(serialize_inspector_on_dispatch_timeout);
     RT(riscv_debug_info_enabled);

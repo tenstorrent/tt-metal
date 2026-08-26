@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Op-level smoke test for ttnn.transformer.windowed_scaled_dot_product_attention.
+"""Op-level smoke test for windowed (block-diagonal) attention via
+ttnn.transformer.scaled_dot_product_attention(..., cu_window_seqlens=...).
 
 This intentionally lives next to the other SDPA op tests (instead of only under
 models/demos/qwen25_vl/) so that any change to the shared SDPA kernel helpers
@@ -15,6 +16,7 @@ Correctness is checked against torch SDPA with the equivalent block-diagonal
 window mask.
 """
 
+import os
 import torch
 import pytest
 from loguru import logger
@@ -33,13 +35,15 @@ def windowed_mask(seq_len, cu_window_seqlens):
 
 
 @pytest.mark.parametrize(
-    "seq_len, cu_window_seqlens",
+    "seq_len, chunk, cu_window_seqlens",
     [
-        (128, [0, 64, 128]),  # two equal tile-aligned windows
-        (128, [0, 32, 96, 128]),  # three uneven windows
-        (256, [0, 64, 128, 256]),  # larger sequence
+        (128, 32, [0, 64, 128]),  # two equal tile-aligned windows
+        (128, 32, [0, 32, 96, 128]),  # three uneven windows
+        (256, 32, [0, 64, 128, 256]),  # larger sequence
+        (96, 64, [0, 33, 64, 96]),  # sequence padded to chunk size; windowed mask owns padding
+        (129, 64, [0, 32, 97, 129]),  # partial final tile plus chunk padding
     ],
-    ids=["s128_w2", "s128_w3", "s256_w3"],
+    ids=["s128_w2", "s128_w3", "s256_w3", "s96_padded_chunk", "s129_partial_tile"],
 )
 @pytest.mark.parametrize("num_heads", [1, 8])
 @pytest.mark.parametrize(
@@ -53,9 +57,14 @@ def windowed_mask(seq_len, cu_window_seqlens):
     ],
     ids=["bf16", "bf8"],
 )
-def test_windowed_sdpa_smoke(device, dtype, pcc_threshold, num_heads, seq_len, cu_window_seqlens):
+# Both dest-accumulation modes are covered: fp32_dest_acc_en selects different compute paths
+# (False -> streaming on Blackhole, True -> standard), so both must stay correct.
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32acc", "no_fp32acc"])
+def test_windowed_sdpa_smoke(
+    device, dtype, pcc_threshold, num_heads, seq_len, chunk, cu_window_seqlens, fp32_dest_acc_en
+):
     torch.manual_seed(42)
-    b, dh, chunk = 1, 128, 32
+    b, dh = 1, 128
     scale = dh**-0.5
 
     q = torch.randn(b, num_heads, seq_len, dh, dtype=torch.bfloat16)
@@ -71,7 +80,7 @@ def test_windowed_sdpa_smoke(device, dtype, pcc_threshold, num_heads, seq_len, c
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=True,
     )
 
@@ -85,14 +94,15 @@ def test_windowed_sdpa_smoke(device, dtype, pcc_threshold, num_heads, seq_len, c
         dtype=ttnn.uint32,
     )
 
-    out_tt = ttnn.transformer.windowed_scaled_dot_product_attention(
+    out_tt = ttnn.transformer.scaled_dot_product_attention(
         q_tt,
         k_tt,
         v_tt,
-        cu_tt,
+        is_causal=False,
         scale=scale,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
+        cu_window_seqlens=cu_tt,
     )
     out = ttnn.to_torch(out_tt).to(torch.float32)
 

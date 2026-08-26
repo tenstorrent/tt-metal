@@ -11,6 +11,7 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -24,11 +25,23 @@ using namespace tt;
 
 namespace {
 
-// Worker-core list for the fill_cache work-split. batch_idx_fallback (excluded from the program
-// hash, baked into writer runtime args) is the SAME value on every core, so re-patching it on a
-// cache hit only needs the core *ordering* — not the per-core block counts. This helper is the
-// single source of truth for that ordering: both build_paged_fill_cache_descriptor (cache miss)
-// and PagedFillCacheDeviceOperation::get_dynamic_runtime_args (cache hit) call it, so the two
+// `noop` is the only thing that differs between the single-device and the mesh-workload factory: a
+// mesh coordinate outside operation_attributes.mesh_coords gets a noop program (kernels early-exit).
+// Single source of truth for that choice, called by both create_descriptor overloads and by
+// override_runtime_arguments — so the cache-hit patch mirrors select_program_factory by construction
+// (mesh_coords is nullopt on the single-device path, where the coordinate is ignored).
+bool paged_fill_cache_noop(
+    const PagedFillCacheParams& operation_attributes, const std::optional<ttnn::MeshCoordinate>& coord) {
+    if (operation_attributes.mesh_coords.has_value() && coord.has_value() &&
+        !operation_attributes.mesh_coords->contains(coord.value())) {
+        return true;
+    }
+    return operation_attributes.noop;
+}
+
+// Worker-core list for the fill_cache work-split. Single source of truth for core ordering: called by
+// both build_paged_fill_cache_descriptor (cache miss, emitting per-core runtime args) and
+// PagedFillCacheProgramFactory::override_runtime_arguments (cache hit, patching them), so the two
 // paths cannot drift in which cores they touch or in what order.
 std::vector<tt_metal::CoreCoord> compute_paged_fill_cache_cores(
     const PagedFillCacheParams& /*operation_attributes*/, const PagedFillCacheInputs& tensor_args) {
@@ -66,6 +79,7 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& page_table_tensor = tensor_args.page_table;
     const auto& batch_idx_tensor = tensor_args.batch_idx_tensor_opt;
+    const auto& valid_seq_len_tensor = tensor_args.valid_seq_len_tensor_opt;
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -135,6 +149,15 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
             input_batch);
     }
 
+    // valid_seq_len tensor: optional 1-element int giving the block-aligned real
+    // fill length (in tokens). When present, the writer restricts the bounded ring
+    // window to end at valid_seq_len instead of the padded input end (see kernel).
+    const bool use_valid_seq_len = valid_seq_len_tensor.has_value();
+    uint32_t valid_seq_len_stick_size_B = 4;
+    if (use_valid_seq_len) {
+        valid_seq_len_stick_size_B = valid_seq_len_tensor->element_size();
+    }
+
     tt_metal::IDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -152,7 +175,8 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
 
     tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
     tt::CBIndex page_table_cb_index = tt::CBIndex::c_1;
-    tt::CBIndex cb_batch_idx_id = tt::CBIndex::c_2;  // New CB for batch_idx_tensor
+    tt::CBIndex cb_batch_idx_id = tt::CBIndex::c_2;      // New CB for batch_idx_tensor
+    tt::CBIndex cb_valid_seq_len_id = tt::CBIndex::c_3;  // CB for valid_seq_len_tensor
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * single_tile_size,
@@ -182,6 +206,17 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
                 .buffer_index = static_cast<uint8_t>(cb_batch_idx_id),
                 .data_format = batch_idx_data_format,
                 .page_size = batch_idx_stick_size_B,
+            }}},
+        });
+    }
+    if (use_valid_seq_len) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = valid_seq_len_stick_size_B,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_valid_seq_len_id),
+                .data_format = tt::DataFormat::UInt32,
+                .page_size = valid_seq_len_stick_size_B,
             }}},
         });
     }
@@ -215,10 +250,17 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
         batch_idx_num_elements,        // 1 = legacy single-batch, N = batched
         num_blocks_of_work_per_batch,  // num_heads * input_seq_len_t, for row_id -> batch decode
         capacity_t,
+        // valid_seq_len_tensor compile-time args (positions 14..16). Position 15..16
+        // are only meaningful when use_valid_seq_len is true.
+        (uint32_t)use_valid_seq_len,
+        cb_valid_seq_len_id,
+        valid_seq_len_stick_size_B,
     };
     TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(page_table_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(batch_idx_tensor.has_value() ? batch_idx_tensor->buffer() : nullptr)
+        .append_to(writer_compile_time_args);
+    TensorAccessorArgs(valid_seq_len_tensor.has_value() ? valid_seq_len_tensor->buffer() : nullptr)
         .append_to(writer_compile_time_args);
 
     KernelDescriptor reader_desc;
@@ -240,7 +282,7 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
 
-    // Core list shared with get_dynamic_runtime_args (single source of truth for ordering).
+    // Core list shared with override_runtime_arguments (single source of truth for ordering).
     const auto cores = compute_paged_fill_cache_cores(operation_attributes, tensor_args);
 
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
@@ -276,6 +318,13 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
             writer_args.push_back(operation_attributes.batch_idx_fallback);  // batch_idx_fallback
         }
         writer_args.push_back(static_cast<uint32_t>(noop));  // noop flag
+        // Arg 6: valid_seq_len tensor address (Buffer*, framework re-patches on cache
+        // hit / trace replay) or 0 scalar when unused.
+        if (use_valid_seq_len) {
+            writer_args.push_back(valid_seq_len_tensor->buffer());
+        } else {
+            writer_args.push_back(static_cast<uint32_t>(0));
+        }
         writer_desc.emplace_runtime_args(core, writer_args);
         num_blocks_written += num_blocks_per_core;
     }
@@ -292,7 +341,8 @@ ProgramDescriptor PagedFillCacheProgramFactory::create_descriptor(
     const PagedFillCacheParams& operation_attributes,
     const PagedFillCacheInputs& tensor_args,
     Tensor& /*tensor_return_value*/) {
-    return build_paged_fill_cache_descriptor(operation_attributes, tensor_args, operation_attributes.noop);
+    return build_paged_fill_cache_descriptor(
+        operation_attributes, tensor_args, paged_fill_cache_noop(operation_attributes, std::nullopt));
 }
 
 ProgramDescriptor PagedFillCacheMeshWorkloadFactory::create_descriptor(
@@ -304,58 +354,77 @@ ProgramDescriptor PagedFillCacheMeshWorkloadFactory::create_descriptor(
     // program (kernels early-exit).  This preserves the legacy behavior of
     // dispatching a "dummy" program to every device in the mesh range so the
     // cached workload covers all coords.
-    bool noop = operation_attributes.noop;
-    if (operation_attributes.mesh_coords.has_value() && mesh_dispatch_coordinate.has_value()) {
-        const auto& mesh_coords_set = operation_attributes.mesh_coords.value();
-        if (!mesh_coords_set.contains(mesh_dispatch_coordinate.value())) {
-            noop = true;
-        }
-    }
-    return build_paged_fill_cache_descriptor(operation_attributes, tensor_args, noop);
+    return build_paged_fill_cache_descriptor(
+        operation_attributes, tensor_args, paged_fill_cache_noop(operation_attributes, mesh_dispatch_coordinate));
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> PagedFillCacheDeviceOperation::get_dynamic_runtime_args(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/,
+void PagedFillCacheProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const PagedFillCacheParams& operation_attributes,
+    const PagedFillCacheInputs& tensor_args,
+    Tensor& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // Coords excluded from a mesh dispatch build a noop program (kernels early-exit), so there is
-    // nothing meaningful to re-patch there.
-    if (operation_attributes.mesh_coords.has_value() && mesh_dispatch_coordinate.has_value() &&
-        !operation_attributes.mesh_coords.value().contains(mesh_dispatch_coordinate.value())) {
-        return {};
-    }
-
-    // batch-idx-tensor mode: the writer pushes the batch_idx tensor's Buffer* (writer arg 4), which
-    // the framework already re-patches by buffer base address. Nothing op-specific to re-apply.
-    if (tensor_args.batch_idx_tensor_opt.has_value()) {
-        return {};
-    }
-
-    // Scalar-fallback mode: batch_idx_fallback is excluded from the program hash (so two calls
-    // differing only in it cache-hit) yet baked into writer runtime arg index 4 — re-patch it on
-    // every dispatch or it freezes at the first cache-miss value. It is the SAME value on every
-    // core (operation_attributes.batch_idx_fallback, not per-core), so we emit one arg per core
-    // using the shared core-list helper (single source of truth for core ordering).
-    //
-    // noop is intentionally NOT re-patched: it is derived from the hashed mesh_coords (the mesh
-    // factory sets it per coord from coord-membership), so it is stable across cache hits for a
-    // fixed coord and is already correct in the cached program.
+    // Patch the cached program in place. Calling create_descriptor() here would re-pay the whole
+    // cache-MISS host cost on every hit (work-split, CoreRangeSet, TensorAccessorArgs, kernel-source
+    // strings, a fresh per-core arg vector for every core) plus a full apply over every kernel x core
+    // x arg. Both factories emit the same layout via build_paged_fill_cache_descriptor and differ only
+    // in `noop`, so one patch covers both variants — see paged_fill_cache_noop.
     //
     // Kernel push order in build_paged_fill_cache_descriptor: reader(0), writer(1).
-    // Writer rt args: [0]=dst, [1]=page_table, [2]=start_row_num, [3]=num_rows,
-    //                 [4]=batch_idx_fallback (scalar-fallback mode), [5]=noop.
+    // reader rt args: [0]=src, [1]=start_tile_id, [2]=num_rows, [3]=noop.
+    // writer rt args: [0]=dst, [1]=page_table, [2]=start_row_num, [3]=num_rows,
+    //                 [4]=batch_idx_tensor addr | batch_idx_fallback, [5]=noop,
+    //                 [6]=valid_seq_len addr | 0.
+    constexpr uint32_t kReaderKernelIdx = 0;
     constexpr uint32_t kWriterKernelIdx = 1;
-    constexpr uint32_t kBatchIdxFallbackArgIdx = 4;
 
+    // Buffer addresses: override supersedes resolve_bindings, so every Buffer* the descriptor
+    // emplaced is ours to re-apply. The op is in place (tensor_return_value aliases
+    // tensor_args.cache_tensor), so read the same tensors build_paged_fill_cache_descriptor does.
+    const auto src_addr = static_cast<uint32_t>(tensor_args.input_tensor.buffer()->address());
+    const auto dst_addr = static_cast<uint32_t>(tensor_args.cache_tensor.buffer()->address());
+    const auto page_table_addr = static_cast<uint32_t>(tensor_args.page_table.buffer()->address());
+    // Optional tensors: an absent one is emplaced as the literal 0 the descriptor pushes.
+    const uint32_t valid_seq_len_arg =
+        tensor_args.valid_seq_len_tensor_opt.has_value()
+            ? static_cast<uint32_t>(tensor_args.valid_seq_len_tensor_opt->buffer()->address())
+            : 0u;
+    // Writer arg 4 is a buffer address in batch-idx-tensor mode, and otherwise batch_idx_fallback —
+    // excluded from the program hash (so calls differing only in it cache-hit) yet baked into the
+    // arg, so it freezes at the first miss value unless re-applied here.
+    const uint32_t batch_idx_arg = tensor_args.batch_idx_tensor_opt.has_value()
+                                       ? static_cast<uint32_t>(tensor_args.batch_idx_tensor_opt->buffer()->address())
+                                       : operation_attributes.batch_idx_fallback;
+    // noop is hash-excluded too, and on the mesh path depends on the dispatch coordinate.
+    const auto noop_arg = static_cast<uint32_t>(paged_fill_cache_noop(operation_attributes, mesh_dispatch_coordinate));
+
+    // Not re-applied: start_tile_id / start_row_num / num_rows. They come from the work split over
+    // the input's padded shape and the device grid, both of which the program hash includes, so a
+    // cache hit has them identical by construction.
     const auto cores = compute_paged_fill_cache_cores(operation_attributes, tensor_args);
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(cores.size());
     for (const auto& core : cores) {
-        dynamic_args.push_back(
-            {kWriterKernelIdx, core, kBatchIdxFallbackArgIdx, operation_attributes.batch_idx_fallback});
+        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx, core);
+        reader_args[0] = src_addr;
+        reader_args[3] = noop_arg;
+
+        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
+        writer_args[0] = dst_addr;
+        writer_args[1] = page_table_addr;
+        writer_args[4] = batch_idx_arg;
+        writer_args[5] = noop_arg;
+        writer_args[6] = valid_seq_len_arg;
     }
-    return dynamic_args;
+    // No CB addresses to re-point: none of the four CBs is globally allocated (no .buffer/.tensor).
+}
+
+void PagedFillCacheMeshWorkloadFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const PagedFillCacheParams& operation_attributes,
+    const PagedFillCacheInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    PagedFillCacheProgramFactory::override_runtime_arguments(
+        program, operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
 }
 
 }  // namespace ttnn::experimental::prim

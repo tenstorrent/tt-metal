@@ -25,6 +25,7 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     direct_write/test_direct_write.cpp
     pcie_read_bw/test_pcie_read_bw.cpp
     pcie_write_bw/test_pcie_write_bw.cpp
+    device_pcie_loopback/test_device_pcie_loopback.cpp
     atomics/test_atomic_semaphore_bandwidth.cpp
     multicast_atomics/test_multicast_atomic_semaphore.cpp
     noc_api_latency/test_noc_api_latency.cpp
@@ -34,6 +35,7 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     matmul/test_matmul_1d_v2.cpp
     matmul/test_matmul_2d.cpp
     quasar_cache/test_quasar_cache.cpp
+    quasar_cache_perf/test_quasar_cache_perf.cpp
     quasar_examples/quasar_addrgen/test_addrgen_example.cpp
     quasar_examples/quasar_im2col/test_im2col_example.cpp
     quasar_examples/quasar_idma/test_idma_example.cpp

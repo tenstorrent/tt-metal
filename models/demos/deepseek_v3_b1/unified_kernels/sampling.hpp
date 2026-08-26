@@ -8,7 +8,7 @@
 #include "api/numeric/bfloat16.h"
 #include "../metadata/metadata.hpp"
 #ifdef TRISC_MATH
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sampling.h"
+#include "experimental/llk_sfpu/ckernel_sfpu_sampling.h"
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
@@ -120,25 +120,33 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
-#include "api/compute/transpose_wh.h"
-#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #include "api/compute/cumsum.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_unary/rand.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/rmsnorm.h"
+#include "api/compute/experimental/rmsnorm.h"
 
 #if defined(TRISC_UNPACK)
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_top32_rm_api.h"
+#include "experimental/llk_unpack_A_top32_rm_api.h"
 #endif
 #if defined(TRISC_MATH)
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_top32_rm_api.h"
-#include "../kernel_includes/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_deepseek_top32_rm.h"
+#include "experimental/llk_math_top32_rm_api.h"
+#include "sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h"
 template <bool legacy_compat = true>
 ALWI void sampling_recip_tile_scalar(uint32_t idst) {
+    // Programs the Newton-Raphson constant the legacy_compat=false path reads from
+    // vConstFloatPrgm0; compile-time no-op on the legacy path used here.
+    ckernel::sfpu::sampling_recip_init<legacy_compat>();
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_recip_scalar, (legacy_compat), idst, VectorMode::None);
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sampling_recip_scalar,
+        (legacy_compat, DST_ACCUM_MODE),
+        idst,
+        VectorMode::None);
 }
 
 ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {
@@ -188,8 +196,15 @@ ALWI void sampling_mul_unary_tile_first_column(uint32_t idst, uint32_t param) {
 }
 
 ALWI void sampling_add_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_add_binary_first_column, idst0, idst1, odst, VectorMode::C);
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sampling_binary_first_column,
+        (ckernel::sfpu::SamplingBinaryOp::add),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::C);
 }
 #endif
 
@@ -197,16 +212,24 @@ ALWI void sampling_add_binary_tile_first_column(uint32_t idst0, uint32_t idst1, 
 // these local so the core API can continue defaulting to the kernel-wide
 // MATH_FIDELITY macro, while sampling can force HiFi4 in only the softmax
 // normalization path.
-template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation, MathFidelity math_fidelity>
+template <PoolType reduce_type, ReduceDim reduce_dim, MathFidelity math_fidelity>
 ALWI void sampling_reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure(icb, icb_scaler, ocb, call_line);
-#ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler)));
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, math_fidelity, enforce_fp32_accumulation>()));
-    if constexpr (enforce_fp32_accumulation) {
-        MATH((tensix_sync()));
-        MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11)));
+#ifdef ARCH_BLACKHOLE
+    // BH REDUCE_ROW SUM/AVG uses MVMUL with swapped operands (scaler→SrcA, data→SrcB)
+    // Reconfig formats to match: SrcA=scaler format, SrcB=data
+    constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
+    if constexpr (swap_operands) {
+        state_configure(icb_scaler, icb, ocb, call_line);
+        reconfig_data_format(icb_scaler, icb);
+    } else {
+        state_configure(icb, icb_scaler, ocb, call_line);
     }
+#else
+    state_configure(icb, icb_scaler, ocb, call_line);
+#endif
+#ifndef ARCH_QUASAR
+    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(icb, icb_scaler)));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, math_fidelity>(icb, icb_scaler)));
 #else
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, math_fidelity>(icb)));
@@ -214,12 +237,11 @@ ALWI void sampling_reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, 
     PACK((llk_pack_reduce_mask_config<reduce_dim, ckernel::PackMode::Default>(ocb)));
 }
 
-template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation, MathFidelity math_fidelity>
+template <PoolType reduce_type, ReduceDim reduce_dim, MathFidelity math_fidelity>
 ALWI void sampling_reduce_tile(
     uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
 #ifndef ARCH_QUASAR
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, math_fidelity, false, enforce_fp32_accumulation>(
-        icb, icb_scaler, idst)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, math_fidelity>(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
 #else
     MATH((llk_math_reduce(idst)));
@@ -264,24 +286,22 @@ void trisc_fused_softmax_top_p_sampling_block() {
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-1");
         reconfig_data_format(in_cb, scaler_cb);
-        sampling_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, false, MathFidelity::HiFi4>(
-            in_cb, scaler_cb, exp_cb);
+        sampling_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, MathFidelity::HiFi4>(in_cb, scaler_cb, exp_cb);
 
         tile_regs_acquire();
-        sampling_reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW, false, MathFidelity::HiFi4>(
-            in_cb, scaler_cb, 0, 0, 0);
+        sampling_reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW, MathFidelity::HiFi4>(in_cb, scaler_cb, 0, 0, 0);
         reduce_uninit();
     }
     // Step 2: Compute DST[0, 0, 0] = x_i - max(x_i, dim=0), x_i = in_cb,
     // max(x_i, dim=0) comes from DST in Step 1.
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-2");
-        rmsnorm_bcast_scalar_reuse_tiles_init<
+        rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<
             EltwiseBinaryType::ELWSUB,
             /*num_tiles=*/1,
             MathFidelity::LoFi,
             /*unpack_full_transpose=*/true>(in_cb);
-        rmsnorm_bcast_scalar_reuse_tiles<
+        rmsnorm_bcast_scalar_reuse_tiles_fidelity<
             EltwiseBinaryType::ELWSUB,
             /*num_tiles=*/1,
             MathFidelity::LoFi,
@@ -313,12 +333,10 @@ void trisc_fused_softmax_top_p_sampling_block() {
         // Since the result is a column strip, we need to reduce along the column dimension
         DeviceZoneScopedN("SP-TOPP-TRISC-5");
         reconfig_data_format(exp_cb, scaler_cb);
-        sampling_reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL, false, MathFidelity::HiFi4>(
-            exp_cb, scaler_cb, probs_cb);
+        sampling_reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL, MathFidelity::HiFi4>(exp_cb, scaler_cb, probs_cb);
         tile_regs_acquire();
         // MATH wait for DST register to be available
-        sampling_reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL, false, MathFidelity::HiFi4>(
-            exp_cb, scaler_cb, 0, 0, 0);
+        sampling_reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL, MathFidelity::HiFi4>(exp_cb, scaler_cb, 0, 0, 0);
         reduce_uninit();
         // Step 6: Compute DST[0, 0, 0] = 1/sum(exp(x_i - max(x_i, dim=0))), sum(exp(x_i - max(x_i, dim=0))) comes from
         // DST in Step 5
@@ -328,11 +346,11 @@ void trisc_fused_softmax_top_p_sampling_block() {
     }
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-6");
-        rmsnorm_bcast_scalar_reuse_tiles_init<
+        rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<
             EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4>(exp_cb);
-        rmsnorm_bcast_scalar_reuse_tiles<
+        rmsnorm_bcast_scalar_reuse_tiles_fidelity<
             EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4,
@@ -351,7 +369,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         pack_tile(0, probs_cb);
         cb_push_back(probs_cb, 1);
         tile_regs_release();
-        reconfig_data_format_srca(exp_cb, probs_cb);
+        reconfig_full_operand_srca(exp_cb, probs_cb);
         cb_wait_front(probs_cb, 1);
         cb_wait_front(p_cb, 1);
         tile_regs_acquire();
@@ -429,11 +447,11 @@ void trisc_fused_softmax_top_p_sampling_block() {
 
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-13b");
-        rmsnorm_bcast_scalar_reuse_tiles_init<
+        rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<
             EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4>(probs_cb);
-        rmsnorm_bcast_scalar_reuse_tiles<
+        rmsnorm_bcast_scalar_reuse_tiles_fidelity<
             EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4,
@@ -453,21 +471,21 @@ void trisc_fused_softmax_top_p_sampling_block() {
         recip_tile_init();
         MATH((sampling_recip_tile_scalar(0)));
     }
-    // Step 19: Compute DST[6] = cumsum * 1/cum_kept (rescaled CDF over the kept set).
+    // Step 19: Compute DST[2] = cumsum * 1/cum_kept (rescaled CDF over the kept set).
     // SrcA reads out_cb (Step 15's T(cumsum)), SrcB scalar comes from
     // DST[0] (Step 18.75's recomputed 1/cum_kept).
     // NOTE: rescaled_cumsum_i = cumsum(softmax_out_i, dim=0) * 1/cum_kept
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-14");
-        rmsnorm_bcast_scalar_reuse_tiles_init<
+        rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<
             EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4>(out_cb);
-        rmsnorm_bcast_scalar_reuse_tiles<
+        rmsnorm_bcast_scalar_reuse_tiles_fidelity<
             EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4,
-            /*clear_dest=*/false>(out_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/6);
+            /*clear_dest=*/false>(out_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/2);
     }
     // Step 20: DST[1] = rand (column-0 broadcast staged by BRISC into rand_bcast_cb).
     copy_tile_to_dst_init_short(rand_bcast_cb);
@@ -476,7 +494,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-15");
         ge_binary_tile_init();
-        MATH((sampling_ge_binary_tile_first_column(6, 1, 2)));
+        MATH((sampling_ge_binary_tile_first_column(2, 1, 2)));
         tile_regs_commit();
     }
     tile_regs_wait();
@@ -508,10 +526,10 @@ void trisc_fused_softmax_top_p_sampling_block() {
 }
 
 void generate_rand_tile(const uint32_t cb_id) {
-    uint32_t rand_scale = 0;
-    const float one_f = 1.0f;
-    std::memcpy(&rand_scale, &one_f, sizeof(uint32_t));
-    uint32_t rand_from = 0;
+    // The random tile is packed to BF16. Keep the FP32 endpoint below the BF16
+    // midpoint to 1.0 so the packed threshold remains strictly less than 1.0.
+    constexpr uint32_t rand_scale = 0x3F7F7FFFU;
+    constexpr uint32_t rand_from = 0;
     cb_reserve_back(cb_id, 1);
     tile_regs_acquire();
     rand_tile(0, rand_from, rand_scale);
@@ -543,6 +561,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     tile_regs_acquire();
 
     uint32_t num_faces = 4;
+    PACK((void)num_faces);
     reconfig_data_format_srca(in_scores_cb);
     UNPACK((llk_unpack_A_top32_rm_init(in_scores_cb)));
     UNPACK((llk_unpack_A_top32_rm(in_scores_cb, 0, num_faces)));
@@ -601,6 +620,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
             num_faces = 4;
         }
 
+        PACK((void)num_faces);
         reconfig_data_format_srca(in_scores_cb);
         UNPACK((llk_unpack_A_top32_rm_init(in_scores_cb)));
         UNPACK((llk_unpack_A_top32_rm(in_scores_cb, i / 64, num_faces)));
@@ -676,12 +696,15 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     // 16 rows (32 elements total) for the topk output, which requires
     // pack_reads_per_xy_plane = FACE_R_DIM = 16 so the tile position generator counts
     // 16 rows before resetting. Save FACE_R_DIM here and restore 1 after pack_tile.
+    ckernel::pack_reconfig_data_format(out_scores_cb);
     PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
-
-    ckernel::pack_reconfig_data_format(out_scores_cb);
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
+
     ckernel::pack_reconfig_data_format(out_indices_cb);
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
+    PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
     PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
@@ -691,7 +714,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     cb_pop_front(in_scores_cb, num_input_tiles);
     cb_pop_front(in_indices_cb, num_input_tiles);
     // Phase 1's llk_unpack_A_top32_rm_init modifies four unpacker registers for
-    // row-major mode. transpose_wh_init_short restores Haloize_mode and X counter,
+    // row-major mode. transpose_init restores Haloize_mode and X counter,
     // but Tile_x_dim and Y_stride must be restored explicitly here.
     UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
     UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
@@ -727,12 +750,12 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
 
     // Step 1: load first 1024 values/indices chunk with transpose.
     reconfig_data_format_srca(in_scores_cb);
-    transpose_wh_init_short(in_scores_cb);
-    transpose_wh_tile(in_scores_cb, 0, value_offset_tiles);
+    transpose_init(in_scores_cb);
+    transpose_tile(in_scores_cb, 0, value_offset_tiles);
 
     reconfig_data_format_srca(in_indices_cb);
-    transpose_wh_init_short(in_indices_cb);
-    transpose_wh_tile(in_indices_cb, 0, index_offset_tiles);
+    transpose_init(in_indices_cb);
+    transpose_tile(in_indices_cb, 0, index_offset_tiles);
 
     // Step 2: prepare first chunk for pre-sorted combine pipeline.
     MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
@@ -748,12 +771,12 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     // Steps 3-5: ingest remaining full 1024 chunks and combine.
     for (uint32_t i = 1; i < num_chunks; ++i) {
         reconfig_data_format_srca(in_scores_cb);
-        transpose_wh_init_short(in_scores_cb);
-        transpose_wh_tile(in_scores_cb, i, value_offset_tiles + 1);
+        transpose_init(in_scores_cb);
+        transpose_tile(in_scores_cb, i, value_offset_tiles + 1);
 
         reconfig_data_format_srca(in_indices_cb);
-        transpose_wh_init_short(in_indices_cb);
-        transpose_wh_tile(in_indices_cb, i, index_offset_tiles + 1);
+        transpose_init(in_indices_cb);
+        transpose_tile(in_indices_cb, i, index_offset_tiles + 1);
 
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
@@ -785,6 +808,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
 
     // Steps 7-9: handle trailing (<1024) values in 64-element chunks.
     uint32_t num_faces = 4;
+    PACK((void)num_faces);
     for (uint32_t i = num_chunks * chunk_size; i < row_elements; i += 64) {
         num_faces = (i + 64 > row_elements) ? 2 : 4;
 
@@ -853,12 +877,15 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     // 16 rows (32 elements total) for the topk output, which requires
     // pack_reads_per_xy_plane = FACE_R_DIM = 16 so the tile position generator counts
     // 16 rows before resetting. Save FACE_R_DIM here and restore 1 after pack_tile.
+    ckernel::pack_reconfig_data_format(out_scores_cb);
     PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
-
-    ckernel::pack_reconfig_data_format(out_scores_cb);
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
+
     ckernel::pack_reconfig_data_format(out_indices_cb);
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
+    PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
 
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
@@ -1745,7 +1772,8 @@ struct TopKSampling {
                         {
                             DeviceZoneScopedN("SP-FC-STAGE");
 
-                            generate_bcast_col_scalar(CTArgs::p_bcast_cb, bf16_pack_to_uint32(float_to_bf16_rne(p)));
+                            generate_bcast_col_scalar(
+                                CircularBuffer(CTArgs::p_bcast_cb), bf16_pack_to_uint32(float_to_bf16_rne(p)));
 
                             cb_reserve_back(CTArgs::softmax_in_cb, 1);
                             auto tile_u32 =
@@ -1779,7 +1807,7 @@ struct TopKSampling {
                             auto rand_u16 =
                                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::rand_cb));
                             rand = rand_u16[0];
-                            generate_bcast_col_scalar(CTArgs::rand_bcast_cb, bf16_pack_to_uint32(rand));
+                            generate_bcast_col_scalar(CircularBuffer(CTArgs::rand_bcast_cb), bf16_pack_to_uint32(rand));
                         }
 
                         {

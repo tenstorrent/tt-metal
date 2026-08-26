@@ -18,16 +18,13 @@ def IOU(intputs, targets):
 
 
 def inverse_sigmoid(x, eps: float = 1e-5):
+    # ttnn.rsub(x, 1.0) replaces `ttnn.ones(shape=x.shape) - x`: ttnn.ones
+    # uploads a fill constant via host->device write, which is rejected
+    # inside ttnn.begin_trace_capture. Mirror ttnn_utils.inverse_sigmoid.
     x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
     x = ttnn.clamp(x, min=0, max=1)
     x1 = ttnn.clamp(x, min=eps)
-    if len(x.shape) == 3:
-        x_temp = ttnn.ones(shape=[x.shape[0], x.shape[1], x.shape[2]], layout=ttnn.TILE_LAYOUT, device=x.device())
-    else:
-        x_temp = ttnn.ones(
-            shape=[x.shape[0], x.shape[1], x.shape[2], x.shape[3]], layout=ttnn.TILE_LAYOUT, device=x.device()
-        )
-    x_temp = x_temp - x
+    x_temp = ttnn.rsub(x, 1.0)
     x2 = ttnn.clamp(x_temp, min=eps)
     return ttnn.log(ttnn.div(x1, x2))
 
@@ -68,10 +65,19 @@ class TtSinePositionalEncoding(nn.Module):
         self.scale = scale
         self.eps = eps
         self.offset = offset
+        # `dim_t` is a function of (num_feats, temperature) only — both
+        # constants. Cache the post-pow tensor on the instance so we don't
+        # rebuild it (host roundtrip via to_torch + from_torch) every call.
+        self._dim_t_cache = None
 
     def forward(self, mask):
-        one_tensor = ttnn.ones(mask.shape, layout=ttnn.TILE_LAYOUT, device=self.device)
-        not_mask = ttnn.subtract(one_tensor, mask)
+        # Replace `not_mask = ones(mask.shape) - mask` with `rsub(mask, 1.0)`
+        # — same value, no per-call ttnn.ones allocation (which blocks
+        # trace capture). cumsum below requires TILE_LAYOUT, so coerce if
+        # `mask` came in row-major.
+        not_mask = ttnn.rsub(mask, 1.0)
+        if not_mask.layout != ttnn.TILE_LAYOUT:
+            not_mask = ttnn.to_layout(not_mask, ttnn.TILE_LAYOUT)
         y_embed = ttnn.cumsum(not_mask, dim=1)
         x_embed = ttnn.cumsum(not_mask, dim=2)
         if self.normalize:
@@ -85,11 +91,13 @@ class TtSinePositionalEncoding(nn.Module):
             x_embed = ttnn.div(x_embed, norm_factor)
             x_embed = x_embed * self.scale
 
-        dim_t = ttnn.arange(0, self.num_feats)
-        dim_t = 2 * ttnn.to_torch(dim_t) // 2
-        dim_t = ttnn.from_torch(dim_t, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        power = ttnn.div(dim_t, self.num_feats)
-        dim_t = ttnn.pow(self.temperature, power)
+        if self._dim_t_cache is None:
+            dim_t = ttnn.arange(0, self.num_feats)
+            dim_t = 2 * ttnn.to_torch(dim_t) // 2
+            dim_t = ttnn.from_torch(dim_t, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            power = ttnn.div(dim_t, self.num_feats)
+            self._dim_t_cache = ttnn.pow(self.temperature, power)
+        dim_t = self._dim_t_cache
         x_embed = ttnn.unsqueeze(x_embed, dim=-1)
         y_embed = ttnn.unsqueeze(y_embed, dim=-1)
         pos_x = ttnn.div(x_embed, dim_t)
@@ -192,6 +200,13 @@ class TtPansegformerHead(nn.Module):
             return_intermediate_dec=False,
             self_attn=True,
         )
+
+        # img_masks is a constant zero tensor whose shape depends only on
+        # (bs, bev_h, bev_w). Allocated lazily on the first forward and
+        # reused — avoids `ttnn.zeros` per call, which uploads a fill
+        # constant from host (a small but real overhead on the warm
+        # path; also a prerequisite for any future trace-capture wrap).
+        self._img_masks_cache = {}  # bs -> ttnn.Tensor of zeros (bs, bev_h, bev_w)
 
     def _get_bboxes_single(self, cls_score, bbox_pred, img_shape, scale_factor, rescale=False):
         """ """
@@ -362,19 +377,25 @@ class TtPansegformerHead(nn.Module):
             masks_st = masks_all[stuff_selected]
 
             stuff_score_list.append(scores_st)
-            results = ttnn.zeros(shape=[2, mask_pred.shape[-2], mask_pred.shape[-1]], device=self.device)
 
             id_unique = 1
 
-            lane = ttnn.zeros(
-                shape=[self.num_things_classes, mask_pred.shape[-2], mask_pred.shape[-1]], device=self.device
+            # `results`, `lane`, `lane_score` are all per-pixel mask buffers
+            # mutated by host-side bool indexing inside the loop below. The
+            # original code allocated them on device, then on every loop
+            # iteration did:
+            #   ttnn.to_torch(results[0] > 0)   # 2x per iter
+            #   ttnn.to_torch(results) → mutate → ttnn.from_torch(results)
+            # That's four device⇄host transfers per scored mask, and the loop
+            # iterates over every mask prediction. Keep all three buffers on
+            # host as torch tensors for the duration of the loop; upload
+            # `results` once at the end for the panoptic_list entry, which is
+            # the only downstream consumer that wants a ttnn tensor.
+            results = torch.zeros((2, mask_pred.shape[-2], mask_pred.shape[-1]), dtype=torch.int64)
+            lane = torch.zeros((self.num_things_classes, mask_pred.shape[-2], mask_pred.shape[-1]), dtype=torch.int64)
+            lane_score = torch.zeros(
+                (self.num_things_classes, mask_pred.shape[-2], mask_pred.shape[-1]), dtype=torch.float32
             )
-
-            lane_score = ttnn.zeros(
-                shape=[self.num_things_classes, mask_pred.shape[-2], mask_pred.shape[-1]], device=self.device
-            )
-            lane = ttnn.to_torch(lane).to(torch.int64)
-            lane_score = ttnn.to_torch(lane_score).to(torch.float32)
             for i, scores in enumerate(scores_all):
                 # MDS: things and stuff have different thresholds may perform a little bit better
                 if labels_all[i] < self.num_things_classes and scores < self.quality_threshold_things:
@@ -383,7 +404,7 @@ class TtPansegformerHead(nn.Module):
                     continue
                 _mask = masks_all[i] > 0.5
                 mask_area = _mask.sum().item()
-                intersect = _mask & ttnn.to_torch((results[0] > 0)).bool()
+                intersect = _mask & (results[0] > 0)
                 intersect_area = intersect.sum().item()
                 if labels_all[i] < self.num_things_classes:
                     if mask_area == 0 or (intersect_area * 1.0 / mask_area) > self.overlap_threshold_things:
@@ -392,8 +413,7 @@ class TtPansegformerHead(nn.Module):
                     if mask_area == 0 or (intersect_area * 1.0 / mask_area) > self.overlap_threshold_stuff:
                         continue
                 if intersect_area > 0:
-                    _mask = _mask & ttnn.to_torch((results[0] == 0)).bool()
-                results = ttnn.to_torch(results)
+                    _mask = _mask & (results[0] == 0)
                 results[0, _mask] = labels_all[i]
                 labels_all = labels_all.long()
                 if labels_all[i] < self.num_things_classes:
@@ -401,10 +421,10 @@ class TtPansegformerHead(nn.Module):
                     lane_score[labels_all[i], _mask] = masks_all[i][_mask]
                     results[1, _mask] = id_unique
                     id_unique += 1
-                results = ttnn.from_torch(results, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
+            results_device = ttnn.from_torch(results, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
             file_name = img_metas[img_id]["pts_filename"].split("/")[-1].split(".")[0]
-            panoptic_list.append((ttnn.permute(results, (1, 2, 0)), file_name, ori_shape))
+            panoptic_list.append((ttnn.permute(results_device, (1, 2, 0)), file_name, ori_shape))
 
             bbox_list.append(bbox_th)
             labels_list.append(labels_th)
@@ -436,7 +456,13 @@ class TtPansegformerHead(nn.Module):
         bev_embed = ttnn.permute(bev_embed, (0, 3, 1, 2))
         mlvl_feats = [bev_embed]
 
-        img_masks = ttnn.zeros((bs, self.bev_h, self.bev_w), device=self.device)
+        # img_masks is constant (all-zero) for fixed-input inference; the
+        # original `ttnn.zeros(...)` per forward both reallocated the
+        # buffer and uploaded the fill constant via host->device write —
+        # the latter blocks ttnn.begin_trace_capture.
+        if bs not in self._img_masks_cache:
+            self._img_masks_cache[bs] = ttnn.zeros((bs, self.bev_h, self.bev_w), device=self.device)
+        img_masks = self._img_masks_cache[bs]
 
         hw_lvl = []
         for feat_lvl in mlvl_feats:
@@ -446,10 +472,9 @@ class TtPansegformerHead(nn.Module):
         mlvl_masks = []
         mlvl_positional_encodings = []
         for feat in mlvl_feats:
-            img_masks = ttnn.unsqueeze(img_masks, 0)
-            out = ttnn.upsample(img_masks, scale_factor=1)
+            img_masks_4d = ttnn.unsqueeze(img_masks, 0)
+            out = ttnn.upsample(img_masks_4d, scale_factor=1)
             out = ttnn.squeeze(out, 0)
-            img_masks = ttnn.squeeze(img_masks, 0)
             mlvl_masks.append(out)
         out = self.positional_encoding(mlvl_masks[-1])
         mlvl_positional_encodings.append(out)
@@ -457,16 +482,6 @@ class TtPansegformerHead(nn.Module):
         query_embeds = None
         if not self.as_two_stage:
             query_embeds = self.params.query_embedding.weight
-
-        out = self.transformer.forward(
-            mlvl_feats,
-            mlvl_masks,
-            query_embeds,
-            mlvl_positional_encodings,
-            level_embeds=level_embeds,
-            reg_branches=self.reg_branches if self.with_box_refine else None,
-            cls_branches=self.cls_branches if self.as_two_stage else None,
-        )
 
         (
             (memory, memory_pos, memory_mask, query_pos),
@@ -518,12 +533,14 @@ class TtPansegformerHead(nn.Module):
             if reference.shape[-1] == 4:
                 tmp += reference
             else:
-                tmp = ttnn.to_torch(tmp)
-                reference = ttnn.to_torch(reference)
+                # Replaced the to_torch/from_torch round-trip with pure ttnn
+                # slice + add + concat. Same fix as ttnn_decoder.py for the
+                # reg_branches reference-update.
                 assert reference.shape[-1] == 2
-                tmp[..., :2] += reference
-                reference = ttnn.from_torch(reference, device=self.device, layout=ttnn.TILE_LAYOUT)
-                tmp = ttnn.from_torch(tmp, device=self.device, layout=ttnn.TILE_LAYOUT)
+                tmp_first2 = tmp[..., :2]
+                tmp_rest = tmp[..., 2:]
+                tmp_first2 = ttnn.add(tmp_first2, reference)
+                tmp = ttnn.concat([tmp_first2, tmp_rest], dim=-1)
 
             outputs_coord = ttnn.sigmoid(tmp)
             outputs_classes.append(outputs_class)
@@ -542,6 +559,9 @@ class TtPansegformerHead(nn.Module):
             "args_tuple": args_tuple,
             "reference": reference,
         }
+        # Retained so the e2e seg-head PCC gate (test_ttnn_uniad) can read the
+        # continuous forward outputs on the real BEV embedding.
+        self._last_forward_outs = {"outputs_classes": outputs_classes, "outputs_coords": outputs_coords}
 
         return outs
 
@@ -576,11 +596,14 @@ class TtPansegformerHead(nn.Module):
             lanes_gt = (ttnn.to_torch(gt_lane_masks[0][0][:-1]).sum(0) > 0).int()
             lanes_iou, lanes_intersection, lanes_union = IOU(lanes_pred.view(1, -1), lanes_gt.view(1, -1))
 
-            divider_gt = (ttnn.to_torch(gt_lane_masks[0][0])[ttnn.to_torch(gt_lane_labels[0][0]) == 0].sum(0) > 0).int()
-            crossing_gt = (
-                ttnn.to_torch(gt_lane_masks[0][0])[ttnn.to_torch(gt_lane_labels[0][0]) == 1].sum(0) > 0
-            ).int()
-            contour_gt = (ttnn.to_torch(gt_lane_masks[0][0])[ttnn.to_torch(gt_lane_labels[0][0]) == 2].sum(0) > 0).int()
+            # Pull the lane masks/labels to host once instead of 3x each for
+            # divider/crossing/contour — same tensor was fetched six times
+            # via ttnn.to_torch back-to-back, each a full device→host sync.
+            lane_masks_host = ttnn.to_torch(gt_lane_masks[0][0])
+            lane_labels_host = ttnn.to_torch(gt_lane_labels[0][0])
+            divider_gt = (lane_masks_host[lane_labels_host == 0].sum(0) > 0).int()
+            crossing_gt = (lane_masks_host[lane_labels_host == 1].sum(0) > 0).int()
+            contour_gt = (lane_masks_host[lane_labels_host == 2].sum(0) > 0).int()
             divider_iou, divider_intersection, divider_union = IOU(lane_pred[0].view(1, -1), divider_gt.view(1, -1))
             crossing_iou, crossing_intersection, crossing_union = IOU(lane_pred[1].view(1, -1), crossing_gt.view(1, -1))
             contour_iou, contour_intersection, contour_union = IOU(lane_pred[2].view(1, -1), contour_gt.view(1, -1))

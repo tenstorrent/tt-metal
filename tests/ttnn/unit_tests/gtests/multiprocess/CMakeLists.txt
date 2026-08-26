@@ -24,8 +24,10 @@ function(setup_multiprocess_unit_test target_name test_source)
 endfunction()
 
 setup_multiprocess_unit_test(unit_tests_dual_rank_2x4 test_host_all_gather.cpp)
+setup_multiprocess_unit_test(unit_tests_dual_rank_2x4_to_string test_tensor_to_string.cpp)
 setup_multiprocess_unit_test(unit_tests_dual_rank_2x2 test_send_recv_ops.cpp)
 setup_multiprocess_unit_test(unit_tests_pipeline_2x4 test_send_recv_pipeline.cpp)
+setup_multiprocess_unit_test(unit_tests_cross_process_d2d test_cross_process_d2d_stream_service.cpp)
 
 # Cross-process H2DStreamService test: owns its main() (MPI world setup), so it is a
 # standalone target rather than using setup_multiprocess_unit_test. Launched with `mpirun -np 2`.

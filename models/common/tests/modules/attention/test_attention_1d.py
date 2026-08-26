@@ -16,9 +16,11 @@ Test coverage notes:
 - Variants: non-paged, paged, paged-chunked (3 combinations per test case).
 """
 
+import inspect
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -37,13 +39,19 @@ except ImportError:
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
+from models.common.modules.attention import attention_1d as attention_1d_module
 from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig, _resolve_attention1d_config
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1DConfig
 from models.common.modules.tt_ccl import TT_CCL
-from models.common.tensor_utils import get_rot_transformation_mat, zeros_like_kv_cache, zeros_like_paged_cache
+from models.common.tensor_utils import (
+    get_rot_transformation_mat,
+    nearest_32,
+    zeros_like_kv_cache,
+    zeros_like_paged_cache,
+)
 from models.common.tests.utils import stable_model_seed
-from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.common.utility_functions import comp_allclose, comp_pcc
 
 # =============================================================================
 # RoPE Helper Functions (replaces TTTv1 rope imports)
@@ -297,6 +305,7 @@ class HfAttentionWrapper:
         self.past_key_value = DynamicCache()
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
+        self._uses_past_key_values = "past_key_values" in inspect.signature(attention.forward).parameters
 
     def forward(self, x: torch.Tensor, start_pos: int, mask=None):
         """Run attention forward pass using rotary_emb directly."""
@@ -308,21 +317,22 @@ class HfAttentionWrapper:
 
         if self.rotary_emb is not None:
             position_embeddings = self.rotary_emb(x, position_ids)
-            output, *_ = self.attention(
-                x,
-                position_embeddings=position_embeddings,
-                past_key_value=self.past_key_value,
-                use_cache=True,
-                attention_mask=mask,
+            cache_kwargs = (
+                {"past_key_values": self.past_key_value}
+                if self._uses_past_key_values
+                else {"past_key_value": self.past_key_value, "use_cache": True}
             )
+            output, *_ = self.attention(x, position_embeddings=position_embeddings, attention_mask=mask, **cache_kwargs)
         else:
-            output, _, self.past_key_value = self.attention(
-                x,
-                past_key_value=self.past_key_value,
-                use_cache=True,
-                position_ids=position_ids,
-                attention_mask=mask,
+            cache_kwargs = (
+                {"past_key_values": self.past_key_value}
+                if self._uses_past_key_values
+                else {"past_key_value": self.past_key_value, "use_cache": True}
             )
+            outputs = self.attention(x, position_ids=position_ids, attention_mask=mask, **cache_kwargs)
+            output = outputs[0]
+            if not self._uses_past_key_values and len(outputs) > 2:
+                self.past_key_value = outputs[2]
         return output
 
     def __call__(self, *args, **kwargs):
@@ -403,11 +413,29 @@ def get_attention_weights_from_ref_model(
     Returns:
         (wqkv, wo, q_norm, k_norm, wqkv_bias) tensors in TTNN layout
     """
-    # Get raw weights from HF module
-    wq_raw = reference_attn.q_proj.weight  # (n_heads * head_dim, dim)
-    wk_raw = reference_attn.k_proj.weight  # (n_kv_heads * head_dim, dim)
-    wv_raw = reference_attn.v_proj.weight  # (n_kv_heads * head_dim, dim)
-    wo_raw = reference_attn.o_proj.weight  # (dim, n_heads * head_dim)
+    # Phi-3 / Phi-4 ship a FUSED qkv_proj (single Linear) instead of separate q/k/v projections.
+    # Split it into Q/K/V rows here so the rest of the pipeline is architecture-agnostic.
+    fused_qkv = hasattr(reference_attn, "qkv_proj") and not hasattr(reference_attn, "q_proj")
+    if fused_qkv:
+        cfg = reference_attn.config
+        _n_heads = cfg.num_attention_heads
+        _n_kv = getattr(cfg, "num_key_value_heads", _n_heads)
+        _hd = (
+            getattr(reference_attn, "head_dim", None) or getattr(cfg, "head_dim", None) or (cfg.hidden_size // _n_heads)
+        )
+        _q = _n_heads * _hd
+        _kv = _n_kv * _hd
+        qkv_w = reference_attn.qkv_proj.weight  # (n_heads*hd + 2*n_kv*hd, dim), order Q|K|V
+        wq_raw = qkv_w[:_q]  # (n_heads * head_dim, dim)
+        wk_raw = qkv_w[_q : _q + _kv]  # (n_kv_heads * head_dim, dim)
+        wv_raw = qkv_w[_q + _kv : _q + 2 * _kv]  # (n_kv_heads * head_dim, dim)
+        wo_raw = reference_attn.o_proj.weight  # (dim, n_heads * head_dim)
+    else:
+        # Get raw weights from HF module
+        wq_raw = reference_attn.q_proj.weight  # (n_heads * head_dim, dim)
+        wk_raw = reference_attn.k_proj.weight  # (n_kv_heads * head_dim, dim)
+        wv_raw = reference_attn.v_proj.weight  # (n_kv_heads * head_dim, dim)
+        wo_raw = reference_attn.o_proj.weight  # (dim, n_heads * head_dim)
 
     # Compute head_dim from weight shapes
     dim = wq_raw.shape[1]
@@ -470,7 +498,7 @@ def get_attention_weights_from_ref_model(
     # QKV bias (optional, e.g., for Qwen2/Qwen2.5 models)
     # Bias also needs the same chunking/concat pattern as weights
     wqkv_bias = None
-    if hasattr(reference_attn.q_proj, "bias") and reference_attn.q_proj.bias is not None:
+    if not fused_qkv and hasattr(reference_attn.q_proj, "bias") and reference_attn.q_proj.bias is not None:
         bq_raw = reference_attn.q_proj.bias  # (n_heads * head_dim,)
         bk_raw = reference_attn.k_proj.bias  # (n_kv_heads * head_dim,)
         bv_raw = reference_attn.v_proj.bias  # (n_kv_heads * head_dim,)
@@ -675,7 +703,7 @@ def test_attention_1d_happy_path_signature():
         assert param.default is inspect.Parameter.empty, f"{param_name} should be required (no default)"
 
 
-def test_attention_1d_resolve_requires_n_heads():
+def test_attention_1d_resolve_requires_n_heads(expect_error):
     """Test that _resolve_attention1d_config raises ValueError when n_heads is missing."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -692,11 +720,11 @@ def test_attention_1d_resolve_requires_n_heads():
         head_dim=128,
     )
 
-    with pytest.raises(ValueError, match="n_heads must be provided"):
+    with expect_error(ValueError, "n_heads must be provided"):
         _resolve_attention1d_config(config)
 
 
-def test_attention_1d_resolve_requires_n_kv_heads():
+def test_attention_1d_resolve_requires_n_kv_heads(expect_error):
     """Test that _resolve_attention1d_config raises ValueError when n_kv_heads is missing."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -713,11 +741,11 @@ def test_attention_1d_resolve_requires_n_kv_heads():
         head_dim=128,
     )
 
-    with pytest.raises(ValueError, match="n_kv_heads must be provided"):
+    with expect_error(ValueError, "n_kv_heads must be provided"):
         _resolve_attention1d_config(config)
 
 
-def test_attention_1d_resolve_requires_head_dim():
+def test_attention_1d_resolve_requires_head_dim(expect_error):
     """Test that _resolve_attention1d_config raises ValueError when head_dim is missing."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -734,74 +762,8 @@ def test_attention_1d_resolve_requires_head_dim():
         head_dim=None,  # Missing!
     )
 
-    with pytest.raises(ValueError, match="head_dim must be provided"):
+    with expect_error(ValueError, "head_dim must be provided"):
         _resolve_attention1d_config(config)
-
-
-def test_attention_1d_resolve_validates_token_budget():
-    """Test that _resolve_attention1d_config raises ValueError when token budget is exceeded."""
-    mock_source = MagicMock()
-    mock_source.shape = (4096, 1536)
-
-    mock_wqkv = MagicMock(spec=LazyWeight)
-    mock_wqkv.source = mock_source
-    mock_wqkv.device = None
-
-    # 32 batch × 8192 seq = 262,144 tokens > 128K limit
-    config = Attention1DConfig(
-        wqkv=mock_wqkv,
-        wo=MagicMock(spec=LazyWeight),
-        n_heads=32,
-        n_kv_heads=8,
-        head_dim=128,
-        max_batch_size=32,
-        max_seq_len=8192,  # 32 × 8192 = 262K > 128K
-    )
-
-    with pytest.raises(ValueError, match="Total token budget exceeded"):
-        _resolve_attention1d_config(config)
-
-
-def test_attention_1d_resolve_validates_token_budget_edge_case():
-    """Test that exactly 128K tokens is allowed but 128K+1 is not."""
-    mock_source = MagicMock()
-    mock_source.shape = (4096, 1536)
-
-    mock_wqkv = MagicMock(spec=LazyWeight)
-    mock_wqkv.source = mock_source
-    mock_wqkv.device = None
-
-    # Exactly 128K tokens should be allowed (boundary case)
-    # 32 batch × 4096 seq = 131,072 tokens = 128K (should pass token budget check)
-    config_ok = Attention1DConfig(
-        wqkv=mock_wqkv,
-        wo=MagicMock(spec=LazyWeight),
-        n_heads=32,
-        n_kv_heads=8,
-        head_dim=128,
-        max_batch_size=32,
-        max_seq_len=4096,  # 32 × 4096 = 131,072 = 128K exactly
-    )
-    # Should not raise token budget error (may fail later due to missing device)
-    try:
-        _resolve_attention1d_config(config_ok)
-    except (ValueError, AssertionError) as e:
-        # Token budget errors should NOT occur - only device-related errors are acceptable
-        assert "Total token budget exceeded" not in str(e), f"Unexpected token budget error: {e}"
-
-    # 128K + 1 token should fail with token budget error
-    config_fail = Attention1DConfig(
-        wqkv=mock_wqkv,
-        wo=MagicMock(spec=LazyWeight),
-        n_heads=32,
-        n_kv_heads=8,
-        head_dim=128,
-        max_batch_size=1,
-        max_seq_len=128 * 1024 + 1,  # 128K + 1 tokens
-    )
-
-    with pytest.raises(ValueError, match="Total token budget exceeded"):
-        _resolve_attention1d_config(config_fail)
 
 
 def test_attention_1d_resolve_kv_cache_tensor_passthrough():
@@ -842,7 +804,7 @@ def test_attention_1d_resolve_kv_cache_tensor_passthrough():
     assert resolved.kv_cache[1] is mock_cache_v
 
 
-def test_attention_1d_resolve_rejects_sliding_window_with_paged():
+def test_attention_1d_resolve_rejects_sliding_window_with_paged(expect_error):
     """Test that _resolve_attention1d_config rejects sliding_window + paged_attention_config."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -863,8 +825,106 @@ def test_attention_1d_resolve_rejects_sliding_window_with_paged():
         paged_attention_config=PagedAttentionConfig(block_size=64, max_num_blocks=2048),
     )
 
-    with pytest.raises(ValueError, match="sliding_window"):
+    with expect_error(ValueError, "sliding_window"):
         _resolve_attention1d_config(config)
+
+
+class _AttentionPrefillTensor:
+    def __init__(self, shape, dtype):
+        self.shape = shape
+        self.dtype = dtype
+
+
+@pytest.mark.parametrize("use_runtime_tensor", [False, True])
+def test_attention_prefill_selects_scalar_or_tensor_chunk_start_api(monkeypatch, use_runtime_tensor):
+    bfloat16 = object()
+    bfloat8_b = object()
+    chunked_sdpa = MagicMock(return_value=_AttentionPrefillTensor((1, 32, 128, 128), bfloat8_b))
+    xqkv = _AttentionPrefillTensor((1, 1, 128, 6144), bfloat16)
+    q_heads = _AttentionPrefillTensor((1, 32, 128, 128), bfloat16)
+    k_heads = _AttentionPrefillTensor((1, 8, 128, 128), bfloat16)
+    v_heads = _AttentionPrefillTensor((1, 8, 128, 128), bfloat16)
+    output = _AttentionPrefillTensor((1, 1, 128, 4096), bfloat8_b)
+    # TTNN operation fakes retain backend-specific overload arguments.
+    fake_ttnn = SimpleNamespace(
+        DRAM_MEMORY_CONFIG=object(),
+        bfloat16=bfloat16,
+        bfloat8_b=bfloat8_b,
+        deallocate=MagicMock(),
+        experimental=SimpleNamespace(
+            nlp_concat_heads=MagicMock(side_effect=lambda tensor, **_kwargs: tensor),
+            nlp_create_qkv_heads=MagicMock(return_value=(q_heads, k_heads, v_heads)),
+            rotary_embedding_llama=MagicMock(side_effect=lambda tensor, *_args, **_kwargs: tensor),
+        ),
+        linear=MagicMock(side_effect=[xqkv, output]),
+        reshape=MagicMock(side_effect=lambda tensor, *_args, **_kwargs: tensor),
+        transformer=SimpleNamespace(chunked_scaled_dot_product_attention=chunked_sdpa),
+        typecast=MagicMock(side_effect=lambda tensor, **_kwargs: tensor),
+    )
+    prefill_sdpa_prg_config = MagicMock(return_value="sdpa-program")
+    cfg = SimpleNamespace(
+        activation_dtype=None,
+        head_dim=128,
+        li_o_prefill_compute_kernel_cfg=object(),
+        li_qkv_prefill_compute_kernel_cfg=object(),
+        mesh_device=SimpleNamespace(get_num_devices=MagicMock(return_value=1)),
+        min_kv_prefill_shard_seqlen=256,
+        n_heads=32,
+        n_kv_heads=8,
+        paged_attention_config=SimpleNamespace(block_size=32),
+        prefill_sdpa_prg_config=prefill_sdpa_prg_config,
+        prefill_wo_prg_config=MagicMock(return_value="wo-program"),
+        prefill_xqkv_prg_config=MagicMock(return_value="qkv-program"),
+        scale=0.125,
+        sdpa_prefill_compute_kernel_cfg=object(),
+        sliding_window=None,
+        transformation_mat_prefill=object(),
+        use_minimal_qkv_matmul=MagicMock(return_value=False),
+        use_minimal_wo_matmul=MagicMock(return_value=False),
+        wo_prefill_len_cutoff=1024,
+    )
+    cache_dtype = object()
+    attention = SimpleNamespace(
+        _all_gather_before_wo_prefill=MagicMock(side_effect=lambda tensor: tensor),
+        _kv_fill_prefill=MagicMock(),
+        _reduce_after_wo_prefill=MagicMock(side_effect=lambda tensor: tensor),
+        config=cfg,
+        k_norm=None,
+        kv_cache=(
+            _AttentionPrefillTensor((1, 8, 4096, 128), cache_dtype),
+            _AttentionPrefillTensor((1, 8, 4096, 128), cache_dtype),
+        ),
+        load_device_weights=MagicMock(),
+        q_norm=None,
+        wo=object(),
+        wqkv=object(),
+        wqkv_bias_prefill=None,
+    )
+    x = _AttentionPrefillTensor((1, 1, 128, 4096), bfloat16)
+    page_table = object()
+    chunk_start_idx_tensor = object() if use_runtime_tensor else None
+    monkeypatch.setattr(attention_1d_module, "ttnn", fake_ttnn)
+    # This loader is a generic bypass, not the API under test.
+    monkeypatch.setattr(attention_1d_module, "_load_input_device_tensor", lambda tensor, *_args, **_kwargs: tensor)
+
+    Attention1D.prefill_forward(
+        attention,
+        x,
+        (object(), object()),
+        page_table=page_table,
+        chunk_start_idx=96,
+        chunk_start_idx_tensor=chunk_start_idx_tensor,
+    )
+
+    sdpa_kwargs = chunked_sdpa.call_args.kwargs
+    if use_runtime_tensor:
+        assert sdpa_kwargs["chunk_start_idx_tensor"] is chunk_start_idx_tensor
+        assert "chunk_start_idx" not in sdpa_kwargs
+        prefill_sdpa_prg_config.assert_called_once_with(128, 32)
+    else:
+        assert sdpa_kwargs["chunk_start_idx"] == 96
+        assert "chunk_start_idx_tensor" not in sdpa_kwargs
+        prefill_sdpa_prg_config.assert_called_once_with(128, 96)
 
 
 # ============================================================================
@@ -885,6 +945,7 @@ QWEN25_72B = "Qwen/Qwen2.5-72B-Instruct"
 QWEN25_CODER_32B = "Qwen/Qwen2.5-Coder-32B-Instruct"
 DEEPSEEK_R1_14B = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
 QWEN3_32B = "Qwen/Qwen3-32B"
+PHI4 = "microsoft/phi-4"  # Phi3 architecture: fused qkv_proj, no bias, no q/k norm, GQA 40/10
 
 _slow = pytest.mark.slow
 
@@ -996,6 +1057,13 @@ def _list_test_cases() -> list[pytest.param]:
         pytest.param((1, 2), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-2048-Mistral-7B", marks=_slow),
         pytest.param((1, 2), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-4096-Mistral-7B", marks=_slow),
         pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-decode-32-Mistral-7B", marks=_slow),
+
+        # --- Phi-4 on N300 (1x2) --- fused qkv_proj split, GQA 40/10, head_dim 128, no bias/qk-norm.
+        # decode-32 is validated on N300 for both standard and paged SDPA-decode (the earlier
+        # num_output_cores limit for Phi-4's 10 KV heads no longer trips); batch-1 decode is
+        # additionally covered end-to-end by the M5 token-accuracy demo (97-99% top-1).
+        pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, PHI4, 0.99, id="1x2-prefill-128-Phi-4", marks=_slow),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, PHI4, 0.99, id="1x2-decode-32-Phi-4", marks=_slow),
 
         # --- Qwen2-7B on N300 (1x2) ---
         # NOTE: Qwen2-7B has Q/K biases causing numerical precision issues
@@ -2284,13 +2352,13 @@ def test_attention_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDe
         logger.info(f"test_attention_1d_vs_reference_from_model_args: PASSED for mode={mode}, seq_len={seq_len}")
 
 
-def test_attention_1d_rejects_galaxy():
+def test_attention_1d_rejects_galaxy(expect_error):
     """Test that Attention1D.from_model_args rejects Galaxy/TG devices."""
     # Mock args with is_galaxy = True
     mock_args = MagicMock()
     mock_args.is_galaxy = True
 
-    with pytest.raises(ValueError, match="cannot be used for Galaxy"):
+    with expect_error(ValueError, "cannot be used for Galaxy"):
         Attention1D.from_model_args(
             mesh_device=MagicMock(),
             tt_ccl=MagicMock(),

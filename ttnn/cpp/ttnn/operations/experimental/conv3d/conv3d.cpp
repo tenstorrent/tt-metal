@@ -55,21 +55,18 @@ ttnn::Tensor conv3d(
     const std::string& padding_mode_,
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    // Conservative default blocking: minimal spatial blocks, smallest valid C_in_block.
-    // C_in_block must satisfy: kernel_vol * C_in_block ≡ 0 (mod TILE_WIDTH) for weight tile
-    // alignment, and C_in_block % l1_alignment == 0 for L1 alignment.
-    uint32_t kernel_vol = kernel_size_[0] * kernel_size_[1] * kernel_size_[2];
-    uint32_t tile_align_factor = tt::constants::TILE_WIDTH / std::gcd(kernel_vol, (uint32_t)tt::constants::TILE_WIDTH);
-    uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    uint32_t min_c_in_block = std::lcm(l1_alignment, tile_align_factor);
-
-    // Default C_in_block must match the weight's blocking or the matmul contracts mismatched rows
-    // -> near-zero PCC (issue #47316). rank-5 (unprepared): blocked + computed here, so
-    // min_c_in_block keeps large kernels in L1. rank-2 (pre-prepared): not re-blocked, so match
-    // prepare_conv3d_weights' own default of 0 (full block).
-    const bool weight_already_prepared = weight_tensor.logical_shape().rank() == 2;
-    const uint32_t default_c_in_block = weight_already_prepared ? 0u : min_c_in_block;
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& halo_buffer,
+    uint32_t logical_h_mask,
+    uint32_t logical_w_mask,
+    const std::optional<ttnn::Tensor>& pad_offset_tensor,
+    uint32_t output_pad_h,
+    uint32_t output_pad_w) {
+    // Shared with prepare_conv3d_weights so the prepared weight's K-row blocking always matches the
+    // conv compute -- a mismatch is near-zero PCC (#47316) -- and the minimal block keeps large
+    // kernels within L1 (#42146).
+    const uint32_t default_c_in_block =
+        ttnn::operations::experimental::conv3d::default_c_in_block(kernel_size_[0] * kernel_size_[1] * kernel_size_[2]);
 
     auto config = config_opt.value_or(ttnn::experimental::prim::Conv3dConfig(
         tt::tt_metal::DataType::BFLOAT16,                        // weights_dtype
@@ -83,6 +80,12 @@ ttnn::Tensor conv3d(
         32,                                                      // alignment
         input_tensor.device()->compute_with_storage_grid_size()  // use full device grid
         ));
+
+    // An explicitly-provided config may still carry C_in_block == 0 ("auto"); resolve it here so
+    // prepare_conv3d_weights and the device op cannot disagree on the K-row blocking (#47316).
+    if (config.C_in_block == 0) {
+        config.C_in_block = default_c_in_block;
+    }
 
     Tensor prepared_weight_tensor = prepare_and_check_weight_tensor(weight_tensor, groups_, config, device);
     return ttnn::prim::conv3d(
@@ -99,7 +102,13 @@ ttnn::Tensor conv3d(
         padding_mode_,
         groups_,
         memory_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        halo_buffer,
+        logical_h_mask,
+        logical_w_mask,
+        pad_offset_tensor,
+        output_pad_h,
+        output_pad_w);
 }
 
 }  // namespace ttnn::experimental

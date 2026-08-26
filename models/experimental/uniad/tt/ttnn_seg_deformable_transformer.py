@@ -32,6 +32,19 @@ class TtSegDeformableTransformer:
             num_heads=8,
             params_branches=kwargs["params_branches"],
         )
+        # level_start_index is a constant scalar `0` consumed by encoder
+        # and decoder for every forward — allocate it once.
+        self._level_start_index = ttnn.zeros((1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device)
+        # spatial_shapes, valid_ratios, and reference_points are all
+        # functions of the multi-level feature shapes (constant for
+        # fixed-input UniAD inference) and the all-zeros mask. Cache
+        # the device tensors on first call. The cache key is the tuple
+        # of (h, w) per level, which is what changes if the input
+        # resolution does.
+        self._spatial_shapes_cache = None
+        self._valid_ratios_cache = None
+        self._reference_points_cache = None
+        self._cache_key = None
 
     @staticmethod
     def get_reference_points(spatial_shapes, valid_ratios, device):
@@ -98,34 +111,39 @@ class TtSegDeformableTransformer:
         mask_flatten = ttnn.concat(mask_flatten, 1)
         lvl_pos_embed_flatten = ttnn.concat(lvl_pos_embed_flatten, 1)
 
-        spatial_shapes = ttnn.from_torch(
-            torch.as_tensor(spatial_shapes, dtype=torch.long),
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.float32,
-        )
-        prod = ttnn.prod(spatial_shapes, dim=1)
-        cumsum = ttnn.cumsum(prod, dim=0)
-        cumsum_excl_last = cumsum[: cumsum.shape[0] - 1]
-        zero = ttnn.zeros(
-            (1,),
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        level_start_index = zero
-
-        # valid_ratios computation
-        valid_ratios_list = [self.get_valid_ratio(m, device=self.device) for m in mlvl_masks]
-        valid_ratios = ttnn.stack(valid_ratios_list, dim=1)  # values changes in tnnn
-
-        spatial_shapes = ttnn.to_torch(spatial_shapes)
-        valid_ratios = ttnn.to_torch(valid_ratios)
-        reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device="cpu")
-        reference_points = ttnn.from_torch(reference_points, device=self.device, layout=ttnn.TILE_LAYOUT)
-        spatial_shapes = ttnn.from_torch(
-            spatial_shapes, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-        )
-        valid_ratios = ttnn.from_torch(valid_ratios, device=self.device, layout=ttnn.TILE_LAYOUT)
+        # spatial_shapes / valid_ratios / reference_points are all functions
+        # of the multi-level shape tuple and the all-zeros mask, both
+        # frame-invariant for fixed-input UniAD inference. Lazy-cache the
+        # device tensors. The original code rebuilt them every forward,
+        # including a `to_torch → CPU get_reference_points → from_torch`
+        # round-trip that costs ~10 ms (and blocks trace capture).
+        #
+        # The previous code also computed `prod/cumsum/cumsum_excl_last` on
+        # spatial_shapes but never used the result — dead work, dropped.
+        # Use the constant scalar zero allocated in __init__ for
+        # level_start_index.
+        level_start_index = self._level_start_index
+        cache_key = tuple(spatial_shapes)
+        if self._cache_key != cache_key:
+            spatial_shapes_torch = torch.as_tensor(spatial_shapes, dtype=torch.long)
+            valid_ratios_list = [self.get_valid_ratio(m, device=self.device) for m in mlvl_masks]
+            valid_ratios_ttnn = ttnn.stack(valid_ratios_list, dim=1)
+            valid_ratios_torch = ttnn.to_torch(valid_ratios_ttnn)
+            reference_points_torch = self.get_reference_points(spatial_shapes_torch, valid_ratios_torch, device="cpu")
+            self._reference_points_cache = ttnn.from_torch(
+                reference_points_torch, device=self.device, layout=ttnn.TILE_LAYOUT
+            )
+            self._spatial_shapes_cache = ttnn.from_torch(
+                spatial_shapes_torch,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            self._valid_ratios_cache = ttnn.from_torch(valid_ratios_torch, device=self.device, layout=ttnn.TILE_LAYOUT)
+            self._cache_key = cache_key
+        spatial_shapes = self._spatial_shapes_cache
+        valid_ratios = self._valid_ratios_cache
+        reference_points = self._reference_points_cache
         feat_flatten = ttnn.permute(feat_flatten, (1, 0, 2))
         lvl_pos_embed_flatten = ttnn.permute(lvl_pos_embed_flatten, (1, 0, 2))
         memory = self.encoder(

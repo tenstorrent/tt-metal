@@ -65,7 +65,7 @@ namespace sfpu
 // would quantize to 1.703125 (abs err ~1.1e-3) which then gets amplified by
 // the (up+1)*gate*sig multiplication chain. The extra SFPLOADI here is
 // amortized across every face in the SFPU section. Same pattern as
-// `_init_gelu_` in ckernel_sfpu_gelu.h.
+// `gelu_init` in ckernel_sfpu_gelu.h.
 inline void _init_swiglu_()
 {
     TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0x40E0); // +clamp_limit   =  +7.0f  (BF16 exact)

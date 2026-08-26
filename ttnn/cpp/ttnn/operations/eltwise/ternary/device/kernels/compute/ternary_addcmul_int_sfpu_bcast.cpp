@@ -9,7 +9,7 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/add_int_sfpu.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 ALWI void process_tile(
     tt::CBIndex cb_in0_id,
@@ -22,47 +22,47 @@ ALWI void process_tile(
     uint32_t scalar_arg) {
     using namespace ckernel;
 
-    CircularBuffer cb_in0(cb_in0_id);
-    CircularBuffer cb_in1(cb_in1_id);
-    CircularBuffer cb_in2(cb_in2_id);
-    CircularBuffer cb_out(cb_out_id);
+    DataflowBuffer dfb_in0(cb_in0_id);
+    DataflowBuffer dfb_in1(cb_in1_id);
+    DataflowBuffer dfb_in2(cb_in2_id);
+    DataflowBuffer dfb_out(cb_out_id);
 
     // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
 #if BCAST_A
-    cb_in0.wait_front(num_tiles_per_cycle);  // input_a is broadcast
+    dfb_in0.wait_front(num_tiles_per_cycle);  // input_a is broadcast
 #endif
 #if BCAST_B
-    cb_in1.wait_front(num_tiles_per_cycle);  // input_b is broadcast
+    dfb_in1.wait_front(num_tiles_per_cycle);  // input_b is broadcast
 #endif
 #if BCAST_C
-    cb_in2.wait_front(num_tiles_per_cycle);  // input_c is broadcast
+    dfb_in2.wait_front(num_tiles_per_cycle);  // input_c is broadcast
 #endif
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         // Wait for non-broadcast CBs inside loop
 #if !BCAST_A
-        cb_in0.wait_front(num_tiles_per_cycle);
+        dfb_in0.wait_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_B
-        cb_in1.wait_front(num_tiles_per_cycle);
+        dfb_in1.wait_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_C
-        cb_in2.wait_front(num_tiles_per_cycle);
+        dfb_in2.wait_front(num_tiles_per_cycle);
 #endif
 
-        cb_out.reserve_back(num_tiles_per_cycle);
+        dfb_out.reserve_back(num_tiles_per_cycle);
 
         tile_regs_acquire();
 
         // Load all three inputs into DST registers
-        copy_tile_init(cb_in0.get_cb_id());
-        copy_tile(cb_in0.get_cb_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
+        copy_tile_init(dfb_in0.get_id());
+        copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_tile_init(cb_in1.get_cb_id());
-        copy_tile(cb_in1.get_cb_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
+        copy_tile_init(dfb_in1.get_id());
+        copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_tile_init(cb_in2.get_cb_id());
-        copy_tile(cb_in2.get_cb_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+        copy_tile_init(dfb_in2.get_id());
+        copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
         fill_tile_init();
         fill_tile_int<ADDCMUL_DATA_FORMAT>(3, scalar_arg);
@@ -78,33 +78,33 @@ ALWI void process_tile(
         tile_regs_wait();
 
         // Pack the result from DST[0] to output
-        pack_tile(0, cb_out.get_cb_id());
+        pack_tile(0, dfb_out.get_id());
 
         tile_regs_release();
 
-        cb_out.push_back(num_tiles_per_cycle);
+        dfb_out.push_back(num_tiles_per_cycle);
 
         // Pop non-broadcast CBs inside loop
 #if !BCAST_A
-        cb_in0.pop_front(num_tiles_per_cycle);
+        dfb_in0.pop_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_B
-        cb_in1.pop_front(num_tiles_per_cycle);
+        dfb_in1.pop_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_C
-        cb_in2.pop_front(num_tiles_per_cycle);
+        dfb_in2.pop_front(num_tiles_per_cycle);
 #endif
     }
 
     // Pop broadcast CBs outside loop
 #if BCAST_A
-    cb_in0.pop_front(num_tiles_per_cycle);
+    dfb_in0.pop_front(num_tiles_per_cycle);
 #endif
 #if BCAST_B
-    cb_in1.pop_front(num_tiles_per_cycle);
+    dfb_in1.pop_front(num_tiles_per_cycle);
 #endif
 #if BCAST_C
-    cb_in2.pop_front(num_tiles_per_cycle);
+    dfb_in2.pop_front(num_tiles_per_cycle);
 #endif
 }
 

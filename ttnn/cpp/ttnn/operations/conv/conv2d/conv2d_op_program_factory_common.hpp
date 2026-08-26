@@ -39,8 +39,6 @@ enum class Conv2dCb {
 struct CBInfo {
     // Index of CB that will be passed in to the kernel.
     uint32_t index = kInvalidCBIndex;
-    // CB handle
-    tt::tt_metal::CBHandle handle{};
     // Type of the CB
     Conv2dCb name{Conv2dCb::COUNT};
     // Number of pages in the circular buffer.
@@ -49,6 +47,8 @@ struct CBInfo {
     uint32_t page_size{};
     // Whether this CB is globally allocated (true for sharded tensors).
     bool is_globally_allocated = false;
+    // Byte offset within a globally allocated backing buffer.
+    uint32_t address_offset = 0;
     // Data format of the circular buffer.
     tt::DataFormat data_format = tt::DataFormat::Invalid;
     // Optional: If this CB is overlapped by another CB, this will hold the name of that CB.
@@ -59,7 +59,7 @@ struct CBInfo {
 
 // Returns a vector of CBInfo objects for the Conv2d operation.
 // The vector will contain information about all circular buffers used in the Conv2d operation.
-// CBInfo::index and CBInfo::handle won't be valid until allocate_cbs() is called.
+// CBInfo::index won't be valid until emit_cb_descriptors() is called.
 // When the program factory has the real reader indices DRAM buffer, it can pass its actual page
 // size so the predicted READER_INDICES CB footprint matches the CB the factory creates. Auto-shard
 // L1 estimation passes std::nullopt and falls back to the worst case (1 uint16 index per output row).
@@ -81,17 +81,6 @@ std::vector<CBInfo> get_cb_info(
     bool skip_act_cb_create,
     uint32_t input_channels_padded,
     std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
-
-// Allocates circular buffers for the Conv2d operation.
-// This function will populate index and handle fields of each CBInfo in the cb_info vector,
-// and add these circular buffers to the provided program.
-void allocate_cbs(
-    std::vector<CBInfo>& cb_info,
-    tt::tt_metal::Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& all_cores,
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
-    const Tensor& l1_indices_tensor);
 
 const CBInfo& get_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name);
 CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name);
@@ -127,8 +116,7 @@ void post_conv2d_op_memory_checks(
     std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
 
 // Builds CBDescriptor entries from a vector of CBInfo onto the supplied
-// ProgramDescriptor, mirroring allocate_cbs() but emitting onto the descriptor
-// data structures instead of a realised Program.  The set of globally-allocated
+// ProgramDescriptor. The set of globally-allocated
 // CBs (ACT_SHARDED/OUT/MATMUL_PARTIALS/READER_INDICES) is wired to the supplied
 // raw Buffer*s, which is what the framework's fast cache-hit path patches.
 // This single helper is used by both the sharded and width-sharded conv2d

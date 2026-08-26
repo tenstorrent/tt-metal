@@ -32,6 +32,7 @@ from models.common.utility_functions import comp_pcc, profiler, skip_for_blackho
 from models.demos.gpt_oss.tests.test_factory import TestFactory
 from models.demos.gpt_oss.tt.topk import TopKRouter
 from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
@@ -90,8 +91,10 @@ def gpt_oss_router_reference(
     """
     with torch.no_grad():
         # Reference router returns (routing_weights, routing_indices)
-        router_scores, router_indices = reference_router(hidden_states)
-
+        # transformers 5.x GptOssTopKRouter.forward returns (router_logits, router_scores, router_indices);
+        # <5 returned (router_scores, router_indices). Unpack version-tolerantly.
+        _router_out = reference_router(hidden_states)
+        router_scores, router_indices = (_router_out[1], _router_out[2]) if len(_router_out) == 3 else _router_out
     if use_throughput_experts:
         # When using throughput experts, convert sparse router_scores to dense router_weights
         # (reorder weights to match the order of the indices)
@@ -705,7 +708,7 @@ def _run_router_single_device_test(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,
@@ -797,7 +800,7 @@ def test_gpt_oss_router(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,

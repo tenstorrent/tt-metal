@@ -95,10 +95,6 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
     uint32_t in1_KtNt_stride = transpose_hw_bool ? bshape[2] / TILE_HEIGHT * in1_Kt : in1_Kt * Nt;
     uint32_t in1_KtNt_skip = transpose_hw_bool ? (bshape[2] / TILE_HEIGHT - 1) * in1_Kt : (in1_Kt - Kt) * Nt;
 
-    uint32_t src0_addr = src0_buffer->address();
-    uint32_t src1_addr = src1_buffer->address();
-    uint32_t dst_addr = dst_buffer->address();
-
     // ---- Circular buffers ----
     // cb_src0's total_size = Kt * in0_single_tile_size depends on the input shape;
     // padded_shape is folded into compute_program_hash() so each unique Kt keeps
@@ -234,11 +230,11 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
             continue;
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                src0_addr,
-                src1_addr,
+            {
+                src0_buffer,
+                src1_buffer,
                 Mt,
                 Kt,
                 Nt,
@@ -247,7 +243,7 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
                 in1_KtNt_stride * num_rows_in_one_tile,
                 num_output_blocks_per_core,
                 num_blocks_written * MtKt,  // itileA_start
-                0,                          // itileB_start; always read same in1 per core
+                0u,                         // itileB_start; always read same in1 per core
             });
         compute_desc.runtime_args.emplace_back(
             core,
@@ -257,10 +253,10 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
                 Kt,                                 // Kt
                 num_output_blocks_per_core * MtNt,  // Nt
             });
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                dst_addr,
+            {
+                dst_buffer,
                 num_output_blocks_per_core * MtNt,
                 num_blocks_written * MtNt,
             });

@@ -5,7 +5,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -23,10 +23,10 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     Noc noc;
-    CircularBuffer cb(cb_id_in0);
+    DataflowBuffer dfb(cb_id_in0);
 
 #ifdef OUT_SHARDED
-    cb.wait_front(onetile);
+    dfb.wait_front(onetile);
 #else
 
     // single-tile ublocks
@@ -49,11 +49,11 @@ void kernel_main() {
                  i < end_id + num_tiles_per_2d * dim;
                  i = i + tiles_per_row) {
 #endif
-                cb.reserve_back(onetile);
-                noc.async_read(s, cb, tile_bytes, {.page_id = static_cast<uint32_t>(i + k)}, {.offset_bytes = 0});
+                dfb.reserve_back(onetile);
+                noc.async_read(s, dfb, tile_bytes, {.page_id = static_cast<uint32_t>(i + k)}, {.offset_bytes = 0});
 
                 noc.async_read_barrier();
-                cb.push_back(onetile);
+                dfb.push_back(onetile);
             }
         }
     }

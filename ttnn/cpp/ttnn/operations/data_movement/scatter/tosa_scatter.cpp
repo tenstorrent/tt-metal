@@ -37,7 +37,7 @@ Tensor pre_tosa_scatter_transform_tensor(
     Tensor processed_tensor = tensor;
     if (input_tensor_type == InputTensorType::INDEX) {
         processed_tensor =
-            ttnn::expand(ttnn::unsqueeze(tensor, -1), SmallVector<int32_t>{N, W, C}, tensor.memory_config());
+            ttnn::expand(ttnn::unsqueeze(tensor, -1), ttsl::SmallVector<int32_t>{N, W, C}, tensor.memory_config());
         // WARNING: the rest of this if statement is to be removed after fixing the int32 transpose issue (PR: #23415)
         auto* device = processed_tensor.device();
         processed_tensor = processed_tensor.cpu();

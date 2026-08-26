@@ -31,6 +31,7 @@ from constants import (
 from matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
     LEAD_MODELS_BATCH_POLICY,
+    MODEL_TRACED_BATCH_POLICY,
     get_lead_models_test_group_name_for_hardware_group,
     get_runner_config,
     get_test_group_name_for_hardware_group,
@@ -106,6 +107,17 @@ def _get_hardware_from_master_json(master_json: dict):
     return None
 
 
+def _get_scope_trace_ids(manifest: dict, validation_scope: str) -> set[int]:
+    """Return trace IDs declared under a specific scope in the registry targets."""
+    targets = manifest.get("targets", {})
+    scope_entries = targets.get(validation_scope, [])
+    scope_ids = set()
+    for entry in scope_entries:
+        for tid in entry.get("trace", []):
+            scope_ids.add(int(tid))
+    return scope_ids
+
+
 def _get_trace_ids_by_hardware(trace_ids: list[int], registry: dict) -> dict:
     """Group trace IDs by the normalized hardware tuple declared in the workflow manifest."""
     trace_ids_by_hardware = defaultdict(list)
@@ -146,6 +158,12 @@ def compute_validation_matrix(
 
     registry = {entry["trace_id"]: entry for entry in manifest.get("registry", []) if entry.get("trace_id") is not None}
 
+    if validation_scope == "lead_models":
+        scope_trace_ids = _get_scope_trace_ids(manifest, validation_scope)
+        scoped_ids = [tid for tid in trace_ids if tid in scope_trace_ids] if scope_trace_ids else trace_ids
+    else:
+        scoped_ids = trace_ids
+
     generation_manifest = _load_generation_manifest(vectors_dir)
     grouping_mode = generation_manifest.get("vector_grouping_mode")
     if grouping_mode and grouping_mode != "hw":
@@ -160,7 +178,7 @@ def compute_validation_matrix(
         print(f"No vector JSON files found in {vectors_dir}", file=sys.stderr)
         sys.exit(1)
 
-    trace_ids_by_hardware = _get_trace_ids_by_hardware(trace_ids, registry)
+    trace_ids_by_hardware = _get_trace_ids_by_hardware(scoped_ids, registry)
 
     hardware_modules = defaultdict(list)
     unmatched_modules = []
@@ -181,6 +199,10 @@ def compute_validation_matrix(
         if not base_modules:
             continue
 
+        trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
+        if validation_scope == "lead_models" and not trace_id_list and hardware_group is not None:
+            continue
+
         # Sub-group by mesh shape only when the hardware group has multiple
         # distinct mesh topologies (e.g. N300 with both [1,1] and [1,2]).
         mesh_to_modules = defaultdict(set)
@@ -198,7 +220,7 @@ def compute_validation_matrix(
         else:
             test_group_name = get_test_group_name_for_hardware_group(hardware_group)
         runner_config = get_runner_config(test_group_name)
-        trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
+        group_batch_size = MODEL_TRACED_BATCH_POLICY.get(test_group_name, {}).get("batch_size", batch_size)
 
         solo_modules = set(LEAD_MODELS_BATCH_POLICY.get("solo_modules", []))
 
@@ -207,7 +229,7 @@ def compute_validation_matrix(
                 sorted_modules = sorted(mesh_modules)
                 solo = [m for m in sorted_modules if m in solo_modules]
                 rest = [m for m in sorted_modules if m not in solo_modules]
-                runner_batches = chunk_modules(rest, batch_size)
+                runner_batches = chunk_modules(rest, group_batch_size)
                 for sm in solo:
                     runner_batches.append(sm)
                 total_batches = len(runner_batches)
@@ -230,9 +252,10 @@ def compute_validation_matrix(
                         entry["mesh_device_shape"] = mesh_str
                     include.append(entry)
         else:
+            single_mesh = next(iter(mesh_to_modules), "")
             solo = [m for m in base_modules if m in solo_modules]
             rest = [m for m in base_modules if m not in solo_modules]
-            runner_batches = chunk_modules(rest, batch_size)
+            runner_batches = chunk_modules(rest, group_batch_size)
             for sm in solo:
                 runner_batches.append(sm)
             total_batches = len(runner_batches)
@@ -249,7 +272,7 @@ def compute_validation_matrix(
                         "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
                         "trace_ids": trace_id_list,
                         "hardware_group": hardware_label,
-                        "mesh_device_shape": "",
+                        "mesh_device_shape": single_mesh,
                     }
                 )
     return {"include": include}

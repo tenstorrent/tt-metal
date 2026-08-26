@@ -374,7 +374,7 @@ tt-run \
 
 After a successful **auto allocation** run, `tt-run` logs a **Phase 2–only** command using paths under `generated/ttrun/<cache_id>/` so you can re-run without Phase 1 when the cache still matches.
 
-For mock / single-machine 16-rank runs, use **`--mock-cluster-rank-binding`** with auto allocation (no `--hosts`); see [README_ttrun.md](../../../ttnn/ttnn/distributed/README_ttrun.md) and [custom_mock_cluster_descriptors/README.md](../../../tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/README.md).
+For mock / single-machine 16-rank runs, use **`--mock-cluster-rank-binding`** with auto allocation (no `--hosts`); see [README_ttrun.md](../../../ttnn/ttnn/distributed/README_ttrun.md) and [tt-cluster-descriptors/README.md](../../../tt_metal/third_party/tt-cluster-descriptors/README.md).
 
 For rankfiles and generating cluster descriptors from multiple hosts, see [README_generate_cluster_descriptors.md](../../../scripts/scaleout/README_generate_cluster_descriptors.md).
 
@@ -412,7 +412,7 @@ You can sanity-check the mainlined artifacts before running on real hardware. Al
    "
    ```
 
-**Full end-to-end** validation requires either a 16-host SuperPod (run the **auto allocation** `tt-run` example above) or a mock cluster: use **`tt-run --mesh-graph-descriptor … --mock-cluster-rank-binding <mapping>`** so Phase 1 generates rank bindings and the rankfile (add **`--mpi-args "--allow-run-as-root"`** if your OpenMPI setup requires it), or use **legacy** mode with an explicit `--rank-binding` and rankfile. See [custom_mock_cluster_descriptors/README.md](../../../tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/README.md).
+**Full end-to-end** validation requires either a 16-host SuperPod (run the **auto allocation** `tt-run` example above) or a mock cluster: use **`tt-run --mesh-graph-descriptor … --mock-cluster-rank-binding <mapping>`** so Phase 1 generates rank bindings and the rankfile (add **`--mpi-args "--allow-run-as-root"`** if your OpenMPI setup requires it), or use **legacy** mode with an explicit `--rank-binding` and rankfile. See [tt-cluster-descriptors/README.md](../../../tt_metal/third_party/tt-cluster-descriptors/README.md).
 
 ## Directed Link Retrains (Wormhole Only)
 

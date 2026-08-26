@@ -20,19 +20,23 @@
 // address, size, bank, or count) corrupts the round-trip and fails the test.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 #include "experimental/kernel_args.h"  // provides TT_KERNEL, get_arg, the args:: / dfb:: accessors
 
 template <uint32_t bank_id, uint32_t entry_size>  // CTAs (compile-time)
 TT_KERNEL void loopback_producer(
     uint32_t src_addr,       // RTA (per-node)
     uint32_t num_entries) {  // CRTA (broadcast)
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_src;
     DataflowBuffer buf(dfb::loopback_dfb);
 
     for (uint32_t i = 0; i < num_entries; i++) {
         buf.reserve_back(1);
-        uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
-        noc_async_read(src_noc_addr, buf.get_write_ptr(), entry_size);
-        noc_async_read_barrier();
+        noc.async_read(dram_src, buf, entry_size, {.bank_id = bank_id, .addr = src_addr}, {});
+        noc.async_read_barrier();
         buf.push_back(1);
         src_addr += entry_size;  // by-value function param; mutating the local copy is fine
     }

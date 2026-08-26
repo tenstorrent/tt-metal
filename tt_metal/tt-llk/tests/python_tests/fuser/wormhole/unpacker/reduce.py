@@ -5,16 +5,16 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
-from fuser.fused_loop import FusedLoop, LoopTileByTile
-from fuser.fused_math import ComputeNode
-from fuser.fused_operation import FusedOperation
-from fuser.fused_unpacker import Unpacker
+from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopTileByTile, TileLoop
 
 
 class ReduceUnpacker(Unpacker):
-    loop: FusedLoop = LoopTileByTile()
+    loop: TileLoop = LoopTileByTile()
 
     def __init__(self, reduce_dim, reduce_pool):
         self.reduce_dim = reduce_dim
@@ -32,17 +32,17 @@ class ReduceUnpacker(Unpacker):
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return tensor_a, tensor_b
 
     def perf_set_valid(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         num_faces = compute_unit.src_a.tile_shape.total_num_faces()
@@ -54,9 +54,9 @@ class ReduceUnpacker(Unpacker):
 
     def perf_clear_valid(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         num_faces = compute_unit.src_a.tile_shape.total_num_faces()
@@ -68,32 +68,23 @@ class ReduceUnpacker(Unpacker):
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         reduce_dim = self.reduce_dim.cpp_enum_value
         pool_type = self.reduce_pool.cpp_enum_value
-        enforce_fp32_accumulation = (
-            compute_unit.enforce_fp32_accumulation.cpp_enum_value
-        )
-
-        tile_shape = compute_unit.src_a.tile_shape
-        tensor_shape_instantiation: str = (
-            f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
-        )
-
         return (
-            f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}, {enforce_fp32_accumulation}>(\n"
-            f"{tensor_shape_instantiation});\n"
+            f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}>(\n"
+            f"{compute_unit.src_a.tile_shape.cpp_value});\n"
         )
 
     def unpack(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         buffer_a = compute_unit.src_a.cpp_name

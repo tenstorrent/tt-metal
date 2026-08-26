@@ -41,6 +41,20 @@ Conv1dResult conv1d(
             ? ttnn::reshape(input_tensor, Shape({batch_size, 1, input_length, in_channels}))
             : input_tensor;
 
+    // Reinterpret the 3D conv1d weight [out_channels, in_channels/groups, kernel_size] as 4D
+    // [.., 1, kernel_size], matching the [N, 1, input_length, C] input reshape and the {1, kernel_size}
+    // kernel. conv2d's weight prep does this for the L1 path, but the DRAM slicing auto-shard path reads
+    // weight.logical_shape()[3] (the kernel width) before weights are prepared, so it must be 4D up front.
+    const ttnn::Tensor& weight_tensor_4d = (weight_tensor.logical_shape().rank() == 3)
+                                               ? ttnn::reshape(
+                                                     weight_tensor,
+                                                     Shape(
+                                                         {weight_tensor.logical_shape()[0],
+                                                          weight_tensor.logical_shape()[1],
+                                                          1,
+                                                          weight_tensor.logical_shape()[2]}))
+                                               : weight_tensor;
+
     // padding for conv2d based on conv1d padding
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> conv2d_padding;
     if (std::holds_alternative<uint32_t>(padding)) {
@@ -58,22 +72,25 @@ Conv1dResult conv1d(
 
     // Conv1d reshapes the input to [N, 1, input_length, C], so the height dimension is always 1.
     // DRAM slicing is therefore only meaningful along the width dimension (DRAM_WIDTH, i.e. input_length);
-    // DRAM_HEIGHT would produce a single degenerate slice and silently collapse back to L1.
-    // When no slice config is provided, preserve the historical conv1d behaviour of forcing L1_FULL.
-    // Forwarding nullopt instead would route by input location (conv2d's default), sending DRAM/host
-    // inputs through the DRAM slicing path - which breaks existing auto_shard / shard_layout=None
-    // callers (the slicing path requires a shard layout). So conv1d opts in to DRAM slicing explicitly.
-    const ttnn::prim::Conv2dSliceConfig effective_slice_config = slice_config.value_or(
-        ttnn::prim::Conv2dSliceConfig{.slice_type = ttnn::prim::Conv2dSliceConfig::SliceType::L1_FULL});
-    TT_FATAL(
-        effective_slice_config.slice_type != ttnn::prim::Conv2dSliceConfig::SliceType::DRAM_HEIGHT,
-        "Conv1D does not support DRAM_HEIGHT slicing because the convolution height is always 1. "
-        "Use DRAM_WIDTH slicing (slices along input_length) or L1_FULL.");
+    // DRAM_HEIGHT would produce a single degenerate slice. Reject it only when requested explicitly.
+    if (slice_config.has_value()) {
+        TT_FATAL(
+            slice_config->slice_type != ttnn::prim::Conv2dSliceConfig::SliceType::DRAM_HEIGHT,
+            "Conv1D does not support DRAM_HEIGHT slicing because the convolution height is always 1. "
+            "Use DRAM_WIDTH slicing (slices along input_length) or L1_FULL.");
+    }
+    // When no slice config is provided, forward nullopt so conv2d auto-routes by input location:
+    // inputs already in L1 stay in L1, while DRAM/host inputs are width-sliced through DRAM (height is
+    // always 1, so the auto-selected slice type is always DRAM_WIDTH). This lets long sequences that
+    // would otherwise overflow L1 stream through DRAM by default instead of forcing L1_FULL. The DRAM
+    // slicing path auto-determines a shard layout when conv_config.shard_layout is unset, so
+    // shard_layout=None / auto_shard callers continue to work.
+    const std::optional<const ttnn::prim::Conv2dSliceConfig>& effective_slice_config = slice_config;
 
     auto [output_tensor, output_dimensions, weights_and_bias] =
         std::get<static_cast<int>(ConvResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS)>(ttnn::conv2d(
             input_tensor_4d,
-            weight_tensor,
+            weight_tensor_4d,
             device,
             in_channels,
             out_channels,

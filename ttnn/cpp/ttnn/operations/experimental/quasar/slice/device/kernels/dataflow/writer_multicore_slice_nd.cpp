@@ -9,38 +9,11 @@
  * execution, writing sliced tensor data from circular buffer to output tensor memory.
  * Supports 1D, 2D, 3D, 4D, 5D, etc. tensors with work distribution across cores.
  *
- * Key Responsibilities:
- * - Read sliced data from circular buffer (produced by reader kernel)
- * - Write assigned portion of output data to DRAM using TensorAccessor
- * - Handle different tensor dimensions with proper address calculations
- * - Support different data types with proper element size handling
- * - Process assigned rows for this core based on work distribution
+ * Metal 2.0: named tensor binding (tensor::out); the per-program output_dims array
+ * (identical for every core) arrives as a common runtime vararg; only the per-core work
+ * split (num_rows / start_row) is a per-core RTA.
  *
- * Architecture:
- * - Uses TensorAccessor for efficient DRAM address generation
- * - Processes data row-by-row to match reader kernel output
- * - Simple sequential write pattern for optimal memory controller utilization
- * - Multi-core work distribution: each core writes a subset of output rows
- *
- * Memory Management:
- * - DRAM alignment: 32-byte boundaries for memory controller optimization
- * - L1 alignment: 16-byte boundaries for L1 cache efficiency
- * - Circular buffer: Double buffering synchronized with reader kernel
- *
- * Data Type Support:
- * - Element size determined at compile time for performance
- * - Dynamic element size passed as runtime argument for flexibility
- *
- * Performance Optimizations:
- * - Minimal synchronization overhead with reader kernel
- * - Efficient memory write operations using NOC async transfers
- * - Sequential access patterns optimized for DRAM controllers
- * - Parallel processing with load balancing across multiple cores
- *
- * N-Dimensional Processing:
- * - Row concept: for rank R, rows = product(dims[0:R-1]), width = dims[R-1]
- * - Each core writes a contiguous range of logical output rows
- * - Simple linear mapping from logical row index to physical address
+ * Common-vararg layout: [0, tensor_rank) output_dims.
  *
  * Compatible with: TTNN framework, ROW_MAJOR_LAYOUT tensors, 1D-ND dimensions, multi-core execution
  */
@@ -51,36 +24,32 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // Runtime arguments - first get basic parameters
-    uint32_t rt_args_idx = 0;
-    uint32_t dst_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t tensor_rank = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t element_size = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
-
     // Compile-time arguments
-    constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-    constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr uint32_t tensor_rank = get_arg(args::tensor_rank);
+    constexpr uint32_t element_size = get_arg(args::element_size);
 
-    // Get dimension arrays from runtime arguments
-    // Layout: output_dims[rank]
+    // Per-core runtime arguments (named).
+    uint32_t num_rows_for_this_core = get_arg(args::num_rows_for_this_core);
+    uint32_t start_row_for_this_core = get_arg(args::start_row_for_this_core);
 
-    // Read output dimensions
-    volatile tt_l1_ptr uint32_t* output_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx++));
+    // Output dimensions from common runtime varargs (identical for all cores).
+    uint32_t output_dims[tensor_rank];
+    for (uint32_t i = 0; i < tensor_rank; ++i) {
+        output_dims[i] = get_common_vararg(i);
+    }
 
     // Calculate sizes - working with rows, not tiles
     uint32_t output_bytes_per_row = output_dims[tensor_rank - 1] * element_size;
 
     // Set up TensorAccessor for output data - use row size as page size
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
+    const auto s0 = TensorAccessor(tensor::out);
 
     Noc noc;
-    // Create CircularBuffer for Device 2.0 API
-    CircularBuffer cb_in(cb_id_in);
+    // Create DataflowBuffer for Device 2.0 API
+    DataflowBuffer cb_in(dfb::cb_in);
 
     // Multi-core work distribution: this core writes rows starting from start_row_for_this_core
     // Write each row from circular buffer to output tensor at the correct logical position
