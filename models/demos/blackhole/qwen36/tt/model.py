@@ -2681,7 +2681,11 @@ class Qwen36Model:
     def allocate_kv_caches(self, kv_cache_shape, dtype, batch_size=1):
         """Allocate caches for all 32 layers. Returns only the attention KV caches (for vLLM)."""
         assert self._deltanet_external_states is None, "allocate_kv_caches already called; deallocate first"
-        # QWEN_SDPA_BF8: bf8 paged KV for SDPA; halves KV memory (gated — validate PCC at long ctx).
+        # bf8 paged KV for SDPA (QWEN_SDPA_BF8=1). Halves KV memory and its read bandwidth.
+        # Long-context accuracy is fine -- test_model_tp_long_prefill logits PCC 0.99991, the same
+        # as bf16, and the 128k demo generation is unchanged. The accuracy cost people associate
+        # with "bf8 SDPA" is the Q cast, which is separate and off by default (attention/tp.py,
+        # QWEN_SDPA_BF8_Q). Held off by default only for the B=32 chunked-batched case noted there.
         if os.environ.get("QWEN_SDPA_BF8", "0") == "1":
             dtype = ttnn.bfloat8_b
         if self.num_devices > 1:

@@ -3,7 +3,7 @@
 """Tensor-parallel full-attention for Qwen3.5 (validated 64k+ on 27B).
 
 Q/K-norm: HF-correct (1+weight) uniformly at prefill and decode.
-Keep Q bf16 into SDPA unless bf8 mode (QWEN_SDPA_BF8=1).
+KV cache is bfloat8_b by default; Q stays bf16 (QWEN_SDPA_BF8_Q=1 casts it, at a real accuracy cost).
 Weights interleaved per device; x replicated in, output reduce-scattered on dim=3.
 """
 import os
@@ -193,8 +193,30 @@ class TPAttention:
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
         self.compute_cfg = tpc.COMPUTE_HIFI2
-        # bf8 SDPA (QWEN_SDPA_BF8=1): bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower)
+        # bf8 KV (QWEN_SDPA_BF8=1): the paged KV cache is bfloat8_b and SDPA reads it directly.
+        # Keeps HiFi2 (HiFi4 was slower). Q stays bf16 -- see below.
+        #
+        # Still default OFF, but for a different and much narrower reason than before. Measured
+        # end-to-end on the 27B, 4 chips, against a bf16 cache: ISL 16k TTFT -3.0% / decode +0.7%,
+        # ISL 128k TTFT -11.2% / decode +4.5%, and the 128k generation is unchanged. The qwen36 TP
+        # suite is 20/21 with it on, and the one holdout is
+        #     test_model_tp_prefill_chunked_batched[isl4096-B32]  user 12 decode1 PCC 0.9219 < 0.97
+        # i.e. batched chunked prefill at B=32 -- a vLLM serving shape, so not one to wave through.
+        # Everything else, including all four paged-attention tests and long prefill, is clean.
+        # Resolve that case and this becomes a default-on change worth ~11% TTFT at long context.
         self._sdpa_bf8 = os.environ.get("QWEN_SDPA_BF8", "0") == "1"
+        # Casting Q to bfloat8_b as well is the one part of bf8 that is NOT accuracy-safe, so it
+        # is opt-in and off by default. Measured on the 27B, test_model_tp_long_prefill:
+        #
+        #     bf16 everywhere                    logits PCC 0.99991   pass
+        #     bf8 KV + bf8 Q                     logits PCC 0.89275   FAIL (threshold 0.99)
+        #     bf8 KV + bf8 Q, KV cache bf16      logits PCC 0.89309   FAIL
+        #     bf8 KV, Q left bf16                logits PCC 0.99991   pass
+        #
+        # The loss tracks Q's dtype alone: leaving the KV cache in bf16 changes nothing (0.8931
+        # vs 0.8927), and k_chunk is not implicated either (k=128 gives 0.8925). Whatever the
+        # mechanism, ~0.10 PCC for one cast is far too much to take by default.
+        self._sdpa_bf8_q = os.environ.get("QWEN_SDPA_BF8_Q", "0") == "1"
         # Must match load_attention_weights_tp gates
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
         self._wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
@@ -866,14 +888,18 @@ class TPAttention:
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
-        # bf8 SDPA: paged_fill_cache doesn't cast — cast K/V to cache dtype before fill
-        if self._sdpa_bf8:
-            _k8 = ttnn.typecast(k, ttnn.bfloat8_b)
+        # paged_fill_cache does not cast, and rejects an input whose dtype does not line up with
+        # the cache (paged_fill_cache_device_operation.cpp:36), so match the cache's OWN dtype
+        # rather than an env flag. Callers that allocate their own bf16 caches -- several tests do
+        # -- then keep working regardless of how the model-level bf8 switch is set.
+        if k.dtype != self.paged_k.dtype:
+            _kc = ttnn.typecast(k, self.paged_k.dtype)
             ttnn.deallocate(k)
-            k = _k8
-            _v8 = ttnn.typecast(v, ttnn.bfloat8_b)
+            k = _kc
+        if v.dtype != self.paged_v.dtype:
+            _vc = ttnn.typecast(v, self.paged_v.dtype)
             ttnn.deallocate(v)
-            v = _v8
+            v = _vc
 
         # Fill this chunk into the paged cache
         k_paged, v_paged = self.paged_k, self.paged_v
@@ -893,9 +919,9 @@ class TPAttention:
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Chunked SDPA over paged cache; keep Q bf16 unless bf8 mode (QWEN_SDPA_BF8=1), which also
-        # makes the KV cache bf8 -> full bf8 matmul
-        if self._sdpa_bf8:
+        # Q stays bf16 against a bf8 KV cache. QWEN_SDPA_BF8_Q=1 makes it a full bf8 matmul and
+        # costs ~0.10 logits PCC -- benchmarking only, see __init__.
+        if self._sdpa_bf8_q:
             q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
             ttnn.deallocate(q)
         else:

@@ -72,8 +72,17 @@ Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
 Optional flags:
 
 ```bash
-# Run SDPA in BF8 (faster; slightly lower precision).
+# bfloat8_b paged KV cache: halves KV memory and its read bandwidth. Measured end-to-end on
+# 4 chips against a bf16 cache -- ISL 16k TTFT -3.0% / decode +0.7%, ISL 128k TTFT -11.2% /
+# decode +4.5%, with the 128k generation unchanged and long-prefill logits PCC 0.99991 (= bf16).
+# Off by default only because test_model_tp_prefill_chunked_batched[isl4096-B32] drops one user
+# to PCC 0.9219 (< 0.97); the rest of the qwen36 TP suite passes with it on.
 export QWEN_SDPA_BF8=1
+
+# Casting Q to bfloat8_b as well is a SEPARATE switch and is off by default: it drops
+# long-prefill logits PCC from 0.99991 to 0.89275, well under the 0.99 threshold. Benchmarking
+# only -- do not enable it for accuracy runs.
+export QWEN_SDPA_BF8_Q=1
 ```
 
 
