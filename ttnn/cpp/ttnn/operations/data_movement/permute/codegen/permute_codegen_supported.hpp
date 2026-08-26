@@ -28,12 +28,14 @@ bool supported_by_codegen(
     const ttsl::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& output_mem_config);
 
-// Row-invariant CB batching. The reader fills `kRmReadBatch` slots per round; the writer waits on
-// the previous batch plus the current one before releasing either, so the CB has to hold two
-// write batches at once.
+// Row-invariant CB batching. The reader reserves `kRmReadBatch` slots per round; the writer waits on
+// the previous batch plus the current one before releasing either, so the deeper of those two holds
+// is what the CB must be able to satisfy or the pair deadlocks.
 inline constexpr uint32_t kRmReadBatch = 4;
 inline constexpr uint32_t kRmWriteBatch = 4;
-inline constexpr uint32_t kRmCbSlots = 2 * std::max(kRmReadBatch, kRmWriteBatch);
+inline constexpr uint32_t kRmCbSlots = std::max(2 * kRmWriteBatch, kRmReadBatch);
+static_assert(kRmCbSlots >= 2 * kRmWriteBatch, "writer_permute_rm_interleaved holds two write batches at once");
+static_assert(kRmCbSlots >= kRmReadBatch, "reader_stick_interleaved_unified reserves a whole read batch at once");
 
 // One row-invariant CB slot holds a whole row-major stick, so its byte size scales with the input's
 // last dim. Shared by supported_by_codegen() (which rejects a stick too wide for kRmCbSlots of them
