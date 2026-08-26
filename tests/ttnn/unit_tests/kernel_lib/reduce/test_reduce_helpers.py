@@ -377,7 +377,8 @@ def _compute_config(case: ReduceCase) -> ttnn.ComputeConfigDescriptor:
         dst_full_sync_en=False,
     )
     if case.input_dtype == "fp32" and case.fp32_mode == "Accurate":
-        unpack_modes = [ttnn.UnpackToDestMode.Default] * 32
+        # Host descriptors use the maximum CB count so this vector covers both Wormhole (32) and Blackhole (64).
+        unpack_modes = [ttnn.UnpackToDestMode.Default] * 64
         unpack_modes[CB_INPUT] = ttnn.UnpackToDestMode.UnpackToDestFp32
         if case.calls > 1:
             unpack_modes[CB_ACCUMULATOR] = ttnn.UnpackToDestMode.UnpackToDestFp32
