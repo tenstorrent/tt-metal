@@ -410,6 +410,23 @@ def test_topk_fp32_input_with_uint16_indices_tensor_raise(device, expect_error):
         ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
 
 
+def test_topk_stable_with_indices_tensor_raise(device, expect_error):
+    # Stable tie-breaking against caller-supplied labels has no defined contract (the engines
+    # disagree when labels are not monotonic in position); the prim rejects the combination.
+    torch.manual_seed(0)
+    k = 32
+    shape = [1, 1, 32, 64]
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    indices_torch = torch.zeros(shape, dtype=torch.uint16)
+    indices_tensor = ttnn.from_torch(indices_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    with expect_error(RuntimeError, "does not support a custom indices_tensor"):
+        ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, stable=True, indices_tensor=indices_tensor)
+
+
 def test_topk_narrower_indices_tensor_raise(device, expect_error):
     # The indices are streamed with the input's page stride, so a narrower indices tensor is read at
     # the wrong pages and produces wrong indices rather than an error.
