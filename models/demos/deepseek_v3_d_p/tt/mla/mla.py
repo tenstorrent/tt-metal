@@ -717,7 +717,43 @@ class ttMLA:
         Returns None when no tuned config applies (caller falls back to defaults)."""
         if not is_blackhole():
             return None
-        return self._select_cfg(self.mm_configs[weight_name].get(seq_len_local))
+        cfg = self._select_cfg(self.mm_configs[weight_name].get(seq_len_local))
+        if cfg is not None and not self._cfg_fits_weight(cfg, weight_name):
+            return None
+        return cfg
+
+    def _cfg_fits_weight(self, cfg: dict, weight_name: str) -> bool:
+        """Reject a tuned config whose in0_block_w does not divide THIS weight's Kt.
+
+        The tuned table is keyed on (weight_name, seq_len_local) only -- nothing about the variant's
+        dimensions -- so a config tuned for one model is silently applied to another with a different
+        K. That is fatal when the block width does not divide: Mistral Small 4 at seq_len_local 3200
+        (= 25600/8, i.e. the 25k production ISL) picks up a config with in0_block_w=14, which suits
+        DeepSeek's Kt of 56 (hidden 7168 / tp 4 / 32) but not Mistral's 32, and the matmul asserts:
+
+            TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: Kt (32) must be divisible by
+                      in0_block_w (14)
+
+        Falling back to the default program config keeps such a model running (untuned, so possibly
+        slower) instead of dying. Note the crash is the LUCKY case: where the block width happens to
+        divide, another model's tuning is applied silently and nobody finds out. The real fix is to
+        key the table on the variant or on the actual (K, N); this is the guard until then.
+        """
+        pc = cfg.get("program_config")
+        in0_block_w = getattr(pc, "in0_block_w", None)
+        weight = getattr(self, f"{weight_name}_weight", None)
+        if in0_block_w is None or weight is None:
+            return True  # nothing to check against; keep the tuned config
+        # Weights are [K, N]; only the K dim participates in the in0 block tiling.
+        kt = weight.shape[-2] // ttnn.TILE_SIZE
+        if kt % in0_block_w == 0:
+            return True
+        logger.warning(
+            f"[ttMLA] tuned matmul config for '{weight_name}' has in0_block_w={in0_block_w}, which does "
+            f"not divide this model's Kt={kt} — falling back to the default program config. The tuned "
+            f"table is keyed on (weight, seq_len) only, so it is another variant's tuning."
+        )
+        return False
 
     def _get_act_mem_config(self, weight_name: str, seq_len_local: int) -> ttnn.MemoryConfig:
         """Memory config for the activation (in0) feeding this weight's matmul, as tuned in the mm
