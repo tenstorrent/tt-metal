@@ -34,7 +34,9 @@ import ttnn
 # =============================== CONFIG — edit me ===============================
 OP = "max"  # "max" | "avg"
 BATCH = 1
-IN_H, IN_W, CHANNELS = 16, 16, 64  # input spatial dims + channels
+IN_H, IN_W, CHANNELS = 16, 8, 64  # input spatial dims + channels
+# ^ SIM WARNING: keep N*H*W <= 128 sticks for craq-sim runs — 256-stick shards (e.g. 16,16,64)
+#   hit the open craq-sim DFB bug and STALL UNTIL THE RUNNER TIMEOUT (fine on WH silicon).
 KERNEL = (3, 3)
 STRIDE = (2, 2)
 PADDING = (1, 1)
