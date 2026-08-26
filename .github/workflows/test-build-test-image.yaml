@@ -61,6 +61,26 @@ jobs:
       dockerfile: dockerfile/Dockerfile.test-image-packages
       build-args: PRODUCT=tt-metalium
 
+  # Same artifact, same commit, same moment: the runner is the only variable.
+  # Temporary, for comparing on-prem against GitHub-hosted push times.
+  bake-hosted:
+    name: "Bake on a GitHub-hosted runner"
+    needs: build
+    uses: ./.github/workflows/build-test-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.test-image-packages
+      build-args: PRODUCT=tt-metalium
+      runner-label: ubuntu-latest
+      # Distinct package so the two bakes cannot race on one tag.
+      image-name: test-image-hosted
+
   verify:
     name: "Run a test from the image"
     needs: bake

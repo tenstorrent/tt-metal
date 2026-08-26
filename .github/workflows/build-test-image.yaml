@@ -185,12 +185,27 @@ jobs:
 
       # The docker driver's classic image store does no zstd and no OCI media
       # types, and cannot serve the Dockerfile's bind mount.
+      # The self-hosted runners have no direct egress: the daemon is configured
+      # with a proxy, but BuildKit runs as its own container and inherits none of
+      # it. Emits nothing on runners that need no proxy.
+      - name: Proxy settings for BuildKit
+        id: buildkit
+        run: |
+          set -euo pipefail
+          {
+            echo 'driver-opts<<DRIVEROPTS'
+            if [ -n "${http_proxy:-}" ]; then
+              echo "env.http_proxy=${http_proxy}"
+              echo "env.https_proxy=${https_proxy:-${http_proxy}}"
+              echo "env.no_proxy=${no_proxy:-}"
+            fi
+            echo DRIVEROPTS
+          } >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         with:
-          # The default docker-container driver has no egress to ghcr on the
-          # self-hosted runners, though the host daemon does.
-          driver-opts: network=host
+          driver-opts: ${{ steps.buildkit.outputs.driver-opts }}
 
       - name: Extract metadata (tags, labels)
         id: docker-metadata
