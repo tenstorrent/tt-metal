@@ -704,12 +704,21 @@ KNOBS = {
     # remaining admitted candidates to the same proven programming
     # point as plain LREG live ranges while the function-wide SSA
     # pressure model stays within the 8-LREG file.  Fire targets:
-    # softplus-fresh (3 parks + 1 LREG hoist, 34 -> 28 words/row),
-    # gelu-fresh (3 parks), trigonometry-fresh (1 park; L13/L14
-    # TU-claimed + LREG file full = honest ceiling), softsign-fresh
-    # (1 park).  sqrt-fresh / threshold-fresh = measured honest
-    # no-fire controls (named lreg-file-exhausted / no admissible
-    # candidate).
+    # softplus-fresh (3 parks + 1 LREG hoist, 36 -> 30 loop words),
+    # gelu-fresh (3 parks, 78 -> 72), trigonometry-fresh (1 park;
+    # L13/L14 TU-claimed + LREG file full = honest ceiling),
+    # softsign-fresh (1 park).  MEASURED (laneGV-evidence-20260825,
+    # BH p150, 3 reps cycle-identical, corr-before-perf 7/7 device +
+    # 7/7 paired CRAQ PASS pinned sim 32489dda; same-session hand
+    # anchors reproduce the booked board cells to 0.1pp):
+    # TILE_LOOP MATH_ISOLATE under the knob — softplus 1319.8 ->
+    # 1172.9 (-11.13%; vs-hand +13.30 -> +0.68), gelu 2787.8 ->
+    # 2642.9 (-5.20%; vs-hand +2.54 -> -2.79 LOSS -> WIN), softsign
+    # 578.8 -> 549.8 (-5.02%; +6.63 -> +1.27), acosh 3198.8 -> 3174.8
+    # (-0.75%; +6.39 -> +5.59).  sqrt-fresh / threshold-fresh /
+    # hardsigmoid-fresh = measured honest no-fire controls
+    # (cycle-identical under the knob; named lreg-file-exhausted / no
+    # admissible candidate).
     "pressure-park": "-mtt-tensix-optimize-pressure-park",
 }
 
