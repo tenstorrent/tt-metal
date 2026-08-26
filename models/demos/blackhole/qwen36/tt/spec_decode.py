@@ -84,6 +84,11 @@ class SpeculativeDecoder:
             # verify and decode must share GDN math or near-tie argmax flips reduce acceptance
             gdn.use_fused_recurrent_decode = True
         self._vfy_captured = False
+        # QWEN36_SPEC_EAGER_RESEED=1: keep the per-slot reseed loop (A/B escape hatch).
+        self._batched_reseed = not bool(int(os.environ.get("QWEN36_SPEC_EAGER_RESEED", "0")))
+        # Last page-table entry = the batched reseed's scratch block (its padding rows' KV sink).
+        self._reseed_scratch_block = int(page_table_torch[0, -1])
+        self._reseed_block_size = 0  # filled in generate(), once the KV caches exist
         self.total_drafted = 0
         self.total_accepted = 0  # accepted DRAFT tokens (excludes the mandatory correction/bonus)
         self.iters = 0
@@ -145,11 +150,21 @@ class SpeculativeDecoder:
     def _argmax_last(self, logits):
         """argmax over the vocab dim for ONE row -> [1,1,1] uint32 ROW_MAJOR.
 
-        Two non-obvious constraints: ttnn.argmax needs ROW_MAJOR input -- a TILE tensor takes a
-        single-core internal-untilize path that is catastrophically slow on a 151k-wide vocab -- and
-        the fast multicore argmax is ROW-PARALLEL, returning garbage unless the row dim is exactly
-        one tile. So pad 1 -> 32 rows, untilize multicore, argmax, then slice row 0 back out.
+        ttnn.argmax needs ROW_MAJOR input: a TILE tensor takes a single-core internal-untilize path
+        that is catastrophically slow on a 151k-wide vocab. So untilize multicore, then argmax.
+
+        This used to pad 1 -> 32 rows first, on the belief that the multicore argmax is row-parallel
+        and returns garbage below a full tile of rows. It does not: measured on the real drafter, the
+        unpadded argmax returns byte-identical ids (K=3 lossless acceptance 2.57 either way) and the
+        draft phase drops 35.1 -> 22.3 ms at K=10. The pad was pure traffic — [1,1,1,vocab] is
+        ALREADY 32 rows physically, so padding it to 32 logical rows made untilize and argmax move
+        ~32x the bytes they need. QWEN36_SPEC_ARGMAX_PAD32=1 restores the old path for A/B.
         """
+        if os.environ.get("QWEN36_SPEC_ARGMAX_PAD32") != "1":
+            u = ttnn.untilize(logits, use_multicore=True)
+            out = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,1] uint32 RM
+            ttnn.deallocate(u)
+            return out
         vocab_rows = 32
         padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, vocab_rows - 1), (0, 0)], value=0.0)
         u = ttnn.untilize(padded, use_multicore=True)
@@ -219,16 +234,13 @@ class SpeculativeDecoder:
         so every committed slot is rewritten from the base hidden the verify forward already produced.
         ``vhidden`` row i is the base hidden at slot0+i; tokens[i] is the token at slot0+i+1.
 
-        One drafter DECODE step per slot. The reference batches this into a single proposer forward
-        over all accepted tokens, and that does not port here: the drafter's prefill path needs a
-        genuine prefill shape, and neither candidate width works at an arbitrary mid-sequence slot0.
-        At one tile (32 rows) the stack silently picks DECODE matmuls — every matmul selects on
-        rows <= TILE_SIZE — while the norms still run in PREFILL mode, so the fused fc is handed a
-        fractured activation (width 1280 vs height 5120). At 128 rows the matmuls are right but the
-        drafter's SDPA rejects the unaligned chunk start (q_chunk_size % TILE_WIDTH). Batching this
-        is worth ~7% of the loop, so it needs a drafter decode path that takes N rows at once, not a
-        reshaped prefill. The LM head is already skipped here (need_logits=False), which is the
-        larger part of the per-step cost.
+        One drafter DECODE step per slot. Superseded by _reseed_mtp_batched (one forward over all
+        slots at once, ~11 ms/iteration cheaper at K=10); kept behind QWEN36_SPEC_EAGER_RESEED=1 as
+        the A/B reference. Batching it does NOT go through the drafter's prefill path — that needs a
+        genuine prefill shape and neither candidate width works at an arbitrary mid-sequence slot0
+        (at one tile the stack silently picks DECODE matmuls while the norms stay in PREFILL mode, so
+        the fused fc is handed a fractured activation; at 128 rows the SDPA rejects the unaligned
+        chunk start). It goes through the DECODE path at B rows instead — see _reseed_mtp_batched.
         """
         for i, tok in enumerate(tokens):
             row = ttnn.slice(vhidden, (0, 0, i, 0), (1, 1, i + 1, vhidden.shape[-1]))
@@ -237,21 +249,87 @@ class SpeculativeDecoder:
             ttnn.deallocate(h_next)
             self.mtp_extra_steps += 1
 
+    def _reseed_mtp_batched(self, slot0, vhidden, tokens):
+        """``_reseed_mtp`` as ONE fixed-shape drafter forward over all T = K+1 verify rows.
+
+        The per-slot loop above is m sequential decode forwards (~2.7 ms each, m ~ 6 at K=10). The
+        rows are INDEPENDENT — only the KV write survives, and K/V come from the row's own
+        (hidden, token, position) through the in-projection, never from the attention output — so
+        running them as B=T pseudo-users of one sequence is exactly equivalent and costs one forward.
+
+        This is the same hybrid trick the verify uses: per-row position tensor, page-table rows
+        aliasing the sequence's blocks, alias_kv_write=True so the shared-block KV writes go row by
+        row instead of racing several cores onto one 32-row tile.
+
+        Rows m..T-1 are PADDING (m varies, the shape must not): their page-table rows point at a
+        dedicated scratch block, so their KV write lands there and never touches the sequence, and
+        their position is 0 so their (discarded) SDPA read is one slot deep instead of full-context.
+        ``vhidden`` supplies their hidden rows unchanged — junk in, junk to the scratch block.
+        """
+        m = len(tokens)
+        if m == 0:
+            return
+        T = vhidden.shape[-2]
+        assert m <= T, f"reseed {m} slots into a {T}-row batch"
+        mesh, rep = self.mesh, ttnn.ReplicateTensorToMesh(self.mesh)
+        tok = torch.zeros(T, 1, dtype=torch.int32)
+        tok[:m, 0] = torch.tensor([int(t) for t in tokens], dtype=torch.int32)
+        pos = torch.zeros(T, dtype=torch.int32)
+        pos[:m] = torch.arange(slot0, slot0 + m, dtype=torch.int32)
+        pt = self.page_table.repeat(T, 1).contiguous()
+        pt[m:, :] = self._reseed_scratch_block
+        cos_t, sin_t = self.model._rope_tp_cos_sin_decode_torch(pos)
+        tok_tt = ttnn.from_torch(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
+        pos_tt = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
+        pt_tt = ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
+        cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep)
+        sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep)
+        _, h_next = self.mtp.forward_decode(
+            vhidden, tok_tt, pos_tt, cos, sin, pt_tt, need_logits=False, alias_kv_write=True
+        )
+        for t in (tok_tt, pos_tt, pt_tt, cos, sin, h_next):
+            ttnn.deallocate(t)
+        self.mtp_extra_steps += 1
+
+    def _reseed_warmup(self, T, dim_frac, dtype):
+        """Compile the batched-reseed program BEFORE the verify trace is captured.
+
+        The batched reseed is a shape the loop has never run (B=T decode over the MTP layer), and a
+        program that first compiles while the verify trace is parked lands its kernel binaries in
+        memory the replayed trace writes over. Every row here targets the scratch block, so the
+        throwaway forward touches no real KV.
+        """
+        z = ttnn.zeros(
+            [1, 1, T, dim_frac],
+            device=self.mesh,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._reseed_mtp_batched(self._reseed_scratch_block * self._reseed_block_size, z, [0] * T)
+        self.mtp_extra_steps -= 1  # warmup is not a loop cost
+        ttnn.synchronize_device(self.mesh)
+        ttnn.deallocate(z)
+
     # --------------------------------------------------------------------- #
     # Accept (greedy)
     # --------------------------------------------------------------------- #
-    def _accept_greedy(self, drafts, verify_logits):
+    def _accept_greedy(self, drafts, verify_ids):
         """Greedy acceptance of the matching prefix; returns the number of accepted drafts.
 
-        The verify chunk ran p+1..p+K+1, so verify_logits[j] are the logits at p+1+j and predict
-        p+2+j — exactly drafts[j]'s position. No draft's target was known before drafting (that token
-        is ``pending``, committed unconditionally), so every rejection is a genuine drafter miss and
-        nothing extra needs committing: the correction arrives as the next iteration's ``pending``.
+        The verify chunk ran p+1..p+K+1, so verify_ids[j] is the base model's own argmax at p+1+j,
+        which predicts p+2+j — exactly drafts[j]'s position. No draft's target was known before
+        drafting (that token is ``pending``, committed unconditionally), so every rejection is a
+        genuine drafter miss and nothing extra needs committing: the correction arrives as the next
+        iteration's ``pending``.
+
+        Greedy compares IDS, so the verify trace argmaxes on device and this walks a [K+1] int list
+        rather than a [K+1, 151936] host float tensor.
         """
         K = len(drafts)
         m = K
         for j in range(K):
-            if drafts[j] != int(verify_logits[j].argmax()):
+            if drafts[j] != verify_ids[j]:
                 m = j
                 break
         self.accept_hist[m] += 1
@@ -272,10 +350,10 @@ class SpeculativeDecoder:
         the per-token GDN state so commit_verify_slot(m) can roll the durable state to the accepted
         slot — no rollback, no commit forward.
 
-        Returns (per-position logits, per-position hidden rows [1,1,len,dim/tp]).
+        Returns (per-position argmax ids, per-position hidden rows [1,1,len,dim/tp]).
         """
-        lt, vhidden = self.model.verify_traced(tokens, p + 1, self.page_table)
-        return [lt[i] for i in range(len(tokens))], vhidden
+        _lt, vhidden, ids = self.model.verify_traced(tokens, p + 1, self.page_table)
+        return ids, vhidden
 
     def _seed(self, first, p):
         """Consume the prompt's first predicted token at position p -> (logits, hidden).
@@ -314,15 +392,16 @@ class SpeculativeDecoder:
         return time.perf_counter()
 
     def _verify_split(self, tokens, p):
-        """``_verify``, with the logits device->host readback split out of the device time.
+        """``_verify``, with the device->host readback split out of the device time.
 
-        ``model.verify_traced`` runs execute_trace + synchronize_device and only THEN pulls the
-        logits back (``ttnn.to_torch(ttnn.get_device_tensors(...)[0])`` + reshape/float), so hooking
-        ``ttnn.get_device_tensors`` for the duration of the call marks the device/host boundary
-        without editing model.py. The trailing sync flushes the small hidden-rows clone that follows
-        the readback, which lands in the readback bucket.
+        ``model.verify_traced`` runs execute_trace + synchronize_device and only THEN pulls the ids
+        (and, under QWEN36_SPEC_READ_LOGITS=1, the logits) back via
+        ``ttnn.to_torch(ttnn.get_device_tensors(...)[0])``, so hooking ``ttnn.get_device_tensors``
+        for the duration of the call marks the device/host boundary without editing model.py. The
+        trailing sync flushes the small hidden-rows clone that follows the readback, which lands in
+        the readback bucket.
 
-        Returns (vlogits, vhidden, device_seconds, readback_seconds).
+        Returns (vids, vhidden, device_seconds, readback_seconds).
         """
         orig = ttnn.get_device_tensors
         mark = []
@@ -335,13 +414,13 @@ class SpeculativeDecoder:
         ttnn.get_device_tensors = hooked
         t0 = time.perf_counter()
         try:
-            vlogits, vhidden = self._verify(tokens, p)
+            vids, vhidden = self._verify(tokens, p)
         finally:
             ttnn.get_device_tensors = orig
         ttnn.synchronize_device(self.mesh)
         t1 = time.perf_counter()
         t_mark = mark[0] if mark else t1
-        return vlogits, vhidden, t_mark - t0, t1 - t_mark
+        return vids, vhidden, t_mark - t0, t1 - t_mark
 
     def _log_iter_timing(self, row):
         """Log one iteration's breakdown and fold it into the mean (first 2 iterations excluded)."""
@@ -428,6 +507,16 @@ class SpeculativeDecoder:
             dn._capture_slots = False  # the eager seed must not write the trace's slot buffers
         Lp, Hp = self._seed(first, T - 1)
 
+        # Batched-reseed warmup: compiles the B=K+1 drafter forward while nothing is traced yet.
+        if self._batched_reseed:
+            self._reseed_block_size = self.mtp.attention.paged_k.shape[-2]
+            nb = self.page_table.shape[-1]
+            assert T + max_new_tokens < (nb - 1) * self._reseed_block_size, (
+                f"no spare KV block for the batched reseed's scratch: {nb} blocks x "
+                f"{self._reseed_block_size} must exceed the {T + max_new_tokens}-token sequence by one block"
+            )
+            self._reseed_warmup(self.K + 1, Hp.shape[-1], Hp.dtype)
+
         # One-time verify-trace capture (replayed every iteration), done AFTER prefill + MTP warm +
         # seed so every program those paths need is already compiled: a compile that happens once the
         # trace is parked clobbers it. Its two throwaway passes write junk KV at [T+1, T+1+K] — past
@@ -452,11 +541,11 @@ class SpeculativeDecoder:
             # Verify buffers per-token GDN state and keeps the hidden; commit = select the accepted
             # slot (no re-run forward). committed = [pending] + drafts[:m].
             if self._timing:
-                vlogits, vhidden, _s_verify, _s_read = self._verify_split([pending] + drafts, p)
+                vids, vhidden, _s_verify, _s_read = self._verify_split([pending] + drafts, p)
                 _t_verify = time.perf_counter()
             else:
-                vlogits, vhidden = self._phase("verify", lambda: self._verify([pending] + drafts, p))
-            m = self._accept_greedy(drafts, vlogits)
+                vids, vhidden = self._phase("verify", lambda: self._verify([pending] + drafts, p))
+            m = self._accept_greedy(drafts, vids)
             committed = [pending] + drafts[:m]
             mi = len(committed) - 1  # accepted-prefix's last token index in the verify window
             _t_accept = time.perf_counter() if self._timing else 0.0  # host-only: no fence needed
@@ -464,7 +553,8 @@ class SpeculativeDecoder:
             _t_commit = self._tick() if self._timing else 0.0
             ttnn.deallocate(Hp)
             prev_p = p
-            Lp = vlogits[mi]
+            # The next anchor's own next token: the base's argmax at the accepted-prefix's last row.
+            next_pending = vids[mi]
             # The new anchor hidden is the accepted prefix's last row of the verify window.
             _view = ttnn.slice(vhidden, (0, 0, mi, 0), (1, 1, mi + 1, vhidden.shape[-1]))
             new_Hp = ttnn.clone(_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -473,13 +563,14 @@ class SpeculativeDecoder:
             # MTP KV maintenance over the slots just committed, in ONE drafter forward over the
             # verify window (row i is the base hidden at slot prev_p+1+i, paired with the token at
             # slot+1). Done before vhidden is freed.
-            self._phase("reseed", lambda: self._reseed_mtp(prev_p + 1, vhidden, committed[1:]))
+            _rfn = self._reseed_mtp_batched if self._batched_reseed else self._reseed_mtp
+            self._phase("reseed", lambda: _rfn(prev_p + 1, vhidden, committed[1:]))
             _t_reseed = self._tick() if self._timing else 0.0
             ttnn.deallocate(vhidden)
 
             p += len(committed)
             Hp = new_Hp
-            pending = int(Lp.argmax())
+            pending = next_pending
 
             out.extend(committed)
             if self._timing:

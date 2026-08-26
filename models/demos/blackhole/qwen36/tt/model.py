@@ -1312,7 +1312,20 @@ class Qwen36Model:
         normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,K,dim]
         logits = self._lm_head(normed)  # [1,1,K,vocab] replicated per device
         ttnn.deallocate(normed)
-        return logits, rows
+        # Greedy acceptance compares TOKEN IDS, so argmax the T verify rows here, inside the trace,
+        # and let the caller read back T uint32 instead of T x 151936 floats (~3 MB + a host .float()
+        # cast per iteration). ttnn.argmax needs ROW_MAJOR input (a TILE tensor takes a single-core
+        # internal untilize that is hopeless at this vocab width), so untilize first. No 32-row pad:
+        # the multicore argmax is correct below a full tile of rows, and padding T=11 -> 32 would
+        # nearly triple the bytes untilize and argmax touch (see SpeculativeDecoder._argmax_last).
+        pad_rows = ttnn.TILE_SIZE - T if os.environ.get("QWEN36_SPEC_ARGMAX_PAD32") == "1" else 0
+        padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0) if pad_rows > 0 else logits
+        u = ttnn.untilize(padded, use_multicore=True)
+        if pad_rows > 0:
+            ttnn.deallocate(padded)
+        ids = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,T] uint32 ROW_MAJOR
+        ttnn.deallocate(u)
+        return logits, rows, ids
 
     def capture_verify_trace(self, page_table, T, bucket=None, gdn_recurrent=True, decode_cfg=None, warm_start=0):
         """Capture ONE trace of the recurrent verify forward over a fixed T-token bucket (T = number
@@ -1476,14 +1489,15 @@ class Qwen36Model:
         # then snapshot GDN, throwaway capture pass, begin/end capture, restore (both passes advance the
         # in-place GDN state; restore keeps the baked addresses' VALUES at the anchor).
         snap = self._snapshot_gdn_verify(gdn)
-        wl, wr = self._forward_verify_bucket_tp()
+        wl, wr, wi = self._forward_verify_bucket_tp()
         ttnn.deallocate(wl)
         ttnn.deallocate(wr)
+        ttnn.deallocate(wi)
         ttnn.synchronize_device(dev)
         self._restore_gdn_verify(gdn, snap)
 
         self._vfy_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
-        self._vfy_logits_out, self._vfy_rows_out = self._forward_verify_bucket_tp()
+        self._vfy_logits_out, self._vfy_rows_out, self._vfy_ids_out = self._forward_verify_bucket_tp()
         ttnn.end_trace_capture(dev, self._vfy_trace_id, cq_id=0)
         self._restore_gdn_verify(gdn, snap)
         self._vfy_gdn = gdn
@@ -1520,11 +1534,17 @@ class Qwen36Model:
                 )
                 ttnn.copy(cc, dn.conv_states[j])
                 ttnn.deallocate(cc)
+            # The fullbatch verify's carry reads a persistent MIRROR of conv_states, not the taps
+            # themselves, so restoring the taps must re-seed it — otherwise the captured trace keeps
+            # carrying whatever state the throwaway warmup/capture pass left in the mirror.
+            dn.sync_conv_win()
 
     def verify_traced(self, draft_tokens, chunk_start, page_table):
         """Replay the captured verify trace for `draft_tokens` at absolute `chunk_start`. Advances GDN
         in place + captures per-token slots (commit_verify_slot rolls to the accepted slot after).
-        Returns (logits [T,vocab] host float, rows [1,1,T,dim/tp] device hidden)."""
+        Returns (logits [T,vocab] host float or None, rows [1,1,T,dim/tp] device hidden, ids [T] host
+        int list). The full logits are read back ONLY under QWEN36_SPEC_READ_LOGITS=1: greedy
+        acceptance needs the argmax ids alone, which the trace now produces on device."""
         assert getattr(self, "_vfy_trace_id", None) is not None, "call capture_verify_trace first"
         bucket, T = self._vfy_bucket, self._vfy_T
         assert len(draft_tokens) == T, f"expected {T} tokens, got {len(draft_tokens)}"
@@ -1586,12 +1606,16 @@ class Qwen36Model:
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(dev)
 
-        # Replicated logits (_lm_head all-gathers): one replica is the whole answer. Concatenating
-        # all TP ranks made this readback ~num_devices x larger for nothing, on the hot loop.
-        lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_out)[0])
-        lt = lt.reshape(-1, self.vocab_size)[:T].float()
+        # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
+        # and it is T uint32 instead of T x vocab floats.
+        ids = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_ids_out)[0]).reshape(-1)
+        ids = [int(v) for v in ids[:T]]
+        lt = None
+        if os.environ.get("QWEN36_SPEC_READ_LOGITS") == "1":
+            lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_out)[0])
+            lt = lt.reshape(-1, self.vocab_size)[:T].float()
         rows = ttnn.clone(self._vfy_rows_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return lt, rows
+        return lt, rows, ids
 
     def decode_step_paged(self, token_id, pos, page_table):
         """One paged base decode at absolute ``pos`` (B=1), returning host logits + the pre-final-norm

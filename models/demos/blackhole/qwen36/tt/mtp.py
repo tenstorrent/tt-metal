@@ -144,9 +144,18 @@ class Qwen36MTP:
         return fused
 
     def forward_decode(
-        self, hidden_states, token_ids, position_idxs, cos, sin, page_table, sharded_lm_head=False, need_logits=True
+        self,
+        hidden_states,
+        token_ids,
+        position_idxs,
+        cos,
+        sin,
+        page_table,
+        sharded_lm_head=False,
+        need_logits=True,
+        alias_kv_write=False,
     ):
-        """One MTP draft step.
+        """One MTP draft step, or ONE batched KV-maintenance step over B rows.
 
         hidden_states : [1,1,B,dim/tp] fractured — base last-decoder-layer output (pre final norm),
                         or the previous MTP step's next_hidden when chaining.
@@ -154,6 +163,9 @@ class Qwen36MTP:
         position_idxs : [B] int32 device — KV write index into the MTP cache (base cur_pos + step).
         cos, sin      : partial-RoPE tables for position_idxs (+ rope_delta).
         page_table    : [B, blocks] int32 for the MTP layer's own paged KV cache.
+        alias_kv_write: the B rows belong to ONE sequence at consecutive positions (the batched
+                        reseed), so their KV writes share physical blocks and must go row by row —
+                        see TPAttention.forward_decode.
 
         Returns (logits, next_hidden). next_hidden is the decoder-block output (fractured, pre norm).
         """
@@ -164,7 +176,13 @@ class Qwen36MTP:
         ttnn.deallocate(tok_emb)
 
         next_hidden = self.decoder.forward(
-            fused, cos=cos, sin=sin, mode="decode", position_tensor=position_idxs, page_table=page_table
+            fused,
+            cos=cos,
+            sin=sin,
+            mode="decode",
+            position_tensor=position_idxs,
+            page_table=page_table,
+            alias_kv_write=alias_kv_write,
         )
         ttnn.deallocate(fused)
 

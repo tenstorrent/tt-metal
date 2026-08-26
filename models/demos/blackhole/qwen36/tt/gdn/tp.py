@@ -215,6 +215,11 @@ class TPGatedDeltaNet:
         # Batched-conv verify only: the [1, K-1+T, qkv_dim_tp] conv window stashed with ONE copy, from
         # which commit_verify_slot slices the accepted slot's shift-register. None => per-token slots.
         self._verify_win_buf = None
+        # Batched-conv verify only: the DURABLE shift register as one [1, K, qkv_dim_tp] tensor,
+        # mirroring conv_states[0..K-1]. The traced verify reads its carry from a constant-offset
+        # slice of this, and commit_verify_slot writes it with ONE slice+copy instead of touching K
+        # separate conv_states taps — see commit_verify_slot's COST NOTE.
+        self._conv_win_buf = None
         self._win_captured = False  # did THIS verify populate the window? (buffer is always allocated)
         self._conv_taps_T = None  # conv taps expanded to T rows for the batched-conv path
         # In-place state updates for decode/prefill traces (set by model allocate_kv_caches)
@@ -273,6 +278,9 @@ class TPGatedDeltaNet:
                 for c in convs:
                     ttnn.deallocate(c)
             self._slot_bufs = None
+        if self._conv_win_buf is not None:  # mirrors the now-stale conv_states; re-seeded at capture
+            ttnn.deallocate(self._conv_win_buf)
+            self._conv_win_buf = None
 
     def reset_state_inplace(self):
         """Zero conv + recurrent state in place (preserves trace buffer addresses).
@@ -1460,10 +1468,13 @@ class TPGatedDeltaNet:
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         _L1, mc, rm = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
         kd, C, rf = self.key_dim_tp, self.qkv_dim_tp, Nv // Nk
+        self._ensure_conv_win()  # no-op after the first (eager) call; never allocates inside a trace
 
         # 1) Causal conv over all T tokens in one native op. The carry is the shift register's
         #    previous K-1 inputs, i.e. conv_states[1:] (conv_states[K-1] is the most recent input).
-        carry = ttnn.concat([self.conv_states[j] for j in range(1, self.K)], dim=1, memory_config=mc)
+        # Constant-offset slice of the persistent shift register (rows 1..K-1 = conv_states[1:]).
+        # Trace-safe (fixed address, fixed offsets) and it is what lets commit write ONE buffer.
+        carry = ttnn.slice(self._conv_win_buf, (0, 1, 0), (1, self.K, C))
         conv_all, _cnew = self._conv1d_prefill(qkv_all, T, carry)  # [1,T,C], SiLU applied
         ttnn.deallocate(_cnew)  # the K-entry register is taken from the window below instead
 
@@ -1517,6 +1528,15 @@ class TPGatedDeltaNet:
         else:
             self.rec_state = states
         # Durable shift register = the window's last K rows (what T sequential shifts would leave).
+        # Written to BOTH the persistent [1,K,C] buffer the next replay's carry reads and the
+        # conv_states taps, which stay the source of truth for snapshot/restore and the decode path.
+        tail = ttnn.slice(E, (0, T - 1, 0), (1, T - 1 + self.K, C))
+        ttnn.copy(tail, self._conv_win_buf)
+        if T > 1:
+            # At T == 1 (the one-token eager seed) E is exactly K rows, so that slice is FULL-SPAN
+            # and ttnn.slice hands back an ALIAS of E — deallocating it would free E out from under
+            # the per-tap loop below.
+            ttnn.deallocate(tail)
         for j in range(self.K):
             row = ttnn.slice(E, (0, T - 1 + j, 0), (1, T + j, C))
             ttnn.copy(row, self.conv_states[j])
@@ -1586,6 +1606,7 @@ class TPGatedDeltaNet:
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=mc,
                 )
+            self._ensure_conv_win()
         if self._slot_bufs is not None and len(self._slot_bufs) >= n:
             return
         if self._slot_bufs is not None:
@@ -1598,14 +1619,60 @@ class TPGatedDeltaNet:
             for _ in range(n)
         ]
 
+    def _ensure_conv_win(self):
+        """Allocate the persistent [1, K, qkv_dim_tp] shift register once, seeded from conv_states.
+
+        Allocate-and-seed happens on the FIRST eager fullbatch verify (the spec loop's seed forward),
+        never lazily inside a captured trace: by capture time the buffer exists and the trace body
+        only ever slices/copies it, which the warmup pass has already compiled."""
+        if self._conv_win_buf is not None:
+            return
+        self._conv_win_buf = ttnn.zeros(
+            [1, self.K, self.qkv_dim_tp],
+            device=self.mesh,
+            dtype=self.conv_states[0].dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.sync_conv_win()
+
+    def sync_conv_win(self):
+        """Mirror conv_states[0..K-1] into the persistent [1,K,qkv_dim_tp] shift-register buffer.
+
+        conv_states stay the source of truth outside the spec loop (prefill fills them, snapshot /
+        restore round-trips them, the decode path reads them); this buffer is the copy the traced
+        fullbatch verify reads its carry from, so it has to be re-seeded whenever conv_states are
+        set from outside — at slot-buffer setup and after every _restore_gdn_verify."""
+        if self._conv_win_buf is None or self.conv_states is None:
+            return
+        c = ttnn.concat(list(self.conv_states), dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.copy(c, self._conv_win_buf)
+        ttnn.deallocate(c)
+
     def commit_verify_slot(self, idx):
         """Set the recurrent state to the buffered verify slot `idx` (state after consuming the
         accepted-prefix's last token). Copies in place (preserves buffer addresses), so no commit
         forward runs. Slot buffers are persistent (reused next verify), so they are NOT freed here.
 
         The recurrent state comes straight out of the kernel's token-major per-token output, so only
-        the ONE accepted slot is ever touched — the verify no longer copies all T states aside."""
+        the ONE accepted slot is ever touched — the verify no longer copies all T states aside.
+
+        COST NOTE. This is the one EAGER step of the spec iteration that scales with layer count: 48
+        GDN layers x a handful of device ops, at this stack's ~35 us eager op cost. The ops move a
+        few KB each — it is dispatch count, not data — so the only thing that matters here is how
+        many ttnn calls the loop makes. Under QWEN36_GDN_FULL_BATCH=1 it used to make ten per layer
+        (rec slice+copy, then K conv taps x slice+copy+deallocate) and cost ~17 ms, ~3x its fb=0
+        self, whose trace had already materialised the per-token conv slots. Two changes took it to
+        ~5 ms: the full-acceptance early-out below, and committing the conv shift register as ONE
+        [1,K,qkv_dim_tp] buffer (_conv_win_buf) that the traced verify reads its carry from, instead
+        of K separate conv_states taps."""
         assert self._verify_states is not None, "commit_verify_slot called without a captured verify"
+        if idx == self._verify_states.shape[1] - 1:
+            # Full acceptance: the verify already LEFT the durable state at the last token (rec_state
+            # = states[T-1], conv_states = window rows [T-1, T-1+K)), so every copy below would write
+            # what is already there. 48 layers x ~6 device ops saved on those iterations.
+            self._verify_states = None
+            return
         st = ttnn.reshape(
             ttnn.slice(self._verify_states, (0, idx, 0, 0, 0), (self.B, idx + 1, self.Nv, self.Dk, self.Dv)),
             (self.B, self.Nv, self.Dk, self.Dv),
@@ -1616,10 +1683,15 @@ class TPGatedDeltaNet:
         if self._win_captured:
             # Batched-conv path: conv slots were not materialised per token. The shift-register as of
             # token idx is rows [idx, idx+K) of the stashed window (see _forward_verify_recurrent_batched).
-            for j in range(self.K):
-                row = ttnn.slice(self._verify_win_buf, (0, idx + j, 0), (1, idx + j + 1, self.qkv_dim_tp))
-                ttnn.copy(row, self.conv_states[j])
-                ttnn.deallocate(row)
+            #
+            # ONE slice + ONE copy into the persistent shift register the next replay's carry reads.
+            # This used to write the K conv_states taps individually (K x slice+copy+deallocate per
+            # layer, x48 layers) and that dispatch count WAS the fb=1 commit regression. conv_states
+            # themselves are left at the end-of-window state the trace wrote; nothing in the spec
+            # loop reads them (see sync_conv_win).
+            w = ttnn.slice(self._verify_win_buf, (0, idx, 0), (1, idx + self.K, self.qkv_dim_tp))
+            ttnn.copy(w, self._conv_win_buf)
+            ttnn.deallocate(w)
         else:
             for j, c in enumerate(convs):
                 ttnn.copy(c, self.conv_states[j])
