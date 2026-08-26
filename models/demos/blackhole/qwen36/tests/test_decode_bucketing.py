@@ -15,9 +15,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
-from ttnn.tools import trace_allocation_tracker
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model

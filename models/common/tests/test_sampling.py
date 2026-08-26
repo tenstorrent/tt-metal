@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 import torch.nn.functional as F
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
-from ttnn.tools import trace_allocation_tracker
 from models.common.sampling import (
     LogProbsCalculator,
     SamplingGenerator,
