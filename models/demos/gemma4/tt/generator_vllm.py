@@ -117,6 +117,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         "supports_prefix_caching": False,
         "supports_async_decode": False,
         "supports_sample_on_device": True,
+        "supports_chunked_prefill": True,
+        # ``chunked_prefill_sdpa`` pins q_chunk_size=128 and already documents
+        # that its ``base_offset`` must be a multiple of it.
+        "chunked_prefill_token_alignment": 128,
     }
 
     # Hybrid vLLM kv-cache groups: env-gated via ``GEMMA4_HYBRID_KV_CACHE_GROUPS``

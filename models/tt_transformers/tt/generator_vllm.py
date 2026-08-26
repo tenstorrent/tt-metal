@@ -630,6 +630,10 @@ class LlamaForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_chunked_prefill": True,
+        # get_attn_sdpa_prefill_program_config targets q_chunk_size=256 above
+        # seq_len 2048, and a traced prefill is captured with that value.
+        "chunked_prefill_token_alignment": 256,
     }
 
     @classmethod
@@ -715,6 +719,10 @@ class QwenForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_chunked_prefill": True,
+        # get_attn_sdpa_prefill_program_config targets q_chunk_size=256 above
+        # seq_len 2048, and a traced prefill is captured with that value.
+        "chunked_prefill_token_alignment": 256,
     }
 
     @classmethod
@@ -794,6 +802,10 @@ class MistralForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_chunked_prefill": True,
+        # get_attn_sdpa_prefill_program_config targets q_chunk_size=256 above
+        # seq_len 2048, and a traced prefill is captured with that value.
+        "chunked_prefill_token_alignment": 256,
     }
 
     @classmethod
