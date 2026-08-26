@@ -170,7 +170,7 @@ _E5M2_AND_FLOAT16 = (DataFormat.Float16, DataFormat.MxFp8R)
 #   * **Range** — exp overflows an 8-bit exponent near x = 88.7. True in both modes, so it
 #     lives in the registry entries below.
 #   * **Accuracy** — the *approximation* overshoots the golden by ~5.7% past ~8 (measured on
-#     Wormhole; see _APPROX_EXP_ACCURACY_XFAIL in test_sfpu_unary). One mode only, so it
+#     Wormhole; see _APPROX_EXP_ACCURACY_XFAIL in test_eltwise_unary_sfpu). One mode only, so it
 #     lives in _APPROX_ACCURACY_MAX, applied by for_op() at ApproximationMode.Yes.
 #
 # The registry entry serves both modes, so an accuracy bound written there also withholds
@@ -467,6 +467,9 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.LOG_UNIFORM, low=1e-2, high=100.0
         )
     ),
+    # reciprocal_compat (legacy exponent-difference reciprocal): same domain as the
+    # accurate Reciprocal -- everything except the pole, both signs.
+    MathOperation.ReciprocalCompat: _reciprocal_spec,
     # expm1_cw (component-wise expm1): same safe range as the standalone expm1.
     MathOperation.Expm1Cw: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
@@ -1097,7 +1100,7 @@ _FPU_ELTWISE_OPS: FrozenSet[MathOperation] = frozenset(
 # all, so driving it through the unary test fails to compile.
 _PACKER_OPS: FrozenSet[MathOperation] = frozenset({MathOperation.Relu})
 
-# Binary SFPU ops (test_sfpu_binary.py). Registered ones only -- that suite also drives
+# Binary SFPU ops (test_eltwise_binary_sfpu.py). Registered ones only -- that suite also drives
 # ~30 int, comparison and bitwise ops that have no domain entry and so cannot be keys
 # here; they are declared in its own _UNREGISTERED_BINARY_OPS instead.
 _SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
@@ -1160,6 +1163,7 @@ _SFPU_UNDEFINED_RANGES: Dict[
 ] = {
     # ── Unary: only spec_A has a hole ────────────────────────────────────────
     MathOperation.Reciprocal: {Operand.A: [(-1e-6, 1e-6)]},
+    MathOperation.ReciprocalCompat: {Operand.A: [(-1e-6, 1e-6)]},
     MathOperation.Log: {Operand.A: [(-float("inf"), 1e-6)]},
     MathOperation.Sqrt: {Operand.A: [(-float("inf"), 0.0)]},
     MathOperation.Atanh: {
@@ -1509,6 +1513,7 @@ _OP_SINGULARITIES: Dict[
     MathOperation.SqrtCustom: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.Rsqrt: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.RsqrtCompat: {Operand.A: ((0.0, _ABOVE),)},
+    MathOperation.ReciprocalCompat: {Operand.A: ((0.0, _BOTH),)},
     # Inverse functions defined only on (-1, 1) or [-1, 1]: the interior is the defined
     # side, so -1 is probed upward and +1 downward.
     MathOperation.Atanh: {Operand.A: ((-1.0, _ABOVE), (1.0, _BELOW))},
@@ -1791,7 +1796,7 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     **{op: (0.0, -0.0) for op in _ZERO_EDGE_OPS},
     # UnaryGt/Lt/Ge/Le reach the edge sweep through edge_spec(). UnaryEq and UnaryNe do not
     # -- they are outside _OP_DOMAIN_REGISTRY, so their consumer is
-    # test_sfpu_unary._threshold_op_stimuli_spec, which reads op_edge_points() directly to
+    # test_eltwise_unary_sfpu._threshold_op_stimuli_spec, which reads op_edge_points() directly to
     # place the exact threshold in its stimuli, as the int32 comparison ops below do.
     **{op: (UNARY_COMP_THRESHOLD,) for op in _COMPARISON_EDGE_OPS},
     # logical_not(x) = (x == 0). Same shape as _ZERO_EDGE_OPS but it is a threshold op
@@ -1832,7 +1837,7 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     # Integer scalar comparisons against UnarySFPUGolden._int_maxmin_scalar. These four
     # are not in _OP_DOMAIN_REGISTRY, so sfpu_unary_ops() never puts them in an edge
     # sweep and edge_spec() never sees them: their consumer is
-    # test_sfpu_unary._int_unary_stimuli_spec, which reads op_edge_points() directly to
+    # test_eltwise_unary_sfpu._int_unary_stimuli_spec, which reads op_edge_points() directly to
     # place the exact comparison tie in its stimuli. Keep that call in mind before
     # editing — dropping these entries makes the tie untestable rather than merely
     # unlisted.
@@ -1840,12 +1845,18 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     MathOperation.UnaryMinInt32: (INT_MAXMIN_SCALAR,),
     MathOperation.UnaryMaxUint32: (INT_MAXMIN_SCALAR,),
     MathOperation.UnaryMinUint32: (INT_MAXMIN_SCALAR,),
+    # IEEE pow(x, 0) == 1 for every x, including a negative base. (-2)**0 must stay +1
+    # rather than picking up the odd-integer sign flip; 2**0 is the matching positive
+    # control. Cartesian-producted with Operand.B's zero encodings in
+    # _OP_OPERAND_EDGE_POINTS, these are the committed (base, -0.0) pairs.
+    MathOperation.SfpuElwpow: (-2.0, 2.0),
 }
 
 
 # Cat D for an operand other than A. _OP_EDGE_POINTS describes the op's own input, which for
 # a unary or binary op is operand A. A ternary op breaks that: lerp is a + c * (b - a), so
-# its interesting values are properties of the *weight*, operand C.
+# its interesting values are properties of the *weight*, operand C. pow's interesting
+# exponent encodings live here for the same reason: the singularity is on the base.
 #
 # A second per-operand table rather than a nested _OP_EDGE_POINTS: one of the 44 entries has
 # per-operand structure, and a dict layer on all of them would read worse.
@@ -1855,6 +1866,14 @@ _OP_OPERAND_EDGE_POINTS: Dict[MathOperation, Dict[Operand, Tuple[float, ...]]] =
     # of which the default uniform(-1, 1) weight lands on. 2.0 is the extrapolating probe;
     # -1.0 extrapolates the other way, which is the same branch and a different sign.
     MathOperation.SfpuLerp: {Operand.C: (-1.0, 0.0, 1.0, 2.0)},
+    # IEEE pow(x, 0) == 1, and SFPSETCC's contract excludes negative zero, so the kernel
+    # compares on setsgn(pow, 0). Without -0.0 here, B falls through to edge_counterparts()
+    # which only contributes +0.0, and removing setsgn would leave 0**0 green while
+    # 0**-0.0 went back to inf. 0.0/1.0/2.0 are the counterparts this entry replaces, so
+    # 0**1 and 0**2 stay in the sweep as the over-firing-guard controls. -0.0 is dropped
+    # by edge_values() where negative_zero_delivered() is false, so the datacopy path
+    # does not claim coverage for a sign it flattened.
+    MathOperation.SfpuElwpow: {Operand.B: (-0.0, 0.0, 1.0, 2.0)},
 }
 
 
@@ -1864,8 +1883,8 @@ def op_edge_points(
     """Discrete edges of *op* for *operand* that are not already a domain boundary.
 
     Operand A reads _OP_EDGE_POINTS, the op's own knees. Any other operand reads
-    _OP_OPERAND_EDGE_POINTS, which today holds only lerp's weight boundaries. Returns ()
-    when there is nothing to probe.
+    _OP_OPERAND_EDGE_POINTS (lerp's weight boundaries, pow's exponent encodings).
+    Returns () when there is nothing to probe.
     """
     if operand == Operand.A:
         return _OP_EDGE_POINTS.get(op, ())
@@ -2083,12 +2102,12 @@ SPECIALS_READY_OPS.update(
         MathOperation.UnaryGe: "As UnaryGt.",
         MathOperation.UnaryMin: "min(x, 0.0) under the total order. +NaN is the maximum, so "
         "the minimum is the other operand -- which is why this diverged where UnaryMax did not.",
-        MathOperation.Clamp: "clamp(x, -1, 1) applied as the kernel applies it: `v_if (val < "
-        "min)` then `v_if (val > max)`, both total-order compares, so a NaN falls through the "
-        "first and lands on max.",
-        MathOperation.Hardtanh: "clamp(x, -1, 1), but via `_calculate_hardtanh_` rather than "
-        "Clamp's `_calculate_clamp_` -- a different kernel with differently formatted constants "
-        "that happens to agree at every special here. The agreement is pinned host-side.",
+        MathOperation.Clamp: "clamp(x, -1, 1) applied as metal `calculate_clamp` applies it: "
+        "max(x, min) then min(x, max), both SFPSWAP total-order folds, so a +NaN outranks "
+        "everything, survives the max, and lands on max via the min.",
+        MathOperation.Hardtanh: "clamp(x, -1, 1) via metal `calculate_hardtanh`, i.e. "
+        "`sfpi::clamp` -- the same SFPSWAP max-then-min composition as Clamp's kernel, so the "
+        "two share one golden by construction. The identity is pinned host-side.",
         MathOperation.ReluMax: "_relu_max_body_: a total-order `> threshold` replaces a NaN "
         "with the threshold, and the relu clamp then sees a finite value.",
         MathOperation.Hardsigmoid: "x * (1/6) + 0.5 through the same _relu_max_body_ the "

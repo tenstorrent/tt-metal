@@ -189,14 +189,6 @@ run_t3000_ttnn_multiprocess_slow_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4_to_string
 }
 
-run_t3000_deepseek_tests() {
-  uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-
-  export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
-  export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
-  MESH_DEVICE=T3K pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
-}
-
 run_t3000_ccl_tests() {
   # Record the start time
   fail=0

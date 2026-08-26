@@ -170,7 +170,7 @@ def pytest_collection_modifyitems(config, items):
 
     CT = ttnn.cluster.ClusterType
     FC = ttnn.FabricConfig
-    DEFAULT_ALLOWED_FABRICS = frozenset({FC.DISABLED, FC.FABRIC_2D})
+    DEFAULT_ALLOWED_FABRICS = frozenset({FC.DISABLED, FC.FABRIC_1D, FC.FABRIC_2D})
     # DISABLED is listed only on shapes that already own fabric-irrelevant diagnostics
     # (currently single-chip and the P300 1x2 masked-bincount row). Do not expand it into
     # communicating-test matrices merely to make this table visually symmetric.
@@ -181,18 +181,18 @@ def pytest_collection_modifyitems(config, items):
             (1, 2): [FC.DISABLED, FC.FABRIC_2D],
         },  # 2 chips
         CT.P300_X2: {  # 4-chip QuietBox
-            (4, 1): [FC.FABRIC_2D_TORUS_Y],
+            (4, 1): [FC.FABRIC_1D, FC.FABRIC_2D_TORUS_Y],
             (2, 2): [FC.FABRIC_2D],
             (1, 4): [FC.FABRIC_2D_TORUS_X],
         },
         CT.P150_X8: {
-            (8, 1): [FC.FABRIC_2D_TORUS_Y],
+            (8, 1): [FC.FABRIC_1D, FC.FABRIC_2D_TORUS_Y],
             (4, 2): [FC.FABRIC_2D],
             (2, 4): [FC.FABRIC_2D],
             (1, 8): [FC.FABRIC_2D_TORUS_X],
         },
         CT.T3K: {
-            (8, 1): [FC.FABRIC_2D_TORUS_Y],
+            (8, 1): [FC.FABRIC_1D, FC.FABRIC_2D_TORUS_Y],
             (4, 2): [FC.FABRIC_2D],
             (2, 4): [FC.FABRIC_2D],
             (1, 8): [FC.FABRIC_2D_TORUS_X],
@@ -200,27 +200,27 @@ def pytest_collection_modifyitems(config, items):
         CT.BLACKHOLE_GALAXY: {
             (32, 1): [FC.FABRIC_2D],
             (16, 2): [FC.FABRIC_2D],
-            (8, 4): [FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
+            (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
             (4, 4): [FC.FABRIC_2D_TORUS_X, FC.FABRIC_2D_TORUS_Y, FC.FABRIC_2D_TORUS_XY],
-            (4, 8): [FC.FABRIC_2D],
+            (4, 8): [FC.FABRIC_1D, FC.FABRIC_2D],
             (2, 16): [FC.FABRIC_2D],
             (1, 32): [FC.FABRIC_2D],
         },
         CT.GALAXY: {
             (32, 1): [FC.FABRIC_2D],
             (16, 2): [FC.FABRIC_2D],
-            (8, 4): [FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
+            (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
             (4, 4): [FC.FABRIC_2D_TORUS_X, FC.FABRIC_2D_TORUS_Y, FC.FABRIC_2D_TORUS_XY],
-            (4, 8): [FC.FABRIC_2D],
+            (4, 8): [FC.FABRIC_1D, FC.FABRIC_2D],
             (2, 16): [FC.FABRIC_2D],
             (1, 32): [FC.FABRIC_2D],
         },
         CT.TG: {
             (32, 1): [FC.FABRIC_2D],
             (16, 2): [FC.FABRIC_2D],
-            (8, 4): [FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
+            (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
             (4, 4): [FC.FABRIC_2D_TORUS_X, FC.FABRIC_2D_TORUS_Y, FC.FABRIC_2D_TORUS_XY],
-            (4, 8): [FC.FABRIC_2D],
+            (4, 8): [FC.FABRIC_1D, FC.FABRIC_2D],
             (2, 16): [FC.FABRIC_2D],
             (1, 32): [FC.FABRIC_2D],
         },

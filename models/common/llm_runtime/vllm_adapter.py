@@ -263,6 +263,11 @@ class VLLMAdapter:
             configured = self.config.trace.decode_enabled
         else:
             raise ValueError(f"Unknown trace operation {operation!r}")
+        # TraceConfig describes the trace targets made available at construction.
+        # The unchanged vLLM loader constructs the default ``all`` superset and
+        # presents its effective static mode through these required per-operation
+        # booleans. Reject only requests for a trace target that was not built;
+        # an unselected operation intentionally uses eager execution.
         if enable_trace and not configured:
             raise ValueError(
                 f"enable_trace={enable_trace} for {operation} disagrees with static "

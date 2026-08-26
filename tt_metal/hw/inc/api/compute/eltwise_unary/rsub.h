@@ -30,12 +30,13 @@ namespace ckernel {
  * | scalar         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
-        (APPROX, RSUB_UNARY, 8 /* ITERATIONS */),
+        (APPROX, RSUB_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst,
         VectorMode::RC,
         scalar));
