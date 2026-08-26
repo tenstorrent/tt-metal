@@ -998,11 +998,9 @@ class Operation:
                 # torch tracer, so it is not enabled here. The tracer must be requested explicitly, since it
                 # replaces torch.Tensor arguments with TracedTorchTensor, which cannot be dtype-converted by
                 # nanobind on the way into ttnn.Tensor.
-                if ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_torch_tracer:
-                    if not ttnn.tracer.is_tracing_enabled():
-                        ttnn.tracer.enable_tracing()
+                ttnn.tracer.sync_tracing_with_config()
 
-                if ttnn.tracer.ENABLE_TRACER:
+                if ttnn.tracer.is_tracing_enabled():
                     decorated_function = ttnn.tracer.trace_ttnn_operation(
                         self.python_fully_qualified_name, decorated_function
                     )

@@ -455,6 +455,20 @@ get_graph = ttnn.torch_tracer.get_graph
 
 GRAPH_STACK = None
 ENABLE_TRACER = False
+_CONFIG_OWNS_TRACING = False
+
+
+def sync_tracing_with_config():
+    """Synchronize config-owned tracing without affecting explicit trace sessions."""
+    global _CONFIG_OWNS_TRACING
+
+    config_requests_tracing = ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_torch_tracer
+    if config_requests_tracing:
+        if not is_tracing_enabled():
+            enable_tracing()
+            _CONFIG_OWNS_TRACING = True
+    elif _CONFIG_OWNS_TRACING:
+        disable_tracing()
 
 
 def enable_tracing():
@@ -472,7 +486,9 @@ def enable_tracing():
 def disable_tracing():
     global ENABLE_TRACER
     global GRAPH_STACK
+    global _CONFIG_OWNS_TRACING
     ENABLE_TRACER = False
+    _CONFIG_OWNS_TRACING = False
     ttnn.torch_tracer.disable_tracing()
     GRAPH_STACK = ttnn.torch_tracer.GRAPH_STACK
 
