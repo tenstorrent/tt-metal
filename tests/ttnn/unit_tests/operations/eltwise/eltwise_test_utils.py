@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import struct
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import generate_all_bfloat16_bitpatterns, flush_subnormal_values_to_zero
@@ -103,3 +104,53 @@ def to_tt_tensor(
         layout=layout,
         memory_config=memory_config,
     )
+
+
+def float_to_bf16_bits(f: float) -> int:
+    """Convert float to BFloat16 bit representation."""
+    f32_bits = struct.unpack(">I", struct.pack(">f", f))[0]
+    return f32_bits >> 16
+
+
+def bf16_bits_to_float(bits: int) -> float:
+    """Convert BFloat16 bits to float."""
+    f32_bits = bits << 16
+    return struct.unpack(">f", struct.pack(">I", f32_bits))[0]
+
+
+def is_bf16_denormal(bits: int) -> bool:
+    """Check if BF16 bits represent a denormal (subnormal) value."""
+    exp = (bits >> 7) & 0xFF
+    mantissa = bits & 0x7F
+    return (exp == 0) and (mantissa != 0)
+
+
+def bf16_daz_normalize(bits: int) -> int:
+    """Apply DAZ (Denormals-Are-Zero) normalization to BF16 bits."""
+    if is_bf16_denormal(bits):
+        return 0x0000
+    if bits == 0x8000:  # -0 -> +0
+        return 0x0000
+    return bits
+
+
+def bf16_value_order_index_daz(bits: int) -> int:
+    """Calculate the value order index for a BFloat16 value with DAZ."""
+    bits = bf16_daz_normalize(bits)
+
+    exp = (bits >> 7) & 0xFF
+    mantissa = bits & 0x7F
+    if exp == 0xFF and mantissa != 0:
+        return -1  # NaN
+    if bits == 0x7F80:
+        return 65281  # +inf
+    if bits == 0xFF80:
+        return -1  # -inf
+    if bits == 0x0000:
+        return 32640  # Zero
+
+    if bits & 0x8000:
+        magnitude = bits & 0x7FFF
+        return 0x7F7F - magnitude
+    else:
+        return 32640 + bits - 0x007F
