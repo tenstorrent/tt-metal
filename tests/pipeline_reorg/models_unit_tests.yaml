@@ -1329,7 +1329,7 @@
     #   timeout: 150
     #   tier: 1
     wh_galaxy:
-      timeout: 190
+      timeout: 155
       tier: 1
     bh_quietbox_2:
       timeout: 105
