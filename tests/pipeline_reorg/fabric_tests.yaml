@@ -200,7 +200,7 @@
 - name: BH ccl nightly tests
   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
   skus:
-    bh_loudbox:
+    bh_loudbox_civ2_viommu:
       timeout: 60
     bh_p300:
       timeout: 60
