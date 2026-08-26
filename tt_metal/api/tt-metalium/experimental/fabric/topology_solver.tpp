@@ -1114,47 +1114,23 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     // Build indexed constraint representation
     ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
 
-    // Run the configured engine (SAT or DFS, chosen by problem size) on a constraint set, validate, and return.
-    auto run_solve = [&](const ConstraintIndexData<TargetNode, GlobalNode>& cdata) {
-        MappingResult<TargetNode, GlobalNode> r;
-        if (topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global)) {
-            SatSearchEngine<TargetNode, GlobalNode> sat_engine;
-            sat_engine.search(graph_data, cdata, connection_validation_mode, quiet_mode);
-            const auto& state = sat_engine.get_state();
-            r = MappingValidator<TargetNode, GlobalNode>::build_result(
-                state.mapping, graph_data, cdata, state, connection_validation_mode, quiet_mode);
-        } else {
-            DFSSearchEngine<TargetNode, GlobalNode> search_engine;
-            search_engine.search(graph_data, cdata, connection_validation_mode, quiet_mode);
-            const auto& state = search_engine.get_state();
-            r = MappingValidator<TargetNode, GlobalNode>::build_result(
-                state.mapping, graph_data, cdata, state, connection_validation_mode, quiet_mode);
-        }
-        return r;
-    };
-
-    MappingResult<TargetNode, GlobalNode> result = run_solve(constraint_data);
-
-    // Best-effort HARD host-group cap: a cap that is infeasible for the target's connectivity must never turn a
-    // solvable mapping UNSAT. The SAT backend already falls through to an uncapped solve internally, but the DFS
-    // backend simply fails the cap (no fallback by design). So if a hard cap was set and the solve failed, retry
-    // once with the cap cleared -- the soft set_minimize_same_rank_groups_used bias, if enabled, still applies. This
-    // matches the "SOFT fallback if the cap is infeasible" intent the caller (topology_mapper_utils) sets up.
-    if (!result.success && constraints.max_same_rank_groups_used() > 0) {
-        MappingConstraints<TargetNode, GlobalNode> relaxed = constraints;
-        relaxed.set_max_same_rank_groups_used(0);
-        relaxed.set_quiet_mode(quiet_mode);
-        ConstraintIndexData<TargetNode, GlobalNode> relaxed_data(relaxed, graph_data);
-        auto relaxed_result = run_solve(relaxed_data);
-        if (relaxed_result.success) {
-            if (!quiet_mode) {
-                log_info(
-                    tt::LogFabric,
-                    "Topology mapping: hard host-group cap was infeasible for this instance; succeeded without it "
-                    "(best-effort fallback)");
-            }
-            result = std::move(relaxed_result);
-        }
+    // Solve the constraints faithfully with the configured engine (SAT or DFS, chosen by problem size). Constraints
+    // are honored as given -- in particular a HARD host-group cap (set_max_same_rank_groups_used) either holds or the
+    // solve fails; the solver never silently drops it. Deciding to relax an infeasible cap is the caller's policy
+    // (topology_mapper_utils retries the inter-mesh mapping without the cap).
+    MappingResult<TargetNode, GlobalNode> result;
+    if (topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global)) {
+        SatSearchEngine<TargetNode, GlobalNode> sat_engine;
+        sat_engine.search(graph_data, constraint_data, connection_validation_mode, quiet_mode);
+        const auto& state = sat_engine.get_state();
+        result = MappingValidator<TargetNode, GlobalNode>::build_result(
+            state.mapping, graph_data, constraint_data, state, connection_validation_mode, quiet_mode);
+    } else {
+        DFSSearchEngine<TargetNode, GlobalNode> search_engine;
+        search_engine.search(graph_data, constraint_data, connection_validation_mode, quiet_mode);
+        const auto& state = search_engine.get_state();
+        result = MappingValidator<TargetNode, GlobalNode>::build_result(
+            state.mapping, graph_data, constraint_data, state, connection_validation_mode, quiet_mode);
     }
 
     // Calculate elapsed time
@@ -2832,7 +2808,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
         // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap.
         if (host_cap_active && global_idx < global_to_host.size()) {
             const int grp = global_to_host[global_idx];
-            if (grp >= 0 && occupied_host_groups.count(grp) == 0 && occupied_host_groups.size() >= host_group_cap) {
+            if (grp >= 0 && !occupied_host_groups.contains(grp) && occupied_host_groups.size() >= host_group_cap) {
                 continue;  // would exceed at-most-k occupied host groups
             }
         }

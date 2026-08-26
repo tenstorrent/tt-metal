@@ -3503,7 +3503,7 @@ static size_t count_host_groups_used(
     std::set<size_t> used;
     for (const auto& [t, g] : result.target_to_global) {
         for (size_t i = 0; i < global_groups.size(); ++i) {
-            if (global_groups[i].count(g) != 0) {
+            if (global_groups[i].contains(g)) {
                 used.insert(i);
                 break;
             }

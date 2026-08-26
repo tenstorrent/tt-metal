@@ -3476,6 +3476,21 @@ TopologyMappingResult map_multi_mesh_to_physical(
         auto solver_result = ::tt::tt_fabric::solve_topology_mapping(
             mesh_logical_graph, mesh_physical_graph, inter_mesh_constraints, inter_mesh_validation_mode, quiet_mode);
 
+        // Best-effort minimal-host cap. The cap is a HARD constraint the solver honors strictly (or fails); it is
+        // never silently dropped inside the solver. If it turns out to be infeasible for this instance's
+        // connectivity, relaxing it is an orchestration-level decision made HERE: drop the hard cap (the SOFT
+        // set_minimize_same_rank_groups_used bias stays on) and re-solve, so an infeasible cap never turns a solvable
+        // mapping UNSAT.
+        if (!solver_result.success && inter_mesh_constraints.max_same_rank_groups_used() > 0) {
+            log_debug(
+                tt::LogFabric,
+                "Inter-mesh host alignment: hard host-group cap infeasible for this instance; retrying without it "
+                "(soft minimize stays on)");
+            inter_mesh_constraints.set_max_same_rank_groups_used(0);
+            solver_result = ::tt::tt_fabric::solve_topology_mapping(
+                mesh_logical_graph, mesh_physical_graph, inter_mesh_constraints, inter_mesh_validation_mode, quiet_mode);
+        }
+
         // If the solver fails, return error results for all meshes with detailed information
         if (!solver_result.success) {
             log_info(tt::LogFabric, "Multi-mesh mapping attempt {} failed: Inter-mesh mapping failed", retry_attempt);

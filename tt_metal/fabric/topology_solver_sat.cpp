@@ -653,9 +653,14 @@ inline bool topology_sat_max_groups_cap_capacity_feasible(
 }
 
 // HARD: at most k_hosts same-rank global groups occupied. Returns true if encoded (or non-binding); false only if the
-// underlying cardinality is trivially impossible. `full_packing` == true means a used host must be completely filled
-// and n_target == k_hosts * capacity -- then the all-or-nothing clauses ALONE force the count (exactly k_hosts hosts
-// occupied), so the sequential-counter is skipped entirely (the fast path).
+// underlying cardinality is trivially impossible. `full_packing` == true additionally applies the all-or-nothing
+// occupancy tightening (a used host must be completely filled), which lets tight packings propagate by unit
+// resolution and is what makes cases like a 16-host ring on a 24-host cluster tractable (issue #50253). The
+// at-most-k counter is ALWAYS emitted, though: `full_packing` is derived from the RAW group size, but pinnings /
+// degree filtering / AC-3 can leave a group with fewer *reachable* globals than its raw capacity, and then
+// n_target == k * capacity can be satisfied across MORE than k partially-reachable groups. Relying on all-or-nothing
+// alone would silently exceed the cap; the counter guarantees the bound. The counter is over the per-group
+// occupancy indicators only (one literal per group), so it stays cheap and does not reintroduce the old bottleneck.
 inline bool topology_sat_encode_at_most_k_groups(
     TopologySatSolver& solver,
     const TopologySatConstraintView& constraint_data,
@@ -664,14 +669,11 @@ inline bool topology_sat_encode_at_most_k_groups(
     bool full_packing) {
     std::vector<int> occ;
     topology_sat_build_group_occupancy(solver, constraint_data, enc, /*all_or_nothing=*/full_packing, occ);
-    if (full_packing) {
-        return true;  // all-or-nothing already forces exactly k_hosts occupied; no counter needed
-    }
     const size_t num_present = occ.size();
     if (num_present == 0 || k_hosts >= num_present) {
         return true;  // not binding
     }
-    // General case: explicit "at most k occupied" == "at least (num_present - k) of the negated occupancy literals".
+    // "at most k occupied" == "at least (num_present - k) of the negated occupancy literals".
     std::vector<int> neg;
     neg.reserve(num_present);
     for (int o : occ) {
@@ -1560,9 +1562,10 @@ bool topology_sat_search(
     //   - max_same_rank_groups_used > 0  -> HARD "at most K host groups occupied" (solver picks WHICH K).
     //   - minimize_same_rank_groups_used -> SOFT best-effort: target the capacity lower bound in a single attempt.
     // Both let the solver choose ANY host combination, so we never pin to a specific (possibly-unroutable) cover.
-    // A single conflict-budgeted at-most-K occupancy encode is attempted; if it is UNSAT / too hard within the
-    // budget we fall through to the normal unconstrained solve, so enabling the objective can never turn a solvable
-    // instance UNSAT. (Deciding K is the caller's policy: topology_mapper_utils sets the HARD cap to k_min.)
+    // The HARD cap is honored STRICTLY: if the at-most-K occupancy encode is UNSAT / too hard within the conflict
+    // budget, this returns failure rather than silently dropping the cap (which would violate the constraint the
+    // caller set). Relaxing the cap is the CALLER's decision -- topology_mapper_utils retries without it. The SOFT
+    // minimize, when it is the only objective, is best-effort and falls through to the unconstrained solve below.
     if (constraint_data.max_same_rank_groups_used > 0 || constraint_data.minimize_same_rank_groups_used) {
         size_t num_host_groups = 0;
         size_t max_group_capacity = 0;
@@ -1622,22 +1625,32 @@ bool topology_sat_search(
                 if (r == 1) {
                     return true;
                 }
-                // Fallback: retry the SAME cap with the general (non-all-or-nothing) encoding, so the aggressive
-                // full-packing fast path can never lose a mapping the general cardinality constraint would have found.
+                // Retry the SAME cap with the general (non-all-or-nothing) encoding, so the aggressive full-packing
+                // fast path can never lose a mapping the general cardinality constraint would have found.
                 if (r == 0 && full_packing) {
                     if (attempt_cap(/*packing=*/false) == 1) {
                         return true;
                     }
                 }
-                // Hard-UNSAT or exhausted: fall through to the normal unconstrained solve below.
-            } else if (!quiet_mode) {
-                log_warning(
-                    tt::LogFabric,
-                    "Topology SAT: host-group cap k={} is infeasible for {} target(s) given same-rank group "
-                    "capacities; falling back to unconstrained solve",
+            }
+            // The at-most-K cap could not be satisfied (infeasible capacity, UNSAT, or budget exhausted).
+            if (constraint_data.max_same_rank_groups_used > 0) {
+                // HARD cap: honor it strictly. Do NOT fall through to an uncapped solve -- that would silently
+                // VIOLATE the constraint the caller set. Return failure; relaxing the cap is the caller's decision
+                // (topology_mapper_utils retries the mapping without the cap when this fails).
+                state.error_message = fmt::format(
+                    "Topology SAT: could not satisfy the hard at-most-{}-host-group cap for {} target(s) within the "
+                    "conflict budget",
                     K,
                     graph_data.n_target);
+                if (quiet_mode) {
+                    log_debug(tt::LogFabric, "{}", state.error_message);
+                } else {
+                    log_info(tt::LogFabric, "{}", state.error_message);
+                }
+                return false;
             }
+            // SOFT minimize only: best-effort -- fall through to the unconstrained solve below.
         }
     }
 
