@@ -154,11 +154,21 @@ def _trace_seq_lens(num_devices: int, max_prefill_chunk_size: int, max_seq_len: 
     return tuple(length for length in (128, max_prefill_chunk_size) if length <= max_seq_len)
 
 
-def _trace_warmup_seq_lens(max_prefill_chunk_size: int, max_seq_len: int) -> tuple[int, ...]:
-    """Return logical representatives for regular and fixed-chunk traces."""
+def _trace_warmup_seq_lens(
+    max_prefill_chunk_size: int,
+    max_seq_len: int,
+    supported_seq_lens: tuple[int, ...],
+) -> tuple[int, ...]:
+    """Return logical representatives whose first invocation has a trace family."""
 
     candidates = (128, max_prefill_chunk_size, 2 * max_prefill_chunk_size)
-    return tuple(dict.fromkeys(length for length in candidates if length <= max_seq_len))
+    return tuple(
+        dict.fromkeys(
+            length
+            for length in candidates
+            if length <= max_seq_len and min(length, max_prefill_chunk_size) in supported_seq_lens
+        )
+    )
 
 
 def _resolve_supported_sku(*, arch, cluster_type, num_devices: int) -> str:
@@ -313,14 +323,19 @@ def from_pretrained(
     stop_token_ids = _stop_token_ids(hf)
     if stop_token_ids:
         tokenizer.stop_tokens = list(stop_token_ids)
+    trace_prefill_supported_seq_lens = _trace_seq_lens(num_devices, 2048, max_seq_len)
     runtime_config = Llama33_70BRuntimeConfig(
         model_name=Path(hf_model).name,
         model_cache_path=cache_path,
         max_prefill_chunk_size=2048,
         max_context_len=int(hf_config.max_position_embeddings),
         max_seq_len=max_seq_len,
-        trace_prefill_supported_seq_lens=_trace_seq_lens(num_devices, 2048, max_seq_len),
-        trace_prefill_warmup_seq_lens=_trace_warmup_seq_lens(2048, max_seq_len),
+        trace_prefill_supported_seq_lens=trace_prefill_supported_seq_lens,
+        trace_prefill_warmup_seq_lens=_trace_warmup_seq_lens(
+            2048,
+            max_seq_len,
+            trace_prefill_supported_seq_lens,
+        ),
         disable_batched_prefill=bool(os.getenv("DISABLE_BATCHED_PREFILL")),
     )
     del hf

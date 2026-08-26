@@ -53,10 +53,17 @@ def test_runtime_config_preserves_t3k_trace_and_batched_prefill_policy():
 
 
 def test_trace_policy_supports_t3k_and_p150x4_and_includes_fixed_chunk_invocation(expect_error):
-    assert hf_adaptor._trace_seq_lens(8, 2048, 4096) == (128, 2048)
-    assert hf_adaptor._trace_seq_lens(4, 2048, 4096) == (128,)
+    t3k_supported = hf_adaptor._trace_seq_lens(8, 2048, 4096)
+    p150x4_supported = hf_adaptor._trace_seq_lens(4, 2048, 4096)
+    assert t3k_supported == (128, 2048)
+    assert p150x4_supported == (128,)
     assert hf_adaptor._trace_seq_lens(4, 2048, 64) == ()
-    assert hf_adaptor._trace_warmup_seq_lens(2048, 4096) == (128, 2048, 4096)
+    assert hf_adaptor._trace_warmup_seq_lens(2048, 4096, t3k_supported) == (128, 2048, 4096)
+    assert hf_adaptor._trace_warmup_seq_lens(2048, 4096, p150x4_supported) == (128,)
+    assert all(
+        min(length, 2048) in p150x4_supported
+        for length in hf_adaptor._trace_warmup_seq_lens(2048, 4096, p150x4_supported)
+    )
     for devices in (1, 2, 32):
         with expect_error(ValueError, "T3K.*P150x4"):
             hf_adaptor._trace_seq_lens(devices, 2048, 4096)
