@@ -24,7 +24,7 @@ using namespace tt::constants;
 
 namespace {
 
-// codegen/kernels/sequencers.h: constexpr uint32_t SEQ_PAD = 5;
+// common/kernels/codegen/sequencers.h: constexpr uint32_t SEQ_PAD = 5;
 constexpr uint32_t kSeqPad = 5;
 
 // ops/pad/spec.py: _L1_SAFETY_MARGIN.
@@ -41,8 +41,11 @@ uint32_t pack_pad_value(DataType dtype, float value) {
     if (value == 0.0f) {
         return 0;
     }
-    if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
+    if (dtype == DataType::INT32) {
         return static_cast<uint32_t>(static_cast<int32_t>(value));
+    }
+    if (dtype == DataType::UINT32) {
+        return static_cast<uint32_t>(value);
     }
     float fv = value;
     // Saturate to signed infinity outside the float32 dynamic range (bfloat16 represents
@@ -216,7 +219,7 @@ ProgramDescriptor create_descriptor_tiled(
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/pad/codegen/kernels/reader_tile_interleaved_unified.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/reader_tile_interleaved_unified.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     TensorAccessorArgs(*in_buffer).append_to(reader_desc.compile_time_args);

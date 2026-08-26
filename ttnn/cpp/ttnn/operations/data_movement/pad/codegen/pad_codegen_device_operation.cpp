@@ -7,7 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 
-#include "pad_codegen_supported.hpp"
+#include "ttnn/operations/data_movement/pad/codegen/pad_codegen_supported.hpp"
 #include "tt_stl/assert.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -19,7 +19,7 @@ using namespace tt::constants;
 void PadCodegenDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
-        supported_by_codegen(operation_attributes, tensor_args),
+        ttnn::operations::data_movement::pad_codegen::supported_by_codegen(operation_attributes, tensor_args),
         "ttnn.pad (codegen): input is not supported by the codegen path");
 }
 

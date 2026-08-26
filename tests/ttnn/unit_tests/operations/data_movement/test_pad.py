@@ -1635,3 +1635,97 @@ def test_pad_rank_gt4_use_multicore(device, shape, padding, use_multicore):
 
     assert output_tensor.shape == torch_output_tensor.shape
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+# --- Codegen-path coverage ---
+#
+# ttnn.pad routes gate-supported cases to codegen and the rest to native, and offers no way to ask
+# for one: the verification-only entries below live in the private module for that reason (see
+# pad_force.hpp). These pin the codegen path so the suite exercises it regardless of the gate's
+# verdict.
+_force_native = ttnn._ttnn.operations.data_movement.pad_force_native
+_force_codegen = ttnn._ttnn.operations.data_movement.pad_force_codegen
+
+_CODEGEN_CASES = [
+    # (shape, padding, layout, value)
+    ([1, 1, 32, 32], ((0, 0), (0, 0), (0, 32), (0, 32)), ttnn.TILE_LAYOUT, 0),
+    ([1, 1, 32, 32], ((0, 0), (0, 0), (3, 25), (4, 6)), ttnn.ROW_MAJOR_LAYOUT, 0),
+    ([2, 32, 64], ((0, 0), (0, 32), (0, 64)), ttnn.TILE_LAYOUT, 0),
+    ([32, 32], ((0, 32), (0, 32)), ttnn.TILE_LAYOUT, 3),
+]
+_CODEGEN_CASE_IDS = [
+    "[1,1,32,32]|tile|tile_back|v0",
+    "[1,1,32,32]|rm|subtile|v0",
+    "[2,32,64]|tile|tile_back|v0",
+    "[32,32]|tile|tile_back|v3",
+]
+_CODEGEN_DTYPES = [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32]
+_CODEGEN_DTYPE_IDS = ["bfloat16", "float32", "int32", "uint32"]
+
+
+def _codegen_torch_input(shape, dtype, value):
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.float32:
+        return torch.full(shape, float(value), dtype=torch.float32)
+    return torch.full(shape, float(value), dtype=torch.bfloat16)
+
+
+@pytest.mark.parametrize("dtype", _CODEGEN_DTYPES, ids=_CODEGEN_DTYPE_IDS)
+@pytest.mark.parametrize("shape,padding,layout,value", _CODEGEN_CASES, ids=_CODEGEN_CASE_IDS)
+def test_pad_codegen(device, shape, padding, layout, value, dtype):
+    torch.manual_seed(0)
+    torch_input = _codegen_torch_input(shape, dtype, value)
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, dtype=dtype, device=device)
+    golden = ttnn.to_torch(_force_native(input_tensor, padding=padding, value=value))
+    output = ttnn.to_torch(_force_codegen(input_tensor, padding=padding, value=value))
+    assert_equal(golden, output)
+
+
+@pytest.mark.parametrize("shape,padding,layout,value", _CODEGEN_CASES[:2], ids=_CODEGEN_CASE_IDS[:2])
+def test_pc_pad_codegen(device, shape, padding, layout, value):
+    dtype = ttnn.bfloat16
+    torch.manual_seed(0)
+    first = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=layout, dtype=dtype, device=device)
+    first_golden = ttnn.to_torch(_force_native(first, padding=padding, value=value))
+    assert_equal(first_golden, ttnn.to_torch(_force_codegen(first, padding=padding, value=value)))
+    entries_after_miss = device.num_program_cache_entries()
+
+    second = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=layout, dtype=dtype, device=device)
+    second_golden = ttnn.to_torch(_force_native(second, padding=padding, value=value))
+    assert_equal(second_golden, ttnn.to_torch(_force_codegen(second, padding=padding, value=value)))
+    msg = "second codegen dispatch missed the program cache"
+    assert device.num_program_cache_entries() == entries_after_miss, msg
+
+
+def test_pad_codegen_uint32_above_int32_max(device):
+    """UINT32 pad values above INT32_MAX must pack as unsigned, not through int32_t."""
+    shape = [1, 1, 32, 32]
+    padding = ((0, 0), (0, 0), (0, 32), (0, 32))
+    pad_value = float(3000000000)  # above INT32_MAX; must not route through int32_t
+    torch_input = torch.full(shape, 1, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.uint32, device=device)
+    golden = ttnn.to_torch(_force_native(input_tensor, padding=padding, value=pad_value))
+    output = ttnn.to_torch(_force_codegen(input_tensor, padding=padding, value=pad_value))
+    assert_equal(golden, output)
+
+
+@pytest.mark.parametrize(
+    "h, w, padding, torch_padding",
+    [
+        (4, 20000, ((0, 0), (0, 0), (0, 1), (0, 32)), (0, 32, 0, 1)),
+        (4, 20000, ((0, 0), (0, 0), (0, 1), (0, 4)), (0, 4, 0, 1)),
+        (2, 40000, ((0, 0), (0, 0), (0, 1), (0, 8)), (0, 8, 0, 1)),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_pad_codegen_rm_wide_stick_l1_clamp(device, h, w, padding, torch_padding, dtype):
+    torch.manual_seed(0)
+    torch_input_tensor = random_torch_tensor(dtype, (1, 1, h, w))
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=0)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
+    output_tensor = ttnn.to_torch(_force_codegen(input_tensor, padding=padding, value=0))
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)

@@ -8,12 +8,13 @@
 
 #include "pad_codegen_program_factory.hpp"
 
-namespace ttnn::prim {
+namespace ttnn::operations::data_movement::pad_codegen {
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-bool supported_by_codegen(const PadCodegenParams& operation_attributes, const PadCodegenInputs& tensor_args) {
+bool supported_by_codegen(
+    const ttnn::prim::PadCodegenParams& operation_attributes, const ttnn::prim::PadCodegenInputs& tensor_args) {
     const Tensor& input = tensor_args.input;
     const DataType dtype = input.dtype();
 
@@ -72,7 +73,8 @@ bool supported_by_codegen(const PadCodegenParams& operation_attributes, const Pa
     return false;
 }
 
-bool is_demoted(const PadCodegenParams& operation_attributes, const PadCodegenInputs& tensor_args) {
+bool is_demoted(
+    const ttnn::prim::PadCodegenParams& operation_attributes, const ttnn::prim::PadCodegenInputs& tensor_args) {
     const Tensor& input = tensor_args.input;
     if (input.layout() != Layout::ROW_MAJOR) {
         // supported_by_codegen() admits TILE only for whole-tile back-pads, so every transfer the
@@ -97,20 +99,14 @@ bool is_demoted(const PadCodegenParams& operation_attributes, const PadCodegenIn
     // moves with the buffer: a width that stages against a 64B DRAM alignment can run direct
     // against a 32B one.
     //
-    // tensor_args.input is always the 4D-unsqueezed tensor (try_pad_codegen builds
-    // PadCodegenInputs from input_4d), so logical_shape()[3] is W directly.
+    // tensor_args.input is always the 4D-unsqueezed tensor (PadCodegenInputs is only ever built
+    // from input_4d), so logical_shape()[3] is W directly.
     const uint32_t stick_size = input.logical_shape()[3] * input.element_size();
     return stick_size % input.buffer()->alignment() != 0;
 }
 
-ImplementationSelector parse_implementation(std::string_view implementation) {
-    if (implementation == "native") {
-        return ImplementationSelector::Native;
-    }
-    if (implementation == "codegen") {
-        return ImplementationSelector::Codegen;
-    }
-    return ImplementationSelector::Auto;
+bool supported_execution_controls(bool use_multicore, const std::optional<CoreRangeSet>& sub_core_grids) {
+    return use_multicore && !sub_core_grids.has_value();
 }
 
-}  // namespace ttnn::prim
+}  // namespace ttnn::operations::data_movement::pad_codegen

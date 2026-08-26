@@ -35,7 +35,7 @@ file(
     move/device/kernels/*.cpp
     pad/device/kernels/dataflow/*.cpp
     pad/device/kernels/dataflow/*.hpp
-    pad/codegen/kernels/*
+    pad/codegen/kernels/*.cpp
     permute/device/kernels/*.cpp
     reshape_on_device/device/kernels/*.cpp
     repeat/device/kernels/*.cpp
