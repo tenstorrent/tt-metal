@@ -12,10 +12,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
-// [CONN-LIFECYCLE PROBE #45872] eth_fw_api.h provides fabric_dbg_ch0_conn_event; BH+AERISC only.
-#if defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_AERISC)
-#include "eth_fw_api.h"
-#endif
 
 namespace tt::tt_fabric {
 
@@ -65,23 +61,12 @@ FORCE_INLINE void check_worker_connections(
         if (connect_is_requested(cached)) {
             channel_connection_established = true;
 
-            establish_worker_connection<MY_ETH_CHANNEL, RISC_CPU_DATA_CACHE_ENABLED>(local_sender_channel_worker_interface);
-#if defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_AERISC)
-            // [CONN-LIFECYCLE PROBE #45872] count channel-0 (stream 22) connect edges into word[17]
-            if (stream_id == 22) {
-                fabric_dbg_ch0_conn_event(true);
-            }
-#endif
+            establish_worker_connection<MY_ETH_CHANNEL, RISC_CPU_DATA_CACHE_ENABLED>(
+                local_sender_channel_worker_interface);
         }
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
         channel_connection_established = false;
         local_sender_channel_worker_interface.template teardown_worker_connection<true, RISC_CPU_DATA_CACHE_ENABLED>();
-#if defined(ARCH_BLACKHOLE) && defined(COMPILE_FOR_AERISC)
-        // [CONN-LIFECYCLE PROBE #45872] count channel-0 (stream 22) disconnect edges into word[17]
-        if (stream_id == 22) {
-            fabric_dbg_ch0_conn_event(false);
-        }
-#endif
     }
 }
 

@@ -4,8 +4,6 @@
 
 // clang-format off
 #include "api/dataflow/dataflow_api.h"
-// [MUX-ETHCORE PROBE #45872] WATCHER_RING_BUFFER_PUSH; compiles to nothing unless TT_METAL_WATCHER is set.
-#include "api/debug/ring_buffer.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -220,12 +218,6 @@ void kernel_main() {
 
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
-
-    // [MUX-ETHCORE PROBE #45872] Which eth core does this mux forward to? Encoded (edm_noc_x<<8)|edm_noc_y,
-    // identical to the sync worker's DESTCORE probe (tag 0xC8), so the two can be compared directly to
-    // determine whether payload (mux) and the post-retrain sync share the same eth core / stream 22.
-    WATCHER_RING_BUFFER_PUSH(
-        (0xD0u << 24) | (((uint32_t)fabric_connection.edm_noc_x << 8) | fabric_connection.edm_noc_y));
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 

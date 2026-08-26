@@ -8,9 +8,6 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
-// For WATCHER_RING_BUFFER_PUSH() used by the [SYNC-PROBE] instrumentation below. The macro compiles
-// to nothing unless the watcher is enabled (TT_METAL_WATCHER), so it costs nothing in normal runs.
-#include "api/debug/ring_buffer.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -744,268 +741,10 @@ struct FabricConnectionArray {
     }
 };
 
-// ============================================================================
-// [SYNC-PROBE] End-of-test sync barrier instrumentation
-// ============================================================================
-// Watcher-log evidence showed the hung run parked at the end-of-test barrier: sender cores at
-// waypoint NSW (noc_semaphore_wait, LocalSyncConfig::local_sync) and sync cores at NSMW
-// (noc_semaphore_wait_min, LineSyncConfig::global_sync_finish). Waypoints alone only say "inside a
-// semaphore wait" -- they cannot show WHICH barrier iteration, what value was expected, or what the
-// semaphore actually holds while stuck. These probes add all three.
-//
-// Encoding, one uint32 per ring-buffer entry:
-//     [31:24] tag   [23:16] sync_iter   [15:0] value
-// The tags are grouped so a hexdump reads at a glance: 0xB0/0xB1/0xB2 are the local barrier's
-// enter/poll/exit, 0xB4/0xB5/0xB6 the global barrier's.
-//
-//   ENTER  -> pushed once before spinning; `value` is the value being WAITED FOR.
-//   POLL   -> pushed periodically while still spinning; `value` is the value CURRENTLY OBSERVED.
-//             This is what makes the semaphore readable on a wedged core -- a stuck barrier leaves a
-//             run of POLL entries all carrying the same value, which is the proof it never advanced.
-//   EXIT   -> pushed once the wait is satisfied; `value` is the final observed value.
-//
-// ENTER with no EXIT == wedged in that barrier. The tag says which barrier, sync_iter says which
-// iteration of it, and ENTER-vs-POLL says expected-vs-actual.
-constexpr uint32_t SYNC_DBG_TAG_LOCAL_ENTER = 0xB0;
-constexpr uint32_t SYNC_DBG_TAG_LOCAL_POLL = 0xB1;
-constexpr uint32_t SYNC_DBG_TAG_LOCAL_EXIT = 0xB2;
-constexpr uint32_t SYNC_DBG_TAG_GLOBAL_ENTER = 0xB4;
-constexpr uint32_t SYNC_DBG_TAG_GLOBAL_POLL = 0xB5;
-constexpr uint32_t SYNC_DBG_TAG_GLOBAL_EXIT = 0xB6;
-
-// Send-side phases of global_sync(). The B4/B5/B6 tags above only cover the WAIT half
-// (global_sync_finish). global_sync_start() calls wait_for_empty_write_slot(), which blocks when the
-// local router's sender channel is stalled -- so without these a core wedged while SENDING would emit
-// no B4 at all, and would look identical to a core that never reached global_sync(). These make the
-// send half observable, so "couldn't push the packet out" and "pushed it but nobody answered" are
-// distinguishable.
-//   OPEN   value = number of sync fabric connections about to be opened
-//   SENT   value = connection index whose atomic-inc packet was just pushed
-//   CLOSED value = number of packets pushed this round
-constexpr uint32_t SYNC_DBG_TAG_GLOBAL_OPEN = 0xB8;
-constexpr uint32_t SYNC_DBG_TAG_GLOBAL_SENT = 0xB9;
-constexpr uint32_t SYNC_DBG_TAG_GLOBAL_CLOSED = 0xBA;
-
-// [NOC-DELIVERY PROBE] Did the sync core's NoC write to the router actually land?
-//
-// send_header_non_blocking() uses EDM_IO_BLOCKING_MODE::NON_BLOCKING, so send_chunk_from_address()
-// issues noc_async_write() and returns WITHOUT any flush or barrier. The sync core then goes straight
-// into global_sync_finish() and spins on the semaphore. Nothing ever confirms the write reached the
-// router's L1 -- it is fire-and-forget, and the last packet before a long blocking wait is exactly
-// where that is most dangerous.
-//
-//   NOCPRE  value = outstanding non-posted writes BEFORE the flush (issued - acked)
-//   NOCPOST value = outstanding AFTER the flush; reaching this at all proves the write was acked,
-//                   i.e. it landed in the router's L1 and the NoC is NOT the failure point.
-// NOCPRE with no NOCPOST == the flush never returned == the write is stuck in the NoC.
-constexpr uint32_t SYNC_DBG_TAG_NOC_PRE = 0xBC;
-constexpr uint32_t SYNC_DBG_TAG_NOC_POST = 0xBD;
-
-// [WRITE-POINTER PROBE] Which slot does the sync core actually write into?
-//
-// The router reads from ITS read pointer (recorded in debug word[20]); the worker writes to ITS write
-// pointer. These are separate pieces of state, and the round-1 connection is REOPENED after the
-// retrain -- open_finish() resyncs the write counter from the router's stored value:
-//     buffer_slot_write_counter.counter = *worker_teardown_addr;
-//     buffer_slot_index = counter % num_buffers;
-// If that resync lands on the wrong slot, the write still succeeds and is still acked, but the router
-// is looking somewhere else and never sees it.
-//
-// Encoding is different from the other tags: [31:24] tag, [23:0] the L1 slot address (addresses here
-// are ~0x16ad0, well inside 24 bits). Compare directly against word[20] from the same core:
-//   equal    -> pointers agree; if the packet still isn't sent the failure is the credit/stream write
-//   differ   -> write-pointer desync; the packet is in a slot the router never reads
-constexpr uint32_t SYNC_DBG_TAG_WRADDR = 0xBE;
-
-// [STREAM-ID PROBE, worker side] Which register does the sync core DECREMENT to announce its packet?
-//
-// Resolved at connection-open time as
-//     edm_buffer_remote_free_slots_update_addr = get_stream_reg_write_addr(sender_channel_credits_stream_id)
-// and the sync core rebuilds its connection for round 1, after the retrain. The router polls
-// sender_channel_free_slots_stream_id (logged in debug word[20], upper 16 bits). Compare the two:
-//   same register    -> the decrement genuinely vanished; the bug is in the write path
-//   different        -> the rebuilt connection announces on a register nobody reads. That explains
-//                       both writes being acked, localfree stuck at num_buffers, and round 0 working
-//                       (its connection predates the teardown).
-// [23:0] holds the register ADDRESS; convert to a stream id host-side via the STREAM_REG_ADDR layout,
-// or just compare round 0's value against round 1's on the same core -- a change across rounds is
-// itself the finding.
-constexpr uint32_t SYNC_DBG_TAG_CREDITREG = 0xBF;
-
-// [DOORBELL READ-BACK] Does the worker's own decrement actually take effect on the router's counter?
-//
-// Everything so far measures this from the ROUTER side, minutes later, at teardown. This reads it from
-// the WORKER, microseconds after writing it, over NoC -- an independent vantage point at the moment it
-// matters. Motivated by the asymmetry in update_edm_buffer_free_slots(): the worker's own free-slot
-// view does NOT depend on this remote write (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE is false for this
-// connection), so nothing on either side ever verifies the doorbell rang.
-//
-// The connection stores the UPDATE address (stream reg idx 270). The AVAILABLE counter the router polls
-// is idx 297 in the same stream, i.e. +((297-270)*4) = +108 bytes.
-//
-//   value < num_buffers -> decrement DID apply; the router's later read of 32 is the anomaly
-//   value == num_buffers -> decrement did NOT apply, right at the source
-constexpr uint32_t SYNC_DBG_TAG_DOORBELL = 0xC1;
-constexpr uint32_t STREAM_UPDATE_TO_AVAILABLE_BYTE_OFFSET = (297u - 270u) * 4u;
-constexpr uint32_t STREAM_FREE_SLOTS_MASK = (1u << 17) - 1u;  // MEM_WORD_ADDR_WIDTH, same mask get_ptr_val uses
-
-// [ROUTER PROBE AT THE WEDGE] Read the ROUTER's debug slot from the worker, over NoC, while the
-// barrier is actually stuck.
-//
-// Every router-side number in this investigation so far (the send gate, min-free-since-TX, the polled
-// stream id) comes from the host's SLOT dump, which the hang handler prints minutes BEFORE the round-1
-// barrier develops. So we have precise worker-side data at the moment of failure and only pre-failure
-// snapshots of the router. This closes that gap without needing a separate host tool: the worker is
-// already doing a remote NoC read into its scratch region, so point it at the router's debug slot too.
-//
-// Three questions, answered from the same 104-byte read:
-//   NOCXY   -- which core is this connection actually pointed at, and is a router even running there
-//              (word[0] carries the 0x5E5E.... resume-phase signature; 0 means no router on that core)
-//   RFREE   -- what free-slot value does the ROUTER see (word[25]), vs the 31 the worker sees
-//   RGATE   -- the send gate (word[16]): receiver_has_space_for_packet / can_send / has_unsent
-//
-// If RFREE reads 32 while the worker reads 31, the two sides genuinely disagree about one register.
-// If RFREE reads 31, the router sees the packet and the blocker is the gate -> read RGATE.
-// If word[0] is 0, nothing is running on the core we are writing to.
-constexpr uint32_t SYNC_DBG_TAG_NOCXY = 0xC2;
-constexpr uint32_t SYNC_DBG_TAG_RFREE = 0xC3;
-constexpr uint32_t SYNC_DBG_TAG_RGATE = 0xC4;
-
-// [SAME-REGISTER PROOF] The stream id the target router is actually polling, read at the wedge.
-// Everything claiming "both sides use stream 22" so far came from the pre-HUNG host dump, aggregated
-// across devices. If this is not 22, the two sides are reading DIFFERENT registers and there is no
-// register-visibility question at all -- just a mismatch.
-constexpr uint32_t SYNC_DBG_TAG_RSTREAM = 0xC5;
-
-// [LIVENESS AT THE WEDGE] The router's heartbeat, sampled on each probe pass. This is the measurement
-// that can collapse the whole premise: if the router is FROZEN, then its recorded free-slots value is
-// simply a stale snapshot from before the packet arrived, and there is no disagreement between two
-// readers -- just a stopped core. phase=0x11 cannot distinguish these; a frozen core reads identically
-// to a looping one. Compare this value across the probe passes:
-//   changes  -> router is executing its main loop, so its free-slots record is fresh -> premise holds
-//   constant -> router is stopped; the "32" is stale and the investigation moves to why it stopped
-constexpr uint32_t SYNC_DBG_TAG_RHB = 0xC6;
-
-// [SAME-INSTANT PAIRING] The worker's own read of the register, taken inside the probe rather than
-// back in global_sync_start, so RDOOR and RFREE describe the same moment. Offset 192 keeps it clear
-// of the 128-byte slot copy at the start of the scratch region.
-constexpr uint32_t SYNC_DBG_TAG_RDOOR = 0xC7;
-constexpr uint32_t ERISC_DBG_DOORBELL_SCRATCH_OFF = 192;
-
-// [DEST-CORE PROBE] The NOC (x,y) the worker's doorbell/payload target -- packed (x<<8)|y. Pushed in
-// global_sync_start (which survives ring-buffer eviction, unlike probe_router in global_sync_finish).
-// Compared against the eth core the router runs on: same core + same stream reg (CREDITREG=stream 22)
-// => worker and router address the SAME physical register (cross-core coherency); different => wrong target.
-constexpr uint32_t SYNC_DBG_TAG_DESTCORE = 0xC8;
-
-// [ALT-NOC DOORBELL] Read the SAME stream-22 available reg (idx 297) over the OTHER noc than the one the
-// decrement + primary doorbell read used. If the same-noc read (0xC1) shows the decrement (31) but this
-// shows num_buffers (32), the "31" is a same-NOC ordering/coalescing artifact -- the worker seeing its own
-// outstanding write -- and the decrement never actually applied to the register. Same value on both nocs =
-// the register genuinely holds 31 for the worker's core (true cross-core disagreement).
-constexpr uint32_t SYNC_DBG_TAG_DOORBELL_ALTNOC = 0xC9;
-// [DECR NOC] Which noc + sync cmd buf the decrement write used: packed (noc<<8)|sync_noc_cmd_buf.
-constexpr uint32_t SYNC_DBG_TAG_DECR_NOC = 0xCA;
-
-// MUST track MEM_AERISC_RESUME_PHASE_BASE in dev_mem_map.h. The region grows DOWNWARD from
-// MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so enlarging MEM_AERISC_RESUME_PHASE_SIZE MOVES this base.
-// The host-side SLOT dump hardcodes the same value with the same warning (test_tt_fabric.cpp).
+// [#45872] ERISC debug-slot base. The host SLOT dump reads the 26 words starting here; the sync-side
+// reconcile (reconcile_stream22_once) writes its telemetry into words 17/18/19. MUST track
+// MEM_AERISC_RESUME_PHASE_BASE in dev_mem_map.h.
 constexpr uint32_t ERISC_DBG_SLOT_BASE = 0x6F1F8;
-constexpr uint32_t ERISC_DBG_SLOT_BYTES = 104;  // MEM_AERISC_RESUME_PHASE_SIZE
-constexpr uint32_t ERISC_DBG_WORD_PHASE = 0;
-constexpr uint32_t ERISC_DBG_WORD_HB = 14;  // MEM_AERISC_RX_HEARTBEAT_ADDR (base + 56)
-constexpr uint32_t ERISC_DBG_WORD_GATE = 16;
-constexpr uint32_t ERISC_DBG_WORD_STREAMID = 24;  // MEM_AERISC_POLLED_STREAM_ID_ADDR (base + 96)
-constexpr uint32_t ERISC_DBG_WORD_FREE = 25;
-
-// NOC ALIGNMENT. 0x6F1F8 is only 8-byte aligned and 104 is not a multiple of the NOC alignment, so
-// reading [base, base+104) directly is rejected:
-//   "tried to unicast read 104 bytes ... L1[addr=0x0006f1f8] (invalid address alignment)"
-// which aborted the whole run. So read an aligned superset instead: start at the 32-byte boundary at
-// or below the slot, and read a 32-byte multiple that covers all 104 bytes. Source and destination
-// must share the same alignment, so the destination is bumped up to a 32-byte boundary too.
-constexpr uint32_t ERISC_DBG_NOC_ALIGN = 32;
-constexpr uint32_t ERISC_DBG_READ_BASE = ERISC_DBG_SLOT_BASE & ~(ERISC_DBG_NOC_ALIGN - 1);
-constexpr uint32_t ERISC_DBG_READ_SKEW = ERISC_DBG_SLOT_BASE - ERISC_DBG_READ_BASE;  // bytes to skip
-constexpr uint32_t ERISC_DBG_READ_BYTES =
-    ((ERISC_DBG_READ_SKEW + ERISC_DBG_SLOT_BYTES + ERISC_DBG_NOC_ALIGN - 1) / ERISC_DBG_NOC_ALIGN) *
-    ERISC_DBG_NOC_ALIGN;
-static_assert(ERISC_DBG_READ_BASE % ERISC_DBG_NOC_ALIGN == 0, "read base must be NOC aligned");
-static_assert(ERISC_DBG_READ_BYTES % ERISC_DBG_NOC_ALIGN == 0, "read size must be NOC aligned");
-static_assert(ERISC_DBG_READ_SKEW % 4 == 0, "slot must stay word aligned within the read");
-static_assert(ERISC_DBG_READ_BYTES <= 256, "must fit the debug_scratch region carved by the host");
-
-FORCE_INLINE void sync_dbg_push_addr([[maybe_unused]] uint32_t tag, [[maybe_unused]] uint32_t addr) {
-    WATCHER_RING_BUFFER_PUSH((tag << 24) | (addr & 0xFFFFFF));
-}
-
-// POLL pacing. The ring buffer holds only DEBUG_RING_BUFFER_ELEMENTS (32) entries, so an unbounded
-// poll is self-defeating: the sync core legitimately sits in local_sync(1) for the WHOLE run (it is
-// waiting for every sender to finish its 100M packets), and a fixed-interval poll fills all 32 slots
-// with identical entries and evicts everything else -- including the global-sync markers. Observed
-// directly: the sync core's buffer came back as 32 copies of 0xb1010006 and nothing else.
-//
-// So: at most SYNC_DBG_MAX_POLLS entries per wait, at exponentially growing intervals (2^20, 2^24,
-// 2^28 spins). That gives one early sample and one very late one -- enough to show whether the value
-// moved -- while costing at most 3 slots per wait. Worst case across all barriers a core executes
-// stays inside 32, so the wedged wait's ENTER+POLLs survive at the tail of the buffer.
-constexpr uint32_t SYNC_DBG_FIRST_POLL_SPINS = 1u << 20;
-constexpr uint32_t SYNC_DBG_POLL_GROWTH_SHIFT = 4;
-constexpr uint32_t SYNC_DBG_MAX_POLLS = 3;
-
-// [[maybe_unused]]: with the watcher disabled WATCHER_RING_BUFFER_PUSH expands to nothing, which
-// would otherwise leave all three parameters unused and trip -Wunused-parameter in the kernel build.
-FORCE_INLINE void sync_dbg_push(
-    [[maybe_unused]] uint32_t tag, [[maybe_unused]] uint32_t sync_iter, [[maybe_unused]] uint32_t value) {
-    WATCHER_RING_BUFFER_PUSH((tag << 24) | ((sync_iter & 0xFF) << 16) | (value & 0xFFFF));
-}
-
-// Instrumented stand-in for noc_semaphore_wait(). Semantics are IDENTICAL to the original -- same
-// do/while, same exact-equality (`!=`) test, same invalidate_l1_cache() placement -- so this cannot
-// change whether the barrier passes. The WAYPOINT calls are kept as NSW/NSD so existing watcher-log
-// analysis keeps working unchanged.
-//
-// NOTE the equality test is `!=`, not `<`: if the semaphore ever OVERSHOOTS the expected value this
-// spins forever. The POLL entries will show that case plainly (observed value > expected).
-FORCE_INLINE void sync_dbg_wait_eq(
-    volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val, uint32_t tag_base, uint32_t sync_iter) {
-    sync_dbg_push(tag_base, sync_iter, val);
-    WAYPOINT("NSW");
-    uint32_t spins = 0;
-    uint32_t polls = 0;
-    uint32_t next_poll = SYNC_DBG_FIRST_POLL_SPINS;
-    do {
-        invalidate_l1_cache();
-        if (++spins >= next_poll && polls < SYNC_DBG_MAX_POLLS) {
-            sync_dbg_push(tag_base + 1, sync_iter, *sem_addr);
-            polls++;
-            next_poll <<= SYNC_DBG_POLL_GROWTH_SHIFT;
-        }
-    } while ((*sem_addr) != val);
-    WAYPOINT("NSD");
-    sync_dbg_push(tag_base + 2, sync_iter, *sem_addr);
-}
-
-// Instrumented stand-in for noc_semaphore_wait_min(). As above, semantics are identical to the
-// original (`<` test) and the waypoints stay NSMW/NSMD.
-FORCE_INLINE void sync_dbg_wait_min(
-    volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val, uint32_t tag_base, uint32_t sync_iter) {
-    sync_dbg_push(tag_base, sync_iter, val);
-    WAYPOINT("NSMW");
-    uint32_t spins = 0;
-    uint32_t polls = 0;
-    uint32_t next_poll = SYNC_DBG_FIRST_POLL_SPINS;
-    do {
-        invalidate_l1_cache();
-        if (++spins >= next_poll && polls < SYNC_DBG_MAX_POLLS) {
-            sync_dbg_push(tag_base + 1, sync_iter, *sem_addr);
-            polls++;
-            next_poll <<= SYNC_DBG_POLL_GROWTH_SHIFT;
-        }
-    } while ((*sem_addr) < val);
-    WAYPOINT("NSMD");
-    sync_dbg_push(tag_base + 2, sync_iter, *sem_addr);
-}
 
 // Line sync for each fabric connection (used by SyncKernelConfig)
 template <typename EdmSenderT = WorkerToFabricEdmSender>
@@ -1041,178 +780,20 @@ struct LineSyncConfig {
     }
 
     void global_sync_start(uint8_t sync_iter = 0, uint32_t debug_scratch_addr = 0) {
+        (void)sync_iter;
+        (void)debug_scratch_addr;
         connection_manager_->template wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
-        // [WRITE-POINTER PROBE] Capture the slot we are ABOUT to write into, before the send advances
-        // the pointer. Compared against the router's read slot (debug word[20]) to detect a desync.
-        // current_buffer_slot_l1_addr() is private, so read the public member it returns. With
-        // EDM_NUM_BUFFER_SLOTS == 0 (USER_DEFINED_NUM_BUFFER_SLOTS false, which is this build)
-        // that accessor is exactly `return this->edm_buffer_addr;`.
-        sync_dbg_push_addr(SYNC_DBG_TAG_WRADDR, static_cast<EdmSenderT*>(connection_ptr_)->edm_buffer_addr);
-        // [STREAM-ID PROBE] The credit register this connection will decrement to announce the packet.
-        sync_dbg_push_addr(
-            SYNC_DBG_TAG_CREDITREG,
-            static_cast<uint32_t>(static_cast<EdmSenderT*>(connection_ptr_)->edm_buffer_remote_free_slots_update_addr));
-        // [DEST-CORE PROBE] Which NOC core does this connection's doorbell/payload target? Packed (x<<8)|y.
-        // Same-instant with CREDITREG so we know BOTH the core and the register offset the worker addresses.
-        sync_dbg_push(
-            SYNC_DBG_TAG_DESTCORE,
-            sync_iter,
-            (static_cast<uint32_t>(static_cast<EdmSenderT*>(connection_ptr_)->edm_noc_x) << 8) |
-                static_cast<uint32_t>(static_cast<EdmSenderT*>(connection_ptr_)->edm_noc_y));
         connection_manager_->template send_header_non_blocking<false>(
             connection_ptr_, connection_idx_, (uint32_t)packet_header);
-        // [NOC-DELIVERY PROBE] The send above is fire-and-forget (NON_BLOCKING: no flush, no barrier).
-        // Record outstanding non-posted writes, then force a flush so we learn whether the write was
-        // actually acked by the router's L1. NOTE: this flush is a behaviour change, not a pure
-        // observation -- it makes the send synchronous. If it also makes the hang disappear, that is
-        // itself the finding.
-        // NOTE on what these two markers do and do NOT prove:
-        //
-        // The (issued - acked) value is USELESS as an outstanding-count. ncrisc_noc_fast_write bumps
-        // BOTH software shadows together at issue time:
-        //     noc_nonposted_writes_num_issued[noc] += 1;
-        //     noc_nonposted_writes_acked[noc]      += num_dests;
-        // so the difference is always zero by construction. It is kept only as a cheap sanity value.
-        //
-        // The load-bearing part is the barrier between them. We use noc_async_write_barrier(), NOT
-        // noc_async_writes_flushed():
-        //     writes_flushed -> NIU_MST_NONPOSTED_WR_REQ_SENT == num_issued   ("request left the NIU")
-        //     write_barrier  -> NIU_MST_WR_ACK_RECEIVED       == acked        ("destination ACKED it")
-        // Only the latter proves the bytes actually reached the router's L1. The earlier probe used
-        // the weaker one, so "NOC_POST reached" only ever meant the request departed.
-        //
-        // NOC_PRE with no NOC_POST now means the destination never acked -> the write did not land.
-        const uint8_t noc = get_fabric_worker_noc();
-        sync_dbg_push(
-            SYNC_DBG_TAG_NOC_PRE,
-            sync_iter,
-            noc_get_nonposted_writes_issued(noc) - noc_get_nonposted_writes_acked(noc));
-        noc_async_write_barrier(noc);
-        sync_dbg_push(
-            SYNC_DBG_TAG_NOC_POST,
-            sync_iter,
-            noc_get_nonposted_writes_issued(noc) - noc_get_nonposted_writes_acked(noc));
-
-        // [DOORBELL READ-BACK] Read the router's free-slots counter back over NoC, from here, now.
-        // See SYNC_DBG_TAG_DOORBELL above for why this vantage point is the one we are missing.
-        if (debug_scratch_addr != 0) {
-            auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
-            const uint32_t available_addr = static_cast<uint32_t>(conn->edm_buffer_remote_free_slots_update_addr) +
-                                            STREAM_UPDATE_TO_AVAILABLE_BYTE_OFFSET;
-            const uint64_t doorbell_noc_addr = get_noc_addr(conn->edm_noc_x, conn->edm_noc_y, available_addr, noc);
-            noc_async_read(doorbell_noc_addr, debug_scratch_addr, sizeof(uint32_t), noc);
-            noc_async_read_barrier(noc);
-            invalidate_l1_cache();
-            const uint32_t free_slots =
-                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(debug_scratch_addr) & STREAM_FREE_SLOTS_MASK;
-            sync_dbg_push(SYNC_DBG_TAG_DOORBELL, sync_iter, free_slots);
-
-            // [DECR NOC] which noc + cmd buf the decrement write used (same 'noc' as the read above).
-            sync_dbg_push(SYNC_DBG_TAG_DECR_NOC, sync_iter, (static_cast<uint32_t>(noc) << 8) | conn->sync_noc_cmd_buf);
-
-            // [ALT-NOC DOORBELL] read the SAME reg 297 over the OTHER noc. If this reads num_buffers while the
-            // primary (same-noc) read above read the decremented value, the decrement never truly applied and
-            // the same-noc read was seeing the worker's own outstanding write.
-            const uint8_t alt_noc = 1 - noc;
-            const uint64_t doorbell_altnoc_addr =
-                get_noc_addr(conn->edm_noc_x, conn->edm_noc_y, available_addr, alt_noc);
-            noc_async_read(doorbell_altnoc_addr, debug_scratch_addr + 4, sizeof(uint32_t), alt_noc);
-            noc_async_read_barrier(alt_noc);
-            invalidate_l1_cache();
-            const uint32_t free_slots_altnoc =
-                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(debug_scratch_addr + 4) & STREAM_FREE_SLOTS_MASK;
-            sync_dbg_push(SYNC_DBG_TAG_DOORBELL_ALTNOC, sync_iter, free_slots_altnoc);
-        }
-    }
-
-    // [ROUTER PROBE AT THE WEDGE] Pull the router's debug slot over NoC and push the three words that
-    // matter. See SYNC_DBG_TAG_NOCXY above. Costs 3 ring entries per call, so callers must bound it.
-    void probe_router(uint8_t sync_iter, uint32_t debug_scratch_addr) {
-        const uint8_t noc = get_fabric_worker_noc();
-        auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
-        // Aligned superset read; see ERISC_DBG_NOC_ALIGN above. The destination is bumped to the same
-        // alignment as the source, and the slot itself starts ERISC_DBG_READ_SKEW bytes into it.
-        const uint32_t dst = (debug_scratch_addr + ERISC_DBG_NOC_ALIGN - 1) & ~(ERISC_DBG_NOC_ALIGN - 1);
-        const uint64_t slot_noc_addr = get_noc_addr(conn->edm_noc_x, conn->edm_noc_y, ERISC_DBG_READ_BASE, noc);
-        noc_async_read(slot_noc_addr, dst, ERISC_DBG_READ_BYTES, noc);
-        noc_async_read_barrier(noc);
-        invalidate_l1_cache();
-        auto* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + ERISC_DBG_READ_SKEW);
-
-        // Which core, and is a router alive on it? word[0] is 0x5E5E00xx when one is running, 0 if not.
-        // Coordinate packing: eth cores sit at x=24..31, y=25, so 4 bits per axis TRUNCATES. Earlier
-        // probe output read "(13,9)" when the real core was (29,25). 5 bits each, phase in the low 6.
-        // The device id is not packed -- the watcher attributes each ring buffer to its own core, and
-        // the router is on the same device as the sync core, so it is recoverable from the log.
-        const uint32_t phase = w[ERISC_DBG_WORD_PHASE];
-        sync_dbg_push(
-            SYNC_DBG_TAG_NOCXY,
-            sync_iter,
-            ((static_cast<uint32_t>(conn->edm_noc_x) & 0x1F) << 11) |
-                ((static_cast<uint32_t>(conn->edm_noc_y) & 0x1F) << 6) | (phase & 0x3F));
-        sync_dbg_push(SYNC_DBG_TAG_RFREE, sync_iter, w[ERISC_DBG_WORD_FREE]);
-        sync_dbg_push(SYNC_DBG_TAG_RGATE, sync_iter, w[ERISC_DBG_WORD_GATE]);
-        sync_dbg_push(SYNC_DBG_TAG_RSTREAM, sync_iter, w[ERISC_DBG_WORD_STREAMID]);
-        sync_dbg_push(SYNC_DBG_TAG_RHB, sync_iter, w[ERISC_DBG_WORD_HB]);
-
-        // [SAME-INSTANT PAIRING] Read the register ourselves right here, microseconds after reading the
-        // router's record of it. The existing 0xC1 probe fires back in global_sync_start, so comparing
-        // it against the router's value compares two different moments. This pairs them: RDOOR is what
-        // the WORKER sees and RFREE is what the ROUTER saw, taken back to back on the same core.
-        const uint32_t available_addr = static_cast<uint32_t>(conn->edm_buffer_remote_free_slots_update_addr) +
-                                        STREAM_UPDATE_TO_AVAILABLE_BYTE_OFFSET;
-        const uint64_t doorbell_noc_addr = get_noc_addr(conn->edm_noc_x, conn->edm_noc_y, available_addr, noc);
-        const uint32_t door_dst = debug_scratch_addr + ERISC_DBG_DOORBELL_SCRATCH_OFF;
-        noc_async_read(doorbell_noc_addr, door_dst, sizeof(uint32_t), noc);
-        noc_async_read_barrier(noc);
-        invalidate_l1_cache();
-        sync_dbg_push(
-            SYNC_DBG_TAG_RDOOR,
-            sync_iter,
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(door_dst) & STREAM_FREE_SLOTS_MASK);
     }
 
     void global_sync_finish(uint8_t sync_iter, uint32_t debug_scratch_addr = 0) {
-        // [ROUTER PROBE AT THE WEDGE] Sample the router twice while this barrier is stuck, before
-        // handing off to the blocking wait. The delays are large and growing so both samples land well
-        // inside the wedge rather than during normal completion; in a healthy round the barrier is
-        // already satisfied and we skip out without spending ring entries.
+        (void)debug_scratch_addr;
+        // [#45872 V3] The stream-22 reconcile runs in the driver (global_sync) BEFORE this blocking wait, so it
+        // covers EVERY sync config (any direction can be the stranded one). See reconcile_stream22_once() /
+        // poll_barrier() in global_sync().
         const uint32_t target = line_sync_val * (sync_iter + 1);
-        if (debug_scratch_addr != 0) {
-            // [HEALTHY CONTROL] Probe unconditionally on entry, every round. Round 0 completes quickly
-            // and the delayed probes below never fire for it, so without this we only ever observe the
-            // two read paths in the BROKEN case -- which leaves "NoC reads of overlay register space
-            // don't return the live counter" untestable. Sampling the same code point in a round that
-            // works tells us whether worker-read and router-read agree when nothing is wrong.
-            // Ring-buffer eviction is not a concern: the watcher dumps every ~5s, so round-0 entries are
-            // captured in earlier snapshots even though later rounds overwrite them.
-            probe_router(sync_iter, debug_scratch_addr);
-
-            uint32_t delay = 1u << 24;
-            for (uint32_t p = 0; p < 2; p++) {
-                uint32_t spins = 0;
-                while (spins < delay) {
-                    invalidate_l1_cache();
-                    if (*line_sync_ptr >= target) {
-                        break;
-                    }
-                    spins++;
-                }
-                invalidate_l1_cache();
-                if (*line_sync_ptr >= target) {
-                    break;
-                }
-                probe_router(sync_iter, debug_scratch_addr);
-                delay <<= 4;
-            }
-        }
-
-        // sync wait
-        // [SYNC-PROBE] instrumented; identical wait semantics to noc_semaphore_wait_min().
-        // [#45872 V3] The stream-22 reconcile now runs in the driver (global_sync) BEFORE this blocking wait, so it
-        // can cover EVERY sync config (any direction can be the stranded one), not just config[0]. See
-        // reconcile_stream22_once() / poll_barrier() below.
-        sync_dbg_wait_min(line_sync_ptr, target, SYNC_DBG_TAG_GLOBAL_ENTER, sync_iter);
+        noc_semaphore_wait_min(line_sync_ptr, target);
     }
 
     // [#45872 V3] True once this line's barrier semaphore has reached the round's target.
@@ -1295,12 +876,10 @@ struct LocalSyncConfig {
             }
             // Wait for all local cores to acknowledge
             uint32_t expected_val = NUM_LOCAL_CORES * (sync_iter + 1);
-            // [SYNC-PROBE] instrumented; identical wait semantics to noc_semaphore_wait().
-            sync_dbg_wait_eq(sync_ptr, expected_val, SYNC_DBG_TAG_LOCAL_ENTER, sync_iter);
+            noc_semaphore_wait(sync_ptr, expected_val);
         } else {
             uint32_t expected_val = sync_iter + 1;
-            // [SYNC-PROBE] instrumented; identical wait semantics to noc_semaphore_wait().
-            sync_dbg_wait_eq(sync_ptr, expected_val, SYNC_DBG_TAG_LOCAL_ENTER, sync_iter);
+            noc_semaphore_wait(sync_ptr, expected_val);
             // send ack back to master sender
             auto master_sender_noc_addr = get_noc_addr_helper(sync_core_xy_encoding_[0], sync_address);
             noc_semaphore_inc(master_sender_noc_addr, 1);
@@ -1710,9 +1289,6 @@ struct SenderKernelTrafficConfig {
             const uint32_t exact_free = sc->get_num_free_write_slots();  // counter-based, EXACT
             noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 32u), exact_free);  // word[8]
             noc_async_writes_flushed();
-        }
-        if ((num_packets_processed & 0xFFFFFu) == 0u) {
-            sync_dbg_push(0x99, 0, (num_packets_processed >> 16) & 0xFFFF);
         }
         num_packets_processed += 1;  // Always increment by 1
 
@@ -2177,15 +1753,6 @@ struct SenderKernelConfig {
 
     void open_connections() {
         connections.open_all();
-        // [SENDER-DESTCORE PROBE #45872] Emit each sender fabric connection's target eth core (tag 0xD1,
-        // packed (x<<8)|y, same encoding as the sync DESTCORE 0xC8) so the two sets can be compared to
-        // confirm whether senders (payload) and the barrier sync share the same eth cores / stream-22.
-        for (uint8_t _i = 0; _i < connections.num_connections; _i++) {
-            if (!connections.is_mux[_i]) {
-                auto& _c = connections.get_fabric_connection(_i);
-                WATCHER_RING_BUFFER_PUSH((0xD1u << 24) | (((uint32_t)_c.edm_noc_x << 8) | (uint32_t)_c.edm_noc_y));
-            }
-        }
         // Initialize credit management for all traffic configs
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             traffic_config_ptrs[i]->credit_manager_.initialize();
@@ -2551,34 +2118,16 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
         flow_id_ = flow_id;
     }
 
-    // [#45872] Read-only stall probe. Fires only after a genuine multi-million-spin wait (transient
-    // per-packet waits resolve long before the first threshold), pushing at most SYNC_DBG_MAX_POLLS
-    // records per stalled packet at exponentially growing intervals -- can't flood the ring and
-    // cannot change control flow. tag: 0xE3=atomic-inc short (completion signal missing by `value`),
-    // 0xE4=atomic arrived but payload last-word missing (value=packets remaining). 0xE5 companion =
-    // num_packets_processed (how far this flow got). sync_iter byte = flow_id.
-    FORCE_INLINE void stall_dbg(uint32_t tag, uint32_t value) {
-        if (++stall_spins_ >= stall_next_ && stall_pushes_ < SYNC_DBG_MAX_POLLS) {
-            sync_dbg_push(tag, flow_id_, value);
-            sync_dbg_push(0xE5, flow_id_, num_packets_processed & 0xFFFF);
-            stall_pushes_++;
-            stall_next_ <<= SYNC_DBG_POLL_GROWTH_SHIFT;
-        }
-    }
-
     static bool poll_impl(TrafficValidationConfigBase* base_config) {
         auto* config = static_cast<WriteAtomicIncValidationConfig*>(base_config);
 
         // Check atomic increment first
         uint32_t atomic_value = *config->atomic_inc_address;
         if (atomic_value < config->expected_atomic_value) {
-            config->stall_dbg(0xE3, (config->expected_atomic_value - atomic_value) & 0xFFFF);
             return false;
         }
 
         if (!config->payload_buffer_->poll_for_data(config->metadata.seed)) {
-            uint32_t remaining = config->metadata.num_packets - config->num_packets_processed;
-            config->stall_dbg(0xE4, remaining & 0xFFFF);
             return false;
         }
         return true;
@@ -2597,11 +2146,6 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
         config->expected_atomic_value += config->atomic_inc_val;
 
         config->payload_buffer_->advance();
-
-        // packet completed -> reset stall throttle so the next packet's wait is measured fresh
-        config->stall_spins_ = 0;
-        config->stall_pushes_ = 0;
-        config->stall_next_ = SYNC_DBG_FIRST_POLL_SPINS;
     }
 
     alignas(ReceiverPayloadBuffer) std::array<char, sizeof(ReceiverPayloadBuffer)> payload_buffer_storage;
@@ -2610,9 +2154,6 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
     uint32_t atomic_inc_val;
     uint32_t expected_atomic_value;
     uint8_t flow_id_ = 0;
-    uint32_t stall_spins_ = 0;
-    uint32_t stall_pushes_ = 0;
-    uint32_t stall_next_ = SYNC_DBG_FIRST_POLL_SPINS;
 };
 
 struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
@@ -2850,18 +2391,12 @@ struct SyncKernelConfig {
     }
 
     void global_sync(uint8_t sync_iter) {
-        // [SYNC-PROBE] About to open connections. An OPEN with no following SENT means we wedged in
-        // open_all(); a SENT run that stops short of NUM_SYNC_FABRIC_CONNECTIONS means we wedged in
-        // global_sync_start() (its wait_for_empty_write_slot) on that connection index.
-        sync_dbg_push(SYNC_DBG_TAG_GLOBAL_OPEN, sync_iter, NUM_SYNC_FABRIC_CONNECTIONS);
-
         // Open all sync connections
         sync_connections.open_all();
 
         // Send sync start packets
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
             line_sync_configs()[i].global_sync_start(sync_iter, get_result_buffer_address());
-            sync_dbg_push(SYNC_DBG_TAG_GLOBAL_SENT, sync_iter, i);
         }
 
         // [#45872 V3] Wait for acks. If the barrier wedges (a retrain stranded a sync packet -> its router's
@@ -2891,9 +2426,6 @@ struct SyncKernelConfig {
 
         // Close all sync connections
         sync_connections.close_all();
-
-        // [SYNC-PROBE] Round fully complete (packets out, quorum received, connections closed).
-        sync_dbg_push(SYNC_DBG_TAG_GLOBAL_CLOSED, sync_iter, NUM_SYNC_FABRIC_CONNECTIONS);
     }
 
     void local_sync(uint8_t sync_iter) { local_sync_config().local_sync(sync_iter); }

@@ -293,102 +293,6 @@ void dump_sender_credit_stream_regs() {
     }
 }
 
-// [L1 SCAN] Where did the sync packet's bytes actually land?
-//
-// The single-slot probe (debug word[21]) can only answer "is it in THIS slot". The sender channel is a
-// ring of ~32 slots at 4400-byte stride, and the round-1 connection is rebuilt after the retrain, so
-// the packet could be anywhere in the ring -- or in another channel's buffer. This scans the whole
-// region instead and prints ONLY hits, so the output stays small.
-//
-// Signature: the packet header packs payload_size | noc_send_type at offset 40 into one word.
-//     0x00020000 = sync packet (size 0, NOC_UNICAST_ATOMIC_INC)
-//     0x00001000 = data packet (size 4096, NOC_UNICAST_WRITE)
-// Scanning for 0x00020000 finds every sync header present in the region regardless of which slot or
-// channel it sits in. No hits anywhere == the bytes never landed, which the NoC ack alone cannot tell
-// us. Emits "L1HIT <dev> <chan> <addr>" per match, plus a per-core count.
-void scan_eth_l1_for_sync_headers() {
-    constexpr uint64_t SCAN_BASE = 0x15000;  // just below the observed channel buffers / credit addrs
-    constexpr uint64_t SCAN_END = 0x38000;   // covers ~32 slots x 4400B plus slack
-    constexpr uint32_t SYNC_HDR_SIG = 0x00020000;
-    constexpr std::size_t CHUNK_WORDS = 1024;  // 4KB reads
-
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    log_info(
-        tt::LogTest, "L1 scan for sync headers (sig 0x{:X}) over [0x{:X},0x{:X})", SYNC_HDR_SIG, SCAN_BASE, SCAN_END);
-    for (auto chip_id : cluster.all_chip_ids()) {
-        for (const auto& logical_core : control_plane.get_active_ethernet_cores(chip_id)) {
-            const auto virtual_core =
-                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, tt::CoreType::ETH);
-            std::size_t hits = 0;
-            for (uint64_t addr = SCAN_BASE; addr < SCAN_END; addr += CHUNK_WORDS * sizeof(uint32_t)) {
-                std::vector<uint32_t> buf(CHUNK_WORDS, 0);
-                try {
-                    cluster.read_core(buf, CHUNK_WORDS * sizeof(uint32_t), tt_cxy_pair(chip_id, virtual_core), addr);
-                } catch (...) {
-                    break;  // core unreachable (e.g. link still down) -- skip the rest of this core
-                }
-                for (std::size_t i = 0; i < buf.size(); ++i) {
-                    if (buf[i] == SYNC_HDR_SIG) {
-                        log_info(
-                            tt::LogTest, "L1HIT {} {} 0x{:X}", chip_id, logical_core.y, addr + i * sizeof(uint32_t));
-                        hits++;
-                    }
-                }
-            }
-            log_info(tt::LogTest, "L1SCAN {} {} hits={}", chip_id, logical_core.y, hits);
-        }
-    }
-}
-
-// [SYNC-PROBE] Teardown dump of the end-of-test sync semaphores on every Tensix worker core.
-//
-// The kernel-side ring-buffer POLL entries already carry the observed value, but the ring buffer is
-// small and wraps, so on a long wedge the interesting entries can be evicted. This reads the two
-// semaphores straight out of L1 instead, which is immune to that and gives the definitive value.
-//
-// Rather than plumb through the test's sender/sync core lists, this walks every worker core and
-// prints only those where a sync semaphore is non-zero -- which is exactly the set of cores that
-// participate in the barrier. Emits "SYNCSEM <dev> <x> <y> local=<v> global=<v>".
-void dump_sync_semaphores_from_host(uint32_t local_sync_addr, uint32_t global_sync_addr) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
-    log_info(
-        tt::LogTest,
-        "Sync semaphore dump (teardown): local_sync=0x{:X}, global_sync=0x{:X}",
-        local_sync_addr,
-        global_sync_addr);
-    for (auto chip_id : cluster.all_chip_ids()) {
-        const auto& soc_desc = cluster.get_soc_desc(chip_id);
-        for (const auto& core : soc_desc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::LOGICAL)) {
-            const CoreCoord logical_core{core.x, core.y};
-            const auto virtual_core =
-                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, logical_core, tt::CoreType::WORKER);
-            std::vector<uint32_t> lv(1, 0);
-            std::vector<uint32_t> gv(1, 0);
-            try {
-                cluster.read_core(lv, sizeof(uint32_t), tt_cxy_pair(chip_id, virtual_core), local_sync_addr);
-                cluster.read_core(gv, sizeof(uint32_t), tt_cxy_pair(chip_id, virtual_core), global_sync_addr);
-            } catch (...) {
-                continue;
-            }
-            // Only the barrier participants ever have these non-zero; everything else is noise.
-            if (lv[0] == 0 && gv[0] == 0) {
-                continue;
-            }
-            log_info(
-                tt::LogTest,
-                "SYNCSEM {} {} {} local={} global={}",
-                chip_id,
-                logical_core.x,
-                logical_core.y,
-                lv[0],
-                gv[0]);
-        }
-    }
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -670,17 +574,6 @@ int main(int argc, char** argv) {
                 // out-of-process `run_link_control dump_dbg_slot` exists as well.
                 dump_erisc_debug_slots_from_host();
 
-                // [SYNC-PROBE] Companion dump of the end-of-test sync semaphores. Pairs with the
-                // kernel-side ring-buffer ENTER/POLL/EXIT entries: those say which barrier a core is
-                // parked in, this says what the semaphore it is waiting on actually holds.
-                {
-                    const auto& smm = test_context.get_sender_memory_map();
-                    dump_sync_semaphores_from_host(smm.get_local_sync_address(), smm.get_global_sync_address());
-                }
-
-                // [L1 SCAN] Where the sync packet's bytes actually are, independent of any pointer or
-                // ack. Prints only matches, so it stays compact.
-                scan_eth_l1_for_sync_headers();
                 dump_sender_credit_stream_regs();
 
                 if (test_context.did_last_test_hang()) {

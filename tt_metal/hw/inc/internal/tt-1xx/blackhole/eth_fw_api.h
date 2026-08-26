@@ -492,11 +492,6 @@ inline void fabric_dbg_inc_rx_pkt_count() {
 // loudbox core is exactly one link): peer_RX - this_recvd_completions == completion credits lost over the
 // link. A nonzero gap on a tail-stalled sender is the smoking gun for signature (a) (lost final completion).
 constexpr uint32_t MEM_AERISC_CRED_RECVD_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 12;
-inline void fabric_dbg_set_recvd_completions([[maybe_unused]] uint32_t v) {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_CRED_RECVD_ADDR) = v;
-#endif
-}
 
 // [RECEIVER-SIDE PROBES] Full receiver-side flow-control state, so we can see exactly where completions
 // live (which channel, and the local completion_counter). All written by ERISC1 (receiver) from the
@@ -508,14 +503,6 @@ inline void fabric_dbg_set_recvd_completions([[maybe_unused]] uint32_t v) {
 constexpr uint32_t MEM_AERISC_COMPLETION_SENT_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 16;     // LRC ch0
 constexpr uint32_t MEM_AERISC_COMPLETION_SENT1_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 20;    // LRC ch1
 constexpr uint32_t MEM_AERISC_RECV_COMPL_COUNTER_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 24;  // local completion_counter
-inline void fabric_dbg_set_recv_debug(
-    [[maybe_unused]] uint32_t lrc0, [[maybe_unused]] uint32_t lrc1, [[maybe_unused]] uint32_t compl_counter) {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_COMPLETION_SENT_ADDR) = lrc0;
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_COMPLETION_SENT1_ADDR) = lrc1;
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RECV_COMPL_COUNTER_ADDR) = compl_counter;
-#endif
-}
 // [RX PIPELINE PROBE] words 8..14 of the debug slot. ALL written by ERISC1 (the receiver), so they stay
 // live even when ERISC0 has wedged -- unlike the watcher ring buffer, which ERISC0 owns and stops
 // pushing the moment it stops executing. Read these out of L1 with exalens while the core is hung.
@@ -559,16 +546,6 @@ constexpr uint32_t MEM_AERISC_RX_ACK_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 48;
 constexpr uint32_t MEM_AERISC_RX_FLUSHSTATE_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 52;
 constexpr uint32_t MEM_AERISC_RX_HEARTBEAT_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 56;
 
-inline void fabric_dbg_set_recv_pipeline(
-    [[maybe_unused]] uint32_t occupancy,
-    [[maybe_unused]] uint32_t wr_sent,
-    [[maybe_unused]] uint32_t wr_flush,
-    [[maybe_unused]] uint32_t ack,
-    [[maybe_unused]] uint32_t flush_state) {
-    // [#45872] RX-pipeline occupancy probe DISABLED to reclaim words 8-10 for the doorbell-drop trajectory
-    // (MEM_AERISC_DBELL_* below). Restore the body to re-enable.
-}
-
 // [RESTORE-WINDOW PROBE] Did the hardware transmit anything between the link coming back up and the
 // eth-queue config being restored?
 //
@@ -590,26 +567,6 @@ inline void fabric_dbg_set_recv_pipeline(
 constexpr uint32_t MEM_SYSENG_ETH_FRAMES_TXD_LO = 0x7CE20;
 constexpr uint32_t MEM_AERISC_HWTX_AT_LINKUP_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 28;      // word[7]
 constexpr uint32_t MEM_AERISC_HWTX_AFTER_RESTORE_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 60;  // word[15]
-
-inline uint32_t fabric_dbg_read_hw_frames_txd() {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_SYSENG_ETH_FRAMES_TXD_LO);
-#else
-    return 0;
-#endif
-}
-
-inline void fabric_dbg_mark_hwtx_at_linkup() {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_HWTX_AT_LINKUP_ADDR) = fabric_dbg_read_hw_frames_txd();
-#endif
-}
-
-inline void fabric_dbg_mark_hwtx_after_restore() {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_HWTX_AFTER_RESTORE_ADDR) = fabric_dbg_read_hw_frames_txd();
-#endif
-}
 
 // [SEND-GATE PROBE] Why did / didn't the router transmit, per sender channel.
 //
@@ -730,35 +687,6 @@ inline void fabric_dbg_set_next_slot_content(
 #endif
 }
 
-// [HOP-1 vs HOP-2 PROBE] Direct, contamination-proof answer to "did the sync packet ever land at the
-// local sender ERISC?". Sticky monotonic count of sender steps where an actual SYNC packet header
-// (0x00020000, size=0/NOC_UNICAST_ATOMIC_INC) is sitting in the ERISC's next-transmit slot AND the
-// channel reports an unsent packet (free_slots != num_buffers). Keyed on the SYNC header, so the data
-// traffic (header 0x00001000) never trips it. It lives in the resume-phase debug region and is only ever
-// incremented here -- neither credit-resync (touches only the receiver->sender completion block) nor
-// connection reinit (init_ptr_val on stream 22) ever writes it. Interpretation at the barrier hang:
-//   count huge  => the sync packet DID land in the ERISC's sender slot and it never forwarded it (Hop 2:
-//                  arrived-not-sent). The transmit-slot memory literally holds the sync header, unsent.
-//   count ~0    => the ERISC never saw a ready-to-send sync packet (Hop 1: the worker's write/doorbell
-//                  never registered here). A tiny count can only come from round-0's brief normal window.
-inline void fabric_dbg_latch_sync_ready([[maybe_unused]] uint32_t slot_addr, [[maybe_unused]] bool has_unsent) {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    if (!has_unsent) {
-        return;
-    }
-    // Fence before reading the header: this L1 line was written by the WORKER over NoC, so without
-    // it we read a stale cached copy. Proven: the host L1 scan found 0x00020000 at this exact
-    // address while this read returned 0x1000. Matches what the router does elsewhere --
-    // router_invalidate_l1_cache("Make sure we have the latest packet header in L1").
-    invalidate_l1_cache();
-    uint32_t hdr = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr + FABRIC_DBG_PKT_HDR_SIZE_TYPE_OFFSET);
-    if (hdr == 0x00020000u) {
-        volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_SEEN_ADDR);
-        *p = *p + 1;
-    }
-#endif
-}
-
 // [DECREMENT-LOST vs DECREMENT-RESET PROBE] The round-1 sync PAYLOAD demonstrably lands in the ERISC slot
 // (L1 scan), but free_slots (stream 22) reads 32 so the router thinks the slot is empty. Two mechanisms:
 //   (1) the worker's stream-22 decrement never landed, or
@@ -844,22 +772,6 @@ inline void fabric_dbg_reset_min_free_latch() {
 #endif
 }
 
-// ERISC0 owns the sender step, so the TX counter is single-writer there.
-inline void fabric_dbg_inc_sync_tx_count() {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_TX_COUNT_ADDR);
-    *p = *p + 1;
-#endif
-}
-
-// ERISC1 owns the receiver step, so the RX counter is single-writer there.
-inline void fabric_dbg_inc_sync_rx_count() {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
-    volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_RX_COUNT_ADDR);
-    *p = *p + 1;
-#endif
-}
-
 inline void fabric_dbg_set_sender_gate(
     [[maybe_unused]] uint32_t channel_index,
     [[maybe_unused]] uint32_t recv_free_slots,
@@ -887,18 +799,6 @@ inline void fabric_dbg_set_sender_gate(
 // connected). If it ever exceeds 1, a fresh connect happened without the prior worker's teardown = dirty
 // handoff. If at the barrier hang connects == disconnects (delta 0), the sync's connect never registered.
 constexpr uint32_t MEM_AERISC_CH0_CONNLIFE_ADDR = MEM_AERISC_SENDER_GATE_CH1_ADDR;  // word[17], repurposed
-inline void fabric_dbg_ch0_conn_event([[maybe_unused]] bool is_connect) {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_CH0_CONNLIFE_ADDR);
-    uint32_t v = *p;
-    if (is_connect) {
-        v = ((((v >> 16) + 1u) & 0xFFFFu) << 16) | (v & 0xFFFFu);
-    } else {
-        v = (v & 0xFFFF0000u) | (((v & 0xFFFFu) + 1u) & 0xFFFFu);
-    }
-    *p = v;
-#endif
-}
 
 // Push the current TX packet count into the watcher ring buffer. Called on every context switch so the
 // per-core ring buffer becomes a time series of the counter -- if the values keep changing across
@@ -921,43 +821,6 @@ constexpr uint32_t FABRIC_DBG_RINGBUF_CSENT_TAG = 0xD0000000;   // receiver's se
 constexpr uint32_t FABRIC_DBG_RINGBUF_CSENT1_TAG = 0xE0000000;  // receiver's sent-completion count, chan 1 (LRC1)
 constexpr uint32_t FABRIC_DBG_RINGBUF_RXCC_TAG = 0xF0000000;    // receiver's local completion_counter
 constexpr uint32_t FABRIC_DBG_RINGBUF_VALUE_MASK = 0x0FFFFFFF;
-inline void fabric_dbg_ringbuf_push_txrx_counts() {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    const uint32_t tx = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR);
-    const uint32_t rx = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_PKT_COUNT_ADDR);
-    const uint32_t cred = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_CRED_RECVD_ADDR);
-    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_TX_TAG | (tx & FABRIC_DBG_RINGBUF_VALUE_MASK));
-    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_RX_TAG | (rx & FABRIC_DBG_RINGBUF_VALUE_MASK));
-    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_CRED_TAG | (cred & FABRIC_DBG_RINGBUF_VALUE_MASK));
-#endif
-}
-
-// [CREDIT TIME-SERIES MODE] Push the full flow-control state EVERY context switch (not gated on a stall
-// timeout), so every active link always carries its latest values in the ring buffer. Six tagged entries:
-//   TX   (0xA) = packets sent (sender)
-//   RX   (0xB) = packets received (receiver)
-//   CRED (0xC) = completions RECEIVED by the sender (to_sender_remote_completion, dominant channel)
-//   LRC0 (0xD) = completions SENT by the receiver, sender-channel 0 (local_receiver_completion[0])
-//   LRC1 (0xE) = completions SENT by the receiver, sender-channel 1 (local_receiver_completion[1])
-//   RXCC (0xF) = receiver's local completion_counter (completions PROCESSED)
-// 6 entries -> the 32-slot ring holds ~5 samples; frozen cores keep their last values. Pair endpoints via
-// peers_bh.json. ERISC0-only; reads the receiver slots ERISC1 writes (shared core L1).
-inline void fabric_dbg_ringbuf_push_credits() {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    const uint32_t tx = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR);
-    const uint32_t rx = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_PKT_COUNT_ADDR);
-    const uint32_t cred = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_CRED_RECVD_ADDR);
-    const uint32_t lrc0 = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_COMPLETION_SENT_ADDR);
-    const uint32_t lrc1 = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_COMPLETION_SENT1_ADDR);
-    const uint32_t rxcc = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RECV_COMPL_COUNTER_ADDR);
-    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_TX_TAG | (tx & FABRIC_DBG_RINGBUF_VALUE_MASK));
-    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_RX_TAG | (rx & FABRIC_DBG_RINGBUF_VALUE_MASK));
-    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_CRED_TAG | (cred & FABRIC_DBG_RINGBUF_VALUE_MASK));
-    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_CSENT_TAG | (lrc0 & FABRIC_DBG_RINGBUF_VALUE_MASK));
-    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_CSENT1_TAG | (lrc1 & FABRIC_DBG_RINGBUF_VALUE_MASK));
-    WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_RXCC_TAG | (rxcc & FABRIC_DBG_RINGBUF_VALUE_MASK));
-#endif
-}
 
 // [CREDIT-STALL DUMP MODE] Alternative to fabric_dbg_ringbuf_push_txrx_counts: instead of a per-context-
 // switch TX/RX/CRED time series (which floods the 32-entry ring), this keeps the ring QUIET and only emits
@@ -974,30 +837,6 @@ constexpr uint32_t FABRIC_DBG_CREDIT_STALL_CODE = 0x5E5ECD00;  // "credit dump" 
 // tail-stalls freeze LATE (~99.99M, ~250s into the run), so a 5-min timeout pushed their dump to ~9 min --
 // right at the capture-window edge. 2 min reliably catches late-freezing tail-stalls. 64-bit: fits.
 constexpr uint64_t FABRIC_DBG_CREDIT_STALL_CYCLES = (uint64_t)2 * 60 * 1000 * ETH_CLOCK_CYCLE_1MS;
-inline void fabric_dbg_credit_stall_check() {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    const uint32_t tx = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR);
-    const uint64_t now = eth_read_wall_clock();
-    static uint32_t last_tx = 0;
-    static uint64_t last_progress = 0;
-    static bool armed = false;  // true once TX has advanced at least once (a core that never sent isn't "stalled")
-    static bool dumped = false;
-    if (tx != last_tx) {
-        last_tx = tx;
-        last_progress = now;
-        armed = (tx > 0);
-        dumped = false;  // re-arm on any progress
-    } else if (armed && !dumped && (now - last_progress) >= FABRIC_DBG_CREDIT_STALL_CYCLES) {
-        dumped = true;
-        const uint32_t cred = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_CRED_RECVD_ADDR);        // recv'd
-        const uint32_t csent = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_COMPLETION_SENT_ADDR);  // sent
-        WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_CREDIT_STALL_CODE);
-        WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_TX_TAG | (tx & FABRIC_DBG_RINGBUF_VALUE_MASK));
-        WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_CRED_TAG | (cred & FABRIC_DBG_RINGBUF_VALUE_MASK));
-        WATCHER_RING_BUFFER_PUSH(FABRIC_DBG_RINGBUF_CSENT_TAG | (csent & FABRIC_DBG_RINGBUF_VALUE_MASK));
-    }
-#endif
-}
 
 // [HANDSHAKE DEBUG] Watcher ring-buffer markers for the eth handshake, split by ROLE so a wedged core's
 // ring tells you directly whether it was the sender-side (master) or receiver-side (subordinate) end --
@@ -1015,11 +854,6 @@ constexpr uint32_t FABRIC_DBG_HANDSHAKE_INIT_SENDER_ENTER = 0x5E5EAA13;  // init
 constexpr uint32_t FABRIC_DBG_HANDSHAKE_INIT_SENDER_DONE = 0x5E5EAA14;   // init (boot), sender-side returned
 constexpr uint32_t FABRIC_DBG_HANDSHAKE_INIT_RECV_ENTER = 0x5E5EAA23;    // init (boot), receiver-side spin starting
 constexpr uint32_t FABRIC_DBG_HANDSHAKE_INIT_RECV_DONE = 0x5E5EAA24;     // init (boot), receiver-side returned
-inline void fabric_dbg_ringbuf_push_marker([[maybe_unused]] uint32_t code) {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    WATCHER_RING_BUFFER_PUSH(code);
-#endif
-}
 
 // Tiny local reader (direct volatile load, same technique as the PCS_STATUS read above) so we don't
 // pull in the eth_txq API headers here.
@@ -1070,55 +904,6 @@ constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_RUNTIME = 0x5E5EDA04;    // [3] s
 constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_DROP = 0x5E5EDA05;       // [4] link-down edge detected
 constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_STATUSCHK = 0x5E5EDA06;  // [6] after 2nd link-status check
 constexpr uint32_t FABRIC_DBG_PKTMODE_CODEWORD_PKTMODE = 0x5E5EDA07;    // [7] after eth_enable_packet_mode
-inline void fabric_dbg_ringbuf_push_pktmode_snapshot([[maybe_unused]] uint32_t codeword) {
-#if defined(COMPILE_FOR_AERISC)
-    WATCHER_RING_BUFFER_PUSH(codeword);
-    // [TWO-REG MODE] snapshot reduced to TWO registers (codeword + 2 words = 3 ring entries) so all 7
-    // stage probes can be active at once and coexist in the 32-entry ring (7 x 3 = 21). Keeping
-    // DEST_MAC_LO [8] and ACCEPT_AHEAD [9]; re-enable the others to go back to the full 9-register snapshot.
-    // WATCHER_RING_BUFFER_PUSH(
-    //     (fabric_dbg_rd_reg(ETH_CORE_A_ETH_TXQ_0_CTRL_REG_ADDR) & 0xFFFF) |
-    //     ((fabric_dbg_rd_reg(ETH_CORE_A_ETH_TXQ_1_CTRL_REG_ADDR) & 0xFFFF) << 16));  // [1] TXQ CTRL
-    // WATCHER_RING_BUFFER_PUSH(
-    //     (fabric_dbg_rd_reg(ETH_CORE_A_ETH_RXQ_0_CTRL_REG_ADDR) & 0xFFFF) |
-    //     ((fabric_dbg_rd_reg(ETH_CORE_A_ETH_RXQ_1_CTRL_REG_ADDR) & 0xFFFF) << 16));  // [2] RXQ CTRL
-    // WATCHER_RING_BUFFER_PUSH(
-    //     fabric_dbg_rd_reg(ETH_CORE_A_ETH_CTRL_A_MAC_RX_ADDR_ROUTING_REG_ADDR));  // [3] MAC_RX_ADDR_ROUTING
-    // WATCHER_RING_BUFFER_PUSH(fabric_dbg_rd_reg(ETH_CORE_A_ETH_CTRL_A_MAC_RX_ROUTING_REG_ADDR));  // [4]
-    // WATCHER_RING_BUFFER_PUSH(
-    //     (fabric_dbg_rd_reg(ETH_CORE_A_ETH_TXQ_0_TXPKT_CFG_SEL_SW_REG_ADDR) & 0xFFFF) |
-    //     ((fabric_dbg_rd_reg(ETH_CORE_A_ETH_TXQ_1_TXPKT_CFG_SEL_SW_REG_ADDR) & 0xFFFF) << 16));  // [5]
-    // WATCHER_RING_BUFFER_PUSH(
-    //     (fabric_dbg_rd_reg(ETH_CORE_A_ETH_TXQ_0_TXPKT_CFG_SEL_HW_REG_ADDR) & 0xFFFF) |
-    //     ((fabric_dbg_rd_reg(ETH_CORE_A_ETH_TXQ_1_TXPKT_CFG_SEL_HW_REG_ADDR) & 0xFFFF) << 16));  // [6]
-    // WATCHER_RING_BUFFER_PUSH(
-    //     fabric_dbg_rd_reg(ETH_CORE_A_ETH_CTRL_A_ETH_TXPKT_CFG_A_1__MAC_DA_HI_REG_ADDR));  // [7] MAC_DA_HI
-    WATCHER_RING_BUFFER_PUSH(
-        fabric_dbg_rd_reg(ETH_CORE_A_ETH_CTRL_A_ETH_TXPKT_CFG_A_1__MAC_DA_LO_REG_ADDR));  // [8] MAC_DA_LO
-    WATCHER_RING_BUFFER_PUSH(
-        (fabric_dbg_rd_reg(DBG_REG_D) & 0xFFFF) | ((fabric_dbg_rd_reg(DBG_REG_H) & 0xFFFF) << 16));  // [9]
-#endif
-}
-
-// Unconditionally stamp the resume-phase word. ERISC0-only; no-op elsewhere and on the host, so call
-// sites need no guard beyond ARCH_BLACKHOLE for the macro to exist. A single direct L1 store (not a
-// NOC transaction), so it does not perturb the router's dedicated-NOC state.
-inline void fabric_dbg_set_resume_phase(uint32_t code) {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RESUME_PHASE_BASE) = code;
-#endif
-}
-// Advance the phase word from `from` to `to` only if it currently holds `from`. Lets the hot TX/RX
-// paths mark the FIRST post-retrain send/receive exactly once (subsequent packets are a read+compare
-// no-op) without a separate flag.
-inline void fabric_dbg_advance_resume_phase(uint32_t from, uint32_t to) {
-#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RESUME_PHASE_BASE);
-    if (*p == from) {
-        *p = to;
-    }
-#endif
-}
 
 // This should only be run on ERISC0, and ERISC1 should not be sending/receiving traffic while this is called.
 static void recover_eth_link_if_down() {
@@ -1142,8 +927,6 @@ static void recover_eth_link_if_down() {
     static bool eth_runtime_snap_done = false;
     if (!eth_runtime_snap_done && pcs_link_up() &&
         *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR) > 100000u) {
-        // [TXRX MODE] probe disabled.
-        // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_RUNTIME);
         eth_runtime_snap_done = true;
     }
 
@@ -1162,18 +945,10 @@ static void recover_eth_link_if_down() {
     // the link already up in this same call) can't hide the down state and make us miss the edge.
     if (!eth_link_was_down && !pcs_link_up()) {
         eth_link_was_down = true;
-        // [PROBE 4 - DROP] Config as it stands the moment the link-down edge is first detected (before the
-        // FW recovery/retrain touches anything). Edge-gated by eth_link_was_down, so one snapshot per drop.
-        // [TXRX MODE] probe disabled.
-        // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_DROP);
     }
 
     if (eth_link_recovery_ptr != 0) {
-        // Resume-phase: about to enter FW recovery. If the word stays here, we wedged in the call.
-        fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_ENTER);
         reinterpret_cast<void (*)()>(eth_link_recovery_ptr)();
-        // Resume-phase: recovery returned (link retrained). The TX/RX paths advance from here.
-        fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_DONE);
     }
 
     // [#2] Immediately after recovery, if the link is now UP and we had seen it DOWN, restore the
@@ -1188,25 +963,14 @@ static void recover_eth_link_if_down() {
     // "replicating context switch" restore, now WITH the ACCEPT_AHEAD write included.
     if (eth_link_was_down && pcs_link_up()) {
         eth_link_was_down = false;
-        // [RESTORE-WINDOW PROBE] Window OPENS here: link is up, config is still the post-retrain state.
-        // Sampled before the 1s settle, so the probe spans the entire un-restored interval.
-        fabric_dbg_mark_hwtx_at_linkup();
-        // [PROBE 5 - RETRAIN] Config the instant the link is back up (retrain succeeded), BEFORE the restore
-        // sequence below. Diffing this against PROBE 4 (DROP) shows exactly what the retrain corrupted.
-        // [TXRX MODE] probe disabled.
-        // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_RETRAIN);
         // 1s settle. Also clears the update_boot_results_eth_link_status_check() 1000ms debounce so the FW
         // link-status check below actually runs. Inside the context switch (before the main loop resumes).
         eth_wait_cycles(1000 * ETH_CLOCK_CYCLE_1MS);  // 1s (ETH_CLOCK_CYCLE_1MS = 1e6 cycles = 1ms)
         // FW link-status check -- now past its 1s debounce (the wait above), so this actually invokes it.
         update_boot_results_eth_link_status_check();
-        // [PROBE 6 - STATUSCHK] disabled in TXRX mode.
-        // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_STATUSCHK);
         // Second link-recovery pass (same entry point as [#1]). Null-guarded identically.
         if (eth_link_recovery_ptr != 0) {
-            fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_ENTER);
             reinterpret_cast<void (*)()>(eth_link_recovery_ptr)();
-            fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_DONE);
         }
         // receiver_txq_id == 1 in the fabric router (see static_assert in kernel_main). Hardcoded 1
         // because receiver_txq_id is a kernel-TU constant not visible in this base header.
@@ -1221,14 +985,6 @@ static void recover_eth_link_if_down() {
         // is hardcoded to 1 above).
         eth_txq_reg_write(0, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, 32);
         eth_txq_reg_write(1, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, 32);
-        // [RESTORE-WINDOW PROBE] Window CLOSES here: config is fully restored. A non-zero delta against
-        // the link-up sample means the hardware drained frames while MAC_DA_LO was still 0, i.e. TXQ1
-        // traffic was addressed to the wrong receive queue.
-        fabric_dbg_mark_hwtx_after_restore();
-        // [PROBE 7 - PKTMODE] Config after eth_enable_packet_mode() + ACCEPT_AHEAD restore -- should now match
-        // the INIT baseline (PROBE 2) on ALL registers incl. ACCEPT_AHEAD (32/32) if the restore is complete.
-        // [TXRX MODE] probe disabled.
-        // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_PKTMODE);
         // [POST-RETRAIN HANDSHAKE] Config is now restored; bump the L1 retrain counter. The router's
         // coordinated context switch brackets this recovery pass with a before/after read of the counter,
         // sees it advance, and runs the post-retrain handshake before resuming traffic.

@@ -1461,11 +1461,7 @@ template <typename RoutingTableT>
 FORCE_INLINE void run_post_retrain_handshake(
     const RoutingTableT* routing_table_l1, volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     if constexpr (enable_ethernet_handshake) {
-        // [POST-RETRAIN HANDSHAKE DEBUG] Role-specific markers: ENTER before the spin, DONE only if it
-        // returns. ENTER with no DONE on a core == wedged; the role marker says whether that stuck end was
-        // the sender (master) or receiver (subordinate), so we can classify links straight from the log.
         if constexpr (is_handshake_sender) {
-            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_SENDER_ENTER);
             // SKIP_CONTEXT_SWITCH=true: post-retrain runs inside the coordinated context switch, so the spin
             // must NOT call run_routing() (full switch would desync the router's dedicated-NOC shadow counters).
             erisc::datamover::handshake::
@@ -1475,9 +1471,7 @@ FORCE_INLINE void run_post_retrain_handshake(
                     routing_table_l1->my_device_id,
                     termination_signal_ptr,
                     DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_SENDER_DONE);
         } else {
-            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_RECV_ENTER);
             // SKIP_CONTEXT_SWITCH=true: see sender-side note above.
             erisc::datamover::handshake::
                 fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE, /*SKIP_CONTEXT_SWITCH=*/true>(
@@ -1486,7 +1480,6 @@ FORCE_INLINE void run_post_retrain_handshake(
                     routing_table_l1->my_device_id,
                     termination_signal_ptr,
                     DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_RECV_DONE);
         }
     }
 }
@@ -2411,7 +2404,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             if (was_retrained > WAS_RETRAINED_FREEZE_AFTER_N_ITERS) {
                 return;
             }
-            fabric_dbg_set_resume_phase(RESUME_PHASE_LOOP_TOP);
 #endif
             did_something = false;
 
@@ -2735,9 +2727,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
             }
 
-#if defined(ARCH_BLACKHOLE)
-            fabric_dbg_set_resume_phase(RESUME_PHASE_CTX_SWITCH);  // [FREEZE-PROBE] entering ctx-switch region
-#endif
             if constexpr (enable_context_switch) {
                 // shouldn't do noc counter sync since we are not incrementing them
                 if constexpr (IDLE_CONTEXT_SWITCHING) {
@@ -2770,7 +2759,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 }
             }
 #if defined(ARCH_BLACKHOLE)
-            fabric_dbg_set_resume_phase(RESUME_PHASE_LOOP_BOTTOM);  // [FREEZE-PROBE] iteration completed
             // [WAS_RETRAINED] Advance the freeze counter only after a retrain has been seen (>= 1), so
             // this never trips at startup. It climbs 1..N over the N allowed iterations; once it exceeds
             // N (== N+1) the top-of-loop gate freezes on the next pass. Naturally capped: the gate
@@ -3087,18 +3075,12 @@ __attribute__((optimize("Os"))) void teardown(
 }
 
 __attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode() {
-    // [PROBE 1 - PREINIT] Config registers BEFORE the init eth_enable_packet_mode() configures the queues.
-    // [TXRX MODE] probe disabled.
-    // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_PREINIT);
     eth_enable_packet_mode(receiver_txq_id);
     for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
         reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)[i] = 0;
         reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)[i] = 0;
     }
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
-    // [PROBE 2 - INIT] Config after the init eth_enable_packet_mode() -- the golden baseline.
-    // [TXRX MODE] probe disabled.
-    // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_INIT);
 }
 __attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode_sender_side() {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
@@ -3697,27 +3679,20 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
-        // [HANDSHAKE DEBUG] Role-specific init/boot markers (distinct codewords from the post-retrain
-        // markers) so a fresh-machine run confirms the handshake path + ring-buffer plumbing work -- for
-        // both sender and receiver roles -- even before any retrain is injected.
         if constexpr (is_handshake_sender) {
-            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_INIT_SENDER_ENTER);
             erisc::datamover::handshake::fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
                 handshake_addr,
                 routing_table_l1->my_mesh_id,
                 routing_table_l1->my_device_id,
                 termination_signal_ptr,
                 DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_INIT_SENDER_DONE);
         } else {
-            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_INIT_RECV_ENTER);
             erisc::datamover::handshake::fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
                 handshake_addr,
                 routing_table_l1->my_mesh_id,
                 routing_table_l1->my_device_id,
                 termination_signal_ptr,
                 DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-            fabric_dbg_ringbuf_push_marker(FABRIC_DBG_HANDSHAKE_INIT_RECV_DONE);
         }
 
         // After handshake completes, extract neighbor info and populate telemetry
