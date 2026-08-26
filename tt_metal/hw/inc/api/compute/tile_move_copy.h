@@ -71,6 +71,23 @@ ALWI void copy_init(
         cbid)));
 #endif
 }
+// clang-format off
+/**
+ * Issue a single lightweight clear-SrcA unpacker op (UNPACR_NOP, no dvalid). Intended to be called between
+ * cb_wait_front and cb_pop_front when a circular buffer must be drained/flow-controlled without a real
+ * consume. On Quasar this satisfies the unpacker's requirement that a POP_TILES be ordered after its
+ * WAIT_TILES by a real unpacker op (TEN-4746 / #48552) -- a bare TTI_NOP/DMANOP does NOT (they issue no
+ * unpacker transaction), and a real read (copy_tile / UNPACR_TILE) is heavier and, if partial, corrupts
+ * PACKER_L1_ACC offsets. This clears SrcA only (harmless: the next op re-unpacks SrcA) and never reads the
+ * CB, so it is correct and side-effect free. On WH/BH there is no such HW ordering bug, so this is a no-op.
+ * Return value: None
+ */
+// clang-format on
+ALWI void dummy_unpack() {
+#ifdef ARCH_QUASAR
+    UNPACK(TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC));
+#endif
+}
 
 // clang-format off
 /**

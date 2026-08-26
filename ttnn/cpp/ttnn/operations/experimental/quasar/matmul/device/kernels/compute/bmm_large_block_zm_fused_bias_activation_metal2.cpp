@@ -439,59 +439,27 @@ void kernel_main() {
 #ifdef FUSE_BIAS
                     if (block < num_blocks_inner_dim - 1) {
                         // [#48552] TEN-4746: a bare wait_front->pop_front on mm_partials traps the Quasar unpacker
-                        // (POP_TILES races past WAIT_TILES -> TILE_COUNTERS 0x10000). Interpose a REAL unpack TDMA
-                        // (dummy copy_tile of tile 0) between wait and pop -- NOP/DMANOP/TTI_NOP are INSUFFICIENT
-                        // (LLK-team guidance + abhullar/pop-wait-fix 69014037a + our TTI_NOP-fails/DPRINT-works
-                        // bisection). NB the old "wait_front increments must be identical" rationale for the
-                        // stepped loop is FALSE (only num_entries<=capacity is enforced) but the loop is harmless.
-#ifdef ARCH_QUASAR
-                        reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
-                        copy_init(mm_partials_cb_id);
-#endif
+                        // (POP_TILES races past WAIT_TILES). dummy_unpack() issues the single clear-SrcA
+                        // UNPACR_NOP that orders POP after WAIT; it reads nothing (no PACKER_L1_ACC disturbance)
+                        // and is a no-op on WH/BH. Replaces the old copy_tile-drain dance.
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
-#ifdef ARCH_QUASAR
-                            tile_regs_acquire();
-                            copy_tile(mm_partials_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            tile_regs_release();
-#endif
+                            dummy_unpack();
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
-#ifdef ARCH_QUASAR
-                        reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
-                        matmul_block_init(
-                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-#endif
                     }
                     // never reload when with bias, bias uses interm buffer
                     enable_reload = false;
 #else
                     // Last iteration does spill and reload to output buffer
                     if (block < num_blocks_inner_dim - 2) {
-                        // [#48552] TEN-4746 interpose (see the FUSE_BIAS drain above): REAL unpack TDMA
-                        // (dummy copy_tile of tile 0) between the bare wait_front/pop_front on mm_partials.
-#ifdef ARCH_QUASAR
-                        reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
-                        copy_init(mm_partials_cb_id);
-#endif
+                        // [#48552] TEN-4746 (see the FUSE_BIAS drain above): dummy_unpack() orders POP after WAIT
+                        // on mm_partials via a clear-SrcA UNPACR_NOP; no-op on WH/BH.
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
-#ifdef ARCH_QUASAR
-                            tile_regs_acquire();
-                            copy_tile(mm_partials_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            tile_regs_release();
-#endif
+                            dummy_unpack();
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
-#ifdef ARCH_QUASAR
-                        reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
-                        matmul_block_init(
-                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-#endif
                     }
                     if (block == num_blocks_inner_dim - 2) {
                         enable_reload = true;
