@@ -440,14 +440,19 @@ def resolve_attention2d_config(config: Attention2DConfig) -> Attention2DConfig:
         raise ValueError("n_heads and n_kv_heads must be divisible by the mesh row partition")
 
     qkv_size = config.head_dim * (config.n_heads + 2 * config.n_kv_heads)
+    # Architectures that decouple head_dim from the hidden size (Qwen3) project
+    # attention into n_heads * head_dim before WO reduces back to dim.
+    attention_dim = config.head_dim * config.n_heads
     wqkv_shape, wo_shape = _matrix_shape("wqkv", config.wqkv), _matrix_shape("wo", config.wo)
     dim = config.dim or wqkv_shape[0]
     if config.qkv_size is not None and config.qkv_size != qkv_size:
         raise ValueError(f"qkv_size must equal {qkv_size}")
     if wqkv_shape != (dim, qkv_size):
         raise ValueError(f"wqkv source shape must be {(dim, qkv_size)}, got {wqkv_shape}")
-    if wo_shape != (dim, dim):
-        raise ValueError(f"wo source shape must be {(dim, dim)}, got {wo_shape}")
+    if attention_dim % GALAXY_MESH_SHAPE[0]:
+        raise ValueError("n_heads * head_dim must be divisible by the mesh row partition")
+    if wo_shape != (attention_dim, dim):
+        raise ValueError(f"wo source shape must be {(attention_dim, dim)}, got {wo_shape}")
     if (config.prefill_wqkv is None) != (config.prefill_wo is None):
         raise ValueError("prefill_wqkv and prefill_wo must be supplied together")
     if config.prefill_wqkv is not None:
@@ -514,7 +519,7 @@ def resolve_attention2d_config(config: Attention2DConfig) -> Attention2DConfig:
         resolved.wqkv,
         device=mesh_device,
         mesh_mapper_config=resolved.wqkv_mesh_mapper_config,
-        memory_config=resolved.wo_weight_memory_config,
+        memory_config=resolved.weight_memory_config,
         layout=resolved.weight_layout,
         dtype=resolved.wqkv_dtype,
     )
@@ -522,7 +527,7 @@ def resolve_attention2d_config(config: Attention2DConfig) -> Attention2DConfig:
         resolved.wo,
         device=mesh_device,
         mesh_mapper_config=resolved.wo_mesh_mapper_config,
-        memory_config=resolved.weight_memory_config,
+        memory_config=resolved.wo_weight_memory_config,
         layout=resolved.weight_layout,
         dtype=resolved.wo_dtype,
     )

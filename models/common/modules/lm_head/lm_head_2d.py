@@ -422,8 +422,14 @@ def _load_input(
 
 def _validate_input_shape(shape, config: LMHead2DConfig, mode: str) -> None:
     shape = tuple(int(value) for value in shape)
-    if len(shape) != 4 or shape[-1] != config.dim:
-        raise ValueError(f"LMHead2D {mode} input must have shape [N, C, S, {config.dim}], got {shape}")
+    # A host source carries the complete hidden dimension; a device activation
+    # produced by the column-sharded residual stream carries its column shard.
+    column_local_dim = config.dim // _GALAXY_MESH_SHAPE[1]
+    if len(shape) != 4 or shape[-1] not in (config.dim, column_local_dim):
+        raise ValueError(
+            f"LMHead2D {mode} input must have shape [N, C, S, {config.dim}] or "
+            f"[N, C, S, {column_local_dim}], got {shape}"
+        )
     if mode == "decode" and shape[-2] != config.max_batch_size:
         raise ValueError(f"LMHead2D decode input requires physical batch {config.max_batch_size}, got {shape[-2]}")
 

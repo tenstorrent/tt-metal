@@ -152,7 +152,9 @@ def _config(*, events=None, mesh=None, bias=False, releases=None, runtime_releas
     wqkv_mapper, wo_mapper, bias_mapper = "wqkv-map", "wo-map", "bias-map"
     values = dict(
         wqkv=_weight((5120, 10240), mesh, _Tensor("WQKV"), wqkv_mapper, "wqkv-dtype"),
-        wo=_weight((5120, 5120), mesh, _Tensor("WO"), wo_mapper, "wo-dtype"),
+        # Qwen3-32B geometry: head_dim is decoupled from the hidden size, so WO
+        # reduces n_heads * head_dim (8192) back to dim (5120).
+        wo=_weight((8192, 5120), mesh, _Tensor("WO"), wo_mapper, "wo-dtype"),
         wqkv_bias=_weight((10240,), mesh, _Tensor("BIAS"), bias_mapper, "bias-dtype") if bias else None,
         n_heads=64,
         n_kv_heads=8,
@@ -368,6 +370,107 @@ def test_weight_shapes_and_atomic_qk_norm_fail_closed():
         resolve_attention2d_config(replace(config, wo=replace(config.wo, source=_Source((5120, 2560)))))
     with pytest.raises(ValueError, match="supplied together"):
         resolve_attention2d_config(replace(config, q_norm_config=object()))
+
+
+def test_wo_shape_follows_the_attention_projection_width():
+    config = resolve_attention2d_config(_config())
+
+    assert tuple(config.wo.source.shape) == (8192, 5120)
+    with pytest.raises(ValueError, match="wo source shape must be"):
+        resolve_attention2d_config(replace(config, wo=replace(config.wo, source=_Source((5120, 5120)))))
+
+
+def test_square_wo_resolves_when_attention_width_equals_hidden_size():
+    mesh = _Mesh()
+    resolved = resolve_attention2d_config(
+        _config(
+            mesh=mesh,
+            wqkv=_weight((8192, 10240), mesh, _Tensor("WQKV"), "wqkv-map", "wqkv-dtype"),
+            wo=_weight((8192, 8192), mesh, _Tensor("WO"), "wo-map", "wo-dtype"),
+        )
+    )
+
+    assert (resolved.dim, resolved.qkv_size) == (8192, 10240)
+
+
+def test_wqkv_and_wo_each_carry_their_own_weight_memory_config():
+    """Pin which config reaches which projection, with two *different* values.
+
+    Both `weight_memory_config` and `wo_weight_memory_config` are set, and to
+    distinct objects, so a config that reached the wrong projection would show.
+    Every earlier test leaves the two equal, which makes any confusion between
+    them a no-op; this one cannot pass by that accident.
+    """
+
+    mesh = _Mesh()
+    config = _config(
+        mesh=mesh,
+        bias=True,
+        wqkv=replace(_weight((5120, 10240), mesh, _Tensor("WQKV"), "wqkv-map", "wqkv-dtype"), memory_config="wqkv-mem"),
+        wo=replace(_weight((8192, 5120), mesh, _Tensor("WO"), "wo-map", "wo-dtype"), memory_config="wo-mem"),
+        wqkv_bias=replace(_weight((10240,), mesh, _Tensor("BIAS"), "bias-map", "bias-dtype"), memory_config="wqkv-mem"),
+        weight_memory_config="wqkv-mem",
+        wo_weight_memory_config="wo-mem",
+    )
+    assert config.weight_memory_config != config.wo_weight_memory_config
+
+    resolved = resolve_attention2d_config(config)
+
+    assert resolved.wqkv.memory_config == "wqkv-mem"
+    assert resolved.wo.memory_config == "wo-mem"
+    assert resolved.wqkv_bias.memory_config == "wqkv-mem"
+
+
+def test_a_projection_placed_against_the_other_configs_value_is_rejected():
+    """The guard that keeps the two placements from being confused.
+
+    `resolve_attention2d_config` requires each weight to already carry the
+    placement its own config field names, *before* `resolve_lazy_weight` gets to
+    fill anything in. This is why swapping the two `resolve_lazy_weight`
+    arguments never produced an observable wrong placement: an unplaced or
+    cross-placed weight never reaches that code. Pin the guard, because it is
+    what makes the assertion above load-bearing.
+    """
+
+    mesh = _Mesh()
+
+    def build(*, wqkv_mem, wo_mem):
+        return _config(
+            mesh=mesh,
+            wqkv=replace(
+                _weight((5120, 10240), mesh, _Tensor("WQKV"), "wqkv-map", "wqkv-dtype"), memory_config=wqkv_mem
+            ),
+            wo=replace(_weight((8192, 5120), mesh, _Tensor("WO"), "wo-map", "wo-dtype"), memory_config=wo_mem),
+            weight_memory_config="wqkv-mem",
+            wo_weight_memory_config="wo-mem",
+        )
+
+    with pytest.raises(ValueError, match=r"wo weight placement must exactly match config fields"):
+        resolve_attention2d_config(build(wqkv_mem="wqkv-mem", wo_mem="wqkv-mem"))
+    with pytest.raises(ValueError, match=r"wqkv weight placement must exactly match config fields"):
+        resolve_attention2d_config(build(wqkv_mem="wo-mem", wo_mem="wo-mem"))
+    with pytest.raises(ValueError, match=r"wqkv weight placement must exactly match config fields"):
+        resolve_attention2d_config(build(wqkv_mem=None, wo_mem="wo-mem"))
+
+
+def test_wo_weight_memory_config_defaults_to_the_shared_placement():
+    """Left unset, `wo` takes `weight_memory_config` — the pre-Milestone-B default."""
+
+    mesh = _Mesh()
+    resolved = resolve_attention2d_config(
+        _config(
+            mesh=mesh,
+            wqkv=replace(
+                _weight((5120, 10240), mesh, _Tensor("WQKV"), "wqkv-map", "wqkv-dtype"), memory_config="shared"
+            ),
+            wo=replace(_weight((8192, 5120), mesh, _Tensor("WO"), "wo-map", "wo-dtype"), memory_config="shared"),
+            weight_memory_config="shared",
+            wo_weight_memory_config=None,
+        )
+    )
+
+    assert (resolved.wqkv.memory_config, resolved.wo.memory_config) == ("shared", "shared")
+    assert resolved.wo_weight_memory_config == "shared"
 
 
 def test_qk_norm_requires_explicit_head_local_geometry():
@@ -809,7 +912,8 @@ def test_cache_binding_is_borrowed_idempotent_and_owner_guarded():
 def test_mode_specific_projection_weights_materialize_independently():
     config = _config()
     prefill_wqkv = _weight((5120, 10240), config.mesh_device, _Tensor("PREFILL-WQKV"), "prefill-qkv-map", "bf16")
-    prefill_wo = _weight((5120, 5120), config.mesh_device, _Tensor("PREFILL-WO"), "prefill-wo-map", "bf16")
+    # prefill_wo must match wo, which is (n_heads * head_dim, dim) = (8192, 5120).
+    prefill_wo = _weight((8192, 5120), config.mesh_device, _Tensor("PREFILL-WO"), "prefill-wo-map", "bf16")
     model = Attention2D.from_config(replace(config, prefill_wqkv=prefill_wqkv, prefill_wo=prefill_wo))
 
     model.load_device_weights("decode")
