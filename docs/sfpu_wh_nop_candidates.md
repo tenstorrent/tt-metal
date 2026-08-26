@@ -3,13 +3,44 @@
 A survey of the Wormhole B0 SFPU kernels for instruction-scheduling wins — places where an
 `SFPNOP` could be replaced with useful work, or a stall removed by reshuffling.
 
-**Status: static analysis only. Nothing here has been measured.** Instruction counts are an
-upper bound on the win, not the win. Treat every number below as "worth measuring", not
-"worth landing".
+**Status: attempted. See §0 for what actually survived contact.** One of the six candidates
+produced a win; four turned out to have no headroom and one is untestable. The original
+per-candidate analysis is kept below, corrected in place, because the reasons the dead ends
+are dead are the useful part.
 
 **Scope: Wormhole B0 only.** Blackhole does not need these NOPs at all — it interlocks —
 so none of this applies there. That is also the reason the list is worth having: WH kernels
 carry a scheduling tax that the BH versions of the same kernels do not.
+
+---
+
+## 0. Outcome
+
+Worked through on branch `ldjurovic/sfpu_wh_nop_overlap`.
+
+| Candidate | Outcome |
+|---|---|
+| `ema` | **Done — 17 → 11 slots**, bit-identical over 172032 outputs |
+| `quant` / `requant` / `dequant` | **Blocked** — not wired into the LLK harness, no test to validate against |
+| `lcm` | **No headroom** — all 8 LREGs in use, and the one "free" slot is already filled |
+| `binary_bcast` | **Already done** by its author; residual NOPs have no independent work left |
+| `reduce` | **Already done**; the 3 remaining NOPs are end-of-chain drains |
+| `cumsum` | **Wash**, as predicted in §3.6 |
+
+The recurring blocker is not cleverness, it is **register pressure**. Filling a latency slot
+needs an independent instruction, an independent instruction needs its own registers, and
+these kernels mostly already use all eight LREGs. `ema` was winnable precisely because it did
+*not* need another register — the win came from restructuring the arithmetic so that
+independent work already in the block could be dealt into the slots.
+
+**The generalisable lesson:** look for kernels where independent work already exists in the
+block and is merely mis-scheduled, or where an algebraic reassociation creates independent
+work without new registers. Do not look for kernels with big NOP counts.
+
+A second, cheaper lesson: **check for a test before analysing a kernel.** `quant` was ranked
+first on the merits and then turned out to be unverifiable on the LLK harness, which is a
+hard stop — the whole point of these changes is that they are bit-neutral, and that is not a
+claim to make without a way to check it.
 
 ---
 
@@ -75,10 +106,21 @@ What matters is **NOPs per element in the steady-state body**, which is what the
 | 5 | `ckernel_sfpu_exp.h` (accurate TTI) | 17 slots | 3 | data + 1 struct | no free register |
 | 6 | `ckernel_sfpu_cumsum.h` | 16 slots | **8 (50 %)** | data | **no — see below** |
 
-### 1. `quant` / `requant` / `dequant` — start here
+### 1. `quant` / `requant` / `dequant` — BLOCKED: no test
 
-Best effort-to-payoff by a wide margin, and the only entry where both the fill material and
-the register headroom are already confirmed.
+> **Outcome: not attempted.** These kernels are reachable only from ttnn
+> (`tt_metal/hw/inc/api/compute/quantization.h`). They are **not** wired into
+> `tests/helpers/include/sfpu_operations.h` and no python test drives them, so there is no
+> way to show a reshuffle is bit-neutral on this harness. Wiring up coverage is the
+> prerequisite, and is probably worth more than the reshuffle.
+>
+> Also noted while reading: the kernels program `ADDR_MOD_6` with the dest increment
+> (`_quant_kernels_configure_dest_incr_addrmod_`) but the stores issue against `ADDR_MOD_2`,
+> which is shared state configured by datacopy/A2D. That may be fine and may be a latent
+> bug; either way it needs resolving before anyone restructures the addressing.
+
+On the merits this is still the best-shaped candidate — fill material and register headroom
+both confirmed:
 
 The recorded bodies (`ckernel_sfpu_quant.h:46-56`) are:
 
@@ -109,13 +151,26 @@ LREG5/6 are free for the rotation at no cost.
 
 `dequant` is the one to do first: 2 NOPs in 8 slots, and both are plain MAD-class latency.
 
-### 2. `ema` — highest ceiling, hardest
+### 2. `ema` — DONE, 17 → 11 slots
+
+> **Outcome: fixed.** The math block went from 8 MADs + 8 NOPs + carry MOV (17 slots) to
+> 8 MADs + 2 NOPs + MOV (11 slots), and the per-row critical path from two MADs to one.
+> Bit-identical over 172032 outputs (8 seeds x 3 amplitudes x 3 tile counts).
+>
+> **The analysis below was wrong about how.** It claimed the fix needed "a *second*
+> independent EMA sequence to interleave". It did not. Scaling the inputs by beta up front
+> turns each row into a single fused `row_i = alpha*row_{i-1} + beta_scaled_i`, and the four
+> beta multiplies are mutually independent, so three of them deal straight into the chain's
+> latency slots. No second sequence, no extra register — the independent work was already
+> inside the block, just expressed in a form that kept it on the critical path.
+>
+> The reassociation is not bit-neutral in fp32 (~2^-24), but DEST for this kernel is
+> bfloat16, whose resolution is 2^-9, so nothing survives to the output. **That headroom is
+> what made it safe** and is worth checking first on any similar reassociation: compare the
+> fp32 perturbation against the output format's ULP.
 
 8 MADs, 8 NOPs, every one annotated "Next cycle cannot read from LREGn (2-cycle operation)".
-All data hazards, so in principle all fillable.
-
-The obstacle is the algorithm, not the schedule. `_compute_ema_math_()` is a serial
-recurrence over 4 rows:
+All data hazards. `_compute_ema_math_()` was a serial recurrence over 4 rows:
 
 ```
 LREG7 = alpha * LREG4          (carry in from the previous block)
@@ -130,19 +185,37 @@ one dependency chain. Filling these NOPs means finding a *second* independent EM
 interleave (a batch dimension, say) — a restructuring, not a reshuffle. Worth scoping before
 committing to it, because it may simply not be available.
 
-### 3. `binary_bcast` — unassessed
+### 3. `binary_bcast` — already optimised by its author
+
+> **Outcome: no change.** `_broadcast_stage3_with_data_prefetch_` already applies exactly
+> this technique, and says so: the 4 `SFPSHFT2` latency slots are filled by interleaving the
+> 4 independent data `SFPLOAD`s. The 4 per-slot binops are likewise deliberately pipelined,
+> and the trailing drain is documented. The 6 NOPs left in `_record_broadcast_replay_`
+> (stages 1-2) have **no independent work available** — the only independent instructions in
+> the block are those 4 loads and stage 3 has already claimed them, so any redeal just moves
+> the NOPs. `SFPSHFT2` offers only `SHFLROR1` (no ROR2/ROR4), so the double-rotate in stage 2
+> cannot collapse either. Cross-band pipelining is the only remaining angle and there is ~1
+> free LREG for it.
+
 
 8 NOPs around a `MUL` / `SFPSHFT2` / `ADD` shuffle-reduce chain. `SFPSHFT2` is 2-cycle, so
 these are data hazards and fillable in principle, but it is a log-reduction where each round
 consumes the previous one's output. Needs someone to look at whether rounds overlap.
 
-### 4. `lcm` — small, low-risk, already half-solved
+### 4. `lcm` — no headroom
 
-3 per-element NOPs across two serial Newton-Raphson reciprocal iterations. Note that the
-author **already** filled one slot: line 82 drops an independent `SFPIADD` (exponent
-bookkeeping) straight after the last MAD. The `SFPEXEXP` at line 71 is likewise independent
-of the Newton chain and could migrate into one of the remaining slots. Modest win, contained
-blast radius, good first exercise for anyone learning this.
+> **Outcome: no change, and the suggestion below was wrong.** It proposed migrating the
+> `SFPEXEXP` at line 71 into a later NOP slot. That instruction is already doing exactly that
+> job: the MAD at line 70 writes LREG0, line 74 reads it, and line 71 is the filler between
+> them. Moving it would create the stall it was placed to avoid.
+>
+> Nothing else is available. `calculate_sfpu_mul_u16_to_u32_body` uses **all eight** of
+> LREG0-7, so there is no room to overlap a second element, and within one element the three
+> remaining NOPs sit in a strictly serial Newton-Raphson chain.
+
+3 per-element NOPs across two serial Newton-Raphson reciprocal iterations. The author had
+already filled the fourth slot: line 82 drops an independent `SFPIADD` (exponent bookkeeping)
+straight after the last MAD.
 
 ### 5. `exp` accurate TTI path — known, blocked
 
