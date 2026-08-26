@@ -318,6 +318,7 @@ class Linear(DeepSeekV4Module):
         device: ttnn.MeshDevice,
         cache_file_name: Optional[str] = None,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        mesh_mapper=None,
     ):
         w = _materialize(weight, cache_file_name, dtype)
         self.weight = _load_weight(
@@ -325,6 +326,7 @@ class Linear(DeepSeekV4Module):
             device,
             cache_file_name=cache_file_name,
             dtype=dtype,
+            mesh_mapper=mesh_mapper,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -401,6 +403,7 @@ class LinearDecode(DeepSeekV4Module):
         global_cb=None,
         global_cb_page_bytes: Optional[int] = None,
         keep_weights_in_l1: bool = False,
+        mesh_mapper=None,
         packed_weight_tensor: Optional[ttnn.Tensor] = None,
         packed_weight_spec=None,
     ):
@@ -412,6 +415,7 @@ class LinearDecode(DeepSeekV4Module):
         self.use_prefetcher = use_prefetcher
         self.keep_weights_in_l1 = keep_weights_in_l1
         self.global_cb = None
+        self.mesh_mapper = mesh_mapper
         self.gcb_k_blocks = 1
         self.prefetch_queued = False
         self.packed_weight_tensor = packed_weight_tensor
@@ -433,6 +437,7 @@ class LinearDecode(DeepSeekV4Module):
         num_inputB_cores, shard_shape, preferred_width = decode_weight_layout(
             K, N, partial_width_sharded, k_blocks, n_blocks
         )
+        self.num_inputB_cores = num_inputB_cores
         if packed_weight_tensor is not None:
             if use_prefetcher or keep_weights_in_l1 or packed_weight_spec is None:
                 raise ValueError("packed weights require a spec and are mutually exclusive with other weight paths")
@@ -487,6 +492,7 @@ class LinearDecode(DeepSeekV4Module):
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_file_name=cache_file_name,
+                mesh_mapper=mesh_mapper,
             )
             self._make_weights_resident()
             return
@@ -504,6 +510,7 @@ class LinearDecode(DeepSeekV4Module):
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_file_name,
+            mesh_mapper=mesh_mapper,
         )
         self._make_weights_resident()
 
@@ -583,9 +590,12 @@ class LinearDecode(DeepSeekV4Module):
         cache_file_name = _prefetch_cache_file(cache_file_name)
         w = _materialize(weight, cache_file_name, dtype)
         if w is not None:
-            # torch nn.Linear stores [out=N, in=K]; the op wants [K, N]. Unlike the L1 partial
-            # path there is no K-block fold -- the ND shard supplies that enumeration.
-            w = w.t().contiguous().reshape(1, 1, self.K, self.N)
+            # torch nn.Linear stores [out=N, in=K]; the op wants [K, N]. Rank-4 so a
+            # mesh mapper can cut either K (dim=-2, row-parallel) or N (dim=-1,
+            # column-parallel). Use the host shape, not ``self.K``/``self.N``, which
+            # are already the per-rank sizes under TP.
+            w = w.t().contiguous()
+            w = w.reshape(1, 1, w.shape[0], w.shape[1])
         self.weight = ttnn.as_tensor(
             w,
             dtype=dtype,
@@ -593,6 +603,7 @@ class LinearDecode(DeepSeekV4Module):
             device=self.device,
             memory_config=dram_memory_config,
             cache_file_name=cache_file_name,
+            mesh_mapper=self.mesh_mapper,
         )
         if shared_cb is not None:
             self.global_cb = shared_cb
@@ -684,7 +695,7 @@ class LinearDecode(DeepSeekV4Module):
         )
         return a_memory_config
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, *, mesh_coords=None) -> ttnn.Tensor:
         if self.packed_weight_tensor is not None:
             # Packed placement is the source of truth: a preceding packed projection may
             # have left this activation on a different zone/core count.
@@ -720,6 +731,7 @@ class LinearDecode(DeepSeekV4Module):
                 partial_width_sharded=self.partial_width_sharded,
                 output_mem_config=output_memory_config,
                 packed_weight=self.packed_weight_spec,
+                mesh_coords=mesh_coords,
             )
         if self.use_prefetcher:
             if not x.is_sharded():
@@ -739,6 +751,7 @@ class LinearDecode(DeepSeekV4Module):
                     global_cb=self.global_cb,
                     global_cb_k_blocks=self.gcb_k_blocks,
                     output_mem_config=self._prefetch_output_memory_config(m_padded),
+                    mesh_coords=mesh_coords,
                 )
             except Exception:
                 # The request is already with the DRISC senders, and matmul_decode does most
@@ -774,11 +787,21 @@ class LinearDecode(DeepSeekV4Module):
                 ),
             )
         else:
-            output_memory_config = regular_width_sharded_l1_config(m_padded, self.N, self.device)
+            # Full-width matmul_decode requires B and output to use the exact
+            # same core range. Deriving the output grid independently from N
+            # diverges for smaller widths (for example TP o_b: N=1024 gives
+            # 16 B cores but the generic activation helper chooses 32).
+            output_memory_config = regular_width_sharded_l1_config(
+                m_padded, self.N, self.device, num_cores=self.num_inputB_cores
+            )
         if not x.is_sharded():
             x = ttnn.to_memory_config(x, self.get_input_memory_config(x.shape[-2], x.shape[-1]))
         result = ttnn.experimental.matmul_decode(
-            x, self.l1_weights, partial_width_sharded=self.partial_width_sharded, output_mem_config=output_memory_config
+            x,
+            self.l1_weights,
+            partial_width_sharded=self.partial_width_sharded,
+            output_mem_config=output_memory_config,
+            mesh_coords=mesh_coords,
         )
         if not self.keep_weights_in_l1:
             self.l1_weights.deallocate()
@@ -832,6 +855,8 @@ class BatchedLinearDecode(DeepSeekV4Module):
         num_prefetch_slabs: Optional[int] = None,
         global_cb=None,
         global_cb_page_bytes: Optional[int] = None,
+        mesh_mapper=None,
+        global_batch: Optional[int] = None,
         packed_weight_tensor: Optional[ttnn.Tensor] = None,
         packed_weight_spec=None,
     ):
@@ -843,6 +868,8 @@ class BatchedLinearDecode(DeepSeekV4Module):
         self.num_inputA_cores = num_inputA_cores
         self.use_prefetcher = use_prefetcher
         self.global_cb = None
+        self.mesh_mapper = mesh_mapper
+        self.global_batch = global_batch if global_batch is not None else batch
         self.gcb_k_blocks = 1
         self.prefetch_queued = False
         self.packed_weight_tensor = packed_weight_tensor
@@ -863,17 +890,28 @@ class BatchedLinearDecode(DeepSeekV4Module):
         assert N % self.n_blocks == 0, "n_blocks must divide N"
         self.bc = batch // self.b_blocks
         self.nc = N // self.n_blocks
+        if self.global_batch % self.batch:
+            raise ValueError(f"global_batch {self.global_batch} must be divisible by local batch {self.batch}")
+        if self.global_batch != self.batch and mesh_mapper is None:
+            raise ValueError("global_batch may differ from batch only when mesh_mapper shards the folded weight")
         if packed_weight_tensor is not None:
-            if use_prefetcher or packed_weight_spec is None:
-                raise ValueError("packed weights require a spec and are mutually exclusive with the prefetcher")
+            if use_prefetcher or mesh_mapper is not None or packed_weight_spec is None:
+                raise ValueError(
+                    "packed weights require a spec and are mutually exclusive with the prefetcher and mesh sharding"
+                )
             return
 
         def fold(w):
-            # [batch, K, N] -> [b_blocks, Bc, K, N] -> [Bc, K, b_blocks, N] -> [1, 1, Bc*K, b_blocks*N].
+            # The ordinary path folds local ``batch``. A mesh-sharded weight instead
+            # folds ``global_batch`` into one width, then ShardTensorToMesh(dim=3)
+            # gives each TP rank its contiguous local batch groups.
+            fold_factor = self.global_batch // self.batch
+            fold_b_blocks = self.b_blocks * fold_factor
+            fold_bc = self.global_batch // fold_b_blocks
             return (
-                w.reshape(self.b_blocks, self.bc, K, N)
+                w.reshape(fold_b_blocks, fold_bc, K, N)
                 .permute(1, 2, 0, 3)
-                .reshape(1, 1, self.bc * K, self.b_blocks * N)
+                .reshape(1, 1, fold_bc * K, fold_b_blocks * N)
                 .contiguous()
             )
 
@@ -911,7 +949,9 @@ class BatchedLinearDecode(DeepSeekV4Module):
             if preprocess is not None:
                 w = preprocess(w)
             w = fold(w)
-        self.weight = _load_weight(w, device, cache_file_name=cache_file_name, dtype=dtype)
+        self.weight = _load_weight(
+            w, device, cache_file_name=cache_file_name, dtype=dtype, mesh_mapper=self.mesh_mapper
+        )
 
     def _init_prefetched_weight(
         self,
@@ -976,6 +1016,7 @@ class BatchedLinearDecode(DeepSeekV4Module):
             device=self.device,
             memory_config=dram_memory_config,
             cache_file_name=cache_file_name,
+            mesh_mapper=self.mesh_mapper,
         )
         if shared_cb is not None:
             self.global_cb = shared_cb

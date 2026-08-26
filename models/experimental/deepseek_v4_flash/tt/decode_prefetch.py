@@ -34,6 +34,13 @@ batched ``b_blocks x n_blocks`` grid is sized to 64 for exactly this reason.
 The price is a single FIFO ordering contract spanning all ten weights, and it is not
 checked anywhere: a matmul that runs out of turn pops another weight's page and produces
 wrong results rather than an error. ``DECODE_GCB_GROUP`` is that order.
+
+Tensor-parallel decode *could* attach two extra GCBs on this mapping (sequential
+``o_a`` at 32 receivers, TP gate/up at ``N/TP`` receivers) via :func:`ensure_named_gcb`.
+They are not used on the full decode path: even a 2-page ring on those cores sits
+on ``(0,0)`` next to the pipeline socket and collides with
+``fused_hyperconnection`` static CBs after the shared 24-page GCB is allocated.
+Those projections stay on the DRAM->L1 copy instead.
 """
 
 from typing import Optional
@@ -108,6 +115,64 @@ DECODE_GCB_GROUP = (
     "shared_up_proj",
     "shared_down_proj",
 )
+
+# Extra GCBs attached to the per-device prefetch mapping under TP. Not in
+# ``DECODE_GCB_GROUP``: different receiver counts, independent FIFOs.
+SEQUENTIAL_OA_GCB = "o_a_sequential"
+TP_GATE_UP_GCB = "shared_gate_up_tp"
+# Those private rings cannot use the shared 16/24-page depth: each has a single
+# spec, so the page is the whole slab (72 KB for sequential o_a, 144 KB for TP
+# gate/up). 24 such pages is 1.7–3.5 MB per receiver, which does not fit in a
+# Blackhole L1 bank after the shared GCB. Two pages is the streaming floor and
+# covers the two weights on each FIFO.
+TP_PRIVATE_GCB_PAGES = 2
+
+
+def sequential_oa_layout(K: int, N: int) -> dict:
+    """One sequential o_a slot: ``[K, o_lora_rank]`` on 32 cores.
+
+    The batched ``o_a_proj`` layout is the same ``K``/``N`` folded over ``o_groups``;
+    a sequential slot is that per-group matrix, which no longer spans 64 receivers.
+    """
+    oa = DECODE_LAYOUTS["o_a_proj"]
+    n_blocks = oa["N"] // ttnn.TILE_SIZE
+    if (oa["K"], oa["N"]) != (K, N):
+        raise ValueError(f"sequential o_a is fixed at K={oa['K']}, N={oa['N']} but this config wants K={K}, N={N}")
+    return {"K": K, "N": N, "n_blocks": n_blocks}
+
+
+def tp_gate_up_layout(tp_size: int, K: int, N: int) -> dict:
+    """Per-rank shared-expert gate/up: column-parallel ``N = I / tp_size``."""
+    full = DECODE_LAYOUTS["shared_gate_proj"]
+    if full["N"] % tp_size:
+        raise ValueError(f"shared expert N={full['N']} is not divisible by tp_size={tp_size}")
+    expected = {"K": full["K"], "N": full["N"] // tp_size}
+    if (expected["K"], expected["N"]) != (K, N):
+        raise ValueError(
+            f"TP{tp_size} gate/up is fixed at K={expected['K']}, N={expected['N']} "
+            f"but this config wants K={K}, N={N}"
+        )
+    return expected
+
+
+def ensure_named_gcb(
+    prefetch_buffers: dict,
+    key: str,
+    device: ttnn.MeshDevice,
+    specs: list,
+    weight_dtype: ttnn.DataType,
+    num_pages: int = TP_PRIVATE_GCB_PAGES,
+):
+    """Return ``prefetch_buffers[key]``, building that GCB on first use.
+
+    Mutates the mapping so later layers on the same device reuse the buffer. The
+    caller must pass the same dict to every layer (see
+    :func:`make_decode_prefetch_buffers`). Defaults to :data:`TP_PRIVATE_GCB_PAGES`
+    rather than the shared-ring depth: these buffers serve two weights, not ten.
+    """
+    if key not in prefetch_buffers:
+        prefetch_buffers[key] = make_shared_decode_gcb(device, specs, weight_dtype, num_pages=num_pages)
+    return prefetch_buffers[key]
 
 
 def decode_prefetch_page_bytes(weight_dtype: ttnn.DataType) -> int:

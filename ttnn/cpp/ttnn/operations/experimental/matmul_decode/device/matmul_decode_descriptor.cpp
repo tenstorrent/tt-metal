@@ -7,6 +7,9 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include <optional>
+
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace ttnn::prim {
 
@@ -32,6 +35,8 @@ RealOp::operation_attributes_t to_real_attributes(const MatmulDecodeParams& p) {
         p.global_cb,
         p.global_cb_k_blocks,
         p.packed_weight,
+        p.all_gather,
+        p.ring_size,
     };
 }
 
@@ -93,10 +98,11 @@ RealOp::program_factory_t matmul_decode_select_program_factory(
 tt::tt_metal::ProgramDescriptor matmul_decode_full_width_sharded_create_descriptor(
     const MatmulDecodeParams& operation_attributes,
     const MatmulDecodeInputs& tensor_args,
-    Tensor& tensor_return_value) {
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     const auto& real_attrs = keep_attributes_alive(to_real_attributes(operation_attributes));
     return RealOp::FullWidthSharded::create_descriptor(
-        real_attrs, to_real_tensor_args(tensor_args), tensor_return_value);
+        real_attrs, to_real_tensor_args(tensor_args), tensor_return_value, mesh_dispatch_coordinate);
 }
 
 tt::tt_metal::ProgramDescriptor matmul_decode_partial_width_sharded_create_descriptor(
