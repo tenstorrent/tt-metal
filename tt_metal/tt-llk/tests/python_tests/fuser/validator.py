@@ -299,11 +299,17 @@ class UnarySfpuMathSchema(BaseModel):
             try:
                 v = MathOperation[v]
             except KeyError:
-                raise ValueError(f"Unknown operation: {v}")
+                valid_ops = sorted(op.name for op in cls._sfpu_ops)
+                raise ValueError(
+                    f"Unknown operation: {v}, expected one of: {', '.join(valid_ops)}"
+                )
         if not isinstance(v, MathOperation):
             raise ValueError(f"Invalid operation: {v}")
         if v not in cls._sfpu_ops:
-            raise ValueError(f"{v.name} is not a supported unary SFPU operation")
+            valid_ops = sorted(op.name for op in cls._sfpu_ops)
+            raise ValueError(
+                f"{v.name} is not a supported unary SFPU operation, expected one of: {', '.join(valid_ops)}"
+            )
         return v
 
     def to_node(self, operands):
@@ -347,11 +353,17 @@ class BinarySfpuMathSchema(BaseModel):
             try:
                 v = MathOperation[v]
             except KeyError:
-                raise ValueError(f"Unknown operation: {v}")
+                valid_ops = sorted(op.name for op in cls._sfpu_ops)
+                raise ValueError(
+                    f"Unknown operation: {v}, expected one of: {', '.join(valid_ops)}"
+                )
         if not isinstance(v, MathOperation):
             raise ValueError(f"Invalid operation: {v}")
         if v not in cls._sfpu_ops:
-            raise ValueError(f"{v.name} is not a supported binary SFPU operation")
+            valid_ops = sorted(op.name for op in cls._sfpu_ops)
+            raise ValueError(
+                f"{v.name} is not a supported binary SFPU operation, expected one of: {', '.join(valid_ops)}"
+            )
         return v
 
     def to_node(self, operands):
@@ -411,7 +423,10 @@ class FpuMathSchemaBase(BaseModel):
     @classmethod
     def validate_operation(cls, v):
         if v not in cls._fpu_map:
-            raise ValueError(f"Unknown FPU operation: {v}")
+            valid_ops = sorted(cls._fpu_map.keys())
+            raise ValueError(
+                f"Unknown FPU operation: {v}, expected one of: {', '.join(valid_ops)}"
+            )
         return v
 
     @model_validator(mode="after")
@@ -427,7 +442,10 @@ class FpuMathSchemaBase(BaseModel):
     @classmethod
     def validate_unpacker(cls, v):
         if v is not None and v not in cls._unpacker_map:
-            raise ValueError(f"Unknown unpacker: {v}")
+            valid_ops = sorted(cls._unpacker_map.keys())
+            raise ValueError(
+                f"Unknown unpacker: {v}, expected one of: {', '.join(valid_ops)}"
+            )
         return v
 
     @field_validator("math_fidelity", mode="before")
@@ -517,7 +535,10 @@ class PackSchema(BaseModel):
     @classmethod
     def validate_packer(cls, v):
         if v not in cls._packer_map:
-            raise ValueError(f"Unknown packer: {v}")
+            valid_ops = sorted(cls._packer_map.keys())
+            raise ValueError(
+                f"Unknown packer: {v}, expected one of: {', '.join(valid_ops)}"
+            )
         return v
 
     def to_node(self, operands):
@@ -673,9 +694,20 @@ class OperationSchemaBase(BaseModel):
         for m in self.math:
             m._block_size = self.block_size
 
-        pack_nodes = [p.to_node(operands) for p in self.pack]
+        pack_nodes = []
+        for i, p in enumerate(self.pack):
+            try:
+                pack_nodes.append(p.to_node(operands))
+            except ValueError as e:
+                raise ValueError(f"Pack entry {i + 1}\n    {e}") from None
 
-        math_ops = [m.to_node(operands) for m in self.math]
+        math_ops = []
+        for i, m in enumerate(self.math):
+            node_type = getattr(m, "type", type(m).__name__)
+            try:
+                math_ops.append(m.to_node(operands))
+            except ValueError as e:
+                raise ValueError(f"Math node {i + 1} ({node_type})\n    {e}") from None
 
         has_sfpu = any(isinstance(node, SfpuNode) for node in math_ops)
         has_fpu = any(isinstance(node, FpuNode) for node in math_ops)
