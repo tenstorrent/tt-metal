@@ -23,6 +23,9 @@ import ttnn
 QWEN36_NH = 6
 QWEN36_NKV = 1
 QWEN36_HD = 256
+SIGMOID = ttnn.UnaryOpType.SIGMOID
+# Binary operand activations use [VecMode, approximate]; RC is enum value 4.
+SIGMOID_APPROX = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 4.0, 1.0)
 
 # Production prefill chunk. tp.py caps serving prefill at <=2048 per chunk.
 #
@@ -98,11 +101,21 @@ FUSED_CONCAT = {
 # reads its big operand from L1. Removes a DRAM write + DRAM read of [S, NH*HD].
 # Bit-identical -- memory placement does not change values.
 FUSED_CONCAT_L1 = {
-    "o_bf8_l1attn": (ttnn.bfloat8_b, ttnn.bfloat8_b, 128),
-    "p_bf16_l1attn": (ttnn.bfloat16, ttnn.bfloat16, 128),
+    "o_bf8_l1attn": (ttnn.bfloat8_b, ttnn.bfloat8_b, 128, ttnn.DRAM_MEMORY_CONFIG, SIGMOID),
+    "p_bf16_l1attn": (ttnn.bfloat16, ttnn.bfloat16, 128, ttnn.DRAM_MEMORY_CONFIG, SIGMOID),
     # Production accuracy-safe fast path: Q remains bf16 while the paged K/V cache is bf8.
-    "v_bf16q_bf8kv_k128_l1": (ttnn.bfloat16, ttnn.bfloat8_b, 128),
-    "x_bf16q_bf8kv_k256_l1": (ttnn.bfloat16, ttnn.bfloat8_b, 256),
+    "v_bf16q_bf8kv_k128_l1": (ttnn.bfloat16, ttnn.bfloat8_b, 128, ttnn.DRAM_MEMORY_CONFIG, SIGMOID),
+    "x_bf16q_bf8kv_k256_l1": (ttnn.bfloat16, ttnn.bfloat8_b, 256, ttnn.DRAM_MEMORY_CONFIG, SIGMOID),
+    # Measured-rejected candidate: keeping the gated result in L1 was within capture noise.
+    "z_bf16q_bf8kv_k256_l1_gate_l1": (ttnn.bfloat16, ttnn.bfloat8_b, 256, ttnn.L1_MEMORY_CONFIG, SIGMOID),
+    # Measured-rejected candidate: faster gate, but attention PCC dropped too far for a default.
+    "aa_bf16q_bf8kv_k256_l1_sigmoid_approx": (
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+        256,
+        ttnn.DRAM_MEMORY_CONFIG,
+        SIGMOID_APPROX,
+    ),
 }
 
 # k_chunk=256 makes SDPA itself faster (reduce_trigger switches on) but its larger CBs contend
@@ -214,7 +227,7 @@ def test_gated_attention_prefill_perf_l1_attn(device, variant):
     """SDPA -> L1, gate multiply reads L1. Saves a DRAM round trip of the output."""
     if os.environ.get("TT_METAL_SIMULATOR") and not DRYRUN:
         pytest.skip("perf variants are hardware-only")
-    q_dtype, kv_dtype, k_chunk = FUSED_CONCAT_L1[variant]
+    q_dtype, kv_dtype, k_chunk, gate_memory_config, gate_activation = FUSED_CONCAT_L1[variant]
     torch.manual_seed(1234)
     b, nh, nkv, s, d = 1, QWEN36_NH, QWEN36_NKV, SEQ, QWEN36_HD
     scale = 1.0 / math.sqrt(d)
@@ -244,8 +257,8 @@ def test_gated_attention_prefill_perf_l1_attn(device, variant):
         gated = ttnn.multiply(
             concat,
             tt_gate,
-            input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_tensor_b_activations=[gate_activation],
+            memory_config=gate_memory_config,
         )
         ttnn.deallocate(concat)
         ttnn.deallocate(gated)
