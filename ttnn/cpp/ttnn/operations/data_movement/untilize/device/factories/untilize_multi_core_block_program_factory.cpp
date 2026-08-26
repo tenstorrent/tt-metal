@@ -23,66 +23,12 @@ namespace ttnn::prim {
 namespace {
 
 using ttnn::operations::data_movement::BlockBufferSet;
+using ttnn::operations::data_movement::BlockCoreOrder;
+using ttnn::operations::data_movement::BlockDirection;
+using ttnn::operations::data_movement::BlockPlan;
+using ttnn::operations::data_movement::buffer_set_for_core;
+using ttnn::operations::data_movement::make_block_plan;
 using ttnn::operations::data_movement::push_buffer_set;
-using ttnn::operations::data_movement::union_of;
-
-// The work split plus the two buffer sets derived from it.
-//
-// `create_descriptor` needs the whole split; the two buffer sets are derived from it here so the
-// sizes, the indices, and the core ranges they are built from all come from one place.
-struct BlockPlan {
-    ttnn::BlockSplitWH split;
-    BlockBufferSet full;
-    BlockBufferSet cliffrow;
-};
-
-BlockPlan make_block_plan(const Tensor& a, uint32_t input_single_tile_size, uint32_t output_single_tile_size) {
-    const uint32_t a_tile_width = a.tensor_spec().tile().get_width();
-    const uint32_t a_tile_height = a.tensor_spec().tile().get_height();
-
-    IDevice* device = a.device();
-    const CoreCoord grid_size = device->compute_with_storage_grid_size();
-
-    const uint32_t num_tiles_per_row = a.padded_shape()[-1] / a_tile_width;
-    const uint32_t num_tiles_per_col = a.padded_shape()[-2] / a_tile_height;
-    const uint32_t num_blocks = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (a_tile_height * a_tile_width);
-
-    const uint32_t max_l1_size = operations::data_movement::get_max_l1_space(a);
-    const uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
-
-    BlockPlan plan;
-    plan.split = ttnn::split_blocks_for_tilize_wh(
-        grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
-
-    // The work split hands out exactly two block widths, so the op needs exactly two buffer sets:
-    //
-    //   full     -- `single_sub_block_size` tiles wide: the full-block cores, plus the cliff-*column*
-    //               cores (a short column still processes full-width blocks).
-    //   cliffrow -- `single_block_size_cliff_row` tiles wide: the cores holding the narrow block at
-    //               the end of a row, plus the corner core that is both cliff-row and cliff-column.
-    //
-    // Each set gets its own indices and its own sizes, so no index is ever re-used at two different
-    // sizes. Either set may be empty for a given shape. Untilize has no reader-side
-    // DRAM-alignment staging buffer, so `staging_index` stays unset on both sets.
-    plan.full = BlockBufferSet{
-        .input_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-        .output_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-        .block_tiles = plan.split.single_sub_block_size,
-        .core_ranges = union_of(
-            plan.split.core_range, plan.split.has_cliff_col ? plan.split.cliff_col_core_range : CoreRangeSet{}),
-    };
-    plan.cliffrow = BlockBufferSet{
-        .input_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-        .output_index = static_cast<uint8_t>(tt::CBIndex::c_17),
-        .block_tiles = plan.split.single_block_size_cliff_row,
-        .core_ranges = plan.split.has_cliff_row
-                           ? union_of(
-                                 plan.split.cliff_row_core_range,
-                                 plan.split.has_cliff_col ? plan.split.cliff_col_row_core_range : CoreRangeSet{})
-                           : CoreRangeSet{},
-    };
-    return plan;
-}
 
 }  // namespace
 
@@ -101,7 +47,19 @@ ProgramDescriptor UntilizeMultiCoreBlockProgramFactory::create_descriptor(
     const auto& input_shape = a.padded_shape();
     const uint32_t a_tile_height = a.tensor_spec().tile().get_height();
 
-    const BlockPlan plan = make_block_plan(a, input_single_tile_size, output_single_tile_size);
+    // RowMajor: this factory's runtime-arg loop walks grid_to_cores(..., row_wise=true), so the
+    // split has to hand cores out in that same order. The block factory is never reached with
+    // sub_core_grids set -- that routes to the sub-core-grid factory instead.
+    const BlockPlan plan = make_block_plan(
+        BlockDirection::Untilize,
+        BlockCoreOrder::RowMajor,
+        a,
+        output,
+        input_single_tile_size,
+        output_single_tile_size,
+        a_tile_height,
+        a.tensor_spec().tile().get_width(),
+        /*sub_core_grids=*/std::nullopt);
     const BlockBufferSet& full_set = plan.full;
     const BlockBufferSet& cliffrow_set = plan.cliffrow;
     const auto& [ncores, all_cores, core_range, cliff_row_core_range, cliff_col_core_range, cliff_col_row_core_range, nblocks_per_core, single_block_size, single_block_size_cliff_row, single_block_size_cliff_col, has_cliff_row, has_cliff_col, full_cores_per_row, full_cores_per_col, single_sub_block_size] =
@@ -214,11 +172,6 @@ ProgramDescriptor UntilizeMultiCoreBlockProgramFactory::create_descriptor(
         input_cb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines.emplace_back("DST_ACCUM_MODE", "1");
     }
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (fp32_dest_acc_en) {
-        unpack_to_dest_mode[full_set.input_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[cliffrow_set.input_index] = UnpackToDestMode::UnpackToDestFp32;
-    }
 
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp";
@@ -235,6 +188,14 @@ ProgramDescriptor UntilizeMultiCoreBlockProgramFactory::create_descriptor(
                 cores.str(),
                 block_size_row,
                 set.block_tiles);
+            // fp32 unpack is marked for exactly the buffer this kernel reads. Marking both sets'
+            // indices would set it on `cliffrow_set.input_index` even when that set is empty -- an
+            // operand with no CB on any core -- and would do so in the full-set kernels too.
+            std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+            if (fp32_dest_acc_en) {
+                unpack_to_dest_mode[set.input_index] = UnpackToDestMode::UnpackToDestFp32;
+            }
+
             KernelDescriptor cd;
             cd.kernel_source = compute_kernel_path;
             cd.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -243,7 +204,7 @@ ProgramDescriptor UntilizeMultiCoreBlockProgramFactory::create_descriptor(
             cd.defines = compute_kernel_defines;
             cd.config = ComputeConfigDescriptor{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             };
             return cd;
         };
@@ -307,8 +268,8 @@ ProgramDescriptor UntilizeMultiCoreBlockProgramFactory::create_descriptor(
         }
 
         // Route this core's args to the reader/writer instance for its buffer set.
-        const bool is_cliff_row_core = !cliffrow_set.empty() && cliffrow_set.core_ranges.contains(core);
-        const BlockBufferSet& set = is_cliff_row_core ? cliffrow_set : full_set;
+        const BlockBufferSet& set = buffer_set_for_core(plan, core);
+        const bool is_cliff_row_core = (&set == &cliffrow_set);
         KernelDescriptor& reader_desc = is_cliff_row_core ? cliffrow_reader_desc : full_reader_desc;
         KernelDescriptor& writer_desc = is_cliff_row_core ? cliffrow_writer_desc : full_writer_desc;
         TT_FATAL(

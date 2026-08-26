@@ -26,6 +26,8 @@ namespace ttnn::prim {
 namespace {
 
 using ttnn::operations::data_movement::BlockBufferSet;
+using ttnn::operations::data_movement::BlockCoreOrder;
+using ttnn::operations::data_movement::BlockDirection;
 using ttnn::operations::data_movement::BlockPlan;
 using ttnn::operations::data_movement::buffer_set_for_core;
 using ttnn::operations::data_movement::make_block_plan;
@@ -56,7 +58,15 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
     const BlockPlan plan = make_block_plan(
-        a, output, input_single_tile_size, output_single_tile_size, TILE_HEIGHT, TILE_WIDTH, sub_core_grids);
+        BlockDirection::Tilize,
+        BlockCoreOrder::ColumnMajor,
+        a,
+        output,
+        input_single_tile_size,
+        output_single_tile_size,
+        TILE_HEIGHT,
+        TILE_WIDTH,
+        sub_core_grids);
     const BlockBufferSet& full_set = plan.full;
     const BlockBufferSet& cliffrow_set = plan.cliffrow;
     const auto& [ncores, all_cores, core_range, cliff_row_core_range, cliff_col_core_range, cliff_col_row_core_range, nblocks_per_core, single_block_size, single_block_size_cliff_row, single_block_size_cliff_col, has_cliff_row, has_cliff_col, full_cores_per_row, full_cores_per_col, single_sub_block_size] =

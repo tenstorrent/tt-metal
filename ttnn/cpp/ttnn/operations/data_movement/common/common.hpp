@@ -100,9 +100,11 @@ struct BlockBufferSet {
 
 // The block work split plus the two buffer sets derived from it.
 //
-// Shared so both `_multi_core_block[_interleaved]` tilize factories apply one set of index and
-// sizing rules. A private copy per factory drifts, and a CB-index or sizing change landing in only
-// one of them silently reintroduces the overrun BlockBufferSet exists to prevent.
+// Shared so every `_multi_core_block[_interleaved]` factory -- tilize, tilize_with_val_padding,
+// untilize and untilize_with_unpadding -- applies one set of index and sizing rules. A private copy
+// per factory drifts, and a CB-index or sizing change landing in only some of them silently
+// reintroduces the overrun BlockBufferSet exists to prevent. What legitimately differs between the
+// callers is passed in, not forked: see BlockDirection and BlockCoreOrder.
 //
 // Tile sizes are passed in rather than derived from a Tile: the factories compute them differently
 // (`Tile::get_tile_size`, which folds in runtime L1 alignment, versus the constexpr
@@ -123,7 +125,41 @@ struct BlockPlan {
     uint32_t num_dm_pairs() const { return (full.empty() ? 0u : 1u) + (cliffrow.empty() ? 0u : 1u); }
 };
 
+// Which way the block factory runs. This selects the two things that genuinely differ between the
+// directions, both of which are correctness-relevant:
+//
+//   * Staging. Only the tilize direction's reader touches DRAM row by row and has to fix up
+//     alignment before the block lands in L1, so only it gets a staging buffer -- and only it has
+//     to reserve room for one when computing the block-size limit. Untilize reads whole tile pages
+//     in and writes sticks out, so its sets leave `staging_index` unset.
+//   * Which shape drives the split. Tilize splits over the *output* (tiled) shape, untilize over
+//     the *input* (tiled) shape. For plain untilize the two are the same, but for
+//     untilize_with_unpadding the output is smaller, and splitting over it would under-count the
+//     tiles that actually have to be read.
+enum class BlockDirection : uint8_t {
+    Tilize,
+    Untilize,
+};
+
+// The order the work split hands cores out in. A factory's runtime-arg loop must walk its cores in
+// the SAME order the split assigned them, or a core's args land on another core's buffer set. The
+// two orders are not interchangeable, so each factory passes the one its loop already uses:
+//
+//   ColumnMajor - `corerange_to_cores(grid)`, i.e. the CoreRangeSet work-split overload. Pair with
+//                 a loop over `corerange_to_cores(available_grid)`.
+//   RowMajor    - the CoreCoord work-split overload, which walks (x, y) across the full grid. Pair
+//                 with a loop over `grid_to_cores(ncores, x, y, /*row_wise=*/true)`.
+//
+// RowMajor cannot be combined with `sub_core_grids`, since the CoreCoord overload has no way to
+// honour a restricted grid.
+enum class BlockCoreOrder : uint8_t {
+    ColumnMajor,
+    RowMajor,
+};
+
 BlockPlan make_block_plan(
+    BlockDirection direction,
+    BlockCoreOrder core_order,
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     uint32_t input_single_tile_size,
@@ -136,9 +172,6 @@ BlockPlan make_block_plan(
 // set: an unmatched core silently defaulting to `full_set` would bind the wrong-width buffers, and
 // a downstream size check only catches that when the widths happen to differ numerically.
 const BlockBufferSet& buffer_set_for_core(const BlockPlan& plan, const tt::tt_metal::CoreCoord& core);
-
-// Union of two core ranges, either of which may be empty.
-tt::tt_metal::CoreRangeSet union_of(const tt::tt_metal::CoreRangeSet& a, const tt::tt_metal::CoreRangeSet& b);
 
 // Append the CBDescriptors for one buffer set: input, output, and -- only if the set declares a
 // `staging_index` -- the staging buffer ahead of them. `dram_alignment` and `tile_height` size the

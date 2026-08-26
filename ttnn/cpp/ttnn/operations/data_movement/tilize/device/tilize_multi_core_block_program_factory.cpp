@@ -31,6 +31,8 @@ constexpr size_t kReaderRuntimeArgCount = 9;
 constexpr size_t kWriterRuntimeArgCount = 4;
 
 using ttnn::operations::data_movement::BlockBufferSet;
+using ttnn::operations::data_movement::BlockCoreOrder;
+using ttnn::operations::data_movement::BlockDirection;
 using ttnn::operations::data_movement::BlockPlan;
 using ttnn::operations::data_movement::buffer_set_for_core;
 using ttnn::operations::data_movement::make_block_plan;
@@ -60,6 +62,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
     const BlockPlan plan = make_block_plan(
+        BlockDirection::Tilize,
+        BlockCoreOrder::ColumnMajor,
         a,
         output,
         input_single_tile_size,

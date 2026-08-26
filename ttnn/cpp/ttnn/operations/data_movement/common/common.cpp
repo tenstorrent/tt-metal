@@ -792,16 +792,6 @@ uint32_t per_shard_page_size_bytes(const ttnn::Tensor& t, uint32_t row_bytes) {
     return row_bytes;
 }
 
-tt::tt_metal::CoreRangeSet union_of(const tt::tt_metal::CoreRangeSet& a, const tt::tt_metal::CoreRangeSet& b) {
-    if (a.empty()) {
-        return b;
-    }
-    if (b.empty()) {
-        return a;
-    }
-    return a.merge(b);
-}
-
 void push_buffer_set(
     tt::tt_metal::ProgramDescriptor& desc,
     const BlockBufferSet& set,
@@ -860,6 +850,8 @@ void push_buffer_set(
 }
 
 BlockPlan make_block_plan(
+    BlockDirection direction,
+    BlockCoreOrder core_order,
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     uint32_t input_single_tile_size,
@@ -867,27 +859,40 @@ BlockPlan make_block_plan(
     uint32_t tile_height,
     uint32_t tile_width,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const bool has_staging = (direction == BlockDirection::Tilize);
+
+    TT_FATAL(
+        core_order == BlockCoreOrder::ColumnMajor || !sub_core_grids.has_value(),
+        "RowMajor core order splits over the whole grid and cannot honour sub_core_grids");
+
     const tt::tt_metal::CoreCoord grid_size = input_tensor.device()->compute_with_storage_grid_size();
     const tt::tt_metal::CoreRangeSet default_grid(tt::tt_metal::CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
     tt::tt_metal::CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
-    const auto& padded = output_tensor.padded_shape();
+    // Tilize splits over the output (tiled) shape; untilize over the input (tiled) shape. They only
+    // coincide when nothing is padded away -- see BlockDirection.
+    const auto& padded =
+        (direction == BlockDirection::Tilize) ? output_tensor.padded_shape() : input_tensor.padded_shape();
     const uint32_t num_tiles_per_col = padded[-2] / tile_height;
     const uint32_t num_tiles_per_row = padded[-1] / tile_width;
     const uint32_t num_blocks = (padded[-1] * padded[-2]) / (tile_height * tile_width);
 
-    // Fold the staging buffer (bytes/tile + fixed) into the limit or the region overruns L1.
+    // Fold the staging buffer (bytes/tile + fixed) into the limit or the region overruns L1. Only
+    // the tilize direction has one, so untilize budgets the input/output pair alone.
     const uint32_t max_l1_size = get_max_l1_space(input_tensor);
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    const uint32_t staging_bytes_per_tile = input_single_tile_size / tile_height;
-    const uint32_t fixed_staging_bytes = 2 * dram_alignment;
+    const uint32_t staging_bytes_per_tile = has_staging ? (input_single_tile_size / tile_height) : 0;
+    const uint32_t fixed_staging_bytes = has_staging ? (2 * dram_alignment) : 0;
     const uint32_t budget_for_tiles = (max_l1_size > fixed_staging_bytes) ? (max_l1_size - fixed_staging_bytes) : 0;
     const uint32_t bytes_per_tile_pair = input_single_tile_size + output_single_tile_size + staging_bytes_per_tile;
     const uint32_t cb_block_size_limit = (bytes_per_tile_pair == 0) ? 0 : budget_for_tiles / bytes_per_tile_pair;
 
     BlockPlan plan;
-    plan.split = ttnn::split_blocks_for_tilize_wh(
-        available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
+    plan.split = (core_order == BlockCoreOrder::RowMajor)
+                     ? ttnn::split_blocks_for_tilize_wh(
+                           grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit)
+                     : ttnn::split_blocks_for_tilize_wh(
+                           available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
 
     // The work split hands out exactly two block widths, so there are exactly two buffer sets:
     //
@@ -899,21 +904,19 @@ BlockPlan make_block_plan(
     // Each set gets its own indices and its own sizes, so no index is ever re-used at two different
     // sizes. Either set may be empty for a given shape.
     plan.full = BlockBufferSet{
-        .staging_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+        .staging_index = has_staging ? std::optional<uint8_t>{static_cast<uint8_t>(tt::CBIndex::c_1)} : std::nullopt,
         .input_index = static_cast<uint8_t>(tt::CBIndex::c_0),
         .output_index = static_cast<uint8_t>(tt::CBIndex::c_16),
         .block_tiles = plan.split.single_sub_block_size,
-        .core_ranges = union_of(
-            plan.split.core_range,
+        .core_ranges = plan.split.core_range.merge(
             plan.split.has_cliff_col ? plan.split.cliff_col_core_range : tt::tt_metal::CoreRangeSet{}),
     };
     plan.cliffrow = BlockBufferSet{
-        .staging_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+        .staging_index = has_staging ? std::optional<uint8_t>{static_cast<uint8_t>(tt::CBIndex::c_3)} : std::nullopt,
         .input_index = static_cast<uint8_t>(tt::CBIndex::c_2),
         .output_index = static_cast<uint8_t>(tt::CBIndex::c_17),
         .block_tiles = plan.split.single_block_size_cliff_row,
-        .core_ranges = plan.split.has_cliff_row ? union_of(
-                                                      plan.split.cliff_row_core_range,
+        .core_ranges = plan.split.has_cliff_row ? plan.split.cliff_row_core_range.merge(
                                                       plan.split.has_cliff_col ? plan.split.cliff_col_row_core_range
                                                                                : tt::tt_metal::CoreRangeSet{})
                                                 : tt::tt_metal::CoreRangeSet{},
