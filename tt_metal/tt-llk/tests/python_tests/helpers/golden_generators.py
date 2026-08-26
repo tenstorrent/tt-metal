@@ -2376,6 +2376,7 @@ class UnarySFPUGolden:
             MathOperation.TanhDerivative: self._tanh_derivative,
             MathOperation.TanhDerivativeLut: self._tanh_derivative_lut,
             MathOperation.RsqrtCompat: self._rsqrt,
+            MathOperation.ReciprocalCompat: self._reciprocal,
             MathOperation.Expm1Cw: self._expm1,
             MathOperation.Hardmish: self._hardmish,
             MathOperation.Lgamma: self._lgamma,
@@ -2456,6 +2457,7 @@ class UnarySFPUGolden:
         fill_const_value: float = 5,
         reduce_pool: Optional[ReducePool] = None,
         skip_tilize: bool = False,
+        unpack_to_srcs: bool = False,
         shift_amount: int = 3,
     ):
         self.data_format = data_format
@@ -2502,6 +2504,12 @@ class UnarySFPUGolden:
         if input_format.is_mx_format():
             # MX in L1 always unpacks to Float16_b even if dest_acc=Yes.
             dst_format = DataFormat.Float16_b
+        elif unpack_to_srcs and input_format in (
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ):
+            # SrcS: fp16 stays 16-bit; dest_acc does not widen.
+            dst_format = input_format
         elif self.dest_acc == DestAccumulation.Yes:
             dst_format = DataFormat.Float32
         elif DataFormat.Float16 in (input_format, data_format):

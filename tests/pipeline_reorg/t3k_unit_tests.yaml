@@ -52,15 +52,6 @@
   team: models
   model-name: dits
 
-- name: t3k_deepseek_tests
-  cmd: run_t3000_deepseek_tests
-  skus:
-    wh_llmbox:
-      timeout: 10
-  owner_id: U03HY7MK4BT # Mark O'Connor
-  team: models
-  model-name: deepseek
-
 - name: t3k_ttnn_multiprocess_slow_tests
   cmd: run_t3000_ttnn_multiprocess_slow_tests
   skus:
