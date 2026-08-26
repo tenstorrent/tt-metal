@@ -189,19 +189,31 @@ void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::
     tm.risc = kRisc[zone.risc % 5];
     const uint32_t thread = tm.get_thread_id();
 
+    // Colour resolution, matching the legacy wire's getMarkerColor exactly (TracyTTDevice.hpp): an
+    // explicit colour wins (the DRISC role tables), then PROFILER-keyword names go Tomato3, then the
+    // per-RISC palette -- BRISC Orange2, NCRISC SeaGreen3, TRISC_0/1/2 SkyBlue3/Turquoise2/CadetBlue1.
+    // Without this every worker zone shipped colour 0 and the GUI fell back to its own palette -- the
+    // "colors are all wrong" regression of the zones-at-arrival rework.
+    uint32_t color = zone.color;
+    if (color == 0) {
+        static constexpr uint32_t kRiscColor[5] = {0xEE9A00u, 0x43CD80u, 0x6CA6CDu, 0x00E5EEu, 0x98F5FFu};
+        color = zone.name.find("PROFILER") != std::string_view::npos ? 0xCD4F39u : kRiscColor[zone.risc % 5];
+    }
+
     // Intern the srcloc: QueueGpuZone ships a raw pointer that the SERVER dereferences by querying this
     // process later, so the SourceLocationData and its name string must outlive the capture -- allocated
-    // once per (zone id, colour), never freed. Bounded by distinct zone names, not zone count.
+    // once per (zone id, colour), never freed. Bounded by distinct zone names x RISCs, not zone count
+    // (the same name on two RISCs carries two colours, hence two entries -- the colour is in the key).
     const tracy::SourceLocationData* srcloc = nullptr;
     {
-        const uint64_t key = (static_cast<uint64_t>(zone.timer_id) << 32) | zone.color;
+        const uint64_t key = (static_cast<uint64_t>(zone.timer_id) << 32) | color;
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = zone_srclocs_.find(key);
         if (it == zone_srclocs_.end()) {
             const std::string nm = zone.name.empty() ? fmt::format("Zone_{}", zone.timer_id) : std::string(zone.name);
             char* nm_copy = new char[nm.size() + 1];
             std::memcpy(nm_copy, nm.c_str(), nm.size() + 1);
-            auto* sl = new tracy::SourceLocationData{nm_copy, "kernel_profiler", "kernel_profiler", 0, zone.color};
+            auto* sl = new tracy::SourceLocationData{nm_copy, "kernel_profiler", "kernel_profiler", 0, color};
             it = zone_srclocs_.emplace(key, sl).first;
         }
         srcloc = static_cast<const tracy::SourceLocationData*>(it->second);
