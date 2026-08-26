@@ -450,17 +450,8 @@ class GRPOMonitor(TrainerCallback):
         )
 
     def _log_console(self, step: int, metrics: dict[str, Any]) -> None:
-        nan = float("nan")
-        logging.info(
-            "Step %d | Reward: %.4f | Len: %.2f (min %d, max %d) tokens | Step: %.2fs | Gen: %.2fs",
-            step,
-            _as_float(metrics.get("reward_mean", nan)),
-            _as_float(metrics.get("mean_completion_len", nan)),
-            _as_int(metrics.get("min_completion_len", 0)),
-            _as_int(metrics.get("max_completion_len", 0)),
-            _as_float(metrics.get("step_time_s", nan)),
-            _as_float(metrics.get("generation_time_s", nan)),
-        )
+        logs = {"step": step, **{k: v for k, v in metrics.items() if k not in _NON_CSV_KEYS}}
+        logging.info(logs)
 
     def _write_csv_row(self, step: int, metrics: dict[str, Any]) -> None:
         if self._csv_path is None:
@@ -580,13 +571,6 @@ def _as_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return float("nan")
-
-
-def _as_int(value: Any) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
 
 
 def _format_cell(value: Any) -> Any:
