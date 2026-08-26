@@ -1,15 +1,25 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""DEVICE (>=8 chips): the ring-joint SDPA over the block-cyclic SP KV cache, vs torch.
+"""DEVICE (8 chips, BH LoudBox): the ring-joint SDPA over the block-cyclic SP KV cache, vs torch.
 
-This isolates ``tt/attention/dense_sp.py::dense_sp_attention`` from the rest of the block: Q, K and V
-are placed directly, so a failure here is the ring op or the cache layout, not the projections.
+The core of attention, isolated. This drives ``tt/attention/dense_sp.py::dense_sp_attention`` with Q,
+K and V placed directly, so a failure here is the ring op or the cache layout — never the
+projections. The column/row-parallel QKV and o_proj paths, and the TP CCLs that close them, get
+their own tests later.
 
-The grouping is the point. At TP=4 each chip carries **2 KV heads and 24 Q heads**, so the op runs in
-its grouped-GQA mode (``NKH == NVH < NQH && NQH % NKH == 0`` — see
-``ring_joint_sdpa_device_operation.cpp:759-765``). Every other model in the repo drives this op with
-either 1 KV head per chip or MLA's single latent, so this ratio is new.
+**Why (2,4) rather than the (8,4) target.** TP stays at its production width of 4, so the head split,
+the cache head count and every per-chip shape are exactly Galaxy's. Only the ring is shortened,
+SP 8 -> 2. Because ``chunk_global = sp * chunk_local``, that shortens the *global* sequence with it,
+which leaves per-chip load **identical**: 128 Q rows and a 256-token cache shard per chip either way.
+Holding TP and per-chip load fixed while moving only the ring length is what makes a failure here
+attributable — the alternative (shrinking TP to fit a smaller box) changes the head grouping too,
+and then a PCC drop has two possible causes.
+
+The grouping is the point. 2 KV / 24 Q heads per chip puts the op in its grouped-GQA mode
+(``NKH == NVH < NQH && NQH % NKH == 0`` — see ``ring_joint_sdpa_device_operation.cpp:759-765``).
+Every other model in the repo drives this op with either 1 KV head per chip or MLA's single latent,
+so this ratio is new — which is exactly why it needs a rung of its own before Galaxy time.
 
 The ring gathers KV across the SP axis internally via online softmax — there is no explicit
 AllGather of K/V — so the reference is a plain full-sequence causal SDPA and the test checks that
@@ -43,7 +53,7 @@ def _torch_causal_gqa(q, k, v, n_q, n_kv):
     return torch.softmax(scores, dim=-1) @ v
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4), (8, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4)])
 @pytest.mark.parametrize("chunk_local", [128], ids=["c128"])
 def test_ring_joint_sp_vs_ref(mesh_device, device_params, chunk_local, reset_seeds):
     """One cache-backed ring-joint SDPA call, 2 KV / 24 Q heads per chip, vs torch."""
@@ -155,7 +165,10 @@ def test_ring_joint_sp_vs_ref(mesh_device, device_params, chunk_local, reset_see
     got = got[:, :, inv, :]
 
     passing, pcc = comp_pcc(ref, got, 0.99)
-    logger.info(f"ring-joint SDPA SP={sp} TP={tp} ({n_q_local}Q/{n_kv_local}KV per chip): {pcc}")
+    logger.info(
+        f"ring-joint SDPA SP={sp} TP={tp} ({n_q_local}Q/{n_kv_local}KV per chip, "
+        f"seq={chunk_global} global / {C} local): {pcc}"
+    )
     assert passing, f"ring-joint SDPA PCC fail: {pcc}"
 
 

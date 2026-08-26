@@ -28,7 +28,7 @@ Per-chip shapes at TP=4 (all tile-aligned; no padding anywhere):
 Note ``n_kv_local = 2``: every other GQA model in the repo lands on exactly one KV head per chip
 (minimax_m3 4/4, gpt_oss 8/8). Two is legal — ``update_padded_kv_cache`` only requires cache and
 input head dims to match, and ring-joint SDPA supports grouped GQA ``NKH == NVH < NQH`` — but it is
-unexercised, so ``tests/unit/test_kv_cache_write_vs_ref.py`` exists to pin it.
+unexercised, so ``tests/unit/test_ring_joint_sp_vs_ref.py`` drives the op at 2/2/24 to pin it.
 """
 
 from loguru import logger

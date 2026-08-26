@@ -25,14 +25,18 @@ from ..utils.general_utils import get_default_num_links
 
 _CONFIG_JSON = os.path.join(os.path.dirname(__file__), "..", "configs", "Mistral-Medium-3.5-128B", "config.json")
 
-# Mesh shapes this model is tested on. (8,4) is the hardware target (SP=8 x TP=4); the smaller
-# shapes are the rungs of the ladder that let each risk be retired on the cheapest box that can
-# show it:
-#   (1,1)  1 chip   - block math, TP=1 (the sharded-residual close degenerates to a no-op)
-#   (1,4)  4 chips  - production TP=4: 24 Q + 2 KV heads/chip, real reduce-scatter close.  <- QuietBox
-#   (2,4)  8 chips  - adds SP: ring-joint SDPA, chunked cache-read, SP KV writes.          <- LoudBox
-#   (8,4)  32 chips - the full SP=8 x TP=4 target.                                         <- Galaxy
-MESH_SHAPES = [(1, 1), (1, 4), (2, 4), (8, 4)]
+# Mesh shapes this model is tested on. (8,4) is the hardware target (SP=8 x TP=4).
+#
+# Only the LoudBox rung is wired up today - the ladder is being rebuilt one rung at a time as
+# hardware becomes reachable, so shapes are added back deliberately rather than kept on spec:
+#   (2,4)  8 chips  - production TP=4 (24 Q + 2 KV heads/chip, real head split) with the ring
+#                     shortened to SP=2. Since chunk_global = sp * chunk_local, the global
+#                     sequence shortens with it and per-chip load is IDENTICAL to SP=8 - so the
+#                     ring length is the only variable that moves.                        <- LoudBox
+#   (8,4)  32 chips - the full SP=8 x TP=4 target.                                        <- Galaxy
+#
+# Not yet re-added: the column/row-parallel QKV + o_proj tests, and the (1,1) block-math rung.
+MESH_SHAPES = [(2, 4)]
 
 
 def mistral_config_dims() -> dict:
@@ -96,9 +100,9 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
 def mesh_setup(mesh_device, linear_fabric=False):
     """Build the ``(MeshConfig, CCLManager)`` pair for this mesh.
 
-    TP is always the full col axis (``mesh_shape[1]``), so a (1,4) mesh is TP=4/SP=1 and an (8,4)
-    mesh is TP=4/SP=8 — the same TP sharding on both, which is what makes the 4-chip rung able to
-    retire the TP-side risks before any Galaxy time is spent.
+    TP is always the full col axis (``mesh_shape[1]``), so a (2,4) mesh is TP=4/SP=2 and an (8,4)
+    mesh is TP=4/SP=8 — the **same** TP sharding and the same per-chip load on both, which is what
+    lets the 8-chip rung retire the ring machinery before any Galaxy time is spent.
 
     ``ccl_manager`` is None at TP=1 and SP=1, where no collective ever runs.
     """
