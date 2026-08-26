@@ -245,12 +245,21 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
             num_tiles_per_cb),
         make_dfb(BATCH_VAR_DFB, d_data_format, d_single_tile_size, b_num_tiles_per_cb),
         make_dfb(EPS_DFB, interm_data_format, interm_single_tile_size, b_num_tiles_per_cb),
-        make_dfb(WEIGHT_DFB, e_data_format, e_single_tile_size, b_num_tiles_per_cb),
-        make_dfb(BIAS_DFB, f_data_format, f_single_tile_size, b_num_tiles_per_cb),
-        // Intermediates, produced and consumed entirely inside the compute kernel.
-        make_dfb(DEN_DFB, interm_data_format, interm_single_tile_size, num_tiles_per_cb),
-        make_dfb(TEMP_1_DFB, interm_data_format, interm_single_tile_size, num_tiles_per_cb),
     };
+    // Optional affine tensors: omit the DFB when the tensor is absent. Kernel bindings still
+    // name weight/bias (and temp_1) so the device symbols exist as null tokens.
+    if (weight_has_value) {
+        dataflow_buffers.push_back(make_dfb(WEIGHT_DFB, e_data_format, e_single_tile_size, b_num_tiles_per_cb));
+    }
+    if (bias_has_value) {
+        dataflow_buffers.push_back(make_dfb(BIAS_DFB, f_data_format, f_single_tile_size, b_num_tiles_per_cb));
+    }
+    // Intermediates, produced and consumed entirely inside the compute kernel.
+    dataflow_buffers.push_back(make_dfb(DEN_DFB, interm_data_format, interm_single_tile_size, num_tiles_per_cb));
+    if (weight_has_value || bias_has_value) {
+        // Staging for (input - mean) * den while weight and/or bias still has to be applied.
+        dataflow_buffers.push_back(make_dfb(TEMP_1_DFB, interm_data_format, interm_single_tile_size, num_tiles_per_cb));
+    }
     if (needs_output_typecast) {
         // Writer-facing output at the output dtype, fed by the typecast stage.
         dataflow_buffers.push_back(make_dfb(WRITER_OUT_DFB, c_data_format, c_single_tile_size, num_tiles_per_cb));
@@ -307,8 +316,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
             .accessor_name = "batch_var",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-        // weight and bias are bound whether or not their tensor is present: the kernel reads their
-        // entry size outside the has-value guards, and legacy allocated the buffers unconditionally.
+        // Always listed: null iff this program omitted the matching DFB.
         DFBBinding{
             .dfb_spec_name = WEIGHT_DFB,
             .accessor_name = "weight",
@@ -325,28 +333,21 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
         TensorBinding{.tensor_parameter_name = BATCH_MEAN, .accessor_name = "batch_mean"},
         TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
         TensorBinding{.tensor_parameter_name = BATCH_VAR, .accessor_name = "batch_var"},
+        TensorBinding{.tensor_parameter_name = WEIGHT, .accessor_name = "weight"},
+        TensorBinding{.tensor_parameter_name = BIAS, .accessor_name = "bias"},
     };
-    // An absent optional tensor has no binding and therefore no tensor:: token, so the kernel's
-    // accessor construction has to disappear at the preprocessor stage rather than under an
-    // if constexpr -- which would still look the name up in its discarded branch.
-    KernelSpec::CompilerOptions::Defines writer_defines;
     if (weight_has_value) {
         tensor_parameters.push_back(
             TensorParameter{.unique_id = WEIGHT, .spec = weight_tensor->mesh_tensor().tensor_spec()});
-        writer_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = WEIGHT, .accessor_name = "weight"});
-        writer_defines["WEIGHT_HAS_VALUE"] = "1";
     }
     if (bias_has_value) {
         tensor_parameters.push_back(
             TensorParameter{.unique_id = BIAS, .spec = bias_tensor->mesh_tensor().tensor_spec()});
-        writer_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = BIAS, .accessor_name = "bias"});
-        writer_defines["BIAS_HAS_VALUE"] = "1";
     }
 
     KernelSpec writer{
         .unique_id = WRITER,
         .source = "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_batch_norm.cpp",
-        .compiler_options = {.defines = std::move(writer_defines)},
         .dfb_bindings = std::move(writer_dfb_bindings),
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args =
@@ -395,8 +396,8 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
             .accessor_name = "eps",
             .endpoint_type = DFBEndpointType::CONSUMER,
         },
-        // den and temp_1 never leave the compute kernel: it packs a partial result and reads it
-        // straight back, so it holds both ends of each FIFO.
+        // den never leaves the compute kernel. temp_1 is affine staging: always bound here
+        // (null when this program omitted it) so dest(dfb::temp_1, dfb::out) can pick the pack dest.
         DFBBinding{
             .dfb_spec_name = DEN_DFB,
             .accessor_name = "den",
@@ -417,8 +418,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
             .accessor_name = "temp_1",
             .endpoint_type = DFBEndpointType::CONSUMER,
         },
-        // weight and bias are selected by a runtime if inside the compute kernel, so they are bound
-        // whether or not their tensor is present.
+        // Always listed: null iff this program omitted the matching DFB.
         DFBBinding{
             .dfb_spec_name = WEIGHT_DFB,
             .accessor_name = "weight",
@@ -431,10 +431,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
         },
     };
 
-    KernelSpec::CompileTimeArgs compute_compile_time_args{
-        {"weight_has_value", static_cast<uint32_t>(weight_has_value)},
-        {"bias_has_value", static_cast<uint32_t>(bias_has_value)},
-    };
+    KernelSpec::CompileTimeArgs compute_compile_time_args;
     KernelSpec::CompilerOptions::Defines compute_defines;
     if (use_sfpu_kernel) {
         compute_compile_time_args["tc_in_fmt"] = static_cast<uint32_t>(DataFormat::Float32);
@@ -466,9 +463,17 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
         // compute kernel consumes is listed; the writer-facing output is producer-only, so it gets no
         // entry. An omitted DFB keeps the UnpackToSrc default.
         auto& unpack_modes = std::get<ComputeGen1Config>(compute_hw_config).unpack_modes;
-        for (const auto& dfb_name :
-             {INPUT_DFB, BATCH_MEAN_DFB, BATCH_VAR_DFB, EPS_DFB, DEN_DFB, WEIGHT_DFB, TEMP_1_DFB, BIAS_DFB}) {
+        for (const auto& dfb_name : {INPUT_DFB, BATCH_MEAN_DFB, BATCH_VAR_DFB, EPS_DFB, DEN_DFB}) {
             unpack_modes[dfb_name] = UnpackMode::UnpackToDest;
+        }
+        if (weight_has_value) {
+            unpack_modes[WEIGHT_DFB] = UnpackMode::UnpackToDest;
+        }
+        if (bias_has_value) {
+            unpack_modes[BIAS_DFB] = UnpackMode::UnpackToDest;
+        }
+        if (weight_has_value || bias_has_value) {
+            unpack_modes[TEMP_1_DFB] = UnpackMode::UnpackToDest;
         }
         if (needs_output_typecast) {
             unpack_modes[OUT_DFB] = UnpackMode::UnpackToDest;

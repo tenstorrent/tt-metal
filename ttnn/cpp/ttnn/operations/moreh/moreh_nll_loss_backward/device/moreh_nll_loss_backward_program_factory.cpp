@@ -117,9 +117,8 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
     }
     spec.dataflow_buffers.push_back(make_dfb(DFB_TMP_WEIGHT, 1, fp32_dest_acc_en_data_format));
     if (divisor_has_value) {
-        // tmp1 and tmp2 are touched only by the compute kernel's divisor branch, so they exist
-        // exactly when that branch does. Allocating them unconditionally would leave two buffers
-        // with no producer and no consumer in the no-divisor build, which cannot be expressed.
+        // tmp1 and tmp2 are used only by the compute kernel's divisor branch. Omit them when
+        // divisor is absent so those KernelSpec bindings stay null (no dummy resources).
         spec.dataflow_buffers.push_back(make_dfb(DFB_TMP1, 1, fp32_dest_acc_en_data_format));
         spec.dataflow_buffers.push_back(make_dfb(DFB_TMP2, 1, fp32_dest_acc_en_data_format));
     }
@@ -154,15 +153,6 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
     // create read/write kernel
     KernelSpec::CompilerOptions::Defines reader_defines;
     KernelSpec::CompilerOptions::Defines compute_defines;
-
-    if (weight_has_value) {
-        reader_defines.emplace("WEIGHT", "1");
-        compute_defines.emplace("WEIGHT", "1");
-    }
-    if (divisor_has_value) {
-        reader_defines.emplace("DIVISOR", "1");
-        compute_defines.emplace("DIVISOR", "1");
-    }
 
     if (fp32_dest_acc_en) {
         reader_defines.emplace("FP32_DEST_ACC_EN", "1");
@@ -202,51 +192,42 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
             .accessor_name = "tmp_weight",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-    };
-    if (weight_has_value) {
         // `weight` is read once into L1 and held there for the whole kernel, and `weight_scratch`
         // never sees a FIFO operation at all. Both are reader-only, so the reader holds both ends.
-        reader_dfb_bindings.push_back(DFBBinding{
+        // Null when the matching DFB is not declared.
+        DFBBinding{
             .dfb_spec_name = DFB_WEIGHT,
             .accessor_name = "weight",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_WEIGHT,
             .accessor_name = "weight",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_WEIGHT_SCRATCH,
             .accessor_name = "weight_scratch",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_WEIGHT_SCRATCH,
             .accessor_name = "weight_scratch",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-    }
-    if (divisor_has_value) {
-        reader_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_DIVISOR,
             .accessor_name = "divisor",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-    }
+        },
+    };
 
     Group<TensorBinding> reader_tensor_bindings{
         TensorBinding{.tensor_parameter_name = TENSOR_TARGET, .accessor_name = "target"},
         TensorBinding{.tensor_parameter_name = TENSOR_OUTPUT_GRAD, .accessor_name = "output_grad"},
+        TensorBinding{.tensor_parameter_name = TENSOR_WEIGHT, .accessor_name = "weight"},
+        TensorBinding{.tensor_parameter_name = TENSOR_DIVISOR, .accessor_name = "divisor"},
     };
-    if (weight_has_value) {
-        reader_tensor_bindings.push_back(
-            TensorBinding{.tensor_parameter_name = TENSOR_WEIGHT, .accessor_name = "weight"});
-    }
-    if (divisor_has_value) {
-        reader_tensor_bindings.push_back(
-            TensorBinding{.tensor_parameter_name = TENSOR_DIVISOR, .accessor_name = "divisor"});
-    }
 
     KernelSpec reader{
         .unique_id = READER,
@@ -294,36 +275,34 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
             .accessor_name = "input_grad",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-    };
-    if (divisor_has_value) {
-        compute_dfb_bindings.push_back(DFBBinding{
+        DFBBinding{
             .dfb_spec_name = DFB_DIVISOR,
             .accessor_name = "divisor",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
+        },
         // The compute kernel packs each intermediate and reads it straight back within its own
-        // loop, so it holds both ends of tmp1 and tmp2.
-        compute_dfb_bindings.push_back(DFBBinding{
+        // loop, so it holds both ends of tmp1 and tmp2. Null when those DFBs are not declared.
+        DFBBinding{
             .dfb_spec_name = DFB_TMP1,
             .accessor_name = "tmp1",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        compute_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_TMP1,
             .accessor_name = "tmp1",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-        compute_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_TMP2,
             .accessor_name = "tmp2",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        compute_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_TMP2,
             .accessor_name = "tmp2",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-    }
+        },
+    };
 
     ComputeUnpackModes compute_unpack_modes;
     require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_OUTPUT_GRAD, data_format);
@@ -479,9 +458,8 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
     }
     spec.dataflow_buffers.push_back(make_dfb(DFB_TMP_WEIGHT, 1, fp32_dest_acc_en_data_format));
     if (divisor_has_value) {
-        // tmp1 and tmp2 are touched only by the compute kernel's divisor branch, so they exist
-        // exactly when that branch does. Allocating them unconditionally would leave two buffers
-        // with no producer and no consumer in the no-divisor build, which cannot be expressed.
+        // tmp1 and tmp2 are used only by the compute kernel's divisor branch. Omit them when
+        // divisor is absent so those KernelSpec bindings stay null (no dummy resources).
         spec.dataflow_buffers.push_back(make_dfb(DFB_TMP1, 1, fp32_dest_acc_en_data_format));
         spec.dataflow_buffers.push_back(make_dfb(DFB_TMP2, 1, fp32_dest_acc_en_data_format));
     }
@@ -516,15 +494,6 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
     // create read/write kernel
     KernelSpec::CompilerOptions::Defines reader_defines;
     KernelSpec::CompilerOptions::Defines compute_defines;
-
-    if (weight_has_value) {
-        reader_defines.emplace("WEIGHT", "1");
-        compute_defines.emplace("WEIGHT", "1");
-    }
-    if (divisor_has_value) {
-        reader_defines.emplace("DIVISOR", "1");
-        compute_defines.emplace("DIVISOR", "1");
-    }
 
     if (fp32_dest_acc_en) {
         reader_defines.emplace("FP32_DEST_ACC_EN", "1");
@@ -564,51 +533,42 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
             .accessor_name = "tmp_weight",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-    };
-    if (weight_has_value) {
         // `weight` is read once into L1 and held there for the whole kernel, and `weight_scratch`
         // never sees a FIFO operation at all. Both are reader-only, so the reader holds both ends.
-        reader_dfb_bindings.push_back(DFBBinding{
+        // Null when the matching DFB is not declared.
+        DFBBinding{
             .dfb_spec_name = DFB_WEIGHT,
             .accessor_name = "weight",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_WEIGHT,
             .accessor_name = "weight",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_WEIGHT_SCRATCH,
             .accessor_name = "weight_scratch",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_WEIGHT_SCRATCH,
             .accessor_name = "weight_scratch",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-    }
-    if (divisor_has_value) {
-        reader_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_DIVISOR,
             .accessor_name = "divisor",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-    }
+        },
+    };
 
     Group<TensorBinding> reader_tensor_bindings{
         TensorBinding{.tensor_parameter_name = TENSOR_TARGET, .accessor_name = "target"},
         TensorBinding{.tensor_parameter_name = TENSOR_OUTPUT_GRAD, .accessor_name = "output_grad"},
+        TensorBinding{.tensor_parameter_name = TENSOR_WEIGHT, .accessor_name = "weight"},
+        TensorBinding{.tensor_parameter_name = TENSOR_DIVISOR, .accessor_name = "divisor"},
     };
-    if (weight_has_value) {
-        reader_tensor_bindings.push_back(
-            TensorBinding{.tensor_parameter_name = TENSOR_WEIGHT, .accessor_name = "weight"});
-    }
-    if (divisor_has_value) {
-        reader_tensor_bindings.push_back(
-            TensorBinding{.tensor_parameter_name = TENSOR_DIVISOR, .accessor_name = "divisor"});
-    }
 
     KernelSpec reader{
         .unique_id = READER,
@@ -657,36 +617,34 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
             .accessor_name = "input_grad",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-    };
-    if (divisor_has_value) {
-        compute_dfb_bindings.push_back(DFBBinding{
+        DFBBinding{
             .dfb_spec_name = DFB_DIVISOR,
             .accessor_name = "divisor",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
+        },
         // The compute kernel packs each intermediate and reads it straight back within its own
-        // loop, so it holds both ends of tmp1 and tmp2.
-        compute_dfb_bindings.push_back(DFBBinding{
+        // loop, so it holds both ends of tmp1 and tmp2. Null when those DFBs are not declared.
+        DFBBinding{
             .dfb_spec_name = DFB_TMP1,
             .accessor_name = "tmp1",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        compute_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_TMP1,
             .accessor_name = "tmp1",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-        compute_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_TMP2,
             .accessor_name = "tmp2",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        compute_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_TMP2,
             .accessor_name = "tmp2",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-    }
+        },
+    };
 
     ComputeUnpackModes compute_unpack_modes;
     require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_OUTPUT_GRAD, data_format);
@@ -845,9 +803,8 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_4d(
     }
     spec.dataflow_buffers.push_back(make_dfb(DFB_TMP_WEIGHT, 1, fp32_dest_acc_en_data_format));
     if (divisor_has_value) {
-        // tmp1 and tmp2 are touched only by the compute kernel's divisor branch, so they exist
-        // exactly when that branch does. Allocating them unconditionally would leave two buffers
-        // with no producer and no consumer in the no-divisor build, which cannot be expressed.
+        // tmp1 and tmp2 are used only by the compute kernel's divisor branch. Omit them when
+        // divisor is absent so those KernelSpec bindings stay null (no dummy resources).
         spec.dataflow_buffers.push_back(make_dfb(DFB_TMP1, 1, fp32_dest_acc_en_data_format));
         spec.dataflow_buffers.push_back(make_dfb(DFB_TMP2, 1, fp32_dest_acc_en_data_format));
     }
@@ -882,15 +839,6 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_4d(
     // create read/write kernel
     KernelSpec::CompilerOptions::Defines reader_defines;
     KernelSpec::CompilerOptions::Defines compute_defines;
-
-    if (weight_has_value) {
-        reader_defines.emplace("WEIGHT", "1");
-        compute_defines.emplace("WEIGHT", "1");
-    }
-    if (divisor_has_value) {
-        reader_defines.emplace("DIVISOR", "1");
-        compute_defines.emplace("DIVISOR", "1");
-    }
 
     if (fp32_dest_acc_en) {
         reader_defines.emplace("FP32_DEST_ACC_EN", "1");
@@ -930,51 +878,42 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_4d(
             .accessor_name = "tmp_weight",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-    };
-    if (weight_has_value) {
         // `weight` is read once into L1 and held there for the whole kernel, and `weight_scratch`
         // never sees a FIFO operation at all. Both are reader-only, so the reader holds both ends.
-        reader_dfb_bindings.push_back(DFBBinding{
+        // Null when the matching DFB is not declared.
+        DFBBinding{
             .dfb_spec_name = DFB_WEIGHT,
             .accessor_name = "weight",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_WEIGHT,
             .accessor_name = "weight",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_WEIGHT_SCRATCH,
             .accessor_name = "weight_scratch",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_WEIGHT_SCRATCH,
             .accessor_name = "weight_scratch",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-    }
-    if (divisor_has_value) {
-        reader_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_DIVISOR,
             .accessor_name = "divisor",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-    }
+        },
+    };
 
     Group<TensorBinding> reader_tensor_bindings{
         TensorBinding{.tensor_parameter_name = TENSOR_TARGET, .accessor_name = "target"},
         TensorBinding{.tensor_parameter_name = TENSOR_OUTPUT_GRAD, .accessor_name = "output_grad"},
+        TensorBinding{.tensor_parameter_name = TENSOR_WEIGHT, .accessor_name = "weight"},
+        TensorBinding{.tensor_parameter_name = TENSOR_DIVISOR, .accessor_name = "divisor"},
     };
-    if (weight_has_value) {
-        reader_tensor_bindings.push_back(
-            TensorBinding{.tensor_parameter_name = TENSOR_WEIGHT, .accessor_name = "weight"});
-    }
-    if (divisor_has_value) {
-        reader_tensor_bindings.push_back(
-            TensorBinding{.tensor_parameter_name = TENSOR_DIVISOR, .accessor_name = "divisor"});
-    }
 
     KernelSpec reader{
         .unique_id = READER,
@@ -1023,36 +962,34 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_4d(
             .accessor_name = "input_grad",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-    };
-    if (divisor_has_value) {
-        compute_dfb_bindings.push_back(DFBBinding{
+        DFBBinding{
             .dfb_spec_name = DFB_DIVISOR,
             .accessor_name = "divisor",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
+        },
         // The compute kernel packs each intermediate and reads it straight back within its own
-        // loop, so it holds both ends of tmp1 and tmp2.
-        compute_dfb_bindings.push_back(DFBBinding{
+        // loop, so it holds both ends of tmp1 and tmp2. Null when those DFBs are not declared.
+        DFBBinding{
             .dfb_spec_name = DFB_TMP1,
             .accessor_name = "tmp1",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        compute_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_TMP1,
             .accessor_name = "tmp1",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-        compute_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_TMP2,
             .accessor_name = "tmp2",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        compute_dfb_bindings.push_back(DFBBinding{
+        },
+        DFBBinding{
             .dfb_spec_name = DFB_TMP2,
             .accessor_name = "tmp2",
             .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-    }
+        },
+    };
 
     ComputeUnpackModes compute_unpack_modes;
     require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_OUTPUT_GRAD, data_format);

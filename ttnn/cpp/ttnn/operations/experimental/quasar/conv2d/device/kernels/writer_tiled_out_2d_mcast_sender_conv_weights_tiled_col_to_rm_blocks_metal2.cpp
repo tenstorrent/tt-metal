@@ -45,8 +45,6 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks_w = get_arg(args::out_num_blocks_w);
     constexpr uint32_t weight_block_height_num_outer_in = get_arg(args::weight_block_height_num_outer_in);
 
-    constexpr bool fuse_bias = get_arg(args::fuse_bias);
-
     constexpr bool split_reader_enabled = get_arg(args::split_reader_enabled);
 
     // Split reader args
@@ -82,9 +80,6 @@ void kernel_main() {
     Semaphore weights_mcast_receiver_sem(sem::weights_mcast_receiver);
     MulticastEndpoint mcast_ep;
     DataflowBuffer cb_weight_obj(dfb::weights);
-#ifdef FUSE_BIAS
-    DataflowBuffer cb_bias_obj(dfb::bias);
-#endif
 #ifdef SPLIT_READER
     DataflowBuffer cb_act_second_obj(dfb::act_second_reader);
     DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);
@@ -145,11 +140,6 @@ void kernel_main() {
 #endif
 
     // read in bias if enabled (done only once for all batches)
-#ifdef FUSE_BIAS
-    const uint32_t bias_pagesize = cb_bias_obj.get_entry_size();
-    const auto s_bias = TensorAccessor(tensor::bias);
-#endif
-
     bool load_bias = true;
 
     const uint32_t weight_tile_nbytes = cb_weight_obj.get_entry_size();
@@ -283,65 +273,68 @@ void kernel_main() {
                 }
             }
 #endif
-            if constexpr (fuse_bias) {
+            with_nullable_token(dfb::bias, [&](DFBBindingToken const& token) {
                 if (load_bias) {
-#ifdef FUSE_BIAS
-                    cb_bias_obj.reserve_back(bias_ntiles);
+                    DataflowBuffer cb_bias_obj(token);
+                    const uint32_t bias_pagesize = cb_bias_obj.get_entry_size();
+                    with_nullable_token(tensor::bias, [&](const auto& tens_tok) {
+                        const auto s_bias = TensorAccessor(tens_tok);
+                        cb_bias_obj.reserve_back(bias_ntiles);
 
-                    uint32_t bias_write_offset = 0;
-                    uint32_t bias_block_size_bytes = 0;
-                    for (uint32_t bias_tile = bias_tile_offset; bias_tile < bias_tile_offset + bias_ntiles;
-                         ++bias_tile) {
-                        noc.async_read(
-                            s_bias,
-                            cb_bias_obj,
-                            bias_pagesize,
-                            {.page_id = bias_tile},
-                            {.offset_bytes = bias_write_offset});
-                        bias_write_offset += bias_pagesize;
-                        bias_block_size_bytes += bias_pagesize;
-                    }
-                    noc.async_read_barrier();
+                        uint32_t bias_write_offset = 0;
+                        uint32_t bias_block_size_bytes = 0;
+                        for (uint32_t bias_tile = bias_tile_offset; bias_tile < bias_tile_offset + bias_ntiles;
+                             ++bias_tile) {
+                            noc.async_read(
+                                s_bias,
+                                cb_bias_obj,
+                                bias_pagesize,
+                                {.page_id = bias_tile},
+                                {.offset_bytes = bias_write_offset});
+                            bias_write_offset += bias_pagesize;
+                            bias_block_size_bytes += bias_pagesize;
+                        }
+                        noc.async_read_barrier();
 
 // MCAST BIAS (shares some mcast args with weights)
 #ifndef SKIP_MCAST
-                    // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr
-                    // (i.e. its value should be weights_mcast_num_dests), then reset the semaphore_addr value back to
-                    // zero for the next block
-                    weights_mcast_sender_sem.wait(weights_mcast_num_dests);
-                    weights_mcast_sender_sem.set(0);
+                        // wait until all weights mcast destinations have atomically incremented the weights
+                        // semaphore_addr (i.e. its value should be weights_mcast_num_dests), then reset the
+                        // semaphore_addr value back to zero for the next block
+                        weights_mcast_sender_sem.wait(weights_mcast_num_dests);
+                        weights_mcast_sender_sem.set(0);
 
-                    // Now we have the block in the CB address, we can mcast to dests!
-                    // num_dests must not include source, since we are NOT really doing a local copy!
-                    mcast_dst.addr = cb_bias_obj.get_write_ptr();
-                    noc.async_write_multicast(
-                        CoreLocalMem<uint32_t>(cb_bias_obj.get_write_ptr()),
-                        mcast_ep,
-                        bias_block_size_bytes,
-                        weights_mcast_num_cores,
-                        {},
-                        mcast_dst,
-                        true);
+                        // Now we have the block in the CB address, we can mcast to dests!
+                        // num_dests must not include source, since we are NOT really doing a local copy!
+                        mcast_dst.addr = cb_bias_obj.get_write_ptr();
+                        noc.async_write_multicast(
+                            CoreLocalMem<uint32_t>(cb_bias_obj.get_write_ptr()),
+                            mcast_ep,
+                            bias_block_size_bytes,
+                            weights_mcast_num_cores,
+                            {},
+                            mcast_dst,
+                            true);
 
-                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
-                    // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
-                    // (using NOC_CMD_STATIC_VC).
-                    // We should also multicast the flag to destinations
-                    // num_dests must not include source, since we are NOT really doing a local copy!
-                    weights_mcast_receiver_sem.set_multicast(
-                        noc,
-                        mcast_rect.noc_x_start,
-                        mcast_rect.noc_y_start,
-                        mcast_rect.noc_x_end,
-                        mcast_rect.noc_y_end,
-                        weights_mcast_num_cores);
+                        // Note: no need for write barrier, since these two multicasts are done on the same noc id and
+                        // same vc even though cmd bufs are different Also, this only works because we are setting VCs
+                        // statically (using NOC_CMD_STATIC_VC).
+                        // We should also multicast the flag to destinations
+                        // num_dests must not include source, since we are NOT really doing a local copy!
+                        weights_mcast_receiver_sem.set_multicast(
+                            noc,
+                            mcast_rect.noc_x_start,
+                            mcast_rect.noc_y_start,
+                            mcast_rect.noc_x_end,
+                            mcast_rect.noc_y_end,
+                            weights_mcast_num_cores);
 #endif
 
-                    cb_bias_obj.push_back(bias_ntiles);
-                    load_bias = false;
-#endif
+                        cb_bias_obj.push_back(bias_ntiles);
+                        load_bias = false;
+                    });
                 }
-            }
+            });
 
         }  // out_num_blocks_h
 

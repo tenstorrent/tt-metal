@@ -330,13 +330,15 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
         make_dfb(IN1, in1_t, cb_data_format),
         make_dfb(IN2, in2_t, cb_data_format),
         make_dfb(IN3, in3_t, cb_data_format),
-        make_dfb(IN4, in4_t, cb_data_format),
         make_dfb(IM0, im0_t, im0_data_format),
         make_dfb(IM1, im1_t, cb_data_format),
         make_dfb(IM2, im2_t, cb_data_format),
         make_dfb(IM3, im3_t, im3_data_format),
         make_dfb(OUT0, out0_t, cb_data_format),
     };
+    if (bias.has_value()) {
+        dataflow_buffers.push_back(make_dfb(IN4, in4_t, cb_data_format));
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Tensor parameters
@@ -354,9 +356,7 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    KernelSpec::CompilerOptions::Defines reader_defines;
     if (bias.has_value()) {
-        reader_defines.emplace("FUSE_BIAS", "1");
         log_debug(tt::LogOp, "{}:{} bias tensor. is bias dram {}", __func__, __LINE__, is_dram(bias));
     }
 
@@ -368,10 +368,8 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
         {"input_mask_w", input_mask_w},
         {"other_mask_h", other_mask_h},
         {"other_mask_w", other_mask_w},
+        {"is_scalar_bias", static_cast<uint32_t>(is_scalar_bias)},
     };
-    if (bias.has_value()) {
-        reader_compile_time_args["is_scalar_bias"] = static_cast<uint32_t>(is_scalar_bias);
-    }
 
     Group<DFBBinding> reader_dfb_bindings = {
         DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
@@ -383,15 +381,12 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
     Group<TensorBinding> reader_tensor_bindings = {
         TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
         TensorBinding{.tensor_parameter_name = OTHER, .accessor_name = "other"},
+        TensorBinding{.tensor_parameter_name = BIAS, .accessor_name = "bias"},
     };
-    if (bias.has_value()) {
-        reader_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = BIAS, .accessor_name = "bias"});
-    }
 
     KernelSpec reader{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/reader_moreh_matmul.cpp",
-        .compiler_options = {.defines = reader_defines},
         .dfb_bindings = reader_dfb_bindings,
         .tensor_bindings = reader_tensor_bindings,
         .compile_time_args = reader_compile_time_args,
@@ -424,9 +419,6 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (bias.has_value()) {
-        compute_defines.emplace("FUSE_BIAS", "1");
-    }
     if (fp32_dest_acc_en) {
         compute_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
@@ -467,10 +459,8 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
             {"input_mask_w", input_mask_w},
             {"other_mask_h", other_mask_h},
             {"other_mask_w", other_mask_w},
+            {"is_scalar_bias", static_cast<uint32_t>(is_scalar_bias)},
         };
-        if (bias.has_value()) {
-            compute_args["is_scalar_bias"] = static_cast<uint32_t>(is_scalar_bias);
-        }
 
         Group<DFBBinding> compute_dfb_bindings = {
             DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},

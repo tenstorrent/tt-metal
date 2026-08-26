@@ -398,44 +398,40 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
 
     const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
-    KernelSpec::CompilerOptions::Defines reader_defines = reload_define;
-    if (has_metadata) {
-        reader_defines.emplace("HAS_METADATA", "1");
-    }
 
     // ------------------------------------------------------------------ reader spec (this op's own)
+    // Metadata tensor + DFB are always on the reader's binding list (the kernel's arity). Presence
+    // is whether METADATA_PARAM / META_DFB are declared on this ProgramSpec; omitting them makes
+    // tensor::metadata / dfb::meta null. When declared, meta is a single-toucher (reader fills +
+    // reads it) → producer+consumer self-loop.
     std::vector<DFBBinding> reader_dfbs = {
         DFBBinding{.dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = COS_DFB, .accessor_name = "cos", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = SIN_DFB, .accessor_name = "sin", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{
             .dfb_spec_name = TRANS_MAT_DFB, .accessor_name = "trans_mat", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = META_DFB, .accessor_name = "meta", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = META_DFB, .accessor_name = "meta", .endpoint_type = DFBEndpointType::CONSUMER},
     };
     std::vector<TensorBinding> reader_tensors = {
         TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
         TensorBinding{.tensor_parameter_name = COS_PARAM, .accessor_name = "cos"},
         TensorBinding{.tensor_parameter_name = SIN_PARAM, .accessor_name = "sin"},
         TensorBinding{.tensor_parameter_name = TRANS_MAT_PARAM, .accessor_name = "trans_mat"},
+        TensorBinding{.tensor_parameter_name = METADATA_PARAM, .accessor_name = "metadata"},
     };
-    if (has_metadata) {
-        // meta scratch CB is a single-toucher (reader fills + reads it) → self-loop.
-        reader_dfbs.push_back(
-            DFBBinding{.dfb_spec_name = META_DFB, .accessor_name = "meta", .endpoint_type = DFBEndpointType::PRODUCER});
-        reader_dfbs.push_back(
-            DFBBinding{.dfb_spec_name = META_DFB, .accessor_name = "meta", .endpoint_type = DFBEndpointType::CONSUMER});
-        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = METADATA_PARAM, .accessor_name = "metadata"});
-    }
 
+    // kv_actual_global is always in the schema so the kernel can name args::kv_actual_global on
+    // both programs (scalar default; overwritten from the metadata tensor when that resource is
+    // declared). The value is still not hashed — patched on cache hits.
     KernelSpec::RuntimeArgSchema reader_schema{
-        .runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}};
-    if (!has_metadata) {
-        reader_schema.common_runtime_arg_names = {"kv_actual_global"};
-    }
+        .runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"},
+        .common_runtime_arg_names = {"kv_actual_global"}};
 
     KernelSpec reader_spec{
         .unique_id = READER,
         .source = std::filesystem::path{kReaderKernelPath},
-        .compiler_options = {.defines = reader_defines},
+        .compiler_options = {.defines = reload_define},
         .dfb_bindings = reader_dfbs,
         .tensor_bindings = reader_tensors,
         .compile_time_args =
@@ -539,9 +535,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     KernelRunArgs reader_run{.kernel = READER};
     KernelRunArgs writer_run{.kernel = WRITER};
     KernelRunArgs compute_run{.kernel = COMPUTE};
-    if (!has_metadata) {
-        reader_run.common_runtime_arg_values = {{"kv_actual_global", args.kv_actual_global}};
-    }
+    reader_run.common_runtime_arg_values = {{"kv_actual_global", args.kv_actual_global}};
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& a = per_core_args[i];
         const NodeCoord node = cores[i];
@@ -615,11 +609,11 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     // kv_actual_global is not hashed and can change per chunk; per-core RTAs and my_sp_coord are stable
-    // (same shapes / same coordinate), so a cache hit only refreshes tensor addresses and, on the scalar
-    // path, the kv_actual_global common arg. The metadata path advances the value on-device (the reader
-    // re-reads element [0]), so only its tensor address needs refreshing. has_metadata is hashed, so it
-    // matches the cached program on every hit -- read it straight from tensor_args. The run args are
-    // coordinate-independent, so build them once and apply to every stamped program.
+    // (same shapes / same coordinate), so a cache hit refreshes tensor addresses and the kv_actual_global
+    // common arg. The metadata path advances the value on-device (the reader re-reads element [0]) and
+    // overwrites that scalar; still refresh the arg so the schema stays complete. has_metadata is hashed,
+    // so it matches the cached program on every hit -- read it straight from tensor_args. The run args
+    // are coordinate-independent, so build them once and apply to every stamped program.
     ProgramRunArgs run_args;
     run_args.tensor_args = {
         {INPUT_PARAM, TensorArgument{tensor_args.input.mesh_tensor()}},
@@ -629,11 +623,10 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
         {OUTPUT_PARAM, TensorArgument{output.mesh_tensor()}}};
     if (tensor_args.metadata.has_value()) {
         run_args.tensor_args.emplace(METADATA_PARAM, TensorArgument{tensor_args.metadata->mesh_tensor()});
-    } else {
-        KernelRunArgs reader_run{.kernel = READER};
-        reader_run.common_runtime_arg_values = {{"kv_actual_global", args.kv_actual_global}};
-        run_args.kernel_run_args = {reader_run};
     }
+    KernelRunArgs reader_run{.kernel = READER};
+    reader_run.common_runtime_arg_values = {{"kv_actual_global", args.kv_actual_global}};
+    run_args.kernel_run_args = {reader_run};
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         UpdateProgramRunArgs(program, run_args);

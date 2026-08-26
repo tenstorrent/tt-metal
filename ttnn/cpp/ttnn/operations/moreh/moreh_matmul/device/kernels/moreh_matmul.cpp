@@ -23,7 +23,6 @@ constexpr uint32_t cb_in0 = dfb::in0;
 constexpr uint32_t cb_in1 = dfb::in1;
 constexpr uint32_t cb_in2 = dfb::in2;
 constexpr uint32_t cb_in3 = dfb::in3;
-constexpr uint32_t bias_cb_id = dfb::in4;
 constexpr uint32_t cb_out0 = dfb::out0;
 constexpr uint32_t cb_intermed0 = dfb::im0;
 constexpr uint32_t cb_intermed1 = dfb::im1;
@@ -151,36 +150,36 @@ FORCE_INLINE void mask_tile_to_cb(
     }
 }
 
-#ifdef FUSE_BIAS
 template <bool is_scalar_bias>
 FORCE_INLINE void bias_add() {
-    DataflowBuffer dfb_intermed3_obj(cb_intermed3);
-    DataflowBuffer bias_cb_id_obj(bias_cb_id);
-    pack_onetile_to_cb(cb_intermed3);
-    dfb_intermed3_obj.wait_front(onetile);
-    bias_cb_id_obj.wait_front(onetile);
-    tile_regs_acquire();
-    if (is_scalar_bias) {
+    with_nullable_token(dfb::in4, [&](const DFBBindingToken& token) {
+        DataflowBuffer dfb_intermed3_obj(cb_intermed3);
+        DataflowBuffer bias_cb_id_obj(token);
+        pack_onetile_to_cb(cb_intermed3);
+        dfb_intermed3_obj.wait_front(onetile);
+        bias_cb_id_obj.wait_front(onetile);
+        tile_regs_acquire();
+        if (is_scalar_bias) {
 #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(cb_intermed3, bias_cb_id);
+            reconfig_data_format(cb_intermed3, token);
 #endif
-        add_bcast_scalar_init(cb_intermed3, bias_cb_id);
-        add_tiles_bcast_scalar(cb_intermed3, bias_cb_id, 0, 0, 0);
-    } else {
+            add_bcast_scalar_init(cb_intermed3, token);
+            add_tiles_bcast_scalar(cb_intermed3, token, 0, 0, 0);
+        } else {
 #if defined FP32_DEST_ACC_EN
-        reconfig_data_format(cb_intermed3, bias_cb_id);
+            reconfig_data_format(cb_intermed3, token);
 #endif
-        add_bcast_rows_init(cb_intermed3, bias_cb_id);
-        add_tiles_bcast_rows(cb_intermed3, bias_cb_id, 0, 0, 0);
-    }
-    tile_regs_commit();
+            add_bcast_rows_init(cb_intermed3, token);
+            add_tiles_bcast_rows(cb_intermed3, token, 0, 0, 0);
+        }
+        tile_regs_commit();
 
-    dfb_intermed3_obj.pop_front(onetile);
-    if constexpr (!is_scalar_bias) {
-        bias_cb_id_obj.pop_front(onetile);
-    }
+        dfb_intermed3_obj.pop_front(onetile);
+        if constexpr (!is_scalar_bias) {
+            bias_cb_id_obj.pop_front(onetile);
+        }
+    });
 }
-#endif
 
 template <bool is_scalar_bias>
 FORCE_INLINE void matmul_with_transpose_and_mask(
@@ -309,12 +308,10 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
             }
 
             if (last_out) {
-////////////////////
-// bias add
-////////////////////
-#ifdef FUSE_BIAS
+                ////////////////////
+                // bias add
+                ////////////////////
                 bias_add<is_scalar_bias>();
-#endif
                 pack_onetile_to_cb(cb_out0);
             } else {
                 pack_onetile_to_cb(cb_intermed0);
@@ -358,13 +355,8 @@ void kernel_main() {
     constexpr uint32_t input_mask_w = get_arg(args::input_mask_w);
     constexpr uint32_t other_mask_h = get_arg(args::other_mask_h);
     constexpr uint32_t other_mask_w = get_arg(args::other_mask_w);
-#ifdef FUSE_BIAS
     constexpr bool is_scalar_bias = (get_arg(args::is_scalar_bias) == 1);
-    constexpr bool need_bias_add = true;
-#else
-    constexpr bool is_scalar_bias = false;
-    constexpr bool need_bias_add = false;
-#endif
+    constexpr bool need_bias_add = !is_null_binding(dfb::in4);
     constexpr bool need_input_mask_h = (input_mask_h != 32);
     constexpr bool need_input_mask_w = (input_mask_w != 32);
     constexpr bool need_other_mask_h = (other_mask_h != 32);

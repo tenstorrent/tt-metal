@@ -35,13 +35,6 @@ void kernel_main() {
 
     const auto src_a = TensorAccessor(tensor::src);
 
-#ifdef FUSE_PRE_ADD
-    // Residual tiles, added to the input by the compute kernel before the statistics pass.
-    DataflowBuffer dfb_res_buf(dfb::res);
-    const uint32_t src1_tile_bytes = dfb_res_buf.get_tile_size();
-    const auto src_b = TensorAccessor(tensor::res_src);
-#endif
-
     uint32_t inp_tile_idx = tile_offset;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -49,16 +42,27 @@ void kernel_main() {
             for (uint32_t r = 0; r < blk; r++) {
                 dfb_inp_buf.reserve_back(1);
                 noc.async_read(src_a, dfb_inp_buf, src0_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
-#ifdef FUSE_PRE_ADD
-                dfb_res_buf.reserve_back(1);
-                noc.async_read(src_b, dfb_res_buf, src1_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
-#endif
+                // Residual tiles, added to the input by the compute kernel before the statistics pass.
+                with_nullable_token(dfb::res, [&](const DFBBindingToken& res_tok) {
+                    with_nullable_token(tensor::res_src, [&](const auto& res_src_tok) {
+                        DataflowBuffer dfb_res_buf(res_tok);
+                        const auto src_b = TensorAccessor(res_src_tok);
+                        dfb_res_buf.reserve_back(1);
+                        noc.async_read(
+                            src_b,
+                            dfb_res_buf,
+                            dfb_res_buf.get_tile_size(),
+                            {.page_id = inp_tile_idx},
+                            {.offset_bytes = 0});
+                    });
+                });
                 inp_tile_idx++;
                 noc.async_read_barrier();
                 dfb_inp_buf.push_back(1);
-#ifdef FUSE_PRE_ADD
-                dfb_res_buf.push_back(1);
-#endif
+                with_nullable_token(dfb::res, [&](const DFBBindingToken& res_tok) {
+                    DataflowBuffer dfb_res_buf(res_tok);
+                    dfb_res_buf.push_back(1);
+                });
             }
         }  // wt loop
     }  // ncht loop

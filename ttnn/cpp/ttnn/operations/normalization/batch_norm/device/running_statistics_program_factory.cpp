@@ -234,40 +234,50 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
         make_dfb(BATCH_MEAN_DFB, a_data_format, a_single_tile_size, num_tiles_per_cb),
         make_dfb(BATCH_VAR_DFB, b_data_format, b_single_tile_size, b_num_tiles_per_cb),
         make_dfb(OUTPUT_DFB, c_data_format, c_single_tile_size, num_tiles_per_cb),
-        make_dfb(OLD_RUNNING_MEAN_DFB, d_data_format, d_single_tile_size, b_num_tiles_per_cb),
-        make_dfb(OLD_RUNNING_VAR_DFB, e_data_format, e_single_tile_size, b_num_tiles_per_cb),
         make_dfb(MOMENTUM_DFB, interm_data_format, interm_single_tile_size, b_num_tiles_per_cb),
         make_dfb(ONE_DFB, interm_data_format, interm_single_tile_size, b_num_tiles_per_cb),
-        // The compute kernel packs the updated stats here. When the accumulation format is wider
-        // than the stat dtype these are FP32 staging that the typecast stage reads back; otherwise
-        // they are the buffers the writer drains.
-        make_dfb(
-            UPDATED_MEAN_DFB,
-            needs_mean_typecast ? interm_data_format : d_data_format,
-            needs_mean_typecast ? interm_single_tile_size : d_single_tile_size,
-            b_num_tiles_per_cb),
-        make_dfb(
-            UPDATED_VAR_DFB,
-            needs_var_typecast ? interm_data_format : e_data_format,
-            needs_var_typecast ? interm_single_tile_size : e_single_tile_size,
-            b_num_tiles_per_cb),
         // Intermediates required for updating the running stats; produced and consumed entirely
         // inside the compute kernel.
         make_dfb(TMP1_DFB, interm_data_format, interm_single_tile_size, b_num_tiles_per_cb),
         make_dfb(TMP2_DFB, interm_data_format, interm_single_tile_size, b_num_tiles_per_cb),
         make_dfb(TMP3_DFB, interm_data_format, interm_single_tile_size, b_num_tiles_per_cb),
     };
-    if (needs_mean_typecast) {
+    // running_mean / running_var are optional: omit their DFB cluster (old + updated, and the
+    // writer-facing typecast buffer) when the tensor is not on this ProgramSpec. Kernel binding
+    // lists still name those accessors; an omitted spec name is a null binding.
+    if (running_mean_has_value) {
         dataflow_buffers.push_back(
-            make_dfb(WRITER_UPDATED_MEAN_DFB, d_data_format, d_single_tile_size, b_num_tiles_per_cb));
+            make_dfb(OLD_RUNNING_MEAN_DFB, d_data_format, d_single_tile_size, b_num_tiles_per_cb));
+        // Compute packs the updated mean here. When the accumulation format is wider than the
+        // stat dtype this is FP32 staging that the typecast stage reads back; otherwise the
+        // writer drains it.
+        dataflow_buffers.push_back(make_dfb(
+            UPDATED_MEAN_DFB,
+            needs_mean_typecast ? interm_data_format : d_data_format,
+            needs_mean_typecast ? interm_single_tile_size : d_single_tile_size,
+            b_num_tiles_per_cb));
+        if (needs_mean_typecast) {
+            dataflow_buffers.push_back(
+                make_dfb(WRITER_UPDATED_MEAN_DFB, d_data_format, d_single_tile_size, b_num_tiles_per_cb));
+        }
     }
-    if (needs_var_typecast) {
+    if (running_var_has_value) {
         dataflow_buffers.push_back(
-            make_dfb(WRITER_UPDATED_VAR_DFB, e_data_format, e_single_tile_size, b_num_tiles_per_cb));
+            make_dfb(OLD_RUNNING_VAR_DFB, e_data_format, e_single_tile_size, b_num_tiles_per_cb));
+        dataflow_buffers.push_back(make_dfb(
+            UPDATED_VAR_DFB,
+            needs_var_typecast ? interm_data_format : e_data_format,
+            needs_var_typecast ? interm_single_tile_size : e_single_tile_size,
+            b_num_tiles_per_cb));
+        if (needs_var_typecast) {
+            dataflow_buffers.push_back(
+                make_dfb(WRITER_UPDATED_VAR_DFB, e_data_format, e_single_tile_size, b_num_tiles_per_cb));
+        }
     }
     // The DFBs the writer drains are whichever buffers the compute kernel finally packs into. One
-    // binding under one accessor name covers both paths, so the writer needs no preprocessor gate.
-    // The two stats are keyed independently: one may typecast while the other does not.
+    // binding under one accessor name covers both paths. The two stats are keyed independently:
+    // one may typecast while the other does not. When the tensor is omitted these names are not
+    // declared, so the writer's bindings are null.
     const DFBSpecName& writer_updated_mean_dfb = needs_mean_typecast ? WRITER_UPDATED_MEAN_DFB : UPDATED_MEAN_DFB;
     const DFBSpecName& writer_updated_var_dfb = needs_var_typecast ? WRITER_UPDATED_VAR_DFB : UPDATED_VAR_DFB;
 
@@ -320,8 +330,8 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
             .accessor_name = "dst",
             .endpoint_type = DFBEndpointType::CONSUMER,
         },
-        // The old-stat DFBs are bound whether or not their tensor is present: the kernel reads their
-        // entry size outside the has-value guards, and legacy allocated the buffers unconditionally.
+        // Optional running_mean / running_var: always listed. Null when the matching DFB /
+        // TensorParameter is not declared on this ProgramSpec.
         DFBBinding{
             .dfb_spec_name = OLD_RUNNING_MEAN_DFB,
             .accessor_name = "old_mean",
@@ -347,31 +357,22 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
     Group<TensorBinding> writer_tensor_bindings{
         TensorBinding{.tensor_parameter_name = BATCH_VAR, .accessor_name = "batch_var"},
         TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
+        TensorBinding{.tensor_parameter_name = RUNNING_MEAN, .accessor_name = "running_mean"},
+        TensorBinding{.tensor_parameter_name = RUNNING_VAR, .accessor_name = "running_var"},
     };
-    // An absent optional tensor has no binding and therefore no tensor:: token, so the kernel's
-    // accessor construction has to disappear at the preprocessor stage rather than under an
-    // if constexpr -- which would still look the name up in its discarded branch.
-    KernelSpec::CompilerOptions::Defines writer_defines;
     if (running_mean_has_value) {
         tensor_parameters.push_back(
             TensorParameter{.unique_id = RUNNING_MEAN, .spec = running_mean_tensor->mesh_tensor().tensor_spec()});
-        writer_tensor_bindings.push_back(
-            TensorBinding{.tensor_parameter_name = RUNNING_MEAN, .accessor_name = "running_mean"});
-        writer_defines["OLD_RUNNING_MEAN_HAS_VALUE"] = "1";
     }
     if (running_var_has_value) {
         tensor_parameters.push_back(
             TensorParameter{.unique_id = RUNNING_VAR, .spec = running_var_tensor->mesh_tensor().tensor_spec()});
-        writer_tensor_bindings.push_back(
-            TensorBinding{.tensor_parameter_name = RUNNING_VAR, .accessor_name = "running_var"});
-        writer_defines["OLD_RUNNING_VAR_HAS_VALUE"] = "1";
     }
 
     KernelSpec writer{
         .unique_id = WRITER,
         .source =
             "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_running_statistics.cpp",
-        .compiler_options = {.defines = std::move(writer_defines)},
         .dfb_bindings = std::move(writer_dfb_bindings),
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args =
@@ -406,8 +407,8 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
             .accessor_name = "out",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-        // The old-stat DFBs are gated by an if constexpr inside the kernel but bound unconditionally,
-        // matching the legacy unconditional CB allocation and the kernel's unconditional handles.
+        // Optional running_mean / running_var: always listed. Null when the matching DFB is not
+        // declared on this ProgramSpec.
         DFBBinding{
             .dfb_spec_name = OLD_RUNNING_MEAN_DFB,
             .accessor_name = "old_running_mean",
@@ -472,46 +473,40 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
         },
     };
 
-    KernelSpec::CompileTimeArgs compute_compile_time_args{
-        {"old_running_mean_has_value", static_cast<uint32_t>(running_mean_has_value)},
-        {"old_running_var_has_value", static_cast<uint32_t>(running_var_has_value)},
-    };
-    KernelSpec::CompilerOptions::Defines compute_defines;
+    KernelSpec::CompileTimeArgs compute_compile_time_args;
     if (use_sfpu_kernel) {
         compute_compile_time_args["tc_in_fmt"] = static_cast<uint32_t>(DataFormat::Float32);
         compute_compile_time_args["tc_out_fmt"] = stat_format_needs_typecast
                                                       ? static_cast<uint32_t>(running_stat_data_format)
                                                       : static_cast<uint32_t>(DataFormat::Float32);
-    }
-    // needs_*_typecast implies interm == Float32 implies any_float32, so these only ever reach the
-    // SFPU source -- the only one carrying the typecast stage. The host computes the two flags so a
-    // single define gates a single alias, rather than the kernel re-deriving them from two CTAs.
-    if (needs_mean_typecast) {
-        compute_defines["NEEDS_MEAN_TYPECAST"] = "1";
-        // The typecast stage reads its own FP32 staging output back before packing the narrower
-        // result into the writer-facing buffer.
-        compute_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = UPDATED_MEAN_DFB,
-            .accessor_name = "updated_mean",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
+        // SFPU source names writer_updated_* (typecast dest). Listed always; null when the
+        // writer-facing typecast DFB is not declared.
         compute_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = WRITER_UPDATED_MEAN_DFB,
             .accessor_name = "writer_updated_mean",
             .endpoint_type = DFBEndpointType::PRODUCER,
         });
-    }
-    if (needs_var_typecast) {
-        compute_defines["NEEDS_VAR_TYPECAST"] = "1";
-        compute_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = UPDATED_VAR_DFB,
-            .accessor_name = "updated_var",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
         compute_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = WRITER_UPDATED_VAR_DFB,
             .accessor_name = "writer_updated_var",
             .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+    }
+    // needs_*_typecast implies interm == Float32 implies any_float32, so these only ever reach the
+    // SFPU source -- the only one carrying the typecast stage. Compute consumes its own FP32
+    // staging before packing the narrower result into the writer-facing buffer.
+    if (needs_mean_typecast) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = UPDATED_MEAN_DFB,
+            .accessor_name = "updated_mean",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
+    if (needs_var_typecast) {
+        compute_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = UPDATED_VAR_DFB,
+            .accessor_name = "updated_var",
+            .endpoint_type = DFBEndpointType::CONSUMER,
         });
     }
 
@@ -523,19 +518,16 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
         // omitted DFB keeps the UnpackToSrc default.
         auto& unpack_modes = std::get<ComputeGen1Config>(compute_hw_config).unpack_modes;
         for (const auto& dfb_name :
-             {BATCH_MEAN_DFB,
-              BATCH_VAR_DFB,
-              OUTPUT_DFB,
-              OLD_RUNNING_MEAN_DFB,
-              OLD_RUNNING_VAR_DFB,
-              UPDATED_MEAN_DFB,
-              UPDATED_VAR_DFB,
-              MOMENTUM_DFB,
-              ONE_DFB,
-              TMP1_DFB,
-              TMP2_DFB,
-              TMP3_DFB}) {
+             {BATCH_MEAN_DFB, BATCH_VAR_DFB, OUTPUT_DFB, MOMENTUM_DFB, ONE_DFB, TMP1_DFB, TMP2_DFB, TMP3_DFB}) {
             unpack_modes[dfb_name] = UnpackMode::UnpackToDest;
+        }
+        if (running_mean_has_value) {
+            unpack_modes[OLD_RUNNING_MEAN_DFB] = UnpackMode::UnpackToDest;
+            unpack_modes[UPDATED_MEAN_DFB] = UnpackMode::UnpackToDest;
+        }
+        if (running_var_has_value) {
+            unpack_modes[OLD_RUNNING_VAR_DFB] = UnpackMode::UnpackToDest;
+            unpack_modes[UPDATED_VAR_DFB] = UnpackMode::UnpackToDest;
         }
     }
 
@@ -546,7 +538,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
             use_sfpu_kernel ? "sfpu_kernel" : "kernel"),
         // O3 is the level the legacy ComputeConfigDescriptor defaulted a compute kernel to; Metal
         // 2.0's CompilerOptions defaults to O2 for every kernel kind, so it is stated here.
-        .compiler_options = {.defines = std::move(compute_defines), .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args = std::move(compute_compile_time_args),
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},

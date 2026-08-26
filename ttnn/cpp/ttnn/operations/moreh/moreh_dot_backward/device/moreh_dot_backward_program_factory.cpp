@@ -85,6 +85,14 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
             TensorParameter{.unique_id = OTHER_GRAD, .spec = other_grad.value().mesh_tensor().tensor_spec()});
     }
 
+    Group<DataflowBufferSpec> dataflow_buffers{make_dfb(IN0), make_dfb(IN1), make_dfb(IN2)};
+    if (has_input_grad) {
+        dataflow_buffers.push_back(make_dfb(OUT0));
+    }
+    if (has_other_grad) {
+        dataflow_buffers.push_back(make_dfb(OUT1));
+    }
+
     // ---- Reader kernel ----
     KernelSpec reader{
         .unique_id = READER,
@@ -101,39 +109,26 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
                 TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "s1"},
                 TensorBinding{.tensor_parameter_name = OTHER, .accessor_name = "s2"},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"has_input_grad", "has_other_grad", "num_tiles", "start_id"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(output_grad.device().arch()),
     };
 
     // ---- Writer kernel ----
-    // input_grad / other_grad are optional outputs: bind conditionally, and move the
-    // selecting condition from a runtime arg to a compile-time define (HAS_INPUT_GRAD /
-    // HAS_OTHER_GRAD). The writer #ifdef-gates the tensor::s0 / tensor::s1 accessors and
-    // their write blocks on those defines.
-    Group<TensorBinding> writer_tensor_bindings;
-    KernelSpec::CompilerOptions::Defines writer_defines;
-    if (has_input_grad) {
-        writer_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = INPUT_GRAD, .accessor_name = "s0"});
-        writer_defines.emplace("HAS_INPUT_GRAD", "1");
-    }
-    if (has_other_grad) {
-        writer_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = OTHER_GRAD, .accessor_name = "s1"});
-        writer_defines.emplace("HAS_OTHER_GRAD", "1");
-    }
-
+    // input_grad / other_grad are optional outputs. Kernel binding lists always name them; the
+    // binding is null when this ProgramSpec omits the matching TensorParameter / DFB.
     KernelSpec writer{
         .unique_id = WRITER,
         .source = WRITER_KERNEL_PATH,
-        .compiler_options = {.defines = std::move(writer_defines)},
-        // OUT0 / OUT1 are program-local DFBs, bound 1P+1C unconditionally; whether they
-        // are exercised is gated at runtime (compute) / at compile time (writer, via the
-        // HAS_*_GRAD defines above).
         .dfb_bindings =
             {
                 DFBBinding{.dfb_spec_name = OUT0, .accessor_name = "out0", .endpoint_type = DFBEndpointType::CONSUMER},
                 DFBBinding{.dfb_spec_name = OUT1, .accessor_name = "out1", .endpoint_type = DFBEndpointType::CONSUMER},
             },
-        .tensor_bindings = std::move(writer_tensor_bindings),
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = INPUT_GRAD, .accessor_name = "s0"},
+                TensorBinding{.tensor_parameter_name = OTHER_GRAD, .accessor_name = "s1"},
+            },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(output_grad.device().arch()),
     };
@@ -151,7 +146,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
                 DFBBinding{.dfb_spec_name = OUT0, .accessor_name = "out0", .endpoint_type = DFBEndpointType::PRODUCER},
                 DFBBinding{.dfb_spec_name = OUT1, .accessor_name = "out1", .endpoint_type = DFBEndpointType::PRODUCER},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"has_input_grad", "has_other_grad", "per_core_block_cnt"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
         .hw_config = ComputeHardwareConfig{ComputeGen1Config{}},
     };
 
@@ -159,7 +154,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
     ProgramSpec spec;
     spec.name = "moreh_dot_backward";
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
-    spec.dataflow_buffers = {make_dfb(IN0), make_dfb(IN1), make_dfb(IN2), make_dfb(OUT0), make_dfb(OUT1)};
+    spec.dataflow_buffers = std::move(dataflow_buffers);
     spec.tensor_parameters = std::move(tensor_parameters);
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}};
 
@@ -168,12 +163,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
     run_args.kernel_run_args = {
         KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
-                node,
-                {{"has_input_grad", static_cast<uint32_t>(has_input_grad)},
-                 {"has_other_grad", static_cast<uint32_t>(has_other_grad)},
-                 {"num_tiles", num_tiles},
-                 {"start_id", 0u}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles}, {"start_id", 0u}}),
         },
         KernelRunArgs{
             .kernel = WRITER,
@@ -181,11 +171,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
         },
         KernelRunArgs{
             .kernel = COMPUTE,
-            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
-                node,
-                {{"has_input_grad", static_cast<uint32_t>(has_input_grad)},
-                 {"has_other_grad", static_cast<uint32_t>(has_other_grad)},
-                 {"per_core_block_cnt", num_tiles}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"per_core_block_cnt", num_tiles}}),
         },
     };
 

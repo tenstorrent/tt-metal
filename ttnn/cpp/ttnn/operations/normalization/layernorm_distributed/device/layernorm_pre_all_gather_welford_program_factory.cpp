@@ -185,11 +185,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
         "compute kernel config; otherwise precision is silently lost in the unpacker format "
         "conversion.");
 
-    m2::KernelSpec::CompilerOptions::Defines fuse_defines;
-    if (fuse_pre_add) {
-        fuse_defines.emplace("FUSE_PRE_ADD", "1");
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Dataflow buffers
     ////////////////////////////////////////////////////////////////////////////
@@ -223,10 +218,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
     ////////////////////////////////////////////////////////////////////////////
     //                      Kernels
     ////////////////////////////////////////////////////////////////////////////
+    // Residual DFB/tensor (and fused/spill intermediates) are omitted from the program when unused.
+    // Kernel binding lists still name them (kernel arity); a missing resource is a null binding.
     m2::KernelSpec reader{
         .unique_id = PREWF_READER,
         .source = PREWF_READER_KERNEL,
-        .compiler_options = {.defines = fuse_defines},
         .dfb_bindings =
             {
                 m2::DFBBinding{
@@ -242,18 +238,20 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
                     .dfb_spec_name = PREWF_SCRATCH,
                     .accessor_name = "reduce",
                     .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = PREWF_RESIDUAL,
+                    .accessor_name = "res",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
             },
-        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PREWF_INPUT_T, .accessor_name = "src"}},
+        .tensor_bindings =
+            {
+                m2::TensorBinding{.tensor_parameter_name = PREWF_INPUT_T, .accessor_name = "src"},
+                m2::TensorBinding{.tensor_parameter_name = PREWF_RESIDUAL_T, .accessor_name = "res_src"},
+            },
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "Wt", "tile_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
-    if (fuse_pre_add) {
-        reader.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = PREWF_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::PRODUCER});
-        reader.tensor_bindings.push_back(
-            m2::TensorBinding{.tensor_parameter_name = PREWF_RESIDUAL_T, .accessor_name = "res_src"});
-    }
 
     m2::KernelSpec writer{
         .unique_id = PREWF_WRITER,
@@ -270,7 +268,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
     m2::KernelSpec compute{
         .unique_id = PREWF_COMPUTE,
         .source = PREWF_COMPUTE_KERNEL,
-        .compiler_options = {.defines = fuse_defines, .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 m2::DFBBinding{
@@ -283,6 +281,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
                     .endpoint_type = m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{
                     .dfb_spec_name = PREWF_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = PREWF_RESIDUAL,
+                    .accessor_name = "res",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
             },
         .compile_time_args =
             {{"Wt", Wt},
@@ -295,13 +297,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
     // The reciprocal table has no FIFO traffic at all: the kernel reads it by base pointer. It is
     // that kernel's only endpoint, so it takes both roles.
     bind_self_loop(compute, PREWF_RECIP, "recip");
-    if (fuse_pre_add) {
-        compute.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = PREWF_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::CONSUMER});
-        bind_self_loop(compute, PREWF_FUSED, "fused");
-        bind_self_loop(compute, PREWF_MEAN_SPILL, "mean_spill");
-        bind_self_loop(compute, PREWF_M2_SPILL, "m2_spill");
-    }
+    bind_self_loop(compute, PREWF_FUSED, "fused");
+    bind_self_loop(compute, PREWF_MEAN_SPILL, "mean_spill");
+    bind_self_loop(compute, PREWF_M2_SPILL, "m2_spill");
 
     auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
     // When welford_unpack_fp32_active:

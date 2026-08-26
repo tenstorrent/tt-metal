@@ -337,7 +337,7 @@ void kernel_main() {
     constexpr bool pack_relu = get_arg(args::pack_relu);
     constexpr bool packer_untilize = get_arg(args::packer_untilize);
     constexpr bool packer_l1_acc = get_arg(args::packer_l1_acc);
-    constexpr bool fuse_bias = get_arg(args::fuse_bias);
+    constexpr bool fuse_bias = !is_null_binding(dfb::bias);
     constexpr bool split_reader = get_arg(args::split_reader);
     constexpr bool activation_reuse = get_arg(args::activation_reuse);
 
@@ -364,9 +364,6 @@ void kernel_main() {
 
     [[maybe_unused]] uint32_t bias_block_offset = 0;
     [[maybe_unused]] constexpr uint32_t bias_ntiles_w = get_arg(args::bias_ntiles_w);
-#ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = dfb::bias;
-#endif
     constexpr uint32_t mm_out_cb_id = fuse_bias ? matmul_partials_cb : untilize_mode_out_cb_id;
 
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
@@ -385,9 +382,6 @@ void kernel_main() {
     DataflowBuffer cb_matmul_partials(matmul_partials_cb);
     DataflowBuffer cb_mm_out(mm_out_cb_id);
     DataflowBuffer cb_out(out_cb_id);
-#ifdef FUSE_BIAS
-    DataflowBuffer cb_bias(bias_cb_id);
-#endif
     DataflowBuffer cb_untilize_mode_out(untilize_mode_out_cb_id);
 
     [[maybe_unused]] const uint32_t out_cb_tiles =
@@ -876,8 +870,8 @@ void kernel_main() {
                 continue;
             }
 #endif
-#ifdef FUSE_BIAS
-            if constexpr (fuse_bias) {
+            with_nullable_token(dfb::bias, [&](DFBBindingToken const& token) {
+                DataflowBuffer cb_bias(token);
                 if constexpr (pack_relu) {
                     PACK((llk_pack_relu_config(ReluConfig::zero())));
                 }
@@ -893,8 +887,8 @@ void kernel_main() {
                 // fix, at a higher L1 addr). Repoint the pack BD to the actual pack target CB.
                 PACK((llk_pack_init(untilize_mode_out_cb_id)));
 #endif
-                reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
-                add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
+                reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, token);
+                add_bcast_rows_init_short(matmul_partials_cb, token);
 
                 cb_bias.wait_front(bias_ntiles_w);
                 cb_matmul_partials.wait_front(out_block_num_tiles);
@@ -906,7 +900,7 @@ void kernel_main() {
                         for (uint32_t h = 0; h < out_subblock_h; ++h) {
                             uint32_t bcast_tile_i = bias_block_offset + in1_index_subblock_offset;
                             for (uint32_t w = 0; w < out_subblock_w; ++w) {
-                                add_tiles_bcast_rows(matmul_partials_cb, bias_cb_id, i, bcast_tile_i, i);
+                                add_tiles_bcast_rows(matmul_partials_cb, token, i, bcast_tile_i, i);
                                 ++bcast_tile_i;
                                 ++i;
                             }
@@ -946,8 +940,7 @@ void kernel_main() {
                     UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
                     PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
                 }
-            }
-#endif  // FUSE_BIAS
+            });
             if constexpr (untilize_out) {
                 if constexpr (packer_l1_acc) {
                     pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
@@ -980,20 +973,16 @@ void kernel_main() {
                 }
             }
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
-#ifdef FUSE_BIAS
-                if constexpr (fuse_bias) {
-                    reconfig_data_format(matmul_partials_cb, in1_cb_id, bias_cb_id, mm_in0_cb_id);
-                } else
-#endif
-                {
+                with_nullable_token(dfb::bias, [&](const DFBBindingToken& token) {
+                    reconfig_data_format(matmul_partials_cb, in1_cb_id, token, mm_in0_cb_id);
+                });
+                if constexpr (is_null_binding(dfb::bias)) {
                     reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
                 }
             }
         }  // for in0_num_blocks_h
-#ifdef FUSE_BIAS
         if constexpr (fuse_bias) {
             bias_block_offset += in1_block_w;
         }
-#endif
     }  // for in1_num_blocks_w
 }  // void kernel_main()

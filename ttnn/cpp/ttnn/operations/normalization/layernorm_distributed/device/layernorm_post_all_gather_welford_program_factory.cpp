@@ -303,19 +303,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
 
     uint32_t eps = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
 
-    // gamma and beta are optional, and the kernel-side handle for a buffer exists only where the host
-    // binds that buffer: the build emits `dfb::gamma` into a kernel's generated bindings only if this
-    // factory gave that kernel a gamma binding. So when gamma is absent, a kernel's source must not
-    // contain the text `dfb::gamma` at all. Gating the use with `if constexpr` does not achieve that,
-    // the gate has to be `#ifdef`, which removes the text before the compiler sees it.
-    // These two defines are what the kernels gate on.
-    m2::KernelSpec::CompilerOptions::Defines gb_defines;
-    if (gamma.has_value()) {
-        gb_defines.emplace("FUSE_GAMMA", "1");
-    }
-    if (beta.has_value()) {
-        gb_defines.emplace("FUSE_BETA", "1");
-    }
+    // Optional γ/β (and the x_normed / times_gamma_out staging DFBs they induce) stay on every
+    // KernelSpec binding list under their real names. Presence is whether this program declares
+    // the matching DFB / TensorParameter; do not emit FUSE_GAMMA / FUSE_BETA.
 
     // The normalized result is staged in its own buffer only while gamma or beta still has to be
     // applied; otherwise it is packed straight into the output.
@@ -359,7 +349,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     m2::KernelSpec reader{
         .unique_id = POSTWF_READER,
         .source = POSTWF_READER_KERNEL,
-        .compiler_options = {.defines = gb_defines},
         .dfb_bindings =
             {
                 m2::DFBBinding{
@@ -374,11 +363,21 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                     .dfb_spec_name = POSTWF_EPS,
                     .accessor_name = "eps",
                     .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POSTWF_GAMMA,
+                    .accessor_name = "gamma",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POSTWF_BETA,
+                    .accessor_name = "beta",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
             {
                 m2::TensorBinding{.tensor_parameter_name = POSTWF_INPUT_T, .accessor_name = "src"},
                 m2::TensorBinding{.tensor_parameter_name = POSTWF_STATS_T, .accessor_name = "stats_src"},
+                m2::TensorBinding{.tensor_parameter_name = POSTWF_GAMMA_T, .accessor_name = "gamma_src"},
+                m2::TensorBinding{.tensor_parameter_name = POSTWF_BETA_T, .accessor_name = "beta_src"},
             },
         .compile_time_args =
             {{"blk", block_size},
@@ -395,18 +394,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     // its own scaling and never reads it. The reader is then the buffer's only toucher, so it takes
     // both endpoint roles.
     bind_self_loop(reader, POSTWF_REDUCE, "reduce");
-    if (gamma.has_value()) {
-        reader.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = POSTWF_GAMMA, .accessor_name = "gamma", .endpoint_type = m2::DFBEndpointType::PRODUCER});
-        reader.tensor_bindings.push_back(
-            m2::TensorBinding{.tensor_parameter_name = POSTWF_GAMMA_T, .accessor_name = "gamma_src"});
-    }
-    if (beta.has_value()) {
-        reader.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = POSTWF_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::PRODUCER});
-        reader.tensor_bindings.push_back(
-            m2::TensorBinding{.tensor_parameter_name = POSTWF_BETA_T, .accessor_name = "beta_src"});
-    }
 
     m2::KernelSpec writer{
         .unique_id = POSTWF_WRITER,
@@ -423,7 +410,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     m2::KernelSpec compute{
         .unique_id = POSTWF_COMPUTE,
         .source = compute_kernel_file,
-        .compiler_options = {.defines = gb_defines, .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 m2::DFBBinding{
@@ -442,6 +429,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                     .dfb_spec_name = POSTWF_OUT,
                     .accessor_name = "out",
                     .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POSTWF_GAMMA,
+                    .accessor_name = "gamma",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = POSTWF_BETA,
+                    .accessor_name = "beta",
+                    .endpoint_type = m2::DFBEndpointType::CONSUMER},
             },
         .compile_time_args =
             {{"Wt", tiles_per_core_y},
@@ -458,20 +453,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     bind_self_loop(compute, POSTWF_STATS_REDUCED, "stats_reduced");
     bind_self_loop(compute, POSTWF_RECIP_SQRT_VAR, "recip_sqrt_var");
     bind_self_loop(compute, POSTWF_X_MINUS_MEAN, "x_minus_mean");
-    if (uses_x_normed) {
-        bind_self_loop(compute, POSTWF_X_NORMED, "x_normed");
-    }
-    if (uses_times_gamma_out) {
-        bind_self_loop(compute, POSTWF_TIMES_GAMMA_OUT, "times_gamma_out");
-    }
-    if (gamma.has_value()) {
-        compute.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = POSTWF_GAMMA, .accessor_name = "gamma", .endpoint_type = m2::DFBEndpointType::CONSUMER});
-    }
-    if (beta.has_value()) {
-        compute.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = POSTWF_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::CONSUMER});
-    }
+    bind_self_loop(compute, POSTWF_X_NORMED, "x_normed");
+    bind_self_loop(compute, POSTWF_TIMES_GAMMA_OUT, "times_gamma_out");
 
     auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
     // UnpackToDest only helps for buffers whose only consumer is an op that supports the

@@ -467,6 +467,7 @@ static void populate_writer_sender_runtime_args(
                     core,
                     {
                         {"out_start_tile_id_w", out_start_tile_id_w},
+                        {"bias_tile_offset", bias_tile_offset},
                         {"mcast_dest_noc_start_x", mcast[0]},
                         {"mcast_dest_noc_start_y", mcast[1]},
                         {"mcast_dest_noc_end_x", mcast[2]},
@@ -476,9 +477,6 @@ static void populate_writer_sender_runtime_args(
                         // remaining_tiles_to_push is always in the 1D schema (activation reuse deferred -> 0).
                         {"remaining_tiles_to_push", 0u},
                     });
-                if (has_bias) {
-                    writer_sender_rtas["bias_tile_offset"][core] = bias_tile_offset;
-                }
             }
         }
     }
@@ -1864,7 +1862,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             if (is_sender) {
                 ctas.insert({"weight_block_height_num_outer_in", out_conv_c_blocks});
             }
-            ctas.insert({"fuse_bias", (uint32_t)has_bias});
             ctas.insert({"split_reader_enabled", (uint32_t)enable_split_reader});
             ctas.insert({"window_outer", (uint32_t)window_outer});
             ctas.insert({"act_block_num_tiles_split_last", (uint32_t)act_block_num_tiles_split_last});
@@ -1890,7 +1887,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             }
             ctas.insert({"bias_ntiles", bias_ntiles_per_core});
             ctas.insert({"out_num_blocks_h", num_blocks_act_h_per_core});
-            ctas.insert({"fuse_bias", (uint32_t)has_bias});
             ctas.insert({"split_reader_enabled", (uint32_t)enable_split_reader});
             ctas.insert({"activation_reuse_enabled", (uint32_t)(enable_activation_reuse && height_sharded)});
             ctas.insert({"act_block_num_tiles", (uint32_t)act_block_num_tiles});
@@ -1925,20 +1921,22 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         std::vector<m2::DFBBinding> bindings;
         bindings.push_back(m2::DFBBinding{
             .dfb_spec_name = DFB_WEIGHTS, .accessor_name = "weights", .endpoint_type = m2::DFBEndpointType::PRODUCER});
-        if (has_bias) {
-            bindings.push_back(m2::DFBBinding{
-                .dfb_spec_name = DFB_BIAS, .accessor_name = "bias", .endpoint_type = m2::DFBEndpointType::PRODUCER});
-        }
+        // Always list bias: null when DFB_BIAS / TP_BIAS are not declared on this ProgramSpec.
+        bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = DFB_BIAS, .accessor_name = "bias", .endpoint_type = m2::DFBEndpointType::PRODUCER});
         return bindings;
     };
-    auto build_writer_tensor_bindings = [&]() {
-        std::vector<m2::TensorBinding> bindings = {
+    auto build_writer_sender_tensor_bindings = [&]() {
+        // Sender kernels name tensor::weights and tensor::bias (DRAM reads). Receiver kernels do not.
+        return std::vector<m2::TensorBinding>{
+            m2::TensorBinding{.tensor_parameter_name = TP_WEIGHTS, .accessor_name = "weights"},
+            m2::TensorBinding{.tensor_parameter_name = TP_BIAS, .accessor_name = "bias"},
+        };
+    };
+    auto build_writer_receiver_tensor_bindings = [&]() {
+        return std::vector<m2::TensorBinding>{
             m2::TensorBinding{.tensor_parameter_name = TP_WEIGHTS, .accessor_name = "weights"},
         };
-        if (has_bias) {
-            bindings.push_back(m2::TensorBinding{.tensor_parameter_name = TP_BIAS, .accessor_name = "bias"});
-        }
-        return bindings;
     };
 
     // ---- writer mcast SENDER ----
@@ -1958,7 +1956,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .source = std::filesystem::path(writer_sender_kernel),
         .dfb_bindings = build_writer_dfb_bindings(),
         .semaphore_bindings = {},
-        .tensor_bindings = build_writer_tensor_bindings(),
+        .tensor_bindings = build_writer_sender_tensor_bindings(),
         .compile_time_args = build_writer_ctas(/*is_sender=*/true),
         .hw_config = std::move(writer_sender_hw),
     };
@@ -1983,22 +1981,18 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                  "skip_work"},
         };
     } else {
-        // 1D sender: bias_tile_offset is read only under #ifdef FUSE_BIAS; remaining_tiles_to_push is
-        // always referenced (in a constexpr-false ternary), so its name must exist.
-        std::vector<std::string> names = {"out_start_tile_id_w"};
-        if (has_bias) {
-            names.push_back("bias_tile_offset");
-        }
-        names.insert(
-            names.end(),
-            {"mcast_dest_noc_start_x",
-             "mcast_dest_noc_start_y",
-             "mcast_dest_noc_end_x",
-             "mcast_dest_noc_end_y",
-             "weights_mcast_num_dests",
-             "weights_mcast_num_cores",
-             "remaining_tiles_to_push"});
-        writer_sender_spec.runtime_arg_schema = {.runtime_arg_names = names};
+        // 1D sender always names args::bias_tile_offset (used inside with_nullable_token).
+        writer_sender_spec.runtime_arg_schema = {
+            .runtime_arg_names = {
+                "out_start_tile_id_w",
+                "bias_tile_offset",
+                "mcast_dest_noc_start_x",
+                "mcast_dest_noc_start_y",
+                "mcast_dest_noc_end_x",
+                "mcast_dest_noc_end_y",
+                "weights_mcast_num_dests",
+                "weights_mcast_num_cores",
+                "remaining_tiles_to_push"}};
     }
 
     // ---- writer mcast RECEIVER ----
@@ -2017,7 +2011,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .source = std::filesystem::path(writer_receiver_kernel),
         .dfb_bindings = build_writer_dfb_bindings(),
         .semaphore_bindings = {},
-        .tensor_bindings = build_writer_tensor_bindings(),
+        .tensor_bindings = build_writer_receiver_tensor_bindings(),
         .compile_time_args = build_writer_ctas(/*is_sender=*/false),
         .hw_config = std::move(writer_receiver_hw),
     };
@@ -2042,9 +2036,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     // Writer defines.
     auto apply_writer_defines = [&](m2::KernelSpec& k, bool is_sender) {
-        if (has_bias) {
-            k.compiler_options.defines.insert({"FUSE_BIAS", "1"});
-        }
         if (enable_split_reader) {
             k.compiler_options.defines.insert({"SPLIT_READER", "1"});
         }
@@ -2172,10 +2163,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .accessor_name = "act_tilized",
                 .endpoint_type = m2::DFBEndpointType::CONSUMER});
         }
-        if (has_bias) {
-            compute_dfb_bindings.push_back(m2::DFBBinding{
-                .dfb_spec_name = DFB_BIAS, .accessor_name = "bias", .endpoint_type = m2::DFBEndpointType::CONSUMER});
-        }
+        // Always list bias: null when DFB_BIAS is not declared on this ProgramSpec.
+        compute_dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = DFB_BIAS, .accessor_name = "bias", .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
 
     m2::KernelSpec compute_kernel_spec{
@@ -2230,7 +2220,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             {"pack_relu", (uint32_t)pack_relu},
             {"packer_untilize", (uint32_t)(weight_block_w_ntiles <= 8)},
             {"packer_l1_acc", (uint32_t)packer_l1_acc_en},
-            {"fuse_bias", (uint32_t)has_bias},
             {"split_reader", (uint32_t)enable_split_reader},
             {"activation_reuse", (uint32_t)enable_activation_reuse},
         };
@@ -2253,9 +2242,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         }
         compute_kernel_spec.compile_time_args.insert({"split_reader_cb_shared", 0u});
 
-        if (has_bias) {
-            compute_kernel_spec.compiler_options.defines.insert({"FUSE_BIAS", "1"});
-        }
         if (block_sharded) {
             // Only the block-sharded (mcast) path binds dfb::act_row_major on compute; the define guards
             // the kernel's in0_pretilize_cb_id = dfb::act_row_major reference (height-sharded has no

@@ -38,6 +38,9 @@ const DFBSpecName RO_IN1_DFB{"in1"};
 const DFBSpecName RO_OUT_DFB{"out"};
 const DFBSpecName RO_INTERM0_DFB{"intermed0"};
 const DFBSpecName RO_IN0_TRANSPOSE_DFB{"in0_transposed"};
+// Always listed on the compute KernelSpec; never declared on this ProgramSpec (this factory has no
+// fused-bias path). Device token is NullDFBBindingToken.
+const DFBSpecName RO_BIAS_DFB{"cb_bias"};
 
 const TensorParamName RO_IN0_TENSOR{"in0"};
 const TensorParamName RO_IN1_TENSOR{"in1"};
@@ -483,6 +486,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 .dfb_spec_name = RO_INTERM0_DFB,
                 .accessor_name = "cb_intermed0",
                 .endpoint_type = DFBEndpointType::CONSUMER},
+            // Always listed; this factory never declares RO_BIAS_DFB, so the device token is null.
+            DFBBinding{
+                .dfb_spec_name = RO_BIAS_DFB, .accessor_name = "cb_bias", .endpoint_type = DFBEndpointType::CONSUMER},
         };
         if (in0_transpose_tile) {
             // The compute kernel both produces (transposes into) and consumes the transposed in0 DFB.
@@ -521,6 +527,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                     {"out_block_num_tiles", out_block_tiles},
                     {"untilize_out", (uint32_t)untilize_out},
                     {"get_batch_from_reader", 0u},
+                    {"bias_ntiles", 0u},
+                    {"row_broadcast_bias", 0u},
                 },
             .hw_config = compute_hw_config,
         };

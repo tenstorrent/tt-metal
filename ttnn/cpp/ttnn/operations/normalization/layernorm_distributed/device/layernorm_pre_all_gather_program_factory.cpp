@@ -191,16 +191,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
                      "layernorm_pre_allgather.cpp";
 
-    // The residual buffers exist only on the fused path, and the kernel-side handle for a buffer exists
-    // only where the host binds it, so a kernel's source must not contain the text `dfb::res` when
-    // there is no residual. That means this define is emitted only when the path is taken, and the
-    // kernels gate on `#ifdef`. Emitting it always as "0" or "1" and testing it with `#if` would not
-    // work: the text naming the unbound handle would still reach the compiler.
-    m2::KernelSpec::CompilerOptions::Defines fuse_defines;
-    if (fuse_pre_add) {
-        fuse_defines.emplace("FUSE_PRE_ADD", "1");
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Dataflow buffers
     ////////////////////////////////////////////////////////////////////////////
@@ -220,10 +210,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     ////////////////////////////////////////////////////////////////////////////
     //                      Kernels
     ////////////////////////////////////////////////////////////////////////////
+    // Residual DFB/tensor are omitted from the program when unused. Kernel binding lists still
+    // name them (kernel arity); a missing resource is a null binding.
     m2::KernelSpec reader{
         .unique_id = PRE1D_READER,
         .source = PRE_READER_KERNEL,
-        .compiler_options = {.defines = fuse_defines},
         .dfb_bindings =
             {
                 m2::DFBBinding{
@@ -234,18 +225,20 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
                     .dfb_spec_name = PRE1D_REDUCE,
                     .accessor_name = "reduce",
                     .endpoint_type = m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE1D_RESIDUAL,
+                    .accessor_name = "res",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
             },
-        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE1D_INPUT_T, .accessor_name = "src"}},
+        .tensor_bindings =
+            {
+                m2::TensorBinding{.tensor_parameter_name = PRE1D_INPUT_T, .accessor_name = "src"},
+                m2::TensorBinding{.tensor_parameter_name = PRE1D_RESIDUAL_T, .accessor_name = "res_src"},
+            },
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "Wt", "tile_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
-    if (fuse_pre_add) {
-        reader.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = PRE1D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::PRODUCER});
-        reader.tensor_bindings.push_back(
-            m2::TensorBinding{.tensor_parameter_name = PRE1D_RESIDUAL_T, .accessor_name = "res_src"});
-    }
 
     m2::KernelSpec writer{
         .unique_id = PRE1D_WRITER,
@@ -262,7 +255,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     m2::KernelSpec compute{
         .unique_id = PRE1D_COMPUTE,
         .source = compute_kernel_file,
-        .compiler_options = {.defines = fuse_defines, .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 m2::DFBBinding{
@@ -276,19 +269,17 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
                 m2::DFBBinding{
                     .dfb_spec_name = PRE1D_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
             },
-        .compile_time_args =
-            {{"Wt", Wt}, {"blk", block_size}, {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
+        .compile_time_args = {{"Wt", Wt}, {"blk", block_size}, {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
         .hw_config = compute_hw,
     };
     // x^2 and the fused a + b are private to the compute kernel: it packs into them and unpacks them
-    // back, so it is the buffer's only endpoint on both sides.
+    // back, so it is the buffer's only endpoint on both sides. Residual names are always listed
+    // (null when the DFB is omitted); both the layernorm and rmsnorm compute kernels use them.
     bind_self_loop(compute, PRE1D_X2, "x2");
-    if (fuse_pre_add) {
-        bind_self_loop(compute, PRE1D_FUSED, "fused");
-        compute.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = PRE1D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::CONSUMER});
-    }
+    bind_self_loop(compute, PRE1D_FUSED, "fused");
+    compute.dfb_bindings.push_back(m2::DFBBinding{
+        .dfb_spec_name = PRE1D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::CONSUMER});
     auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
     // With the 32-bit Dest register enabled, every Float32 buffer the compute kernel consumes needs an
     // explicit unpack mode. Here each one feeds an FPU op (mul_tiles for x**2, the row reduce for the
@@ -502,11 +493,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     }
     const bool has_worker_cores = worker_cores.num_cores() > 0;
 
-    m2::KernelSpec::CompilerOptions::Defines fuse_defines;
-    if (fuse_pre_add) {
-        fuse_defines.emplace("FUSE_PRE_ADD", "1");
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Dataflow buffers
     ////////////////////////////////////////////////////////////////////////////
@@ -536,10 +522,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     ////////////////////////////////////////////////////////////////////////////
     //                      Kernels
     ////////////////////////////////////////////////////////////////////////////
+    // Residual DFB/tensor are omitted from the program when unused. Kernel binding lists still
+    // name them (kernel arity); a missing resource is a null binding.
     m2::KernelSpec reader{
         .unique_id = PRE2D_READER,
         .source = PRE2D_READER_KERNEL,
-        .compiler_options = {.defines = fuse_defines},
         .dfb_bindings =
             {
                 m2::DFBBinding{
@@ -562,21 +549,23 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                     .dfb_spec_name = PRE2D_PARTIAL_OUT,
                     .accessor_name = "out",
                     .endpoint_type = m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{
+                    .dfb_spec_name = PRE2D_RESIDUAL,
+                    .accessor_name = "res",
+                    .endpoint_type = m2::DFBEndpointType::PRODUCER},
             },
         .semaphore_bindings = {m2::SemaphoreBinding{.semaphore_spec_name = PRE2D_REDUCER, .accessor_name = "reducer"}},
-        .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE2D_INPUT_T, .accessor_name = "src"}},
+        .tensor_bindings =
+            {
+                m2::TensorBinding{.tensor_parameter_name = PRE2D_INPUT_T, .accessor_name = "src"},
+                m2::TensorBinding{.tensor_parameter_name = PRE2D_RESIDUAL_T, .accessor_name = "res_src"},
+            },
         .compile_time_args = {{"blk", block_size}, {"num_cores_to_wait", cores_y}},
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"NCHt", "Wt", "tile_offset", "is_merge_core", "reduce_core_noc_x", "reduce_core_noc_y", "y"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
-    if (fuse_pre_add) {
-        reader.dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = PRE2D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::PRODUCER});
-        reader.tensor_bindings.push_back(
-            m2::TensorBinding{.tensor_parameter_name = PRE2D_RESIDUAL_T, .accessor_name = "res_src"});
-    }
 
     m2::KernelSpec writer{
         .unique_id = PRE2D_WRITER,
@@ -594,7 +583,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     // merge flag is a compile-time define rather than a runtime arg because it selects which buffers
     // are bound, and an unbound handle cannot be named even on a dead branch.
     auto make_compute = [&](const m2::KernelSpecName& unique_id, bool is_merge_core) {
-        auto defines = fuse_defines;
+        m2::KernelSpec::CompilerOptions::Defines defines;
         if (is_merge_core) {
             defines.emplace("IS_MERGE_CORE", "1");
         }
@@ -634,13 +623,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
             .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
         };
         bind_self_loop(compute, PRE2D_X2, "x2");
-        if (fuse_pre_add) {
-            bind_self_loop(compute, PRE2D_FUSED, "fused");
-            compute.dfb_bindings.push_back(m2::DFBBinding{
-                .dfb_spec_name = PRE2D_RESIDUAL,
-                .accessor_name = "res",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER});
-        }
+        bind_self_loop(compute, PRE2D_FUSED, "fused");
+        compute.dfb_bindings.push_back(m2::DFBBinding{
+            .dfb_spec_name = PRE2D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::CONSUMER});
         if (is_merge_core) {
             compute.dfb_bindings.push_back(m2::DFBBinding{
                 .dfb_spec_name = PRE2D_OUT_FINAL,

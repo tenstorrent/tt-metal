@@ -47,13 +47,6 @@ void kernel_main() {
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();
 
-#ifdef FUSE_PRE_ADD
-    // Residual tiles, added to the input by the compute kernel before the statistics pass.
-    DataflowBuffer dfb_res_buf(dfb::res);
-    const uint32_t src1_tile_bytes = dfb_res_buf.get_tile_size();
-    const auto src_b = TensorAccessor(tensor::res_src);
-#endif
-
     // Generate constant tiles for reduce scalar
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         dfb::reduce,
@@ -70,9 +63,10 @@ void kernel_main() {
         // read input tiles
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_inp_buf.reserve_back(blk);
-#ifdef FUSE_PRE_ADD
-            dfb_res_buf.reserve_back(blk);
-#endif
+            with_nullable_token(dfb::res, [&](const DFBBindingToken& res_tok) {
+                DataflowBuffer dfb_res_buf(res_tok);
+                dfb_res_buf.reserve_back(blk);
+            });
 
             for (uint32_t r = 0; r < blk; r++) {
                 noc.async_read(
@@ -81,22 +75,29 @@ void kernel_main() {
                     src0_tile_bytes,
                     {.page_id = inp_tile_idx},
                     {.offset_bytes = r * src0_tile_bytes});
-#ifdef FUSE_PRE_ADD
-                noc.async_read(
-                    src_b,
-                    dfb_res_buf,
-                    src1_tile_bytes,
-                    {.page_id = inp_tile_idx},
-                    {.offset_bytes = r * src1_tile_bytes});
-#endif
+                // Residual tiles, added to the input by the compute kernel before the statistics pass.
+                with_nullable_token(dfb::res, [&](const DFBBindingToken& res_tok) {
+                    with_nullable_token(tensor::res_src, [&](const auto& res_src_tok) {
+                        DataflowBuffer dfb_res_buf(res_tok);
+                        const auto src_b = TensorAccessor(res_src_tok);
+                        const uint32_t src1_tile_bytes = dfb_res_buf.get_tile_size();
+                        noc.async_read(
+                            src_b,
+                            dfb_res_buf,
+                            src1_tile_bytes,
+                            {.page_id = inp_tile_idx},
+                            {.offset_bytes = r * src1_tile_bytes});
+                    });
+                });
                 inp_tile_idx++;
             }
             noc.async_read_barrier();
 
             dfb_inp_buf.push_back(blk);
-#ifdef FUSE_PRE_ADD
-            dfb_res_buf.push_back(blk);
-#endif
+            with_nullable_token(dfb::res, [&](const DFBBindingToken& res_tok) {
+                DataflowBuffer dfb_res_buf(res_tok);
+                dfb_res_buf.push_back(blk);
+            });
 
         }  // wt loop
 

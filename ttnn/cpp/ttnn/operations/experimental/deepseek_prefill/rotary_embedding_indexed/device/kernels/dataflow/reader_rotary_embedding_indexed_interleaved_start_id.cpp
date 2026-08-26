@@ -23,10 +23,10 @@
 //
 // my_sp_coord / sp_factor are baked per-device compile-time args (each device's program is built for
 // its own mesh coordinate). The per-call kv_actual_global reaches the reader one of two ways, selected
-// by the HAS_METADATA compile-time flag (set by the op from whether a metadata tensor was supplied; both
-// keep the value out of the program hash so one cached program is reused across chunks):
+// by whether this ProgramSpec declared the optional metadata tensor (tensor::metadata / dfb::meta);
+// both keep the value out of the program hash so one cached program is reused across chunks:
 //   - scalar path: a common runtime arg (patched on cache hits by override_runtime_arguments).
-//   - metadata path (HAS_METADATA): NoC-read of element [0] of a 1-element uint32 tensor bound as
+//   - metadata path: NoC-read of element [0] of a 1-element uint32 tensor bound as
 //     tensor::metadata, so a captured trace advances the value via an in-place host update.
 void kernel_main() {
     Noc noc;
@@ -48,30 +48,32 @@ void kernel_main() {
     constexpr auto my_sp_coord = get_arg(args::my_sp_coord);
     constexpr auto sp_factor = get_arg(args::sp_factor);
 
-#ifdef HAS_METADATA
-    // Metadata path: read kv_actual_global from element [0] of the 1-element uint32 tensor (4 bytes).
-    // #ifdef-gated because tensor::metadata / dfb::meta are bound only on the metadata program.
-    const auto s_meta = TensorAccessor(tensor::metadata);
-    DataflowBuffer dfb_meta(dfb::meta);
-    dfb_meta.reserve_back(1);
-    uint32_t meta_l1_write_addr = dfb_meta.get_write_ptr();
-    noc.async_read(s_meta, CoreLocalMem<uint32_t>(meta_l1_write_addr), 4, {.page_id = 0}, {});
-    noc.async_read_barrier();
-    // The metadata tensor lives at a FIXED DRAM address reused across every chunk/layer/rope call;
-    // the host updates its contents in place each chunk. After the NoC writes the fresh value into
-    // this core's dfb_meta L1 page, the RISC data cache may still hold the PREVIOUS chunk's value for
-    // that L1 line: async_read_barrier orders the DMA but does NOT invalidate the RISC cache, and
-    // `volatile` forces a load but still reads the cached line. Whether the line was evicted is
-    // timing-dependent, so without this invalidate the read is intermittently STALE -> a wrong
-    // rotation offset that compounds (the L61 metadata KV-PCC run-to-run non-determinism).
-    // invalidate_l1_cache() forces a refetch of the freshly-DMA'd value.
-    invalidate_l1_cache();
-    CoreLocalMem<volatile uint32_t> meta(meta_l1_write_addr);
-    const uint32_t kv_actual_global = meta[0];  // the 1-element tensor holds kv_actual_global directly
-    dfb_meta.push_back(1);
-#else
-    const uint32_t kv_actual_global = get_arg(args::kv_actual_global);
-#endif
+    // Scalar path default. When this program declared metadata, overwrite from element [0] of the
+    // 1-element uint32 tensor (4 bytes). Construct TensorAccessor / DataflowBuffer from the
+    // with_nullable_token parameters — tensor::metadata / dfb::meta are null on the scalar program.
+    uint32_t kv_actual_global = get_arg(args::kv_actual_global);
+    with_nullable_token(tensor::metadata, [&](const auto& meta_tok) {
+        with_nullable_token(dfb::meta, [&](const auto& dfb_tok) {
+            const auto s_meta = TensorAccessor(meta_tok);
+            DataflowBuffer dfb_meta(dfb_tok);
+            dfb_meta.reserve_back(1);
+            uint32_t meta_l1_write_addr = dfb_meta.get_write_ptr();
+            noc.async_read(s_meta, CoreLocalMem<uint32_t>(meta_l1_write_addr), 4, {.page_id = 0}, {});
+            noc.async_read_barrier();
+            // The metadata tensor lives at a FIXED DRAM address reused across every chunk/layer/rope call;
+            // the host updates its contents in place each chunk. After the NoC writes the fresh value into
+            // this core's dfb_meta L1 page, the RISC data cache may still hold the PREVIOUS chunk's value for
+            // that L1 line: async_read_barrier orders the DMA but does NOT invalidate the RISC cache, and
+            // `volatile` forces a load but still reads the cached line. Whether the line was evicted is
+            // timing-dependent, so without this invalidate the read is intermittently STALE -> a wrong
+            // rotation offset that compounds (the L61 metadata KV-PCC run-to-run non-determinism).
+            // invalidate_l1_cache() forces a refetch of the freshly-DMA'd value.
+            invalidate_l1_cache();
+            CoreLocalMem<volatile uint32_t> meta(meta_l1_write_addr);
+            kv_actual_global = meta[0];  // the 1-element tensor holds kv_actual_global directly
+            dfb_meta.push_back(1);
+        });
+    });
 
     // Convert the per-call kv_actual_global (tokens) to tiles.
     const uint32_t kv_actual_global_t = kv_actual_global / tile_height;

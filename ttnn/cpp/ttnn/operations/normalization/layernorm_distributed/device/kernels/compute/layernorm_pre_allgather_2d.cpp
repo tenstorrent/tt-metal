@@ -22,14 +22,21 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 
 namespace pre_add = norm::kernel_util::compute::pre_add;
 
-// The statistics pass reads either the raw input or the fused a + b result, depending on whether a
-// residual was supplied. Only the buffer selected here is bound on this build, so the alias is gated
-// at the preprocessor: naming an unbound handle would not compile even on a discarded branch.
-#ifdef FUSE_PRE_ADD
-constexpr auto dfb_inp_id = dfb::fused;  // fused a + b
-#else
-constexpr auto dfb_inp_id = dfb::in0;  // just a
-#endif
+// Statistics read fused a + b when residual is bound, otherwise the raw input. dest() always
+// yields a real DFBBindingToken, so later stages can pack/reduce to it in every compile.
+constexpr DFBBindingToken dest(DFBBindingToken opt, DFBBindingToken) { return opt; }
+constexpr DFBBindingToken dest(NullDFBBindingToken, DFBBindingToken fallback) { return fallback; }
+
+constexpr auto dfb_inp_id = dest(dfb::fused, dfb::in0);
+
+template <typename ResTok>
+void hw_startup(ResTok res_tok) {
+    if constexpr (!is_null_binding(res_tok)) {
+        compute_kernel_hw_startup(dfb::in0, res_tok, dfb_inp_id);
+    } else {
+        compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
+    }
+}
 
 void kernel_main() {
     constexpr auto NCHt = get_arg(args::NCHt);
@@ -43,28 +50,22 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-#ifdef FUSE_PRE_ADD
-    compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
-#else
-    compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
-#endif
+    hw_startup(dfb::res);
 
     DataflowBuffer dfb_inp(dfb_inp_id);
     DataflowBuffer dfb_x2(dfb::x2);
     DataflowBuffer dfb_reduce(dfb::reduce);
-#ifdef FUSE_PRE_ADD
-    DataflowBuffer dfb_in0(dfb::in0);
-    DataflowBuffer dfb_res(dfb::res);  // residual b
-#endif
 #ifdef IS_MERGE_CORE
     DataflowBuffer dfb_zero(dfb::zero);
 #endif
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // Fuse pre-add: dfb_inp = dfb::in0 + dfb::res (absent entirely when there is no residual)
-#ifdef FUSE_PRE_ADD
-        pre_add::one_row<true, unpack_fp32_active>(dfb_in0, dfb_res, dfb_inp, Wt, blk);
-#endif
+        // Fuse pre-add: dfb_inp = dfb::in0 + dfb::res. Skipped when residual is unbound (do not add zeros).
+        with_nullable_token(dfb::res, [&](const DFBBindingToken& res_tok) {
+            DataflowBuffer dfb_in0(dfb::in0);
+            DataflowBuffer dfb_res(res_tok);
+            pre_add::one_row<true, unpack_fp32_active>(dfb_in0, dfb_res, dfb_inp, Wt, blk);
+        });
 
         /*
          * x**2

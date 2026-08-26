@@ -263,10 +263,9 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     spec.dataflow_buffers.push_back(out_dfb);
 
     // TRID staging scratchpad (used only by the non-aligned path; reader fills+drains -> not a DFB / self-loop).
-    // Declared UNCONDITIONALLY: the kernel references `scratch::pad` inside `if constexpr(is_non_aligned)`, and a
-    // non-template if-constexpr still name-checks its discarded branch, so the binding must always exist even when
-    // aligned. Unused (tiny) on the aligned path.
-    {
+    // Declared only when unaligned. The reader always lists the `scratch::pad` binding; omitting this spec
+    // makes that binding null (no dummy pad on the aligned path).
+    if (is_non_aligned) {
         const uint32_t scratch_page =
             tt::align((a.logical_shape()[-1] * a.element_size()) + src_buffer_alignment, src_buffer_alignment);
         spec.scratchpads.push_back(ScratchpadSpec{.unique_id = PS_SCRATCH, .size_per_node = scratch_page * kNumTrids});
@@ -280,13 +279,10 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             "padded_slice_reader_rm_interleaved_start_id.cpp"};
     reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = PS_SRC, .accessor_name = "src"}};
     reader.dfb_bindings = {ProducerOf(PS_OUT_DFB, "in0")};
-    // Always bound (see the ScratchpadSpec note above): the kernel's `scratch::pad` reference must resolve
-    // even when is_non_aligned is false (non-template if-constexpr still name-checks the discarded branch).
+    // Always listed under the real spec name; null iff the ScratchpadSpec was not pushed (aligned).
     reader.scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = PS_SCRATCH, .accessor_name = "pad"}};
     reader.compile_time_args = {
-        {"is_non_aligned", is_non_aligned ? 1u : 0u},
-        {"src_buffer_alignment", static_cast<uint32_t>(src_buffer_alignment)},
-        {"num_trids", kNumTrids}};
+        {"src_buffer_alignment", static_cast<uint32_t>(src_buffer_alignment)}, {"num_trids", kNumTrids}};
     reader.runtime_arg_schema = {
         .runtime_arg_names = {
             "src_byte_offset",

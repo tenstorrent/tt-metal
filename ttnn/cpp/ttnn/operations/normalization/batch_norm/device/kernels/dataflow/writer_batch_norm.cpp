@@ -29,8 +29,6 @@ void kernel_main() {
     DataflowBuffer dfb_src(dfb::src);              // batch_mean, read here for the compute kernel
     DataflowBuffer dfb_dst(dfb::dst);              // the buffer the compute kernel finally packs into
     DataflowBuffer dfb_batch_var(dfb::batch_var);  // batch_var, likewise read here
-    DataflowBuffer dfb_weight(dfb::weight);        // affine scale; bound even when absent
-    DataflowBuffer dfb_bias(dfb::bias);            // affine shift; bound even when absent
 
     // batch_mean
     const uint32_t src_tile_bytes = dfb_src.get_entry_size();
@@ -43,20 +41,6 @@ void kernel_main() {
     // batch_var
     const uint32_t batch_var_tile_bytes = dfb_batch_var.get_entry_size();
     const auto batch_var = TensorAccessor(tensor::batch_var);
-
-    // weight
-    const uint32_t weight_tile_bytes = dfb_weight.get_entry_size();
-#ifdef WEIGHT_HAS_VALUE
-    // An absent optional tensor is not bound, so tensor::weight does not exist on that build; the
-    // accessor has to disappear at the preprocessor stage, before name lookup.
-    const auto weight = TensorAccessor(tensor::weight);
-#endif
-
-    // bias
-    const uint32_t bias_tile_bytes = dfb_bias.get_entry_size();
-#ifdef BIAS_HAS_VALUE
-    const auto bias = TensorAccessor(tensor::bias);
-#endif
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
@@ -94,33 +78,40 @@ void kernel_main() {
             }
             dfb_batch_var.push_back(onetile);
 
-#ifdef WEIGHT_HAS_VALUE
-            {  // read a tile from weight tensor
-                dfb_weight.reserve_back(onetile);
-                noc.async_read(weight, dfb_weight, weight_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
-                noc.async_read_barrier();
-                if constexpr (param_is_fp32) {
-                    fill_tile_with_first_element<float>(dfb_weight.get_write_ptr());
-                } else {
-                    fill_tile_with_first_element_bfloat16(dfb_weight.get_write_ptr());
-                }
-                dfb_weight.push_back(onetile);
-            }
-#endif
+            with_nullable_token(dfb::weight, [&](const DFBBindingToken& weight_dfb_tok) {
+                DataflowBuffer dfb_weight(weight_dfb_tok);
+                const uint32_t weight_tile_bytes = dfb_weight.get_entry_size();
+                with_nullable_token(tensor::weight, [&](const auto& weight_tok) {
+                    const auto weight = TensorAccessor(weight_tok);
+                    dfb_weight.reserve_back(onetile);
+                    noc.async_read(
+                        weight, dfb_weight, weight_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
+                    if constexpr (param_is_fp32) {
+                        fill_tile_with_first_element<float>(dfb_weight.get_write_ptr());
+                    } else {
+                        fill_tile_with_first_element_bfloat16(dfb_weight.get_write_ptr());
+                    }
+                    dfb_weight.push_back(onetile);
+                });
+            });
 
-#ifdef BIAS_HAS_VALUE
-            {  // read a tile from bias tensor
-                dfb_bias.reserve_back(onetile);
-                noc.async_read(bias, dfb_bias, bias_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
-                noc.async_read_barrier();
-                if constexpr (param_is_fp32) {
-                    fill_tile_with_first_element<float>(dfb_bias.get_write_ptr());
-                } else {
-                    fill_tile_with_first_element_bfloat16(dfb_bias.get_write_ptr());
-                }
-                dfb_bias.push_back(onetile);
-            }
-#endif
+            with_nullable_token(dfb::bias, [&](const DFBBindingToken& bias_dfb_tok) {
+                DataflowBuffer dfb_bias(bias_dfb_tok);
+                const uint32_t bias_tile_bytes = dfb_bias.get_entry_size();
+                with_nullable_token(tensor::bias, [&](const auto& bias_tok) {
+                    const auto bias = TensorAccessor(bias_tok);
+                    dfb_bias.reserve_back(onetile);
+                    noc.async_read(bias, dfb_bias, bias_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
+                    if constexpr (param_is_fp32) {
+                        fill_tile_with_first_element<float>(dfb_bias.get_write_ptr());
+                    } else {
+                        fill_tile_with_first_element_bfloat16(dfb_bias.get_write_ptr());
+                    }
+                    dfb_bias.push_back(onetile);
+                });
+            });
 
             for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
                 // write a tile to dst

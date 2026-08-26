@@ -38,8 +38,6 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks_h = get_arg(args::out_num_blocks_h);
     constexpr uint32_t out_num_blocks_w = get_arg(args::out_num_blocks_w);
 
-    constexpr bool fuse_bias = get_arg(args::fuse_bias);
-
     constexpr bool split_reader_enabled = get_arg(args::split_reader_enabled);
 
     // Split reader args
@@ -65,9 +63,6 @@ void kernel_main() {
     Semaphore weights_mcast_sender_sem(sem::weights_mcast_sender);
     Semaphore weights_mcast_receiver_sem(sem::weights_mcast_receiver);
     DataflowBuffer cb_weight_obj(dfb::weights);
-#ifdef FUSE_BIAS
-    DataflowBuffer cb_bias_obj(dfb::bias);
-#endif
 #ifdef SPLIT_READER
     DataflowBuffer cb_act_second_obj(dfb::act_second_reader);
     DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);
@@ -187,9 +182,9 @@ void kernel_main() {
                 }
             }
 #endif
-            if constexpr (fuse_bias) {
+            with_nullable_token(dfb::bias, [&](DFBBindingToken const& token) {
                 if (load_bias) {
-#ifdef FUSE_BIAS
+                    DataflowBuffer cb_bias_obj(token);
                     cb_bias_obj.reserve_back(bias_ntiles);
 
                     // Set weights semaphore value to INVALID
@@ -203,9 +198,8 @@ void kernel_main() {
 
                     cb_bias_obj.push_back(bias_ntiles);
                     load_bias = false;
-#endif
                 }
-            }
+            });
 
         }  // out_num_blocks_h
     }  // out_num_blocks_w

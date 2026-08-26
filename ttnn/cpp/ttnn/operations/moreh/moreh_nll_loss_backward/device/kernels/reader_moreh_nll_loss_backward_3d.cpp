@@ -23,23 +23,28 @@ void kernel_main() {
 
     DataflowBuffer dfb_target_obj(dfb::target);
     DataflowBuffer dfb_tmp_weight_obj(dfb::tmp_weight);
-#if defined(WEIGHT)
-    DataflowBuffer dfb_weight_obj(dfb::weight);
-    const auto addrg_weight = TensorAccessor(tensor::weight);
+    CoreLocalMem<volatile uint16_t> weight_l1_ptr(static_cast<uint32_t>(0));
+    with_nullable_token(dfb::weight, [&](const DFBBindingToken& weight_tok) {
+        with_nullable_token(dfb::weight_scratch, [&](const DFBBindingToken& scratch_tok) {
+            with_nullable_token(tensor::weight, [&](const auto& weight_tensor_tok) {
+                DataflowBuffer dfb_weight_obj(weight_tok);
+                DataflowBuffer dfb_weight_scratch_obj(scratch_tok);
+                const auto addrg_weight = TensorAccessor(weight_tensor_tok);
+                read_line(dfb_weight_obj, dfb_weight_scratch_obj, addrg_weight, weight_num_tile);
 
-    DataflowBuffer dfb_weight_scratch_obj(dfb::weight_scratch);
-    read_line(dfb_weight_obj, dfb_weight_scratch_obj, addrg_weight, weight_num_tile);
+                dfb_weight_obj.wait_front(weight_num_tile);
+                weight_l1_ptr = CoreLocalMem<volatile uint16_t>(dfb_weight_obj.get_read_ptr());
+            });
+        });
+    });
 
-    dfb_weight_obj.wait_front(weight_num_tile);
-    CoreLocalMem<volatile uint16_t> weight_l1_ptr(dfb_weight_obj.get_read_ptr());
-#endif
-
-#if defined(DIVISOR)
-    const auto addrg_divisor = TensorAccessor(tensor::divisor);
-
-    DataflowBuffer dfb_divisor_obj(dfb::divisor);
-    read_tile(dfb_divisor_obj, addrg_divisor, 0);
-#endif
+    with_nullable_token(dfb::divisor, [&](const DFBBindingToken& divisor_tok) {
+        with_nullable_token(tensor::divisor, [&](const auto& divisor_tensor_tok) {
+            const auto addrg_divisor = TensorAccessor(divisor_tensor_tok);
+            DataflowBuffer dfb_divisor_obj(divisor_tok);
+            read_tile(dfb_divisor_obj, addrg_divisor, 0);
+        });
+    });
 
     DataflowBuffer dfb_output_grad_obj(dfb::output_grad);
     read_tile(dfb_output_grad_obj, addrg_output_grad, 0);
@@ -74,11 +79,11 @@ void kernel_main() {
                 uint32_t tmp_weight_tilized_idx = get_tilized_idx(h, w);
 
                 if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
-#if defined(WEIGHT)
-                    tmp_weight_l1_ptr[tmp_weight_tilized_idx] = fp32_dest_acc_cast(weight_l1_ptr[target_val]);
-#else
-                    tmp_weight_l1_ptr[tmp_weight_tilized_idx] = fp32_dest_acc_cast(1.0f);
-#endif
+                    FP32_DEST_ACC_FTYPE wval = fp32_dest_acc_cast(1.0f);
+                    with_nullable_token(dfb::weight, [&](const DFBBindingToken&) {
+                        wval = fp32_dest_acc_cast(weight_l1_ptr[target_val]);
+                    });
+                    tmp_weight_l1_ptr[tmp_weight_tilized_idx] = wval;
                     continue;
                 }
                 tmp_weight_l1_ptr[tmp_weight_tilized_idx] = fp32_dest_acc_cast(0.0f);

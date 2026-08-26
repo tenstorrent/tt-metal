@@ -37,10 +37,7 @@
 #include "experimental/kernel_args.h"
 #include "internal/mod_div_lib.h"
 
-#ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
-#endif
-
 #include "api/compute/eltwise_binary.h"
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
@@ -160,15 +157,13 @@ inline void reblock_and_untilize(
     interm_cb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
-void kernel_main() {
-// RUNTIME ARGS
-#ifdef MATMUL_DRAM_SHARDED
-    const bool is_worker_core = get_arg(args::is_worker_core) == 1;
-    // if not worker core, skip
-    if (not is_worker_core) {
-        return;
-    }
-#endif
+// Presence of fused bias is the type of dfb::cb_bias (real vs NullDFBBindingToken). The body is a
+// function template so `if constexpr (fuse_bias)` actually discards the bias-add stage (a
+// non-template kernel_main would still type-check DataflowBuffer(dfb::cb_bias) when the token is
+// null). Construct DataflowBuffer from the parameter token, not from the possibly-null global.
+template <typename BiasTok>
+void bmm_large_block_zm_fused_bias_activation([[maybe_unused]] BiasTok bias_tok) {
+    constexpr bool fuse_bias = !is_null_binding(dfb::cb_bias);
 
     constexpr uint32_t in0_block_w = get_arg(args::in0_block_w);  // inner block size in tiles
     constexpr uint32_t in0_num_subblocks =
@@ -227,16 +222,11 @@ void kernel_main() {
     DataflowBuffer mm_partials_cb(mm_partials_cb_id);
     DataflowBuffer untilize_mode_out_cb(untilize_mode_out_cb_id);
 
-#ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = dfb::cb_bias;
-    constexpr uint32_t bias_ntiles = get_arg(args::bias_ntiles);
-    constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
+    // Host always emits these CTAs so get_arg compiles when the bias DFB is null (optimized factory).
+    [[maybe_unused]] constexpr uint32_t bias_ntiles = get_arg(args::bias_ntiles);
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
-    constexpr bool row_broadcast_bias = (bool)get_arg(args::row_broadcast_bias);
-    DataflowBuffer bias_cb(bias_cb_id);
-#else
-    constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
-#endif
+    [[maybe_unused]] constexpr bool row_broadcast_bias = (bool)get_arg(args::row_broadcast_bias);
+    constexpr uint32_t mm_out_cb_id = fuse_bias ? mm_partials_cb_id : untilize_mode_out_cb_id;
     DataflowBuffer mm_out_cb(mm_out_cb_id);
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
@@ -315,10 +305,12 @@ void kernel_main() {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     bool last_out = block == (num_blocks_inner_dim - 1);
 // Configure packer once for pack out without Bias
-#if not defined FUSE_BIAS and defined PACK_RELU
-                    if (last_out) {
-                        // if last block we pack the final result with relu enabled
-                        PACK((llk_pack_relu_config(ReluConfig::zero())));
+#ifdef PACK_RELU
+                    if constexpr (!fuse_bias) {
+                        if (last_out) {
+                            // if last block we pack the final result with relu enabled
+                            PACK((llk_pack_relu_config(ReluConfig::zero())));
+                        }
                     }
 #endif
 
@@ -401,12 +393,16 @@ void kernel_main() {
                                 tile_regs_commit();
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
 
-#if defined SFPU_ACTIVATION and not defined FUSE_BIAS
-                                apply_activation_from_pack<
-                                    activation_type,
-                                    activation_param0,
-                                    activation_param1,
-                                    activation_param2>(out_subblock_num_tiles);
+#ifdef SFPU_ACTIVATION
+                                if constexpr (!fuse_bias) {
+                                    apply_activation_from_pack<
+                                        activation_type,
+                                        activation_param0,
+                                        activation_param1,
+                                        activation_param2>(out_subblock_num_tiles);
+                                } else {
+                                    tile_regs_wait();
+                                }
 #else
                                 tile_regs_wait();
 #endif
@@ -416,15 +412,15 @@ void kernel_main() {
 #endif
 
 #ifdef PACKER_L1_ACC
-#ifdef FUSE_BIAS
-                                if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
+                                if constexpr (fuse_bias) {
+                                    if (block == 0) {  // no accumulation for first iteration
+                                        PACK((llk_pack_reconfig_l1_acc(0)));
+                                    } else {
+                                        PACK((llk_pack_reconfig_l1_acc(1)));
+                                    }
                                 } else {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
+                                    PACK((llk_pack_reconfig_l1_acc(0)));
                                 }
-#else
-                                PACK((llk_pack_reconfig_l1_acc(0)));
-#endif
 #endif
                                 uint32_t start_dst_index = 0;
                                 pack_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
@@ -463,14 +459,14 @@ void kernel_main() {
                     }
 
 #ifdef PACKER_L1_ACC
-#ifdef FUSE_BIAS
-                    if (block < num_blocks_inner_dim - 1) {
-                        // [#48552] TEN-4746: a bare wait_front->pop_front on mm_partials traps the Quasar unpacker
-                        // (POP_TILES races past WAIT_TILES -> TILE_COUNTERS 0x10000). Interpose a REAL unpack TDMA
-                        // (dummy copy_tile of tile 0) between wait and pop -- NOP/DMANOP/TTI_NOP are INSUFFICIENT
-                        // (LLK-team guidance + abhullar/pop-wait-fix 69014037a + our TTI_NOP-fails/DPRINT-works
-                        // bisection). NB the old "wait_front increments must be identical" rationale for the
-                        // stepped loop is FALSE (only num_entries<=capacity is enforced) but the loop is harmless.
+                    if constexpr (fuse_bias) {
+                        if (block < num_blocks_inner_dim - 1) {
+                            // [#48552] TEN-4746: a bare wait_front->pop_front on mm_partials traps the Quasar unpacker
+                            // (POP_TILES races past WAIT_TILES -> TILE_COUNTERS 0x10000). Interpose a REAL unpack TDMA
+                            // (dummy copy_tile of tile 0) between wait and pop -- NOP/DMANOP/TTI_NOP are INSUFFICIENT
+                            // (LLK-team guidance + abhullar/pop-wait-fix 69014037a + our TTI_NOP-fails/DPRINT-works
+                            // bisection). NB the old "wait_front increments must be identical" rationale for the
+                            // stepped loop is FALSE (only num_entries<=capacity is enforced) but the loop is harmless.
 #ifdef ARCH_QUASAR
                         reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
                         copy_tile_to_dst_init_short(mm_partials_cb_id);
@@ -491,14 +487,14 @@ void kernel_main() {
                         matmul_block_init(
                             in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 #endif
-                    }
+                        }
                     // never reload when with bias, bias uses interm buffer
                     enable_reload = false;
-#else
-                    // Last iteration does spill and reload to output buffer
-                    if (block < num_blocks_inner_dim - 2) {
-                        // [#48552] TEN-4746 interpose (see the FUSE_BIAS drain above): REAL unpack TDMA
-                        // (dummy copy_tile of tile 0) between the bare wait_front/pop_front on mm_partials.
+                    } else {
+                        // Last iteration does spill and reload to output buffer
+                        if (block < num_blocks_inner_dim - 2) {
+                            // [#48552] TEN-4746 interpose (see the fused-bias drain above): REAL unpack TDMA
+                            // (dummy copy_tile of tile 0) between the bare wait_front/pop_front on mm_partials.
 #ifdef ARCH_QUASAR
                         reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
                         copy_tile_to_dst_init_short(mm_partials_cb_id);
@@ -519,11 +515,11 @@ void kernel_main() {
                         matmul_block_init(
                             in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 #endif
-                    }
+                        }
                     if (block == num_blocks_inner_dim - 2) {
                         enable_reload = true;
                     }  // reload when last iteration
-#endif
+                    }
 #else
                     if constexpr (spill) {
                         enable_reload = true;
@@ -534,7 +530,8 @@ void kernel_main() {
                     in1_cb.pop_front(in1_block_num_tiles);
                 }
 
-#ifdef FUSE_BIAS
+                if constexpr (fuse_bias) {
+                    DataflowBuffer bias_cb(bias_tok);
 #ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
                 PACK((llk_pack_relu_config(ReluConfig::zero())));
@@ -545,11 +542,11 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-                reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
+                reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_tok);
                 if constexpr (row_broadcast_bias) {
-                    add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
+                    add_bcast_rows_init_short(mm_partials_cb_id, bias_tok);
                 } else {
-                    add_tiles_init(mm_partials_cb_id, bias_cb_id);
+                    add_tiles_init(mm_partials_cb_id, bias_tok);
                 }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the CB for reuse across bh/batch iterations.
@@ -577,9 +574,9 @@ void kernel_main() {
                                         : bias_tile_idx;  // dropped by the writer.
 
                                 if constexpr (row_broadcast_bias) {
-                                    add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, safe_bias_tile_idx, i);
+                                    add_tiles_bcast_rows(mm_partials_cb_id, bias_tok, i, safe_bias_tile_idx, i);
                                 } else {
-                                    add_tiles(mm_partials_cb_id, bias_cb_id, i, safe_bias_tile_idx, i);
+                                    add_tiles(mm_partials_cb_id, bias_tok, i, safe_bias_tile_idx, i);
                                 }
                                 bias_tile_idx++;
                             }
@@ -621,20 +618,20 @@ void kernel_main() {
                 if constexpr (num_blocks_w_dim > 1) {
                     bias_cb.pop_front(bias_ntiles);
                 }
-#endif  // FUSE_BIAS
+                }
                 if constexpr (untilize_out) {
 #ifdef PACK_RELU
                     PACK((llk_pack_relu_config(ReluConfig::none())));
 #endif  // PACK_RELU
-#ifndef FUSE_BIAS
-                    reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+                    if constexpr (!fuse_bias) {
+                        reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                     PACK((pack_reconfig_data_format(out_cb_id)));
 #endif
 #ifdef PACKER_L1_ACC
                     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-#endif  // FUSE_BIAS
+                    }
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
                     copy_tile_to_dst_init_short(mm_partials_cb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
@@ -644,13 +641,13 @@ void kernel_main() {
                     pack_untilize_uninit(mm_partials_cb_id);
                 }
                 if constexpr (batch > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
-#ifdef FUSE_BIAS
-                    // reconfigure unpacker df for src A and src B
-                    reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);
-#else
-                    // reconfigure unpacker df for src A
-                    reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
-#endif
+                    if constexpr (fuse_bias) {
+                        // reconfigure unpacker df for src A and src B
+                        reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_tok, in0_cb_id);
+                    } else {
+                        // reconfigure unpacker df for src A
+                        reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+                    }
                     // reconfigure init for matmul
                     matmul_block_init(
                         in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
@@ -658,17 +655,29 @@ void kernel_main() {
             }
         }
     }
-#ifdef FUSE_BIAS
-    // For num_blocks_w_dim == 1 the reader pushes bias once and the kernel holds it resident,
-    // reusing it across all batch/bh/block iterations without popping. Pop it once here, after the
-    // last use, so the CB is balanced. (For num_blocks_w_dim > 1 the per-block pop above already
-    // balances each re-pushed bias block.)
-    if constexpr (num_blocks_w_dim == 1) {
-        bias_cb.pop_front(bias_ntiles);
+    if constexpr (fuse_bias) {
+        DataflowBuffer bias_cb(bias_tok);
+        // For num_blocks_w_dim == 1 the reader pushes bias once and the kernel holds it resident,
+        // reusing it across all batch/bh/block iterations without popping. Pop it once here, after the
+        // last use, so the CB is balanced. (For num_blocks_w_dim > 1 the per-block pop above already
+        // balances each re-pushed bias block.)
+        if constexpr (num_blocks_w_dim == 1) {
+            bias_cb.pop_front(bias_ntiles);
+        }
     }
-#endif
     // [#48552] Compute-side finish() REMOVED: it wedged on PACK (TRISC2 stuck at "MMC bias", never reached
     // "MMC end") — finish() across UNPACK/MATH/PACK isn't well-defined for a role that doesn't drive that CB's
     // balance, and untilize_mode_out_cb.finish() waits on the output writer. Credit drain-on-exit is kept only
     // on the DM producer/consumer kernels.
+}
+
+void kernel_main() {
+#ifdef MATMUL_DRAM_SHARDED
+    const bool is_worker_core = get_arg(args::is_worker_core) == 1;
+    // if not worker core, skip
+    if (not is_worker_core) {
+        return;
+    }
+#endif
+    bmm_large_block_zm_fused_bias_activation(dfb::cb_bias);
 }

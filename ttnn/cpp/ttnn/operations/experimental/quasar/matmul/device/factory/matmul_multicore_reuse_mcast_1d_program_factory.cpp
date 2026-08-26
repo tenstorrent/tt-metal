@@ -5306,7 +5306,6 @@ m2::KernelSpec make_compute_kernel(
     uint32_t out_block_tiles,
     bool untilize_out,
     bool in0_transpose_tile,
-    bool has_bias,
     uint32_t bias_ntiles,
     bool row_broadcast_bias,
     const std::optional<UnaryWithParam>& fused_activation,
@@ -5327,11 +5326,10 @@ m2::KernelSpec make_compute_kernel(
             .dfb_spec_name = RO_INTERM0_DFB,
             .accessor_name = "cb_intermed0",
             .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        // Always listed; null iff this ProgramSpec did not declare RO_BIAS_DFB.
+        m2::DFBBinding{
+            .dfb_spec_name = RO_BIAS_DFB, .accessor_name = "cb_bias", .endpoint_type = m2::DFBEndpointType::CONSUMER},
     };
-    if (has_bias) {
-        dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = RO_BIAS_DFB, .accessor_name = "cb_bias", .endpoint_type = m2::DFBEndpointType::CONSUMER});
-    }
     if (in0_transpose_tile) {
         // The compute kernel both produces (transposes into) and consumes the transposed in0 DFB.
         dfb_bindings.push_back(m2::DFBBinding{
@@ -5363,10 +5361,8 @@ m2::KernelSpec make_compute_kernel(
         {"untilize_out", (uint32_t)untilize_out},
         {"get_batch_from_reader", 0u},
         {"bias_ntiles", bias_ntiles},
+        {"row_broadcast_bias", row_broadcast_bias ? 1u : 0u},
     };
-    if (has_bias) {
-        cta.insert({"row_broadcast_bias", row_broadcast_bias ? 1u : 0u});
-    }
     if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
         using ttnn::operations::experimental::quasar::matmul::utilities::get_activation_params;
         const auto params = get_activation_params(fused_activation.value());
@@ -5643,10 +5639,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
-    if (bias_tensor.has_value()) {
-        mm_kernel_defines["FUSE_BIAS"] = "1";
-        mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
-    }
     if (fused_activation.has_value()) {
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
@@ -6096,14 +6088,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},
             m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
             m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
+            m2::TensorBinding{.tensor_parameter_name = RO_BIAS_TENSOR, .accessor_name = "bias"},
         };
-        if (bias_tensor.has_value()) {
-            b.push_back(m2::DFBBinding{
-                .dfb_spec_name = RO_BIAS_DFB,
-                .accessor_name = "cb_bias",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER});
-            tb.push_back(m2::TensorBinding{.tensor_parameter_name = RO_BIAS_TENSOR, .accessor_name = "bias"});
-        }
+        b.push_back(m2::DFBBinding{
+            .dfb_spec_name = RO_BIAS_DFB, .accessor_name = "cb_bias", .endpoint_type = m2::DFBEndpointType::PRODUCER});
         m2::KernelSpec::CompileTimeArgs cta = {
             {"in1_tensor_stride_w", (uint32_t)in1_tensor_stride_w},
             {"in1_tensor_stride_h", (uint32_t)in1_tensor_stride_h},
@@ -6138,7 +6126,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         };
         // Named RTAs. The legacy per-core padding-arg block is modeled as fixed named slots; last-col
         // vs interior cores fill the same slot set (padded to the max). The !output_is_sharded tail
-        // adds last_num_blocks_w_dim. Bias RTA is present only with bias.
+        // adds last_num_blocks_w_dim. in3_tensor_start_tile_id is always present (0 when bias is omitted).
         m2::Group<std::string> rta_names = {
             "in1_tensor_start_tile_id",
             "in1_mcast_dest_noc_start_x",
@@ -6156,10 +6144,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             "out_last_subblock_w",
             "padded_subblock_tiles_addr_skip",
             "padded_block_tiles_w_skip",
+            "in3_tensor_start_tile_id",
         };
-        if (bias_tensor.has_value()) {
-            rta_names.push_back("in3_tensor_start_tile_id");
-        }
         if (!output_is_sharded) {
             rta_names.push_back("last_num_blocks_w_dim");
         }
@@ -6207,7 +6193,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         out_block_tiles,
         untilize_out,
         in0_transpose_tile,
-        bias_tensor.has_value(),
         in1_per_core_w,
         row_broadcast_bias,
         fused_activation,
@@ -6414,9 +6399,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                         {"padded_block_tiles_w_skip", 0u},
                     });
             }
-            if (bias_tensor.has_value()) {
-                in1_sender_writer_rtas["in3_tensor_start_tile_id"][core] = (uint32_t)per_core_N * output_idx_x;
-            }
+            in1_sender_writer_rtas["in3_tensor_start_tile_id"][core] =
+                bias_tensor.has_value() ? (uint32_t)per_core_N * output_idx_x : 0u;
             if (!output_is_sharded) {
                 in1_sender_writer_rtas["last_num_blocks_w_dim"][core] =
                     output_idx_x == num_blocks_x - 1 ? last_out_num_blocks_w : out_num_blocks_x;
@@ -6666,11 +6650,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     std::map<std::string, std::string> mm_kernel_in0_sender_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_receiver_writer_defines;
-    if (bias_tensor.has_value()) {
-        mm_kernel_defines["FUSE_BIAS"] = "1";
-        mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
-        mm_kernel_in1_receiver_writer_defines["FUSE_BIAS"] = "1";
-    }
     if (fused_activation.has_value()) {
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
@@ -6973,14 +6952,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},
             m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
             m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
+            m2::TensorBinding{.tensor_parameter_name = RO_BIAS_TENSOR, .accessor_name = "bias"},
         };
-        if (bias_tensor.has_value()) {
-            b.push_back(m2::DFBBinding{
-                .dfb_spec_name = RO_BIAS_DFB,
-                .accessor_name = "cb_bias",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER});
-            tb.push_back(m2::TensorBinding{.tensor_parameter_name = RO_BIAS_TENSOR, .accessor_name = "bias"});
-        }
+        b.push_back(m2::DFBBinding{
+            .dfb_spec_name = RO_BIAS_DFB, .accessor_name = "cb_bias", .endpoint_type = m2::DFBEndpointType::PRODUCER});
         m2::KernelSpec::CompileTimeArgs cta = {
             {"in1_tensor_stride_w", (uint32_t)in1_tensor_stride_w},
             {"in1_tensor_stride_h", (uint32_t)in1_tensor_stride_h},
@@ -7030,10 +7005,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             "out_last_subblock_w",
             "padded_subblock_tiles_addr_skip",
             "padded_block_tiles_w_skip",
+            "in3_tensor_start_tile_id",
         };
-        if (bias_tensor.has_value()) {
-            rta_names.push_back("in3_tensor_start_tile_id");
-        }
         if (!output_is_sharded) {
             rta_names.push_back("last_num_blocks_w_dim");
         }
@@ -7068,13 +7041,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 .dfb_spec_name = RO_IN1_DFB, .accessor_name = "cb_in1", .endpoint_type = m2::DFBEndpointType::PRODUCER},
             m2::DFBBinding{
                 .dfb_spec_name = RO_OUT_DFB, .accessor_name = "cb_out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
-        };
-        if (bias_tensor.has_value()) {
-            b.push_back(m2::DFBBinding{
+            m2::DFBBinding{
                 .dfb_spec_name = RO_BIAS_DFB,
                 .accessor_name = "cb_bias",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER});
-        }
+                .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        };
         m2::KernelSpec::CompileTimeArgs cta = {
             {"in1_block_num_tiles", in1_block_w * in0_block_w},
             {"num_blocks_inner_dim", num_blocks},
@@ -7161,7 +7132,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         out_block_tiles,
         untilize_out,
         in0_transpose_tile,
-        bias_tensor.has_value(),
         in1_per_core_w,
         row_broadcast_bias,
         fused_activation,
@@ -7321,9 +7291,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                     {"padded_subblock_tiles_addr_skip", 0u},
                     {"padded_block_tiles_w_skip", 0u},
                 });
-            if (bias_tensor.has_value()) {
-                in1_sender_writer_rtas["in3_tensor_start_tile_id"][core] = (uint32_t)per_core_N * output_idx_x;
-            }
+            in1_sender_writer_rtas["in3_tensor_start_tile_id"][core] =
+                bias_tensor.has_value() ? (uint32_t)per_core_N * output_idx_x : 0u;
             if (!output_is_sharded) {
                 in1_sender_writer_rtas["last_num_blocks_w_dim"][core] = out_num_blocks_x;
             }

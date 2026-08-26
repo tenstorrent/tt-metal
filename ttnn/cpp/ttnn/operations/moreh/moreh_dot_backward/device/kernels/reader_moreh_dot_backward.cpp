@@ -9,8 +9,6 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t has_input_grad = get_arg(args::has_input_grad);
-    uint32_t has_other_grad = get_arg(args::has_other_grad);
     uint32_t num_tiles = get_arg(args::num_tiles);
     uint32_t start_id = get_arg(args::start_id);
 
@@ -34,18 +32,14 @@ void kernel_main() {
     dfb_in0.push_back(onetile);
 
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
-        if (has_input_grad) {
-            dfb_in2.reserve_back(onetile);
-            noc.async_read(s2, dfb_in2, in2_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
-            noc.async_read_barrier();
-            dfb_in2.push_back(onetile);
-        }
+        dfb_in2.reserve_back(onetile);
+        noc.async_read(s2, dfb_in2, in2_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_in2.push_back(onetile);
 
-        if (has_other_grad) {
-            dfb_in1.reserve_back(onetile);
-            noc.async_read(s1, dfb_in1, in1_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
-            noc.async_read_barrier();
-            dfb_in1.push_back(onetile);
-        }
+        dfb_in1.reserve_back(onetile);
+        noc.async_read(s1, dfb_in1, in1_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        dfb_in1.push_back(onetile);
     }
 }

@@ -570,11 +570,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
         m2::DFBBinding{
             .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        // Always list bias: null when DFB_BIAS is not declared on this ProgramSpec.
+        m2::DFBBinding{
+            .dfb_spec_name = DFB_BIAS, .accessor_name = "bias", .endpoint_type = m2::DFBEndpointType::CONSUMER},
     };
-    if (has_bias) {
-        compute_dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = DFB_BIAS, .accessor_name = "bias", .endpoint_type = m2::DFBEndpointType::CONSUMER});
-    }
 
     m2::KernelSpec compute_kernel{
         .unique_id = KERNEL_COMPUTE,
@@ -606,7 +605,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 {"pack_relu", (uint32_t)pack_relu},
                 {"packer_untilize", (uint32_t)(weight_block_w_ntiles <= 8)},
                 {"packer_l1_acc", (uint32_t)packer_l1_acc},
-                {"fuse_bias", (uint32_t)has_bias},
                 {"split_reader", 0u},
                 {"activation_reuse", 0u},
                 {"image_width_in_tiles", 0u},
@@ -716,15 +714,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     std::vector<m2::DFBBinding> weights_dfb_bindings = {
         m2::DFBBinding{
             .dfb_spec_name = DFB_WEIGHTS, .accessor_name = "weights", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        // Always list bias: null when DFB_BIAS / TP_BIAS are not declared on this ProgramSpec.
+        m2::DFBBinding{
+            .dfb_spec_name = DFB_BIAS, .accessor_name = "bias", .endpoint_type = m2::DFBEndpointType::PRODUCER},
     };
     std::vector<m2::TensorBinding> weights_tensor_bindings = {
         m2::TensorBinding{.tensor_parameter_name = TP_WEIGHTS, .accessor_name = "weights"},
+        m2::TensorBinding{.tensor_parameter_name = TP_BIAS, .accessor_name = "bias"},
     };
-    if (has_bias) {
-        weights_dfb_bindings.push_back(m2::DFBBinding{
-            .dfb_spec_name = DFB_BIAS, .accessor_name = "bias", .endpoint_type = m2::DFBEndpointType::PRODUCER});
-        weights_tensor_bindings.push_back(m2::TensorBinding{.tensor_parameter_name = TP_BIAS, .accessor_name = "bias"});
-    }
 
     m2::DataMovementHardwareConfig weights_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
@@ -766,12 +763,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         .hw_config = std::move(weights_hw),
     };
 
-    // FUSE_BIAS preprocessor define gates the conditionally-bound dfb::bias / tensor::bias references
-    // in the weights and compute kernels.
-    if (has_bias) {
-        weights_kernel.compiler_options.defines.insert({"FUSE_BIAS", "1"});
-        compute_kernel.compiler_options.defines.insert({"FUSE_BIAS", "1"});
-    }
     // Width-sharded always binds dfb::act_row_major on compute (mcast tilize-input path), so the shared
     // compute kernel's in0_pretilize_cb_id = dfb::act_row_major reference is always valid here.
     compute_kernel.compiler_options.defines.insert({"HAS_ACT_ROW_MAJOR", "1"});
