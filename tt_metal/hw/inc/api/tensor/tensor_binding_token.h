@@ -13,9 +13,7 @@ namespace tensor_accessor {
 // Emitted when this ProgramSpec did not declare the named TensorParameter.
 // Used as stand-in type to describe null-bindings.
 // Cannot be used to construct a TensorAccessor / LocalTensorAccessor.
-struct NullTensorBindingToken {
-    static constexpr bool is_null = true;
-};
+struct NullTensorBindingToken {};
 
 // TensorBindingToken:
 //
@@ -41,6 +39,7 @@ struct NullTensorBindingToken {
 //   - using my_TA_name_t = ::tensor_accessor::NullTensorBindingToken;
 //   - constexpr my_TA_name_t my_TA_name{};
 // The null token has no args_t / addr_crta_offset payload (offsets are not meaningful).
+// Ask presence with is_null_binding.
 //
 // This indirection gives us ultimate future-proofing flexibility over what actually goes into the
 // TensorBindingToken. We can change TensorBindingToken at any time, or add a wrapper-type indirection,
@@ -55,8 +54,12 @@ struct TensorBindingToken {
     using args_t = TensorAccessorArgs<CTA_OFFSET>;
     static constexpr args_t args{};
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
-
-    static constexpr bool is_null = false;
 };
+
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+constexpr bool is_null_binding(TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) {
+    return false;
+}
+constexpr bool is_null_binding(NullTensorBindingToken) { return true; }
 
 }  // namespace tensor_accessor

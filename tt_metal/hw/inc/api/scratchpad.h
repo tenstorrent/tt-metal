@@ -24,13 +24,13 @@
 //
 // Here my_scratchpad_name is a constexpr ScratchpadBindingToken, auto-included in
 // kernel_bindings_generated.h.
+// If this ProgramSpec did not declare the named Scratchpad, codegen emits a
+// NullScratchpadBindingToken instead. Ask presence with is_null_binding.
 //
 class ScratchpadBindingToken {
 public:
     explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
-
-    static constexpr bool is_null = false;
 
 private:
     template <typename T>
@@ -43,9 +43,10 @@ private:
 // Emitted when this ProgramSpec did not declare the named Scratchpad.
 // Used as stand-in type to describe null-bindings.
 // Cannot be used to construct a Scratchpad.
-struct NullScratchpadBindingToken {
-    static constexpr bool is_null = true;
-};
+struct NullScratchpadBindingToken {};
+
+constexpr bool is_null_binding(ScratchpadBindingToken) { return false; }
+constexpr bool is_null_binding(NullScratchpadBindingToken) { return true; }
 
 /**
  * @brief Kernel-side typed span over a Program-scope scratchpad.

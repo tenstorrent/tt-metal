@@ -83,13 +83,11 @@ template <bool IsWrite, typename ReleaseFunc>
 //
 // If this ProgramSpec did not declare the named DFB, codegen emits a NullDFBBindingToken
 // instead. Naming the symbol always compiles. Constructing a DataflowBuffer from a
-// NullDFBBindingToken does not.
+// NullDFBBindingToken does not. Ask presence with is_null_binding.
 //
 struct DFBBindingToken {
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
-
-    static constexpr bool is_null = false;
 
     // Implicit conversion to uint32_t:
     // This lets a Metal 2.0 kernel pass a DFBBindingToken directly to Gen1 (WH/BH) LLK
@@ -106,9 +104,10 @@ private:
 // Emitted when this ProgramSpec did not declare the named DFB.
 // Used as stand-in type to describe null-bindings.
 // Cannot be used to construct a DataflowBuffer.
-struct NullDFBBindingToken {
-    static constexpr bool is_null = true;
-};
+struct NullDFBBindingToken {};
+
+constexpr bool is_null_binding(DFBBindingToken) { return false; }
+constexpr bool is_null_binding(NullDFBBindingToken) { return true; }
 
 class DataflowBuffer {
 public:
