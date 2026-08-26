@@ -81,6 +81,48 @@ fabric runs.
 - First execution of: dim_zero_line kernels (#26572), deepseek + llama kernels (8-dev WH / TG systems).
 - A **routing-plane helper tier** (deepseek's egress) and the **C.3 multi-target egress shape** (llama's writer) — both deliberately deferred, each needing its own design pass against runnable hardware.
 
+### Deferred by the rebase onto `main` (`e9d0494074`)
+
+Rebasing the 36-commit branch onto current `main` hit two upstream restructurings that
+collide with this effort's migrations. In both cases the resolution was **take upstream
+wholesale for the affected file** rather than hand-merge the branch's intent across the
+new structure — the migration is re-done later against the new shape, as a design pass.
+Exactly **three files** ended up deferred (their branch-side changes are fully dropped;
+each file now matches upstream):
+
+**(a) Ring reduce-scatter reader/writer — upstream's dual staging layout.** Upstream
+restructured the ring RS staging into a dual layout that the branch's shared-schedule
+migration cannot be folded into hunk-by-hunk; expressing this pair on the shared schedule
+needs a **schedule-API design pass** (the schedule must be able to describe two staging
+buffers, which it currently cannot).
+
+- `ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/ring_reduce_scatter_minimal_async_reader.cpp`
+- `ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/ring_reduce_scatter_minimal_async_writer.cpp`
+
+**(b) V1 -> V2 fabric-mux migration obsoletes the V1 `MuxConn` egress.** Upstream migrated
+this kernel to `FabricMuxV2Sender` (`tt_fabric_mux_v2_sender.hpp`), which obsoletes the
+V1-`MuxConn`-based egress the branch's `FabricStreamSender` builds on. The follow-up helper
+design item is a **`MuxV2Conn` connection policy** — the same connection-policy seam the
+helper already has for V1, retargeted at the V2 sender — after which this writer (and any
+other kernel upstream moves to V2) can be re-migrated mechanically.
+
+- `ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/dim_zero_ring_reduce_scatter_minimal_async_writer.cpp`
+
+**Not deferred, for the record:** the strided RS writer
+(`minimal_ring_strided_reduce_scatter_async_writer.cpp`) was the expected next V2 casualty
+but upstream has **not** moved it to V2 — its changes there are mechanical only
+(`noc_obj.*`, `Semaphore`/`termination_sync.wait`, `CircularBuffer` handles, hoisted
+`decompose_tile_advance`). Those compose cleanly with the branch's `MuxConn` egress and
+neighbour-first cursor, so both were kept.
+
+**Owed cleanup:** upstream's eltwise-binary init cleanup renamed `add_tiles_init` ->
+`add_init` and `binary_op_init_common` -> `compute_kernel_hw_startup`, keeping the old
+names as `[[deprecated]]` shims **removed on September 15th, 2026**. The CCL kernels were
+migrated during the rebase, but `ttnn/cpp/ttnn/kernel_lib/accumulate_helpers_compute.inl`
+still calls the deprecated `add_tiles_init` in 6 places (upstream never touched this
+branch-new file, so nothing conflicted). It compiles today, but breaks under
+`-Wdeprecated-declarations`/`-Werror` and at the removal date.
+
 ## Round 3 — the generated reference examples (same box)
 
 The four pipeline-generated CCL ops are now committed reference examples under
