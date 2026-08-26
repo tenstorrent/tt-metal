@@ -72,6 +72,7 @@ class _FakeSeedManager:
         self.conditional_reset_calls = []
         self.align_calls = []
         self.remap_calls = []
+        self.deactivate_calls = []
 
     def reset_seed_from_slots(self, seeds, user_ids):
         self.reset_calls.append((seeds, user_ids))
@@ -84,6 +85,9 @@ class _FakeSeedManager:
 
     def apply_slot_remap(self, remap):
         self.remap_calls.append(remap)
+
+    def deactivate_slots_except(self, live_slots):
+        self.deactivate_calls.append(live_slots)
 
     def get_new_values(self, user_slots):
         self.new_value_calls.append(user_slots)
@@ -373,6 +377,28 @@ def test_deepseek_sampling_params_can_reload_without_state_reset():
     assert user_ids == [0, 32]
 
 
+def test_deepseek_sampling_retires_finished_tail_slot_seed_state():
+    generator = _fake_deepseek_generator(batch_size_per_row=16, sampling_dp=2)
+    sampling_params = SamplingParams(
+        temperature=[0.7] * 32,
+        top_k=[16] * 32,
+        top_p=[0.9] * 32,
+        seed=[1234] * 32,
+    )
+
+    DeepseekGenerator._apply_sampling_state(
+        generator,
+        sampling_params,
+        32,
+        generator.batch_size_per_row,
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+        user_slots=[0, 16],
+    )
+
+    assert generator.sampling_generator.seed_manager.deactivate_calls == [[0, 32]]
+
+
 def test_deepseek_sampling_update_obeys_explicit_commands_without_value_comparison():
     sampling_params = SamplingParams(temperature=0.6, top_k=32, top_p=0.95, seed=None)
     update_calls = []
@@ -433,10 +459,12 @@ def test_deepseek_slot_remap_moves_seeded_state_across_padded_rows():
     manager.max_batch_size = 64
     manager.seeds = [None] * 64
     manager.seed_counters = [0] * 64
+    manager.seed_salts = [0] * 64
     manager.rngs = [random.Random(i) for i in range(64)]
     manager._seed_active = True
     manager.seeds[33] = 1234
     manager.seed_counters[33] = 17
+    manager.seed_salts[33] = 2
     old_rng_state = manager.rngs[33].getstate()
     generator.sampling_generator.seed_manager = manager
 
@@ -444,9 +472,17 @@ def test_deepseek_slot_remap_moves_seeded_state_across_padded_rows():
 
     assert manager.seeds[0] == 1234
     assert manager.seed_counters[0] == 17
+    assert manager.seed_salts[0] == 2
     assert manager.rngs[0].getstate() == old_rng_state
     assert manager.seeds[33] is None
     assert manager.seed_counters[33] == 0
+    assert manager.seed_salts[33] == 0
+
+
+def test_deepseek_host_sampling_remap_is_noop_without_device_sampler():
+    generator = SimpleNamespace(sampling_generator=None)
+
+    DeepseekGenerator._apply_sampling_slot_remap(generator, [0])
 
 
 def test_deepseek_sampling_applies_remap_before_update_and_advance():

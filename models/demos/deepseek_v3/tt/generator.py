@@ -1005,6 +1005,10 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         active_seed_slots = self._sampling_device_slots(user_slots)
         if active_seed_slots is None:
             active_seed_slots = list(range(seed_manager.max_batch_size))
+        # A request finishing at the batch tail produces no non-identity
+        # remap, so retire seed/salt state that no longer belongs to a live
+        # row before assigning salts to newly admitted requests.
+        seed_manager.deactivate_slots_except(active_seed_slots)
         if reset_sampling_state:
             # This must be unconditional: when both requested and cached seeds
             # are None, a conditional reset would skip the fresh device upload.
@@ -1137,9 +1141,10 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         return device_remap
 
     def _apply_sampling_slot_remap(self, slot_remap: torch.Tensor | list[int] | None) -> None:
-        if slot_remap is None:
+        sampling_generator = getattr(self, "sampling_generator", None)
+        if slot_remap is None or sampling_generator is None:
             return
-        self.sampling_generator.seed_manager.apply_slot_remap(self._sampling_device_slot_remap(slot_remap))
+        sampling_generator.seed_manager.apply_slot_remap(self._sampling_device_slot_remap(slot_remap))
 
     def _sampling_device_seed_slots(self, seeds: list[int | None], batch_size: int) -> list[int | None]:
         seed_slot_count = self.sampling_generator.seed_manager.max_batch_size

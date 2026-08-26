@@ -382,5 +382,9 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             # mapping. RoPE deltas are persistent per-slot model state and must
             # move before decode uses them, including during host sampling.
             super().remap_rope_deltas(slot_remap)
+        if slot_remap is not None:
+            # RoPE consumes the mapping above, while the shared generator must
+            # independently move dormant/on-device sampling RNG state.
+            kwargs["slot_remap"] = slot_remap
 
         return super().decode_forward(*args, **kwargs)
