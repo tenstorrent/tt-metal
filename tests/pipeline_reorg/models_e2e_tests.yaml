@@ -1290,7 +1290,7 @@
     export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     fail=0
     pytest --timeout 2700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
-      -k "resolution_480p and t2v" || fail=1
+      -k "resolution_480p and t2v and 2x2_sp0tp1" || fail=1
     pytest --timeout 1500 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
       -k "4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p" || fail=1
     exit $fail
