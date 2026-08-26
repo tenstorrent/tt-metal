@@ -103,6 +103,10 @@ def test_fused_placement_and_unified_scale_sweep(device, emb, hidden, expect_err
         ttnn.ROW_MAJOR_LAYOUT,
         device,
     )
+    # expert_region_offsets is mandatory for unified_routed_expert_moe. One local
+    # expert owning the whole buffer, so its region starts at row 0.
+    offsets_host = torch.zeros(256, dtype=torch.int32)
+    offsets = _to_device(offsets_host, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device)
     config = ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
@@ -137,23 +141,16 @@ def test_fused_placement_and_unified_scale_sweep(device, emb, hidden, expect_err
             )
             fused_outputs[placement] = ttnn.to_torch(output)[0, 0, :COUNT].float()
 
-        unified_output_tensor = ttnn.empty(
-            x.shape,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        unified_output = ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn(
+        unified_output = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
             x,
-            *interleaved_weights,
+            offsets,
             counts,
             expert_ids,
-            0,
+            [interleaved_weights[0]],
+            [interleaved_weights[1]],
+            [interleaved_weights[2]],
+            COUNT,
             compute_kernel_config=config,
-            output=unified_output_tensor,
-            input_m_tiles=COUNT // TILE,
-            x_is_row_major=True,
         )
         unified_host = ttnn.to_torch(unified_output)[0, 0, :COUNT].float()
 
@@ -178,16 +175,16 @@ def test_fused_placement_and_unified_scale_sweep(device, emb, hidden, expect_err
 
     # The unified operation currently documents and validates interleaved-only weights.
     with expect_error(RuntimeError, "DRAM.interleaved"):
-        ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn(
+        ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
             x,
-            *nd_weights,
+            offsets,
             counts,
             expert_ids,
-            0,
+            [nd_weights[0]],
+            [nd_weights[1]],
+            [nd_weights[2]],
+            COUNT,
             compute_kernel_config=config,
-            output=unified_output_tensor,
-            input_m_tiles=COUNT // TILE,
-            x_is_row_major=True,
         )
 
     for result in results.values():
