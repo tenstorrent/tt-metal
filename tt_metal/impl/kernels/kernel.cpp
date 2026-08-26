@@ -346,6 +346,14 @@ void Kernel::process_scratchpad_binding_handles(
     }
 }
 
+void Kernel::process_tensor_groups(
+    const std::function<void(const std::string& accessor_name, const std::vector<std::string>& members)> callback)
+    const {
+    for (const auto& group : this->tensor_groups_) {
+        callback(group.accessor_name, group.members);
+    }
+}
+
 ////////////////////////////////////////////////////////////
 // Blaze-only experimental named args
 // Removal is tracked by issue #50953
@@ -590,6 +598,15 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(handle.accessor_name);
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
+    }
+    // Tensor groups: user order matches genfiles emission; hash size, name, and ordered members.
+    hasher.update(static_cast<uint64_t>(this->tensor_groups_.size()));
+    for (const auto& group : this->tensor_groups_) {
+        hasher.update(group.accessor_name);
+        hasher.update(static_cast<uint64_t>(group.members.size()));
+        for (const auto& member : group.members) {
+            hasher.update(member);
+        }
     }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
     // Named RTA and CRTA counts also need to be hashed!

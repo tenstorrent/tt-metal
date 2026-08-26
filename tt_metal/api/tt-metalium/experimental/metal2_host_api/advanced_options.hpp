@@ -108,6 +108,34 @@ struct KernelAdvancedOptions {
     //          Always prefer regular, named compile-time arguments.
     [[deprecated("Compile-time varargs is a temporary feature that will be removed in the future.")]]
     std::vector<uint32_t> compile_time_varargs;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Tensor groups
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // A tensor group bunches existing TensorBindings on this kernel into a
+    // compile-time-sized pack.
+    //
+    // Each group is emitted into the same `tensor::` namespace as the member
+    // tokens, as a constexpr std::tuple of those tokens in `members` order:
+    //   constexpr auto inputs = std::make_tuple(in0, in1, /* ... */ inN);
+    // An empty members list is std::tuple<>.
+    //
+    // Constraints:
+    //   - Every members entry is a TensorBinding::accessor_name on this kernel
+    //   - No duplicate members within a group
+    //   - Group accessor_name is a valid C++ identifier, unique in this kernel's
+    //     tensor:: namespace.
+    //
+    // CAUTION: This feature exists to address niche use cases only.
+    //          Named TensorBindings remain how a kernel binds tensors; a group
+    //          only packs some of those bindings when the kernel must consume them as a pack.
+
+    struct TensorGroup {
+        std::string accessor_name;         // device: tensor::<accessor_name>
+        std::vector<std::string> members;  // TensorBinding::accessor_name; order is the device tuple order
+    };
+    Group<TensorGroup> tensor_groups;
 };
 
 struct DFBAdvancedOptions {

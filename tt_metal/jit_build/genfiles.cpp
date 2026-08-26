@@ -172,6 +172,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             scratch_entries.push_back({name, size_bytes, addr_crta_word});
         });
 
+    // Tensor groups: user order (matches Kernel::compute_hash); no sort.
+    struct TgEntry {
+        string name;
+        vector<string> members;
+    };
+    vector<TgEntry> tg_entries;
+    settings.process_tensor_groups(
+        [&tg_entries](const string& name, const vector<string>& members) { tg_entries.push_back({name, members}); });
+
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
     //  - Semaphore ids are emitted into the sem namespace (semaphores have no binding-token type;
@@ -193,7 +202,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty()) {
+    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty() &&
+        tg_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
         if (!dfb_entries.empty()) {
@@ -206,6 +216,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // This header defines TensorBindingToken, a type which can be used
             // to construct a TensorAccessor or LocalTensorAccessor.
             content << "#include \"api/tensor/tensor_binding_token.h\"\n";
+        }
+        if (!tg_entries.empty()) {
+            content << "#include <tuple>\n";
         }
         if (!scratch_entries.empty()) {
             // The full Scratchpad type (NOC-free, so it compiles on both data-movement and
@@ -230,7 +243,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "}  // namespace sem\n";
         }
 
-        if (!ta_entries.empty()) {
+        if (!ta_entries.empty() || !tg_entries.empty()) {
             // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
             // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
             // its implicit base-address CRTA.
@@ -238,11 +251,23 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
+            //
+            // Tensor groups are constexpr std::tuple packs of those member tokens (members order).
             content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
                         << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+            }
+            for (const auto& group : tg_entries) {
+                content << "constexpr auto " << group.name << " = std::make_tuple(";
+                for (size_t i = 0; i < group.members.size(); ++i) {
+                    if (i > 0) {
+                        content << ", ";
+                    }
+                    content << group.members[i];
+                }
+                content << ");\n";
             }
             content << "}  // namespace tensor\n";
         }

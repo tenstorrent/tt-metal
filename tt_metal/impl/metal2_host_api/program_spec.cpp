@@ -533,6 +533,43 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
             collected.tensor_parameter_users[binding.tensor_parameter_name].push_back(&kernel);
         }
+
+        std::unordered_set<std::string> group_names;
+        for (const auto& group : kernel.advanced_options.tensor_groups) {
+            TT_FATAL(
+                IsValidCppIdentifier(group.accessor_name),
+                "Kernel '{}' tensor group accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                group.accessor_name);
+            TT_FATAL(
+                !accessor_names.contains(group.accessor_name),
+                "Kernel '{}' tensor group accessor_name '{}' collides with a TensorBinding accessor_name",
+                kernel.unique_id,
+                group.accessor_name);
+            auto [git, ginserted] = group_names.insert(group.accessor_name);
+            TT_FATAL(
+                ginserted,
+                "Kernel '{}' has duplicate tensor group accessor_name '{}'",
+                kernel.unique_id,
+                group.accessor_name);
+
+            std::unordered_set<std::string> member_names;
+            for (const auto& member : group.members) {
+                TT_FATAL(
+                    accessor_names.contains(member),
+                    "Kernel '{}' tensor group '{}' references unknown tensor accessor_name '{}'",
+                    kernel.unique_id,
+                    group.accessor_name,
+                    member);
+                auto [mit, minserted] = member_names.insert(member);
+                TT_FATAL(
+                    minserted,
+                    "Kernel '{}' tensor group '{}' has duplicate member '{}'",
+                    kernel.unique_id,
+                    group.accessor_name,
+                    member);
+            }
+        }
     }
 
     // A borrowed-memory DFB uses its backing TensorParameter via DataflowBufferSpec::borrowed_from
@@ -3148,6 +3185,13 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
         // will later fill each handle's allocated_address.
         kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
+
+        std::vector<TensorGroupHandle> tensor_groups;
+        tensor_groups.reserve(kernel_spec.advanced_options.tensor_groups.size());
+        for (const auto& group : kernel_spec.advanced_options.tensor_groups) {
+            tensor_groups.push_back(TensorGroupHandle{.accessor_name = group.accessor_name, .members = group.members});
+        }
+        kernel->set_tensor_groups(std::move(tensor_groups));
 
         // Prefix length for device get_compile_time_vararg* bounds (values are in compile_time_args_).
         kernel->set_compile_time_vararg_count(vararg_cta_count);
