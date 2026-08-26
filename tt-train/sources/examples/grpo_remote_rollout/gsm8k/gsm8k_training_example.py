@@ -63,7 +63,6 @@ if _EXAMPLE_ROOT not in sys.path:
 import ttml
 import ttnn
 from datasets import load_dataset
-from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, get_model_config, load_config
 from ttml.trainers import GRPOTrainer, get_grpo_config
 from utils.mpi_rollout import MPIRolloutClient, MPIRolloutServer
@@ -280,25 +279,12 @@ def gsm8k_reward(completions: List[str], answer: List[str], **kwargs) -> List[fl
 # ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
-def build_dataset(tokenizer, seed: int):
-    """Return the templated ``prompt`` / ``answer`` GSM8K dataset.
-
-    Uses the tokenizer's own chat template with ``enable_thinking=False`` -- we
-    reserve ``<think>`` for the model's own scratch block (rewarded above), not
-    the Qwen3 thinking-mode wrapper. The tokenizer is used as-is (no override
-    of ``chat_template``, no pad-token mutation).
-    """
+def build_dataset(seed: int):
     ds = load_dataset(DATASET, DATASET_CONFIG, split=DATASET_SPLIT)
 
     def to_example(row):
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": row["question"]},
-        ]
         return {
-            "prompt": tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
-            ),
+            "prompt": f"{SYSTEM_PROMPT}\nQuestion: {row['question']}\nAnswer:",
             "answer": extract_hash_answer(row["answer"]),
         }
 
@@ -449,8 +435,7 @@ def _ttml_main() -> None:
     try:
         bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
 
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-        dataset = build_dataset(tokenizer, seed=int(raw["training_config"].get("seed", 0)))
+        dataset = build_dataset(seed=int(raw["training_config"].get("seed", 0)))
 
         output_dir = get_output_dir()
         grpo_config = get_grpo_config(raw, output_dir=output_dir)

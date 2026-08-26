@@ -30,8 +30,14 @@ Four criteria: ``correct answer``, ``tags present``, ``tags exactly once``,
 ``format-regex`` (renamed from "strict format"). Rows follow the order of the
 ``--models`` argument.
 
-Prompts use the tokenizer's own chat template with ``enable_thinking=False``,
-untouched -- no override of ``chat_template``, no ``pad_token`` mutation.
+Prompts use the plain "Question:/Answer:" completion layout that the reference
+GPU/TRL scripts SFT'd and GRPO-trained on -- no ChatML, no
+``apply_chat_template``. The Qwen3-0.6B-Base checkpoint has untrained ChatML
+control-token embeddings (``<|im_start|>`` / ``<|im_end|>`` land at the same
+norm as unused reserved specials) and the SFT run in this project was done on
+the plain layout, so a chat-templated prompt gives garbage rollouts on the base
+and off-distribution rollouts on the SFT / GRPO checkpoints.
+
 Default tag pair is ``<think>...</think>`` + ``<answer>...</answer>``; pass
 ``--tags reasoning`` to swap.
 
@@ -205,22 +211,15 @@ CRITERIA: Tuple[Tuple[str, Callable[[dict], bool]], ...] = (
 # Prompt building
 # ---------------------------------------------------------------------------
 def build_prompt_texts(
-    tokenizer,
     questions: Sequence[str],
     reasoning_open: str,
     reasoning_close: str,
 ) -> List[str]:
+    """Plain "Question:/Answer:" completion layout, matching the reference
+    training / SFT / eval scripts. No chat template, no control tokens -- that
+    is the point on a *-Base checkpoint whose ChatML tokens are untrained."""
     sysp = system_prompt(reasoning_open, reasoning_close)
-    prompts: list[str] = []
-    for q in questions:
-        messages = [
-            {"role": "system", "content": sysp},
-            {"role": "user", "content": q},
-        ]
-        prompts.append(
-            tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
-        )
-    return prompts
+    return [f"{sysp}\nQuestion: {q}\nAnswer:" for q in questions]
 
 
 # ---------------------------------------------------------------------------
@@ -433,13 +432,14 @@ def main() -> None:
     n_q = len(ds)
     print(f"  {n_q} questions x {args.n_samples} samples = " f"{n_q * args.n_samples} completions per model")
 
-    # -- tokenizer / prompts (shared across models: same Qwen3 vocab; default
-    #    to the first model entry so the chat template is guaranteed to exist,
-    #    since the base checkpoint does not ship one) --
+    # -- tokenizer / prompts (shared across models: same Qwen3 vocab across
+    #    base / SFT / GRPO checkpoints; the tokenizer is only used to tokenize
+    #    the pre-assembled plain-format string and to decode completions, not
+    #    to build the prompt) --
     tokenizer_source = args.tokenizer or models[0][0]
-    print(f"Building prompts with tokenizer from {tokenizer_source}")
+    print(f"Loading tokenizer from {tokenizer_source} (for tokenize/decode only; prompts use plain layout)")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, trust_remote_code=True)
-    prompt_texts = build_prompt_texts(tokenizer, questions, reasoning_open, reasoning_close)
+    prompt_texts = build_prompt_texts(questions, reasoning_open, reasoning_close)
     prompts_token_ids = [tokenizer(t, add_special_tokens=False)["input_ids"] for t in prompt_texts]
 
     # -- preflight: boot every worker once with empty prompts so a bad model
