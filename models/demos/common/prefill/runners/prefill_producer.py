@@ -280,9 +280,9 @@ def _read_device_map(timeout_s: int) -> dict:
     The runner's two publishers do not share an encoding -- the shmem path writes JSON keyed
     "<mesh>:<chip>", the file-export path writes "<mesh> <chip> <umd>" lines -- so accept either.
 
-    A multi-rank runner writes one rank-scoped file per co-located rank (``<stem>_r<rank>.json`` -- see
-    migration.rank_scoped_device_map_path), so all matches on this host are merged. Clear stale
-    ``_r*`` siblings between runs whose topology changed -- a leftover file would merge in."""
+    A multi-rank runner writes one rank-scoped file per co-located rank (``<stem>_r<rank>.json``), so
+    all matches on this host are merged. Clear stale ``_r*`` siblings between runs whose topology
+    changed -- a leftover file would merge in."""
     import glob as _glob
     import json
 
@@ -783,7 +783,7 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
     mins = {"k": 1.0, "v": 1.0}
     checked = 0
     for layer in range(NUM_LAYERS):
-        # Host-local filter (same as the MLA path): skip layers owned by another host's stage.
+        # Skip layers owned by another host's stage (their chips are not in this host's device map).
         loc0 = table.lookup(layer, 0, slot_id, 0)
         try:
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
@@ -819,8 +819,7 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
         f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
     )
-    # No layer resolved against this host's device map: the mins are still their 1.0 inits, which would
-    # masquerade as a perfect pass — fail loudly instead (wrong device map / stage split).
+    # Zero resolved layers would return the 1.0 inits as a perfect pass — fail loudly instead.
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
     return mins
@@ -854,8 +853,7 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
     checked = 0
     ik_checked = 0
     for layer in range(NUM_LAYERS):
-        # Host-local filter (same as the MLA path): a merged multi-rank table spans every host's
-        # layers, so skip any layer whose chips resolve to no local unique_id (owned by another host).
+        # Skip layers owned by another host's stage (their chips are not in this host's device map).
         loc0 = table.lookup(layer, 0, slot_id, 0)
         try:
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
@@ -905,8 +903,7 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
         f"[producer] slot {slot_id} M3 KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} index_k={mins['index_k']:.5f} (min {min_pcc:.6f})"
     )
-    # No layer resolved against this host's device map: the mins are still their 1.0 inits, which would
-    # masquerade as a perfect pass — fail loudly instead (wrong device map / stage split).
+    # Zero resolved layers would return the 1.0 inits as a perfect pass — fail loudly instead.
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
     # Only some traces carry an index_k golden. Its min is still the 1.0 init when none did, so drop the

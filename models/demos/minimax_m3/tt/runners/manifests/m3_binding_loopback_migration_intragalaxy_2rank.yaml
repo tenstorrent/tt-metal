@@ -1,13 +1,10 @@
-# MiniMax-M3 — pipeline Gate P2 (loopback migration) rank binding: 2-stage intra-galaxy pipeline on one
-# 8x4 BH galaxy carved into two Z-connected [4,4] sub-meshes (30 layers per stage), REQUEST mode.
-#
-# Every rank delivers its local device map to the co-located migration worker and joins the stage-layout
-# all-gather; rank 0 builds the merged 60-layer 9-config table, publishes it, and blocks on WORKER_READY,
-# then serves the driver's H2D pushes. It validates nothing: migration_driver owns both read-backs, so
-# run it with PREFILL_SEND_SHUTDOWN=1 or the runner never leaves its request loop.
+# MiniMax-M3 — pipeline Gate P2 (loopback migration): 2-stage intra-galaxy pipeline on one 8x4 BH galaxy
+# carved into two Z-connected [4,4] sub-meshes (30 layers per stage), REQUEST mode. The runner validates
+# nothing — migration_driver owns the read-backs; run the driver with PREFILL_SEND_SHUTDOWN=1 or the
+# runner never leaves its request loop.
 #
 # Launch (endpoint must already be up — one endpoint launch per runner launch, see
-# PREFILL_MIGRATION_TESTING.md Gate 2 / the pipeline gates section):
+# PREFILL_MIGRATION_TESTING.md):
 #   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
 #     models/demos/minimax_m3/tt/runners/manifests/m3_binding_loopback_migration_intragalaxy_2rank.yaml $HOST:2
 #
@@ -35,13 +32,11 @@ global_env:
   PREFILL_PP_D2D_FIFO_BYTES: "32768"
 
   PREFILL_ENABLE_MIGRATION: "1"
-  # The driver drains num_layers x pushes acks before it migrates; without them it copies a half-written
-  # cache. Selects the host-callback ack transport, the only one this runtime implements.
+  # The driver drains num_layers x pushes acks before it migrates; without them it copies a half-written cache.
   PREFILL_ENABLE_LAYER_ACK: "1"
   PREFILL_USE_TRACE: "1"
   PREFILL_MIGRATION_WAIT_READY_MS: "120000"
-  # num_ranks>1 rejects per-host table paths (/tmp, ...) — use shared storage. Device map stays
-  # host-local; each rank writes <stem>_r<rank>.json.
+  # Table on shared storage — num_ranks>1 rejects per-host paths like /tmp. Device map stays host-local.
   PREFILL_MIGRATION_TABLE_PATH: "/data/philei/tmp/m3_kv_chunk_table_pp.pb"
   PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/m3_kv_device_map.json"
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"

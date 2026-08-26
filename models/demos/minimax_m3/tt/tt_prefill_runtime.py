@@ -427,9 +427,8 @@ class TtPrefillRuntime:
 
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
         """One ``KvCacheStage`` per migratable device cache, in the order ``build_kv_chunk_table``
-        consumes their gathered layouts: k, v, index_k. Unlike GLM's compacted index cache, all three
-        M3 tensors share one layer-index space (index_k allocates a slot for every layer, zeros on
-        dense ones), so every stage carries the same layer range."""
+        consumes their gathered layouts: k, v, index_k. All three share one layer-index space (index_k
+        allocates a slot for every layer, zeros on dense ones), so every stage carries the same range."""
         from models.demos.common.prefill.runners.migration import KvCacheStage
 
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)

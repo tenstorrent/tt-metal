@@ -2,9 +2,7 @@
 # 2-galaxy pipeline, then migrate 0->2 and 1->3 through the local migration endpoint (loopback).
 #
 # Pairs with m3_binding_loopback_migration_2galaxy_2rank.yaml. Run with migration_driver on rank 0's
-# host. Source PCC / --verify-migration read back only the layers whose chips resolve against THIS
-# host's device maps (rank 0's 30 layers); run prefill_producer with PREFILL_PRODUCER_CHECK_PCC=1 on the
-# other host for the remaining half.
+# host; its read-backs cover only the layers resident on that host — verify the other host's half there.
 # client_dir is deliberately absent — export PREFILL_MIGRATION_CLIENT_DIR (it is per-checkout).
 
 model:
@@ -28,7 +26,7 @@ workload:
 
 migration:
   dest_endpoint_id: 1             # == our own endpoint id => loopback
-  dst_slot_offset: 2              # dst = src + 2
+  dst_slot_offset: 2
   timeout_ms: 3600000
   done_file: /tmp/m3_migration_done.sentinel   # driver-side only; no runner counterpart
   table_path: /data/philei/tmp/m3_kv_chunk_table_pp.pb   # [MATCH RUNNER]
@@ -39,5 +37,4 @@ migration:
 
 env:
   M3_INDEX_CACHE_BF16: "1"        # [MATCH RUNNER]
-  # M3's accepted KV PCC gate (producer's default 0.93 is the DeepSeek convention and fails M3 at ~0.88).
   PREFILL_STANDALONE_CHUNKED_PCC: "0.88"

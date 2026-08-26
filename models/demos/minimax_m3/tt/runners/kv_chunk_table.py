@@ -144,8 +144,7 @@ def build_and_serialize_kv_chunk_table(
         # M3's three caches share one layer-index space (index_k allocates a slot for every layer, zeros
         # on dense ones), so every cache must gather the identical per-rank ranges.
         if validate_stage_layout_contiguous(layout) != total_layers or any(
-            (a["first_layer"], a["count"]) != (b["first_layer"], b["count"])
-            for a, b in zip(stage_layouts[0], layout)
+            (a["first_layer"], a["count"]) != (b["first_layer"], b["count"]) for a, b in zip(stage_layouts[0], layout)
         ):
             raise RuntimeError(
                 f"{cache_name} layout's layer ranges differ from k's; M3's caches share one layer-index "
@@ -185,11 +184,11 @@ def build_and_serialize_kv_chunk_table(
 
                 # Replay the ND-shard ROUND_ROBIN_1D walk: 32-token blocks round-robin across the DRAM
                 # banks (per chip / per tensor), advancing the per-bank offset after each full bank
-                # sweep. Same arithmetic as DeepSeek's kimi builder — the addresses are identical on
-                # every column of a row (the tensor is allocated identically everywhere); only the
-                # device group's column differs. Each stage restarts the walk from ITS base address and
-                # writes at the GLOBAL layer index; the slot fold on device is per-stage
-                # (slot * stage_count + local_layer), which this slot -> local-layer order replays.
+                # sweep. The addresses are identical on every column of a row (the tensor is allocated
+                # identically everywhere); only the device group's column differs. Each stage restarts
+                # the walk from ITS base address and writes at the GLOBAL layer index; the slot fold on
+                # device is per-stage (slot * stage_count + local_layer), which this slot ->
+                # local-layer order replays.
                 curr_bank_id = 0
                 curr_bank_offset = 0
                 for slot in range(num_users):

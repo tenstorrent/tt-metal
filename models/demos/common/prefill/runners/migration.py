@@ -244,8 +244,7 @@ def _build_device_map(mesh_device, mesh_shape) -> list[tuple[int, int, int]]:
 def rank_scoped_device_map_path(path: str, rank: int, num_ranks: int) -> str:
     """Per-rank JSON device-map path: ``<stem>_r<rank><ext>`` when num_ranks > 1, else ``path``
     unchanged. Co-located ranks (an intragalaxy pipeline) would otherwise overwrite each other's map
-    at the shared host-local path, leaving device-less readers only the last writer's chips; readers
-    glob the ``_r*`` siblings back together (see prefill_producer._read_device_map)."""
+    at the shared host-local path; readers glob the ``_r*`` siblings back together."""
     if num_ranks <= 1:
         return path
     stem, ext = os.path.splitext(path)
@@ -255,7 +254,7 @@ def rank_scoped_device_map_path(path: str, rank: int, num_ranks: int) -> str:
 def validate_stage_layout_contiguous(stage_layout) -> int:
     """Check a gathered layout's layer ranges tile ``[0, total)`` contiguously (no gaps/overlaps) and
     return that cache's layer total. ``compute_layer_split`` produces a contiguous partition, so a
-    violation means the ranks disagree on the split (tt-blaze's missing-layer guard)."""
+    violation means the ranks disagree on the split."""
     expected = 0
     for s in sorted(stage_layout, key=lambda s: s["first_layer"]):
         if s["first_layer"] != expected:
