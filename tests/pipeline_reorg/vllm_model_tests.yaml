@@ -308,8 +308,9 @@
   arch: arch-wormhole_b0
   tt-llama-text-ver: tt_transformers
   # Prefix-caching models reserve a traced resumed prefill per traced sequence
-  # length at warmup, which the 50 MB default does not cover (53 MB measured on
-  # T3K).
+  # length at warmup, which the 50 MB default does not cover: 53248000B measured
+  # on this SKU. 85 MB matches the T3K sampling-tests leg above rather than
+  # tracking the measurement, so the headroom absorbs a bucket set growing.
   tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 85000000}'
   multimodal: false
   additional-benchmark-args: "--random-prefix-len 128"
@@ -347,8 +348,11 @@
   mesh-device: P150x8
   arch: arch-blackhole
   tt-llama-text-ver: tt_transformers
-  # See the prefix-caching leg: warmup now reserves a traced resumed prefill per
-  # traced sequence length, above the 50 MB default.
+  # See the prefix-caching leg: warmup reserves a traced resumed prefill per
+  # traced sequence length, above the 50 MB default. Carried over from the T3K
+  # measurement, not measured on Blackhole. Reserving at warmup means a value
+  # that is too small fails at server startup rather than mid-run, so this is
+  # loud if it is wrong.
   tt-config: '{"trace_region_size": 85000000}'
   additional-server-args: "--data_parallel_size 8 --async-scheduling"
   structured-output: true
@@ -367,8 +371,11 @@
   benchmark-timeout: 5
   mesh-device: TG
   arch: arch-wormhole_b0
-  # See the prefix-caching leg: warmup now reserves a traced resumed prefill per
-  # traced sequence length, above the 50 MB default.
+  # See the prefix-caching leg: warmup reserves a traced resumed prefill per
+  # traced sequence length, above the 50 MB default. Carried over from the T3K
+  # measurement, not measured on Galaxy. Reserving at warmup means a value that
+  # is too small fails at server startup rather than mid-run, so this is loud if
+  # it is wrong.
   tt-config: '{"fabric_config": "FABRIC_1D_RING", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
   tt-llama-text-ver: tt_transformers
   additional-server-args: "--data_parallel_size 4 --async-scheduling"
