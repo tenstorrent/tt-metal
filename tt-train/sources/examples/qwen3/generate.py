@@ -76,13 +76,17 @@ def _causal_mask(seq_len, device):
 create_causal_mask_tensor = _causal_mask  # public alias used by gradients.py
 
 
-def _sample_logits_mask(orig_vocab, padded_vocab, device):
-    """Mask for padded vocabulary entries (subtractive: 0=valid, 1e4=padding)."""
+def _sample_logits_mask(orig_vocab, padded_vocab, device, dtype=ttnn.bfloat16):
+    """Mask for padded vocabulary entries (subtractive: 0=valid, 1e4=padding).
+
+    ``dtype`` must match the logits the mask is applied to -- the sampler rejects a mismatched
+    mask rather than converting it. Pass the dtype of the actual logits tensor.
+    """
     if orig_vocab >= padded_vocab:
         return None
-    mask = torch.zeros((1, 1, 1, padded_vocab), dtype=torch.bfloat16)
+    mask = torch.zeros((1, 1, 1, padded_vocab), dtype=torch.float32)
     mask[:, :, :, orig_vocab:] = 1e4
-    return _to_device_tiled(mask, device)
+    return _to_device_tiled(mask, device, dtype)
 
 
 # =====================================================================
@@ -340,8 +344,9 @@ def generate_ttml(
             )
         else:
             if step == 0:
-                # logits is post-all_gather here, so dim 3 is the full padded vocab.
-                logits_mask = _sample_logits_mask(orig_vocab, int(logits.shape()[3]), device)
+                # logits is post-all_gather here, so dim 3 is the full padded vocab, and its
+                # dtype is the one the mask must be built in.
+                logits_mask = _sample_logits_mask(orig_vocab, int(logits.shape()[3]), device, logits.get_value().dtype)
             tokens = _sample_on_device(
                 logits,
                 pred_positions,

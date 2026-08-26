@@ -26,12 +26,17 @@ ttnn::Tensor sum_ttnn(const ttnn::Tensor& t, int dim, bool keep_dim);
 // and get identical noise. When std::nullopt (the DEFAULT) NO axis is seeded uniquely: every device
 // draws the same noise from `seed` (the original single-seed behavior). Callers needing distinct
 // per-device noise (e.g. GRPO) MUST pass the sharded axes explicitly.
+// `positions` (optional): per-batch-row token position as a [B, 1, 1, 1] UINT32 ROW_MAJOR tensor,
+// sharded with the SAME mapper as the batch. std::nullopt (default) samples every position and
+// returns [B, 1, tokens, 1]; supplying it returns [B, 1, 1, 1] and reads only the tiles those rows
+// live in.
 ttnn::Tensor sample(
     const ttnn::Tensor& t,
     float temperature,
     uint32_t seed,
-    std::optional<ttnn::Tensor> logits_padding_mask = std::nullopt,
-    std::optional<std::vector<uint32_t>> seed_axes = std::nullopt);
+    std::optional<ttnn::Tensor> logits_mask = std::nullopt,
+    std::optional<std::vector<uint32_t>> seed_axes = std::nullopt,
+    std::optional<ttnn::Tensor> positions = std::nullopt);
 
 ttnn::Tensor to_l1_interleaved(const ttnn::Tensor& t);
 ttnn::Tensor to_dram_interleaved(const ttnn::Tensor& t);

@@ -21,9 +21,10 @@ from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
+from ttml.common.sampling import positions_to_tensor
+
 from .completer_common import deallocate_tensors, async_read_to_host
 from .llama_overrides import LlamaCompositeKV
-
 
 TILE_SIZE = 32
 SAMPLE_SEED = 42
@@ -356,10 +357,12 @@ class LlamaGRPOCompleter(GRPOCompleter):
 
         return ttml.autograd.Tensor.from_numpy(mask_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self._dp_mapper)
 
-    def _build_logits_mask(self, vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
+    def _build_logits_mask(self, vocab_size: int, padded_vocab_size: int, dtype: ttnn.DataType) -> ttml.autograd.Tensor:
+        """``dtype`` must match the logits dtype -- the sampler rejects a mismatched mask rather
+        than converting it, so the caller passes the dtype of the actual logits tensor."""
         logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
         logits_mask[:, :, :, vocab_size:] = 1e4
-        return ttml.autograd.Tensor.from_numpy(logits_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+        return ttml.autograd.Tensor.from_numpy(logits_mask, ttnn.Layout.TILE, dtype)
 
     def _get_stop_ids(self) -> set[int]:
         tokenizer = self._ctx._tokenizer
@@ -408,7 +411,9 @@ class LlamaGRPOCompleter(GRPOCompleter):
         padded_V = round_up_to_tile(V)
 
         kv_cache = self._get_kv_cache(B_local)
-        logits_mask_tensor = self._build_logits_mask(V, padded_V) if padded_V != V else None
+        # Built lazily on the first step: the mask must match the LOGITS dtype (the sampler
+        # rejects a mismatch), and that dtype is only knowable from an actual forward pass.
+        logits_mask_tensor = None
 
         tokens_to_complete = min(
             ctx.max_tokens_to_complete,
@@ -432,8 +437,12 @@ class LlamaGRPOCompleter(GRPOCompleter):
                 arr[:, j] = column.to_numpy(composer).reshape(B)
             return arr
 
+        prefill_positions = positions_to_tensor([N - 1] * B, B, N, self._dp_mapper)
+        decode_positions = positions_to_tensor([0] * B, B, 1, self._dp_mapper)
+
         for i in range(tokens_to_complete):
-            if kv_cache.get_cache_position() == 0:
+            is_prefill = kv_cache.get_cache_position() == 0
+            if is_prefill:
                 processed = 0
                 new_tokens = prompt_tokens_np.shape[1]
                 token_tensor = self._tokens_to_tensor(prompt_tokens_np, B)
@@ -450,21 +459,25 @@ class LlamaGRPOCompleter(GRPOCompleter):
             mask = self._create_causal_mask(processed, new_tokens, pad_lengths, B)
             logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
 
+            if logits_mask_tensor is None and padded_V != V:
+                logits_mask_tensor = self._build_logits_mask(V, padded_V, logits.get_value().dtype)
+
             next_token_tensor = ttml.ops.sample.sample_op(
-                logits, ctx.temperature, np.random.randint(low=1e7), logits_mask_tensor, self._seed_axes
+                logits,
+                ctx.temperature,
+                np.random.randint(low=1e7),
+                logits_mask_tensor,
+                self._seed_axes,
+                prefill_positions if is_prefill else decode_positions,
             )
 
-            last_token_column = ttnn.slice(
-                next_token_tensor.get_value(),
-                [0, 0, new_tokens - 1, 0],
-                [B_local, 1, new_tokens, 1],
-            )
+            last_token_column = next_token_tensor.get_value()
 
             generated_columns.append(last_token_column)
             chunk_columns.append(last_token_column)
             N += 1
 
-            deallocate_tensors([token_tensor, mask, logits, next_token_tensor])
+            deallocate_tensors([token_tensor, mask, logits])
 
             if (i + 1) % CHUNK == 0:
                 if pending_event is not None:
@@ -481,8 +494,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
                 chunk_columns = []
 
         completions_np = to_np(generated_columns)
-        deallocate_tensors(generated_columns)
-        deallocate_tensors([logits_mask_tensor])
+        deallocate_tensors(generated_columns + [prefill_positions, decode_positions, logits_mask_tensor])
         kv_cache.reset()
 
         completions: List[List[int]] = []
