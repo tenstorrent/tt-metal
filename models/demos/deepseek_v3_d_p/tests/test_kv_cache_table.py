@@ -830,6 +830,7 @@ def test_glm_kv_cache_table(
 @pytest.mark.parametrize("seq_len", [5 * 1024, 10 * 1024, 25 * 1024], ids=["seq5k", "seq10k", "seq25k"])
 @pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
 @pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
+@pytest.mark.parametrize("compacted_layers", [False, True], ids=["dense_layers", "compacted_layers"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM-5.2 DSA / TP-dedup is Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm52_tp_sharded_kv_cache_mock(
@@ -837,6 +838,7 @@ def test_glm52_tp_sharded_kv_cache_mock(
     seq_len,
     num_users,
     num_layers,
+    compacted_layers,
     device_params,
 ):
     sp_axis, tp_axis = 0, 1
@@ -901,8 +903,13 @@ def test_glm52_tp_sharded_kv_cache_mock(
     # create_kv_chunk_address_table_kimi has no tp_axis (and always builds a stage_layout, which the
     # TP-sharded path rejects), so build the table and populate it directly.
     CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
+    # Compacted: publish on a GLOBAL layer axis strictly wider than the cache's dense rows, mapped
+    # non-contiguously (dense d -> global 2*d + 1), exactly what the merged builder does for a compacted
+    # index cache. Dense: identity, row == layer.
+    layer_rows = [2 * d + 1 for d in range(num_layers)] if compacted_layers else None
+    global_layers = (max(layer_rows) + 1) if compacted_layers else num_layers
     lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
-    lookup_table_config.num_layers = num_layers
+    lookup_table_config.num_layers = global_layers
     lookup_table_config.max_sequence_length = seq_len
     lookup_table_config.num_slots = num_users
     lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
@@ -919,6 +926,7 @@ def test_glm52_tp_sharded_kv_cache_mock(
         chunk_size_bytes=CHUNK_SIZE_BYTES,
         num_users=num_users,
         tp_axis=tp_axis,
+        layer_rows=layer_rows,
     )
 
     reference_bf8 = ttnn.to_torch(ttnn.from_torch(reference, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(
@@ -929,9 +937,11 @@ def test_glm52_tp_sharded_kv_cache_mock(
     for slot in range(num_users):
         for layer in range(num_layers):
             batch_idx = slot * num_layers + layer  # cache batch index
+            # Compacted: dense row `layer` was published at its MAPPED global row, so read it back there.
+            table_row = layer_rows[layer] if layer_rows is not None else layer
             for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
                 pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-                raw_bytes = lookup_table.read_device_chunk(layer=layer, position=position, slot=slot)
+                raw_bytes = lookup_table.read_device_chunk(layer=table_row, position=position, slot=slot)
                 chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
                 chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
                 expected_chunk = reference_bf8[batch_idx : batch_idx + 1, :, position:pos_end, :]
