@@ -115,6 +115,7 @@ def run_model(
     rms_norm_eps=1e-5,
     final_output_pcc=0.982,
     routed_activation=ttnn.RoutedExpertActivation.Silu,
+    shared_activation=ACTIVATION_SILU,
     measure=None,
 ):
     """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
@@ -130,9 +131,10 @@ def run_model(
     dedicated grouped_topk / routing_setup tests. HOST_ALL gates ignore padding entirely
     (TtMoe falls back to padding_config=None for non-DEVICE_FP32 gates).
 
-    ``routed_activation`` selects the fused routed-expert kernel's activation and the matching
-    torch reference. The shared expert always runs SiLU: no SiTU kernel exists outside the
-    routed-expert op, so both sides must stay on SiLU there for the comparison to mean anything.
+    ``routed_activation`` selects the fused routed-expert kernel's activation and ``shared_activation``
+    the shared expert's; each is mirrored onto the matching torch reference. They are separate knobs
+    because the two sites run different implementations -- a fused kernel vs the Python-composed
+    ttnn ops in TtSharedExpert -- even where Kimi-K3 sets both to SiTU (#53625).
 
     ``measure`` wraps the forward for a perf caller: it is called as ``measure(forward)``,
     must invoke the thunk and return its result, and owns the device sync. The perf gates use
@@ -144,6 +146,8 @@ def run_model(
         raise ValueError(f"no torch reference for {routed_activation}; supported: {list(_TORCH_ROUTED_ACTIVATION)}")
     torch_routed_activation = _TORCH_ROUTED_ACTIVATION[routed_activation]
     upstream_activation = _UPSTREAM_ACT[routed_activation]
+    if shared_activation not in (ACTIVATION_SILU, ACTIVATION_SITU):
+        raise ValueError(f"unknown shared_activation {shared_activation!r}")
 
     profiler.clear()
     profiler.start("test_ttnn_moe")
@@ -362,12 +366,11 @@ def run_model(
             latent_weights=latent_weights,
             latent_use_norm=latent_use_norm,
             rms_norm_eps=rms_norm_eps,
-            # Routed side matches whatever the fused kernel runs; the shared expert stays on SiLU
-            # (no SiTU kernel outside the routed-expert op).
+            # Each side matches whatever the device runs there.
             activation=torch_routed_activation,
             situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
             situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
-            shared_activation=ACTIVATION_SILU,
+            shared_activation=shared_activation,
         )
         profiler.end("torch_moe_creation")
 
@@ -402,6 +405,9 @@ def run_model(
         routed_expert_activation=routed_activation,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
+        shared_expert_activation=shared_activation,
+        shared_expert_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
+        shared_expert_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
         gate_weights=gate_weights,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=moe_cache_dir,
@@ -657,9 +663,9 @@ def run_model(
         shared_expert_weights=shared_expert_weights,
         latent_weights=latent_weights,
         x=x,
-        # Same routed/shared split the device runs; see run_reference_moe.
+        # Same per-site activations the device runs; see run_reference_moe.
         hidden_act=upstream_activation,
-        shared_hidden_act="silu" if upstream_activation is not None else None,
+        shared_hidden_act=shared_activation if upstream_activation is not None else None,
     )
     if ref_out is not None and tt_output is not None:
         logger.info("Running upstream MoE reference")
@@ -684,6 +690,18 @@ def run_model(
         logger.debug(f"{key}: {profiler.get(key) * 1000:.2f} ms")
 
 
+def _ci_unsupported_param_combos_ds_moe(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_fallback_mode = params["gate_fallback_mode"]
+
+    if not on_ci:
+        return False
+    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_ds_moe)
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
@@ -719,6 +737,9 @@ def run_model(
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
+        # SP=8 proxy. Kept out of e2e collection by the uncollect predicate; the moe perf
+        # wrapper still reaches it via --wrapper-invocation, and approximate_8x4_perf takes
+        # its non-TP ops on the assumption that this slot is an SP=8 run.
         pytest.param(
             (8, 1),
             torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
@@ -809,18 +830,18 @@ def test_ds_moe(
     "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (8, 1),
-            torus_y_device_params(fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-            2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="torus-y-8x1",
-        ),
-        pytest.param(
             (4, 2),
             fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
+        ),
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
         ),
         pytest.param(
             (8, 4),
@@ -928,11 +949,11 @@ def test_kimi_k3_moe(
 ):
     """Kimi-K3 MoE: 896 experts / top-16 with the LatentMoE projections around the routed side.
 
-    The routed experts run the checkpoint's SiTU-GLU on device
-    (``RoutedExpertActivation.SituGlu``, #51351), matched by a SiTU torch reference. The SHARED
-    expert stays on SiLU on both sides: the SiTU kernel is the routed-expert op's, and nothing
-    implements it at the shared expert's 6144 width, so holding both sides to SiLU there keeps
-    this a test of the dataflow rather than of a gap the device cannot close.
+    Both expert kinds run the checkpoint's SiTU-GLU on device, each matched by a SiTU torch
+    reference: the routed side through the fused kernel (``RoutedExpertActivation.SituGlu``), the
+    shared side through TtSharedExpert's composed softcap/sigmoid/multiply. This is also the only
+    test that reaches that composed path's sub_core_grids branch -- the shared expert runs on a
+    sub-device here, overlapped with the dispatch, which test_shared_expert does not set up.
 
     One deliberate limit remains from the bring-up scope:
 
@@ -971,4 +992,5 @@ def test_kimi_k3_moe(
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
         final_output_pcc=0.965,
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
+        shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
     )

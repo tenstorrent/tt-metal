@@ -6,6 +6,7 @@
 
 #include "internal/dataflow/dataflow_api_common.h"
 #include "internal/dataflow/dataflow_cmd_bufs.h"
+#include "noc_address_backend.h"
 #include "api/debug/assert.h"
 #include "internal/debug/sanitize.h"
 #include "api/debug/waypoint.h"
@@ -187,12 +188,7 @@ uint64_t get_noc_multicast_addr(
     uint32_t noc_y_end,
     uint32_t addr,
     uint8_t noc = noc_index) {
-    return NOC_MULTICAST_ADDR(
-        DYNAMIC_NOC_X(noc, noc_x_start),
-        DYNAMIC_NOC_Y(noc, noc_y_start),
-        DYNAMIC_NOC_X(noc, noc_x_end),
-        DYNAMIC_NOC_Y(noc, noc_y_end),
-        addr);
+    return noc_address_backend::multicast_descriptor(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr, noc);
 }
 
 // clang-format off
@@ -211,7 +207,7 @@ uint64_t get_noc_multicast_addr(
 // clang-format on
 FORCE_INLINE
 uint64_t get_noc_addr(uint32_t noc_x, uint32_t noc_y, uint32_t addr, uint8_t noc = noc_index) {
-    return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, noc_x), DYNAMIC_NOC_Y(noc, noc_y), addr);
+    return noc_address_backend::worker_address(noc_x, noc_y, addr, noc);
 }
 
 /*
@@ -224,7 +220,7 @@ std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
         Get an encoding which contains tensix core and address you want to
         write to via the noc multicast
     */
-    return ((uint64_t)(noc_xy) << NOC_ADDR_COORD_SHIFT) | addr;
+    return noc_address_backend::packed_worker_address(noc_xy, addr);
 }
 
 uint64_t get_dram_noc_addr(
@@ -238,9 +234,7 @@ uint64_t get_dram_noc_addr(
     uint32_t addr =
         (bank_offset_index * align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<true>())) +
         bank_base_address + offset + bank_to_dram_offset[bank_index];
-    uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<true>(bank_index, noc);
-    uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-    return noc_addr;
+    return noc_address_backend::bank_address<true>(bank_index, addr, noc);
 }
 
 uint64_t get_l1_noc_addr(
@@ -254,9 +248,7 @@ uint64_t get_l1_noc_addr(
     uint32_t addr =
         (bank_offset_index * align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<false>())) +
         bank_base_address + offset + bank_to_dram_offset[bank_index];
-    uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<false>(bank_index, noc);
-    uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-    return noc_addr;
+    return noc_address_backend::bank_address<false>(bank_index, addr, noc);
 }
 
 uint64_t get_system_memory_noc_addr(
@@ -265,11 +257,8 @@ uint64_t get_system_memory_noc_addr(
     const uint32_t base_addr,
     const uint32_t offset = 0,
     uint8_t noc = noc_index) {
-    uint64_t pcie_core_noc_encoding =
-        uint64_t(NOC_XY_PCIE_ENCODING(DYNAMIC_NOC_X(noc, PCIE_NOC_X), DYNAMIC_NOC_Y(noc, PCIE_NOC_Y)));
     uint32_t addr = base_addr + page_size * id + offset;
-    uint64_t noc_addr = pcie_core_noc_encoding | addr;
-    return noc_addr;
+    return noc_address_backend::system_memory_address(addr, noc);
 }
 
 FORCE_INLINE
@@ -278,7 +267,7 @@ std::uint64_t get_noc_addr(std::uint32_t addr, uint8_t noc = noc_index) {
         Get an encoding which contains the address in L1 on the current core that you want to
         read from/write to via the noc
     */
-    return NOC_XY_ADDR(my_x[noc], my_y[noc], addr);
+    return noc_address_backend::self_address(addr, noc);
 }
 
 template <bool DRAM>
@@ -304,10 +293,7 @@ struct InterleavedAddrGen {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-        return noc_addr;
+        return noc_address_backend::bank_address<DRAM>(bank_index, addr, noc);
     }
 };
 
@@ -338,10 +324,7 @@ struct InterleavedPow2AddrGen {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-        return noc_addr;
+        return noc_address_backend::bank_address<DRAM>(bank_index, addr, noc);
     }
 };
 
@@ -368,10 +351,7 @@ struct InterleavedAddrGenFast {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-        return noc_addr;
+        return noc_address_backend::bank_address<DRAM>(bank_index, addr, noc);
     }
 };
 
@@ -402,10 +382,7 @@ struct InterleavedPow2AddrGenFast {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
-
-        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
-        return noc_addr;
+        return noc_address_backend::bank_address<DRAM>(bank_index, addr, noc);
     }
 };
 
@@ -530,14 +507,13 @@ FORCE_INLINE uint64_t get_noc_addr(
 template <bool DRAM>
 FORCE_INLINE uint64_t
 get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_t noc = noc_index) {
-    uint64_t noc_addr = 0;
+    // Look up the bank destination before the DRAM offset add, matching the
+    // load order (and object code) of the pre-backend implementation.
+    const uint32_t packed_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_id, noc);
     if constexpr (DRAM) {
-        noc_addr = dram_bank_to_noc_xy[noc][bank_id];
         bank_address_offset += bank_to_dram_offset[bank_id];
-    } else {
-        noc_addr = l1_bank_to_noc_xy[noc][bank_id];
     }
-    return (noc_addr << NOC_ADDR_COORD_SHIFT) | (bank_address_offset);
+    return noc_address_backend::packed_worker_address(packed_xy, bank_address_offset);
 }
 
 template <bool DRAM, uint32_t page_size>

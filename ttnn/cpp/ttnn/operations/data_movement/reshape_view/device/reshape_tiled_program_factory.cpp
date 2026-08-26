@@ -5,16 +5,15 @@
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_program_factory.hpp"
 
 #include <cmath>
-#include <memory>
 #include <numeric>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
 
 namespace ttnn::prim {
@@ -263,167 +262,25 @@ Tensor compute_reshape_mapping_host_tensor(
 // The device operation is parallelized over output tensor pages, where each core operates on a range of pages.
 
 // The reader kernel loads the mapping tensor page that corresponds to the current output tensor page on which it is
-// operating and pushes it on to the circular buffer. The reader kernel loops over all of the data segments represented
+// operating and pushes it on to the dataflow buffer. The reader kernel loops over all of the data segments represented
 // by the map and loads the specified input pages, avoiding redundant loads of pages for segments that come from the
-// same input page, and pushes them to the circular buffer.
+// same input page, and pushes them to the dataflow buffer.
 
-// The writer kernel pops mapping pages off the circular buffer, corresponding to the current page. It loops through
-// the input tensor pages specified by the map and, as necessary, pops input pages off the circular buffer, again
+// The writer kernel pops mapping pages off the dataflow buffer, corresponding to the current page. It loops through
+// the input tensor pages specified by the map and, as necessary, pops input pages off the dataflow buffer, again
 // accounting for consecutive segments that come from the same input page. Using the offsets and size supplied by the
-// map, the reader copies the segment from the input page to a scratch page stored in L1. When all segments are written,
+// map, the writer copies the segment from the input page to a scratch page stored in L1. When all segments are written,
 // the scratch page is copied to its output destination.
 
-namespace {
-
-// Build the per-coord reshape ProgramDescriptor.  The mapping_buffer is
-// workload-scoped (owned by the surrounding WorkloadDescriptor), so its
-// address survives across cache hits and the framework patches the input
-// / output buffer addresses via the buffer-binding fast path.
-tt::tt_metal::ProgramDescriptor build_reshape_tiled_program(
-    const ReshapeViewParams& operation_attributes,
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
-    tt::tt_metal::Buffer* mapping_buffer,
-    uint32_t mapping_page_size,
-    uint32_t mapping_page_size_bytes,
-    tt::DataFormat mapping_dataformat,
-    uint32_t num_output_pages) {
+ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_program_artifacts(
+    const ReshapeViewParams& operation_attributes, const ReshapeViewInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
 
-    Buffer* input_buffer = input_tensor.buffer();
-    Buffer* output_buffer = output_tensor.buffer();
-    TT_ASSERT(input_buffer != nullptr, "Input buffer should be allocated on device!");
-    TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    distributed::MeshDevice* device = input_tensor.device();
-    const auto grid = device->compute_with_storage_grid_size();
-
-    // PCC fails when this is greater than 1. TODO figure out why.
-    constexpr auto reader_cb_len = 1;
-
-    constexpr auto mapping_cb_idx = tt::CBIndex::c_0;
-
-    // set up CB for input tiles
-    const auto input_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    const auto input_tile_size_bytes = tt::tile_size(input_cb_data_format);
-    constexpr auto input_cb_idx = tt::CBIndex::c_1;
-
-    // TODO assert output tile size and data format same as input
-    const auto output_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
-    const auto output_tile_size_bytes = tt::tile_size(output_cb_data_format);
-    constexpr auto output_cb_idx = tt::CBIndex::c_2;
-
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-            operation_attributes.sub_core_grid.has_value()
-                ? split_work_to_cores(operation_attributes.sub_core_grid.value(), num_output_pages)
-                : split_work_to_cores(grid, num_output_pages);
-
-    TT_ASSERT(num_cores <= num_output_pages);
-
-    ProgramDescriptor desc;
-
-    // mapping metadata CB (no buffer binding — reader stages mapping pages
-    // through this CB on the fly)
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = mapping_page_size_bytes * reader_cb_len,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(mapping_cb_idx),
-            .data_format = mapping_dataformat,
-            .page_size = mapping_page_size_bytes,
-        }}},
-    });
-
-    // input tile CB
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = input_tile_size_bytes * reader_cb_len,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_cb_idx),
-            .data_format = input_cb_data_format,
-            .page_size = input_tile_size_bytes,
-        }}},
-    });
-
-    // output tile CB
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = output_tile_size_bytes,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_cb_idx),
-            .data_format = output_cb_data_format,
-            .page_size = output_tile_size_bytes,
-        }}},
-    });
-
-    std::vector<uint32_t> reader_compile_time_args = {
-        mapping_page_size_bytes, input_tile_size_bytes, mapping_cb_idx, input_cb_idx};
-    TensorAccessorArgs(*mapping_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    const uint32_t max_map_entries = mapping_page_size / detail::SegmentMapData::size;
-    std::vector<uint32_t> writer_compile_time_args = {
-        input_tile_size_bytes,
-        max_map_entries,
-        tt::datum_size(output_cb_data_format),
-        mapping_cb_idx,
-        input_cb_idx,
-        output_cb_idx};
-    TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    uint32_t page_idx_start = 0, page_idx_end = 0;
-    for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
-        uint32_t increment = 0;
-        if (core_group_1.contains(c)) {
-            increment = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(c)) {
-            increment = num_tiles_per_core_group_2;
-        } else {
-            continue;
-        }
-        page_idx_end += increment;
-
-        // Bind input + mapping buffers via emplace_runtime_args so the
-        // framework's fast cache-hit path patches their addresses without
-        // re-running the factory.
-        reader_desc.emplace_runtime_args(c, {input_buffer, mapping_buffer, page_idx_start, page_idx_end});
-        writer_desc.emplace_runtime_args(c, {output_buffer, page_idx_start, page_idx_end});
-
-        page_idx_start += increment;
-    }
-
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-
-    return desc;
-}
-
-}  // namespace
-
-tt::tt_metal::WorkloadDescriptor ReshapeViewTiledProgramFactory::create_workload_descriptor(
-    const ReshapeViewParams& operation_attributes,
-    const ReshapeViewInputs& tensor_args,
-    Tensor& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& input_tensor = tensor_args.input;
     auto& output_tensor = tensor_return_value;
+    const auto& input_mt = input_tensor.mesh_tensor();
+    const auto& output_mt = output_tensor.mesh_tensor();
 
     const auto& input_shape = input_tensor.logical_shape();
     const auto& output_shape = output_tensor.logical_shape();
@@ -440,7 +297,7 @@ tt::tt_metal::WorkloadDescriptor ReshapeViewTiledProgramFactory::create_workload
     const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
     const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
 
-    // Host-compute and upload the input→output page-mapping tensor.
+    // Host-compute and upload the input->output page-mapping tensor.
     Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
                                 num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
                                 .to_device(device);
@@ -449,44 +306,178 @@ tt::tt_metal::WorkloadDescriptor ReshapeViewTiledProgramFactory::create_workload
     const auto mapping_dataformat = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
     const uint32_t mapping_page_size_bytes = mapping_page_size * mapping_tensor.element_size();
 
-    tt::tt_metal::WorkloadDescriptor workload_descriptor;
+    // Op-owned tensor: move the owning MeshTensor out of the built Tensor into the artifact so its
+    // device allocation outlives the cached program (~Tensor would otherwise force-deallocate it).
+    // The mapping depends only on the hashed input/output shapes, so on a cache hit the cached
+    // mapping is always valid; operation_attributes.recreate_mapping_tensor stays ignored (it is
+    // excluded from the program hash).
+    std::vector<tt::tt_metal::MeshTensor> op_owned;
+    op_owned.reserve(1);
+    op_owned.push_back(mapping_tensor.device_storage().release_mesh_tensor());
+    const auto& mapping_owned = op_owned.back();
 
-    // Park the mapping Tensor on the WorkloadDescriptor.  Wrapping in a
-    // shared_ptr<Tensor> defers ~Tensor (which force-deallocates the
-    // underlying device memory via DeviceStorage::deallocate) until the
-    // cached workload is evicted.  See pool_multi_core_program_factory.cpp
-    // for the lifetime rationale.
-    auto mapping_owner = std::make_shared<Tensor>(std::move(mapping_tensor));
-    tt::tt_metal::Buffer* mapping_buffer = mapping_owner->buffer();
-    workload_descriptor.buffers.push_back({std::move(mapping_owner), mapping_buffer});
+    const auto grid = device->compute_with_storage_grid_size();
 
-    // Note: operation_attributes.recreate_mapping_tensor is intentionally
-    // ignored here — it's excluded from the program hash, so on a cache
-    // hit the cached mapping_tensor (which depends only on hashed inputs)
-    // is always valid.
+    // PCC fails when this is greater than 1. TODO figure out why.
+    constexpr auto reader_dfb_len = 1;
 
-    // Single-device op: build the per-coord ProgramDescriptor ONCE and
-    // copy it into each coord-range entry to avoid redundant work on
-    // multi-coord workloads.
-    auto desc = build_reshape_tiled_program(
-        operation_attributes,
-        input_tensor,
-        output_tensor,
-        mapping_buffer,
-        mapping_page_size,
-        mapping_page_size_bytes,
-        mapping_dataformat,
-        num_output_pages);
+    // input tile DFB / output tile DFB format metadata
+    const auto input_dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    const auto input_tile_size_bytes = tt::tile_size(input_dfb_data_format);
+    // TODO assert output tile size and data format same as input
+    const auto output_dfb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
+    const auto output_tile_size_bytes = tt::tile_size(output_dfb_data_format);
 
-    auto ranges = tensor_coords.ranges();
-    workload_descriptor.programs.reserve(ranges.size());
-    for (size_t i = 0; i + 1 < ranges.size(); ++i) {
-        workload_descriptor.programs.push_back({ranges[i], desc});
+    const auto
+        [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+            operation_attributes.sub_core_grid.has_value()
+                ? split_work_to_cores(operation_attributes.sub_core_grid.value(), num_output_pages)
+                : split_work_to_cores(grid, num_output_pages);
+
+    TT_ASSERT(num_cores <= num_output_pages);
+
+    const uint32_t max_map_entries = mapping_page_size / detail::SegmentMapData::size;
+
+    // Resource names.
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const DFBSpecName MAPPING{"mapping"};  // reader-produces / writer-consumes mapping-page FIFO
+    const DFBSpecName IN_TILES{"in_tiles"};  // reader-produces / writer-consumes input-tile FIFO
+                                             // (distinct from tensor::input, the input tensor)
+    const DFBSpecName WORKING{"working"};  // writer-only L1 scratch page (self-loop)
+    const TensorParamName INPUT_T{"input"};
+    const TensorParamName MAPPING_T{"map"};  // the op-owned page-mapping tensor
+    const TensorParamName OUTPUT_T{"output"};
+
+    ProgramSpec spec;
+    spec.name = "reshape_view_tiled";
+
+    // DFBs (placement derived from bindings; no core_ranges). The mapping metadata DFB stages
+    // mapping pages on the fly; the input DFB stages input tiles; the output/working DFB is an L1
+    // scratch page the writer both fills and drains (self-loop).
+    spec.dataflow_buffers = {
+        DataflowBufferSpec{
+            .unique_id = MAPPING,
+            .entry_size = mapping_page_size_bytes,
+            .num_entries = reader_dfb_len,
+            .data_format_metadata = mapping_dataformat,
+        },
+        DataflowBufferSpec{
+            .unique_id = IN_TILES,
+            .entry_size = input_tile_size_bytes,
+            .num_entries = reader_dfb_len,
+            .data_format_metadata = input_dfb_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = WORKING,
+            .entry_size = output_tile_size_bytes,
+            .num_entries = 1,
+            .data_format_metadata = output_dfb_data_format,
+        },
+    };
+
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = MAPPING, .accessor_name = "mapping", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = IN_TILES, .accessor_name = "in_tiles", .endpoint_type = DFBEndpointType::PRODUCER},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = INPUT_T, .accessor_name = "input"},
+                TensorBinding{.tensor_parameter_name = MAPPING_T, .accessor_name = "map"},
+            },
+        .compile_time_args =
+            {
+                {"Max_Map_Size_Bytes", mapping_page_size_bytes},
+                {"Tile_size_bytes", input_tile_size_bytes},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx"}},
+        .hw_config = create_reader_datamovement_config(device->arch()),
+    };
+
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = MAPPING, .accessor_name = "mapping", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = IN_TILES, .accessor_name = "in_tiles", .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = WORKING, .accessor_name = "working", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = WORKING, .accessor_name = "working", .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = OUTPUT_T, .accessor_name = "output"},
+            },
+        .compile_time_args =
+            {
+                {"Tile_size_bytes", input_tile_size_bytes},
+                {"Max_Map_Entries", max_map_entries},
+                {"element_sz_bytes", tt::datum_size(output_dfb_data_format)},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"start_output_page", "end_output_page"}},
+        .hw_config = create_writer_datamovement_config(device->arch()),
+    };
+
+    spec.kernels = {reader, writer};
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = INPUT_T, .spec = input_mt.tensor_spec()},
+        TensorParameter{.unique_id = MAPPING_T, .spec = mapping_owned.tensor_spec()},
+        TensorParameter{.unique_id = OUTPUT_T, .spec = output_mt.tensor_spec()},
+    };
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores}};
+
+    // Per-node runtime args. The run-args table is keyed name-first (name -> node -> value);
+    // AddRuntimeArgsForNode builds that from the per-core loop below.
+    KernelRunArgs reader_kra{.kernel = READER};
+    KernelRunArgs writer_kra{.kernel = WRITER};
+
+    uint32_t page_idx_start = 0, page_idx_end = 0;
+    for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
+        uint32_t increment = 0;
+        if (core_group_1.contains(c)) {
+            increment = num_tiles_per_core_group_1;
+        } else if (core_group_2.contains(c)) {
+            increment = num_tiles_per_core_group_2;
+        } else {
+            continue;
+        }
+        page_idx_end += increment;
+
+        AddRuntimeArgsForNode(
+            reader_kra.runtime_arg_values,
+            c,
+            {{"start_output_page_idx", page_idx_start}, {"end_output_page_idx", page_idx_end}});
+        AddRuntimeArgsForNode(
+            writer_kra.runtime_arg_values,
+            c,
+            {{"start_output_page", page_idx_start}, {"end_output_page", page_idx_end}});
+
+        page_idx_start += increment;
     }
-    if (!ranges.empty()) {
-        workload_descriptor.programs.push_back({ranges.back(), std::move(desc)});
-    }
-    return workload_descriptor;
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_kra), std::move(writer_kra)};
+    run_args.tensor_args = {
+        {INPUT_T, TensorArgument{input_mt}},
+        {MAPPING_T, TensorArgument{mapping_owned}},
+        {OUTPUT_T, TensorArgument{output_mt}},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+        .op_owned_tensors = std::move(op_owned),
+    };
 }
 
 }  // namespace ttnn::prim

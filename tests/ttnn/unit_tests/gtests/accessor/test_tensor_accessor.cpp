@@ -54,6 +54,17 @@ static void host_assert(bool condition, const char* expression) {
 #define DYNAMIC_NOC_X(noc, x) (x)
 #define DYNAMIC_NOC_Y(noc, y) (y)
 #define NOC_XY_ADDR(x, y, addr) (static_cast<uint64_t>(x) << 32 | static_cast<uint64_t>(y) << 16 | static_cast<uint64_t>(addr))
+// Host mock of the device NoC address backend (see internal/dataflow/noc_address_backend_xy.h),
+// mirroring the macro stubs above. Required even when no test calls these paths: qualified
+// names in TensorAccessor's member bodies are looked up when the template is parsed.
+namespace noc_address_backend {
+[[maybe_unused]] static bool is_local(uint64_t noc_addr, uint8_t noc) {
+    return NOC_UNICAST_ADDR_X(noc_addr) == my_x[noc] && NOC_UNICAST_ADDR_Y(noc_addr) == my_y[noc];
+}
+[[maybe_unused]] static uint64_t worker_address(uint32_t x, uint32_t y, uint32_t addr, [[maybe_unused]] uint8_t noc) {
+    return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, x), DYNAMIC_NOC_Y(noc, y), addr);
+}
+}  // namespace noc_address_backend
 #endif
 
 #include "api/tensor/tensor_accessor.h"

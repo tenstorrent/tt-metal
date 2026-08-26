@@ -401,7 +401,20 @@ def run_model(
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    is_balanced = params["is_balanced"]
+
+    if not on_ci:
+        return False
+
+    if not is_balanced:
+        return True
+    return False
+
+
 # sp x tp
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [

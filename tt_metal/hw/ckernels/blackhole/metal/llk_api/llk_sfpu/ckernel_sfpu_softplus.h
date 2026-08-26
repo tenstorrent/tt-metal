@@ -161,7 +161,7 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
     v_endif;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
     const float beta = Converter::as_float(param0);
     const float beta_reciprocal = Converter::as_float(param1);
