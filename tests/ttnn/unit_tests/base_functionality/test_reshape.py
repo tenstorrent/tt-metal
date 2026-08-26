@@ -760,26 +760,22 @@ def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, u
     assert tt_output_tensor.shape == torch.Size(output_shape)
 
 
-@pytest.mark.xfail(
-    reason="Test that the previously supported reshape accounting for the physical shape is no longer possible"
-)
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
         ([32, 256], [1, 256]),
     ],
 )
-def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
+def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape, expect_error):
+    """Reshape against a replicated tensor's physical shape is rejected: the logical
+    volumes differ, and only the logical shape is considered."""
     torch_input_tensor = torch.randn(input_shape)
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper, device=mesh_device
     )
-    tt_output_tensor = ttnn.reshape(tt_input_tensor, ttnn.Shape(output_shape))
-
-    for tensor_shard in ttnn.get_device_tensors(tt_output_tensor):
-        tt_output_tensor = ttnn.to_torch(tensor_shard)
-        assert tt_output_tensor.shape == torch.Size(output_shape)
+    with expect_error(RuntimeError, "Attempting to reshape between two shapes with different volumes"):
+        ttnn.reshape(tt_input_tensor, ttnn.Shape(output_shape))
 
 
 @pytest.mark.timeout(320)
