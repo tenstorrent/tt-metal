@@ -24,7 +24,7 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the schedule starts at. Asserted against
 // the field list below, so it cannot drift out of step with it.
-constexpr uint32_t READER_SCALAR_CT_ARGS = 23;
+constexpr uint32_t READER_SCALAR_CT_ARGS = 24;
 
 struct ReaderCtArgs {
     uint32_t num_l1_slots;
@@ -50,6 +50,10 @@ struct ReaderCtArgs {
     uint32_t my_dg_index;
     uint32_t control_addr;
     uint32_t meta_prefetch_cap;
+    // Which way this stream walks the pages inside one run. Its destinations are taken furthest-first, and
+    // for a clockwise stream that is descending dispatch-group index, hence descending page: matching the
+    // pages to it turns the whole own-assignment phase into one continuous sweep of the expert's region.
+    uint32_t walks_down;
 
 #ifndef KERNEL_BUILD
     ReaderCtArgs(
@@ -86,7 +90,8 @@ struct ReaderCtArgs {
         local_split_count(op::stream_count(args.num_links)),
         my_dg_index(op::my_dg_index(args, coord)),
         control_addr(l1.control),
-        meta_prefetch_cap(META_PREFETCH) {
+        meta_prefetch_cap(META_PREFETCH),
+        walks_down(op::stream_is_cw(plan.stream)) {
         // Schedule: the work order, relays tagged. An own entry carries its index into the table that
         // follows.
         uint32_t own_idx = 0;
@@ -139,7 +144,8 @@ struct ReaderCtArgs {
             local_split_count,
             my_dg_index,
             control_addr,
-            meta_prefetch_cap};
+            meta_prefetch_cap,
+            walks_down};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -167,7 +173,8 @@ struct ReaderCtArgs {
         local_split_count(get_compile_time_arg_val(19)),
         my_dg_index(get_compile_time_arg_val(20)),
         control_addr(get_compile_time_arg_val(21)),
-        meta_prefetch_cap(get_compile_time_arg_val(22)) {}
+        meta_prefetch_cap(get_compile_time_arg_val(22)),
+        walks_down(get_compile_time_arg_val(23)) {}
 
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
     static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(13);  // schedule_len
