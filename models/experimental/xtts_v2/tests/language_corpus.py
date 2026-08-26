@@ -93,6 +93,11 @@ SENTENCES = {
         "彼女は手紙をたたんで机の上に置いた。",
         "渡り鳥が夕暮れに谷を越えていった。",
     ],
+    "cs": [
+        "Zimní trh se dnes otevřel brzy.",
+        "Složila dopis a nechala ho na stole.",
+        "Stěhovaví ptáci přeletěli za soumraku údolí.",
+    ],
 }
 
 
@@ -287,5 +292,16 @@ WER_SENTENCES = {
         "その書庫はまったく別の目的で建てられた建物の上の階を占めていて、毎年資料が壁をいっそう強く押していた。",
         "角のパン屋は夜明け前に店を開け、通り全体に温かいパンの香りが広がるので、常連客は毎朝同じ順番でやって来る。",
         "鉄道が谷に届くよりずっと前、郵便は馬で峠を越えて運ばれ、時刻表は時計よりも天気に左右されたので、村人たちは空を読むことを覚えた。",
+    ],
+    "cs": [
+        "Stará mapa ukazovala ostrovy, které žádný námořník nikdy nenašel, a nikdo je nechtěl " "vymazat jako první.",
+        "Teplý chléb a silná káva naplnily malou kuchyni dlouho před východem slunce a konvice se "
+        "vrátila na oheň, jakmile se první džbán vyprázdnil.",
+        "Archiv zabíral horní patra budovy postavené k úplně jinému účelu a materiál každý rok "
+        "tlačil na stěny o něco silněji.",
+        "Pekárna na rohu otevírá před svítáním a celá ulice pak voní teplým chlebem, a proto "
+        "stálí zákazníci přicházejí každé ráno ve stejném pořadí.",
+        "Dlouho předtím, než železnice dosáhla údolí, přinášela poštu přes horský průsmyk koňská "
+        "spřežení a jízdní řád závisel spíše na počasí než na hodinách.",
     ],
 }

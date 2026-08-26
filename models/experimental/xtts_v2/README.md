@@ -119,13 +119,15 @@ first-ever run when kernels build from scratch.
 
 ## Known limitations
 
-- **16 of 17 languages.** `ar de en es fr hu it ko nl pl pt ru tr zh` get coqui's full cleaning
-  (abbreviations, symbols, ordinals, number expansion), `hi` gets lowercase + whitespace, and `ja`
-  is romanized without number expansion — all from the vendored `reference/coqui/`. `zh`, `ja` and
-  `ko` are romanized before the BPE, since the vocab holds no CJK, and each needs its package:
-  `pypinyin`, `cutlet` (~45 MB of dictionary) and `hangul_romanize`. `cs` is blocked upstream —
-  coqui asks `num2words` for language `"cz"`, which does not exist, and `num2words` has no Czech
-  ordinals even under `"cs"`.
+- **All 17 languages**, with two caveats. `ja` is romanized without number expansion (upstream
+  runs neither cleaner for it), so digits reach the model as digits. `cs` ordinals read as
+  cardinals: `num2words` has no Czech ordinals, and the pattern cannot tell `3.` (third) from a
+  sentence-ending `50.` in any case, since Czech writes them identically — so `3. test` is spoken
+  "tři test" rather than "třetí test". `zh`, `ja` and `ko` are romanized before the BPE because the
+  vocab holds no CJK, each needing its package: `pypinyin`, `cutlet` (~45 MB of dictionary) and
+  `hangul_romanize`.
+- **`cs` and `hi` are noticeably weaker than the rest** and are gated to catch regression, not to
+  assert the quality is acceptable. Czech appends audible words past the end of an utterance.
 - **Model hard caps:** text ≤ 402 GPT tokens per utterance; audio ≤ 605 codes ≈ ~28 s of
   speech per utterance. Text needing more than that is cut off **mid-sentence** — the model
   stops wherever it has got to, and the rest is never spoken. Chunk long input by sentence.

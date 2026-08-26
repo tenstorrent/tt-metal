@@ -24,8 +24,8 @@ torch and deterministic.
 
 Language support: those in SUPPORTED_LANGUAGES. Cleaning comes from reference/coqui/cleaners.py,
 vendored rather than transcribed — the model was trained on those tables' output. zh, ja and ko are
-romanized after cleaning because the vocab has no CJK; cs is absent, blocked by a num2words gap (see
-CLEANED_LANGUAGES). Number expansion needs `num2words`; each romanizer needs its own package.
+romanized after cleaning because the vocab has no CJK. Number expansion needs `num2words`; each
+romanizer needs its own package.
 """
 
 import functools
@@ -241,9 +241,7 @@ def speaker_logmel(audio, sr: int):
 # ---------------------------------------------------------------------------------------
 
 # Languages whose cleaning needs nothing beyond num2words.
-# cs is absent: upstream asks num2words for "cz", which does not exist, and num2words has no
-# Czech ordinals — while upstream's cs pattern makes a bare "3." one.
-CLEANED_LANGUAGES = ("ar", "de", "en", "es", "fr", "hu", "it", "ko", "nl", "pl", "pt", "ru", "tr", "zh")
+CLEANED_LANGUAGES = ("ar", "cs", "de", "en", "es", "fr", "hu", "it", "ko", "nl", "pl", "pt", "ru", "tr", "zh")
 # hi has no cleaner tables upstream either — it gets lowercase + whitespace only.
 BASIC_LANGUAGES = ("hi",)
 # Japanese runs neither cleaner: upstream romanizes and lowercases it and stops there, so it gets
@@ -299,6 +297,7 @@ VOCAB_TAG = {"zh": "zh-cn"}
 # A warning rather than an error, matching upstream -- MAX_TEXT_TOKENS is the hard limit.
 CHAR_LIMITS = {
     "ar": 166,
+    "cs": 186,
     "de": 253,
     "en": 250,
     "es": 239,

@@ -61,6 +61,10 @@ SPEAKERS_PER_LANG = 6
 #             near-perfect language. FULL_SWEEP_LANG is tighter, running far more draws.
 # collapse -- past this a run did not say the sentence. Tiered, not fitted per language: the worst
 #             of a few dozen draws is too noisy to fit to.
+#
+# cs and hi sit above the rule: their baselines are the model's own quality, so a ceiling at 3x
+# would gate nothing. Theirs are the tightest here relative to their means, catching a language
+# getting worse rather than asserting it is good.
 LIMITS = {
     "en": (0.02, 0.30),
     "es": (0.03, 0.30),
@@ -77,6 +81,7 @@ LIMITS = {
     "ru": (0.10, 0.30),
     "zh": (0.11, 0.30),
     "hu": (0.15, 0.50),
+    "cs": (0.20, 0.50),
     "hi": (0.20, 0.75),
 }
 # A mean over a language's runs barely moves when a few collapse, so the collapse count is asserted
