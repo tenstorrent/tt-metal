@@ -43,6 +43,8 @@ SQUARE_RANGE_SAFETY_FACTOR = 0.9
 
 SFPU_SQUARE_FORMATS = input_output_formats(
     [
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
@@ -79,10 +81,16 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         input_dimensions_B=input_dimensions,
     )
 
-    # Both caps invert the squaring op so x² stays representable in the input
-    # format's math precision and in the requested output format.
+    # Both caps invert the squaring op so x² stays representable. For the input
+    # cap this is because the SFPU squares in the input format's math precision
+    # (except for MX, where squaring uses a wider intermediate and |x| itself
+    # is the binding constraint -- mx_elem_max is already small).
     input_elem_max = format_elem_max(formats.input_format)
-    input_magnitude_cap = math.sqrt(input_elem_max) * SQUARE_RANGE_SAFETY_FACTOR
+    input_magnitude_cap = (
+        input_elem_max
+        if formats.input_format.is_mx_format()
+        else math.sqrt(input_elem_max)
+    ) * SQUARE_RANGE_SAFETY_FACTOR
     output_magnitude_cap = (
         math.sqrt(format_elem_max(formats.output_format)) * SQUARE_RANGE_SAFETY_FACTOR
     )
@@ -111,6 +119,7 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         dest_acc,
         formats.input_format,
         input_dimensions,
+        unpack_to_srcs=True,
     )
 
     configuration = TestConfig(
@@ -138,6 +147,8 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         ),
         unpack_to_srcs=True,
         dest_acc=dest_acc,
+        # Input MX formats require disable_format_inference
+        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result
