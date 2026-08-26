@@ -326,9 +326,14 @@ hand against a local copy of the branch if they need one. Then stop.
    catch a regression in what changed. Ask of each candidate: *if this change is broken,
    would this pipeline fail?* If you cannot answer yes, drop it.
 
-5. **Narrow each survivor to the relevant platforms** via its inputs (next section).
-   Running `runtime-unit-tests` across every SKU when only Blackhole code changed wastes
-   hours of scarce silicon.
+5. **Narrow each survivor to the relevant platforms _and suites_** via its inputs (next
+   section). Running `runtime-unit-tests` across every SKU when only Blackhole code
+   changed wastes hours of scarce silicon — and so does running the fabric and T3000
+   suites inside `sanity-tests` for a single-device op change.
+
+   Narrowing is not only about architecture. Several pipelines bundle independent test
+   suites behind their own toggles, and those default to *on*. Reach step 6 with an
+   explicit answer for each survivor: which suites can this change actually break?
 
 6. **Respect the cap of 8.** If more than 8 look justified, you are almost certainly
    being too broad — re-cut to the highest-signal ones and note in your comment what you
@@ -338,7 +343,7 @@ hand against a local copy of the branch if they need one. Then stop.
 
 | Pipeline | Hardware | Reach for it when |
 |---|---|---|
-| `sanity-tests` | WH + BH + simulator | Broad, cheap first signal on core `tt_metal/` or `ttnn/` changes |
+| `sanity-tests` | WH + BH + simulator | First-line signal on core `tt_metal/` or `ttnn/` changes. Bundles seven independent suites — select them, do not take the default of all seven |
 | `blackhole-e2e-tests` | Blackhole (P150/P300/BH QuietBox) | Anything under a `blackhole/` path or BH-specific HAL/SoC descriptor |
 | `galaxy-sanity`, `galaxy-health` | Galaxy (WH/BH) | Quick Galaxy-reachability check before committing to the heavier Galaxy suites |
 | `galaxy-unit-tests`, `galaxy-integration-tests`, `galaxy-e2e-tests` | Galaxy | Fabric, CCL, multi-device, or large-mesh code paths |
@@ -401,8 +406,37 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   pipelines, both defaulting to `all`. If the change touches one model, name it. SKU
   values carry a human-readable suffix — use the option string exactly as written
   (e.g. `wh_n150 (N150)`, `bh_p150 (P150)`).
+- **Suite and board toggles: `run-<something>` booleans that default to `true`.** Three
+  pipelines bundle independent suites this way, and taking the defaults runs all of them:
+
+  | Pipeline | Toggles (all default `true`) |
+  |---|---|
+  | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests` |
+  | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
+  | `pipeline-select-profiler` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler`, `run-t3k-profiler` |
+
+  The names say what each covers, so map them the same way you mapped paths to pipelines:
+  a single-device `ttnn` op change reaches `run-ttnn-sanity-tests` and `run-ops-sanity-tests`
+  and does **not** reach fabric, T3000, UMD, or multi-card. Set the ones it cannot reach to
+  `false`. Leaving all seven on is the same mistake as dispatching seven pipelines when one
+  would do — it is just hidden inside a single dispatch.
+
+- **Do not touch inputs that change behaviour rather than scope.** `mlperf-read-only`,
+  `mlperf-write-access`, `upload_results`, `skip_on_timeout`, `build-inplace-wheel`,
+  `enable-watcher`, `enable-llk-asserts`, and `run_triage_tests` are not narrowing knobs;
+  flipping them changes what the run *does* or where it writes, not how much of it runs.
+  Leave them alone.
 - Leave `platform`, `build-type`, and `enable-lto` at their defaults unless the change is
   specifically about a build configuration.
+
+### Consistency check before you dispatch
+
+Read back the reason you are about to write for each pipeline. **If your reason says a
+subsystem is not reachable by this change, no input you are passing may still enable it.**
+Saying "nothing multi-chip or fabric is reachable here" and then dispatching with
+`run-fabric-sanity-tests` and `run-t3000-sanity-tests` left at their defaults contradicts
+your own analysis and spends shared silicon on it. Either narrow the inputs to match the
+reason, or widen the reason to admit why you kept the suite on.
 
 > **Maintenance note (for humans, not the agent).** Because those schemas are baked into
 > `test-command.lock.yml` at compile time, they are a *snapshot*. If an allowlisted
@@ -429,8 +463,18 @@ comment, or your memory of the diff. Never dispatch `main`, `master`, or a relea
 
 Post exactly one comment. Keep it short enough to read at a glance:
 
-- **What you dispatched** — one row per pipeline: a status badge (below), the platform
-  narrowing you applied, and a one-line reason.
+- **What you dispatched** — one row per pipeline: a status badge (below), **the exact
+  inputs you supplied**, and a one-line reason.
+
+  State the inputs verbatim as `key: value`, comma-separated, in a code span — not a prose
+  summary like "Blackhole only". A reader has no other way to find out what a dispatched
+  run was scoped to: `workflow_dispatch` inputs are not shown on the run page, so if this
+  row does not say it, the information is gone. Where you deliberately left a suite off,
+  that `false` is the most useful thing in the row — it is the record of a decision, and
+  the reviewer's chance to catch you having narrowed too far.
+
+  If you passed nothing, write `defaults` — and be aware that for the pipelines with suite
+  toggles above, `defaults` means *everything*, which is rarely what you intended.
 - **The ref** every dispatch targeted, stated explicitly so it is auditable.
 - **What you deliberately skipped** and why, when a reader might expect it — especially
   anything you dropped to stay under the cap of 8.
