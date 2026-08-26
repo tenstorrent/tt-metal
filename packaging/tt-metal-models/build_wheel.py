@@ -53,8 +53,15 @@ SUBMODULE_PATH = "models/demos/t3000/llama2_70b/reference/llama"
 
 
 def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    # Resolve the executable before invoking it: a missing tool becomes one clear error
+    # rather than a FileNotFoundError from deep inside subprocess, and only a verified
+    # executable path ever reaches the invocation.
+    executable = shutil.which(cmd[0])
+    if executable is None:
+        raise SystemExit(f"error: `{cmd[0]}` was not found on PATH.")
+    cmd = [executable, *cmd[1:]]
     print(f"+ {' '.join(str(c) for c in cmd)}", flush=True)
-    return subprocess.run(cmd, check=True, **kwargs)
+    return subprocess.run(cmd, check=True, shell=False, **kwargs)
 
 
 def derive_version(repo_root: Path) -> str:

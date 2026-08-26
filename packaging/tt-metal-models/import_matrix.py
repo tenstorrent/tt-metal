@@ -34,6 +34,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -87,6 +89,33 @@ EXTRA_SENTINELS = (
 )
 
 
+# The probe embeds the module name into Python source (see _PROBE_SNIPPET), so this is
+# an injection boundary: anything that is not a plain dotted identifier is refused
+# before it gets near the interpolation. Names arrive from filesystem discovery, and a
+# hostile filename in the tree under test must not become code.
+_MODULE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
+
+
+def checked_module(module: str) -> str:
+    if not _MODULE_NAME.match(module):
+        raise SystemExit(f"error: {module!r} is not a dotted module name; refusing to probe it.")
+    return module
+
+
+def checked_interpreter(python: str) -> str:
+    """Resolve `python` to a concrete executable file, or fail with one clear error.
+
+    Interpreter paths arrive from the command line (--python) or from a venv this script
+    just created. Resolving them here keeps unvetted strings out of every subprocess
+    invocation below, and turns a typo into an immediate error instead of a confusing
+    per-probe failure.
+    """
+    resolved = shutil.which(python)
+    if resolved is None:
+        raise SystemExit(f"error: {python!r} is not an executable Python interpreter.")
+    return str(Path(resolved).resolve())
+
+
 def find_models_root(python: str, cwd: str) -> Path:
     """Locate the installed `models` namespace package, without importing it.
 
@@ -99,7 +128,7 @@ def find_models_root(python: str, cwd: str) -> Path:
         "s = m.PathFinder.find_spec('models');"
         "print(json.dumps(list(s.submodule_search_locations) if s else []))"
     )
-    out = subprocess.run([python, "-c", code], capture_output=True, text=True, check=True, cwd=cwd)
+    out = subprocess.run([python, "-c", code], capture_output=True, text=True, check=True, cwd=cwd, shell=False)
     locations = json.loads(out.stdout)
     if not locations:
         raise SystemExit("error: no `models` package is importable in the target environment.")
@@ -148,10 +177,11 @@ _PROBE_SNIPPET = textwrap.dedent(
 def probe(python: str, module: str, cwd: str) -> dict | None:
     """Import one module in a subprocess. Returns None on success, else failure detail."""
     result = subprocess.run(
-        [python, "-c", _PROBE_SNIPPET % {"module": module}],
+        [python, "-c", _PROBE_SNIPPET % {"module": checked_module(module)}],
         capture_output=True,
         text=True,
         cwd=cwd,
+        shell=False,
     )
     if result.returncode == 0:
         return None
@@ -223,13 +253,16 @@ def check_environment_is_clean(python: str) -> list[str]:
 
 def make_venv(wheel: Path, workdir: Path) -> str:
     """Create a venv containing only the wheel and its declared dependencies."""
+    wheel = wheel.resolve(strict=True)
+    if wheel.suffix != ".whl" or not wheel.is_file():
+        raise SystemExit(f"error: {wheel} is not a wheel file.")
     venv = workdir / "venv"
     print(f"Creating a clean virtual environment at {venv}", flush=True)
-    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
-    python = str(venv / "bin" / "python")
-    subprocess.run([python, "-m", "pip", "install", "--quiet", "--upgrade", "pip"], check=True)
+    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, shell=False)
+    python = checked_interpreter(str(venv / "bin" / "python"))
+    subprocess.run([python, "-m", "pip", "install", "--quiet", "--upgrade", "pip"], check=True, shell=False)
     print(f"Installing {wheel.name} and its declared dependencies", flush=True)
-    subprocess.run([python, "-m", "pip", "install", "--quiet", str(wheel)], check=True)
+    subprocess.run([python, "-m", "pip", "install", "--quiet", str(wheel)], check=True, shell=False)
     return python
 
 
@@ -272,7 +305,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="tt-metal-models-matrix-") as tmp:
         workdir = Path(tmp)
-        python = make_venv(args.wheel, workdir) if args.wheel else args.python
+        python = make_venv(args.wheel, workdir) if args.wheel else checked_interpreter(args.python)
 
         # A neutral cwd: importing from the repository root would resolve `models` to the
         # checkout instead of the installed package, and the matrix would prove nothing.

@@ -56,8 +56,15 @@ wheel. Install a matching ttnn with pip.\
 
 
 def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    # Resolve the executable before invoking it: a missing tool becomes one clear error
+    # rather than a FileNotFoundError from deep inside subprocess, and only a verified
+    # executable path ever reaches the invocation.
+    executable = shutil.which(cmd[0])
+    if executable is None:
+        raise SystemExit(f"error: `{cmd[0]}` was not found on PATH.")
+    cmd = [executable, *cmd[1:]]
     print(f"+ {' '.join(str(c) for c in cmd)}", flush=True)
-    return subprocess.run(cmd, check=True, **kwargs)
+    return subprocess.run(cmd, check=True, shell=False, **kwargs)
 
 
 def _require(tool: str, fmt: str) -> None:
@@ -253,8 +260,9 @@ def main() -> int:
 
     if not args.deb and not args.rpm:
         parser.error("nothing to do: pass --deb, --rpm, or both.")
-    if not args.wheel.is_file():
+    if not args.wheel.is_file() or args.wheel.suffix != ".whl":
         raise SystemExit(f"error: no such wheel: {args.wheel}")
+    args.wheel = args.wheel.resolve()
 
     version = wheel_version(args.wheel)
     args.output_dir.mkdir(parents=True, exist_ok=True)
