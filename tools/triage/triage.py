@@ -28,7 +28,7 @@ Options:
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
     --llm-output                     Replace Rich tables on the console with a machine-readable report (CSV-formatted tables). Easier and cheaper for LLMs (and grep/CI) to consume. Implies --disable-colors.
     --llm-output-path=<path>         Additionally write the machine-readable report to <path>. Can be combined with --llm-output; without it, Rich output still goes to the console.
-    --sqlite-output-path=<path>      Additionally write a SQLite database to <path>, with one table per script holding that script's rows.
+    --sqlite-output-path=<path>      Additionally write a SQLite database to <path>, with one table per script that returns non-empty tabular data; check-only output is stored in the diagnostics table.
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
