@@ -282,6 +282,7 @@ def from_pretrained(
     # has one, and only K was corrupted.
     use_qk_fused_rotary: bool = True,
     cache_dir: Path | str | None = None,
+    load_hf_model: Any = None,
 ) -> Llama33_70BGalaxyForCausalLM:
     """Load `meta-llama/Llama-3.3-70B-Instruct` onto one WH Galaxy `(8, 4)` mesh.
 
@@ -306,7 +307,16 @@ def from_pretrained(
     cache_path = _cache_path(hf_model, cache_dir)
     paged = paged_attention_config or default_paged_attention_config(params)
 
-    hf = AutoModelForCausalLM.from_pretrained(hf_model, torch_dtype=torch.bfloat16, **load_kwargs)
+    # `load_hf_model` is a seam, not a convenience. The default loads all 141 GB
+    # of an 80-layer checkpoint eagerly, once per process, which is right for the
+    # accuracy gate and ruinous for anything that only needs a layer subset: the
+    # three-runs-in-fresh-processes rule costs three full loads. Callers that want
+    # a subset inject a loader that reads only the shards it needs - the tests use
+    # `galaxy_checkpoint.load_layer_subset_causal_lm` - and this module stays
+    # independent of the test tree rather than importing from it.
+    hf = load_hf_model() if load_hf_model is not None else AutoModelForCausalLM.from_pretrained(
+        hf_model, torch_dtype=torch.bfloat16, **load_kwargs
+    )
     hf.eval()
     try:
         weights = convert_hf_model_weights(hf, params=params)

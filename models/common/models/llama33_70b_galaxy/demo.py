@@ -86,6 +86,14 @@ def _load(mesh_device: Any, **overrides: Any):
         n_layers=_demo_layers(),
     )
     kwargs.update(overrides)
+    # A layer subset reads only the shards it needs (about 12 GB of the 141 GB)
+    # instead of materialising the whole 80-layer checkpoint. Only for iteration:
+    # every gate in this file ignores `_layers()` and runs all 80.
+    layers = kwargs.get("n_layers")
+    if layers:
+        from models.common.tests.models.galaxy.galaxy_checkpoint import load_layer_subset_causal_lm
+
+        kwargs["load_hf_model"] = lambda: load_layer_subset_causal_lm(hf_model, layer_indices=tuple(range(layers)))
     return from_pretrained(mesh_device, **kwargs)
 
 
@@ -99,6 +107,14 @@ def _close(handle: Any) -> None:
 
 def _assert_valid(results, *, vocab_size: int, expected_slots: int) -> None:
     assert len(results) == expected_slots
+    for result in results:
+        # Print the text before asserting anything. "The 80-layer model producing
+        # coherent demo output" is a claim a human has to read, and a test that
+        # only checks token ranges cannot make it - so the evidence log has to
+        # carry the actual continuation.
+        print(f"[demo] slot {result.slot} prompt: {result.prompt!r}", flush=True)
+        print(f"[demo] slot {result.slot} text  : {result.text!r}", flush=True)
+        print(f"[demo] slot {result.slot} tokens: {list(result.tokens)}", flush=True)
     for result in results:
         assert result.tokens, f"slot {result.slot} produced no tokens"
         assert all(0 <= token < vocab_size for token in result.tokens), f"slot {result.slot} sampled outside the vocab"
