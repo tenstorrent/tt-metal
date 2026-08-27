@@ -143,13 +143,19 @@ jobs:
     # Tokens that can select an sc4 entry: its test_type, its test_group, or any of its
     # test_tags (kimi_k2_7 / glm_5_2 / runner / kv_cache). Firing this caller for a selection
     # with no sc4 entry fails on an empty matrix, so the list stays exact.
+    #
+    # Each token is comma-wrapped on BOTH sides because contains() is substring-based while the
+    # impl's filter matches whole tokens. Without the wrapping, `kv_cache_table` (sc1-only)
+    # satisfies contains(..., 'kv_cache') and fires this caller, whose filter then finds no sc4
+    # entry and fails the run -- which is exactly what happened on run 33065088619. The validator
+    # emits the selection as ",".join(tokens) with no spaces, so ',<token>,' is an exact match.
     if: ${{ needs.validate-test-type.outputs.test-type == 'all'
-      || contains(needs.validate-test-type.outputs.test-type, 'module')
-      || contains(needs.validate-test-type.outputs.test-type, 'prefill_runner_kv_pcc')
-      || contains(needs.validate-test-type.outputs.test-type, 'kimi_k2_7')
-      || contains(needs.validate-test-type.outputs.test-type, 'glm_5_2')
-      || contains(needs.validate-test-type.outputs.test-type, 'runner')
-      || contains(needs.validate-test-type.outputs.test-type, 'kv_cache') }}
+      || contains(format(',{0},', needs.validate-test-type.outputs.test-type), ',module,')
+      || contains(format(',{0},', needs.validate-test-type.outputs.test-type), ',prefill_runner_kv_pcc,')
+      || contains(format(',{0},', needs.validate-test-type.outputs.test-type), ',kimi_k2_7,')
+      || contains(format(',{0},', needs.validate-test-type.outputs.test-type), ',glm_5_2,')
+      || contains(format(',{0},', needs.validate-test-type.outputs.test-type), ',runner,')
+      || contains(format(',{0},', needs.validate-test-type.outputs.test-type), ',kv_cache,') }}
     permissions:
       id-token: write
       contents: read
