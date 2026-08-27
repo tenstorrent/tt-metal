@@ -1169,7 +1169,7 @@ inline void calculate_atanh() {
         // Boundary fix-ups: |x| == 1 -> +/-inf, |x| > 1 -> NaN. abs(inp) is
         // recomputed inline here rather than cached in a register; a cached
         // |x| - 1 variant pushed the allocator past the reload budget.
-        v_if(sfpi::abs(inp) > 1.0f) { res = std::numeric_limits<float>::quiet_NaN(); }
+        v_if(sfpi::is_nan(inp) || sfpi::abs(inp) > 1.0f) { res = std::numeric_limits<float>::quiet_NaN(); }
         v_elseif(sfpi::abs(inp) == 1.0f) {
             sfpi::vFloat inf = std::numeric_limits<float>::infinity();
             res = sfpi::copysgn(inf, inp);
