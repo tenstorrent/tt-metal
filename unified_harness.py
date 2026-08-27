@@ -359,6 +359,8 @@ def unified_program_spec(
     dfbs,
     tensors,
     named_compile_time_args=None,
+    runtime_arg_names=None,
+    semaphores=None,
     defines=None,
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
@@ -391,6 +393,14 @@ def unified_program_spec(
         named_compile_time_args: list of (name, value), shared by all three kernels. The
             buffer slots are appended to this, so a kernel reads its own circular buffer id
             by name rather than hardcoding a number.
+        runtime_arg_names: names the kernel reads with get_arg(args::<name>). Declared on all
+            three kernels, because the uniform argument schema is a property of the model.
+            Values are supplied to run_unified_spec(), per node or broadcast. THIS IS D17:
+            there is no positional list left to miscount, so the sentinel that guarded it on
+            the legacy path has nothing to guard.
+        semaphores: names of USER semaphores, in the order they should be allocated. Six more
+            are appended for the multicast handshake and the core-to-core arrival flag, above
+            whatever the caller asked for -- exactly as unified_program() does.
 
     Returns the ProgramSpec. Run it with run_unified_spec().
 
@@ -420,24 +430,63 @@ def unified_program_spec(
     named_cts = list(named_compile_time_args or [])
     named_cts += [(f"cb_{d.name}", slots[d.name]) for d in dfbs]
 
+    # The reserved handshake semaphores, laid out exactly as unified_program() lays them out:
+    # two per data-movement thread, then one arrival flag per thread. tt/unified/api.h derives
+    # every id from the base by arithmetic, so the six must be CONTIGUOUS and in this order.
+    #
+    # They are allocated after the caller's, so user ids stay unconstrained; and metal assigns
+    # the lowest free id among cores that share a core set (program.cpp:2021), which for one
+    # core set is just declaration order. So the base is len(user semaphores) -- predicted,
+    # like the buffer slots, and checked the same way: the harness passes the FIRST and LAST
+    # reserved names as sem:: tokens and tt/unified/api.h static_asserts the arithmetic
+    # against them. First and last together pin the whole run, since metal cannot issue a
+    # duplicate id.
+    user_sems = list(semaphores or [])
+    reserved_sems = [
+        "u_mcast_ready0",
+        "u_mcast_sent0",
+        "u_mcast_ready1",
+        "u_mcast_sent1",
+        "u_copy_arrived0",
+        "u_copy_arrived1",
+    ]
+    assert len(reserved_sems) == MCAST_SEMAPHORES
+    all_sems = user_sems + reserved_sems
+    mcast_sem_base = len(user_sems)
+
     bbox = nodes.bounding_box() if hasattr(nodes, "bounding_box") else None
     grid_h = (bbox.end.y - bbox.start.y + 1) if bbox else 1
     grid_w = (bbox.end.x - bbox.start.x + 1) if bbox else 1
     all_defines = list(defines or []) + [
+        ("TT_UNIFIED_MCAST_SEM_BASE", str(mcast_sem_base)),
+        # The two ends of the reserved run, as sem:: tokens for api.h to check the base and
+        # the contiguity against. Spelled as an expression rather than a value on purpose:
+        # the value is the host's to know and the token is the only thing that reports it.
+        ("TT_UNIFIED_MCAST_SEM_FIRST", f"sem::{reserved_sems[0]}"),
+        ("TT_UNIFIED_MCAST_SEM_LAST", f"sem::{reserved_sems[-1]}"),
         ("TT_UNIFIED_CORE_GRID_H", str(grid_h)),
         ("TT_UNIFIED_CORE_GRID_W", str(grid_w)),
     ]
     if bbox is not None and nodes.num_cores() == grid_h * grid_w:
         all_defines.append(("TT_UNIFIED_CORE_GRID_EXACT", "1"))
 
-    def make_kernel(unique_id, hw_config):
+    def make_kernel(unique_id, hw_config, is_compute):
         k = ps.KernelSpec()
         k.unique_id = unique_id
         k.source = kernel_source
         k.hw_config = hw_config
         k.compile_time_args = {n: int(v) for n, v in named_cts}
         k.compiler_options.include_paths = UNIFIED_INCLUDE_PATHS
-        k.compiler_options.defines = {n: v for n, v in all_defines}
+        # The semaphore-check tokens go only to the kernels that BIND the semaphores, for the
+        # same reason the buffer slots are values and not tokens: sem::<name> exists only
+        # where it was bound. Compute cannot bind one at all (see below), so it does not get
+        # the check -- which costs nothing, since the two data-movement projections between
+        # them check every reserved id, and all five see the same base.
+        defs = dict(all_defines)
+        if is_compute:
+            defs.pop("TT_UNIFIED_MCAST_SEM_FIRST", None)
+            defs.pop("TT_UNIFIED_MCAST_SEM_LAST", None)
+        k.compiler_options.defines = defs
         bindings = []
         for param in tensors:
             b = ps.KernelSpec.TensorBinding()
@@ -445,6 +494,27 @@ def unified_program_spec(
             b.accessor_name = param
             bindings.append(b)
         k.tensor_bindings = bindings
+        # Both DATA-MOVEMENT kernels bind every semaphore, and the compute kernel binds none.
+        #
+        # Not a choice: Metal 2.0 refuses semaphore bindings on a compute kernel outright
+        # (program_spec.cpp:1088). That turns out to agree with the model rather than fight
+        # it -- tt/unified/api.h already says a Semaphore is projected onto one DM thread and
+        # is a no-op elsewhere, and impl_v1.hpp keeps metal's Semaphore behind an
+        # IS_DM_THREAD guard, so compute has never touched one. The rule the model documented
+        # is now the rule the host enforces.
+        #
+        # Both DM kernels bind all of them, rather than one each, because a semaphore binding
+        # carries no exclusive role (unlike a DFB binding, whose two endpoints are spoken
+        # for) and because either thread may be the one driving a given collective.
+        if not is_compute:
+            sem_bindings = []
+            for sem_name in all_sems:
+                b = ps.KernelSpec.SemaphoreBinding()
+                b.semaphore_spec_name = sem_name
+                b.accessor_name = sem_name
+                sem_bindings.append(b)
+            k.semaphore_bindings = sem_bindings
+        k.runtime_arg_schema.runtime_arg_names = list(runtime_arg_names or [])
         return k
 
     dm_cfgs = {}
@@ -462,9 +532,9 @@ def unified_program_spec(
     compute_cfg.sfpu_precision_mode = ps.Precision.Approximate if math_approx_mode else ps.Precision.Precise
 
     kernels = {
-        "dm0": make_kernel("dm0", dm_cfgs[0]),
-        "dm1": make_kernel("dm1", dm_cfgs[1]),
-        "compute": make_kernel("compute", compute_cfg),
+        "dm0": make_kernel("dm0", dm_cfgs[0], is_compute=False),
+        "dm1": make_kernel("dm1", dm_cfgs[1], is_compute=False),
+        "compute": make_kernel("compute", compute_cfg, is_compute=True),
     }
 
     # The endpoint bindings: the api.h table, applied.
@@ -502,16 +572,50 @@ def unified_program_spec(
     spec.name = name
     spec.kernels = [kernels["dm0"], kernels["dm1"], kernels["compute"]]
     spec.dataflow_buffers = dfb_specs
+    sem_specs = []
+    for sem_name in all_sems:
+        ss = ps.SemaphoreSpec()
+        ss.unique_id = sem_name
+        ss.target_nodes = nodes
+        sem_specs.append(ss)
+    spec.semaphores = sem_specs
     spec.tensor_parameters = [ps.TensorParameter(n, t.spec) for n, t in tensors.items()]
     spec.work_units = [wu]
     return spec
 
 
-def run_unified_spec(device, spec, tensors):
-    """Build the program from `spec`, bind `tensors`, enqueue it, and wait.
+def run_unified_spec(device, spec, tensors, runtime_args=None, nodes=None):
+    """Build the program from `spec`, bind `tensors` and `runtime_args`, enqueue it, and wait.
 
     `tensors` is the same dict handed to unified_program_spec, so the TensorParameters and
     the TensorArguments cannot drift apart.
+
+    `runtime_args` is {name: value} for a value every node shares, or {name: {CoreCoord:
+    value}} where nodes differ -- a multicast sender's own coordinate, or each core's output
+    slice. `nodes` is the list of CoreCoords to broadcast a shared value over, and is only
+    needed when some argument is given in the scalar form.
+
+    Names are the schema declared on the kernels; a name that is not in it, or one that is in
+    it and not supplied here, is an error from metal rather than a garbage read. That is D17
+    closed: there is no positional list left to get out of step.
     """
     ps = ttnn.program_spec
-    ps.run_program_spec(device, spec, ps.ProgramRunArgs(), list(tensors.items()))
+
+    per_kernel = []
+    for kernel_name in ("dm0", "dm1", "compute"):
+        kra = ps.ProgramRunArgs.KernelRunArgs()
+        kra.kernel = kernel_name
+        values = {}
+        for name, value in (runtime_args or {}).items():
+            if isinstance(value, dict):
+                values[name] = {c: int(v) for c, v in value.items()}
+            else:
+                if nodes is None:
+                    raise ValueError(f"runtime arg {name!r} is a scalar, so run_unified_spec needs `nodes`")
+                values[name] = {c: int(value) for c in nodes}
+        kra.runtime_arg_values = values
+        per_kernel.append(kra)
+
+    run_args = ps.ProgramRunArgs()
+    run_args.kernel_run_args = per_kernel
+    ps.run_program_spec(device, spec, run_args, list(tensors.items()))

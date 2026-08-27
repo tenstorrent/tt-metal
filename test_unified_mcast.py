@@ -19,14 +19,21 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, unified_program
+from unified_harness import (
+    dfb_input,
+    dfb_output,
+    make_cb,
+    run_unified_spec,
+    unified_program,
+    unified_program_spec,
+)
 
 KERNEL = "unified_kernels/mcast_bcast.cpp"
 CB_IN, CB_OUT = 0, 16
 TILE = 32
 
 
-def run(device, row=2, tiles=2, dm_thread=0, barrier=False, seed=0):
+def run(device, row=2, tiles=2, dm_thread=0, barrier=False, seed=0, metal2=False):
     torch.manual_seed(seed)
     a = (torch.rand([1, 1, tiles * TILE, TILE]) - 0.5).to(torch.bfloat16)
 
@@ -40,32 +47,61 @@ def run(device, row=2, tiles=2, dm_thread=0, barrier=False, seed=0):
     core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(row - 1, 0))])
     cores = [ttnn.CoreCoord(x, 0) for x in range(row)]
 
-    ct_args = []
     named_ct_args = [("tiles_per_block", tiles)]
-    for t in (ta, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    defines = [
+        ("MC_ROW_W", str(row)),
+        # NOC 0: ttsim cannot express an ascending virtual mcast rect on NOC 1.
+        ("MC_DM_THREAD", str(dm_thread)),
+    ] + ([("MC_BARRIER", "1")] if barrier else [])
 
-    # Per-core runtime args: only the output block index differs.
-    per_core = {c: [ta.buffer_address(), tout.buffer_address(), i] for i, c in enumerate(cores)}
-
-    program = unified_program(
-        kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=[make_cb(CB_IN, core_ranges, num_pages=tiles), make_cb(CB_OUT, core_ranges, num_pages=tiles)],
-        compile_time_args=ct_args,
-        named_compile_time_args=named_ct_args,
-        runtime_args=per_core,
-        defines=[
-            ("MC_ROW_W", str(row)),
-            # NOC 0: ttsim cannot express an ascending virtual mcast rect on NOC 1.
-            ("MC_DM_THREAD", str(dm_thread)),
-        ]
-        + ([("MC_BARRIER", "1")] if barrier else []),
+    logger.info(
+        f"running unified mcast: row={row} tiles={tiles} dm_thread={dm_thread} "
+        f"barrier={barrier} path={'metal2' if metal2 else 'legacy'}"
     )
 
-    logger.info(f"running unified mcast: row={row} tiles={tiles} dm_thread={dm_thread} barrier={barrier}")
-    out = ttnn.generic_op([ta, tout], program)
+    if metal2:
+        # The broadcast runs on MC_DM_THREAD and the store on thread 0, which is what the two
+        # roles below have to say. The six handshake semaphores are reserved by the harness;
+        # tt/unified/api.h checks their base and contiguity against the ids the host assigned.
+        spec = unified_program_spec(
+            kernel_source=KERNEL,
+            nodes=core_ranges,
+            dfbs=[
+                dfb_input("in", thread=dm_thread, num_pages=tiles),
+                dfb_output("out", thread=0, num_pages=tiles),
+            ],
+            tensors={"in": ta, "out": tout},
+            named_compile_time_args=named_ct_args,
+            runtime_arg_names=["out_block"],
+            defines=defines + [("TT_UNIFIED_METAL2", "1")],
+            name="mcast_bcast",
+        )
+        run_unified_spec(
+            device,
+            spec,
+            {"in": ta, "out": tout},
+            runtime_args={"out_block": {c: i for i, c in enumerate(cores)}},
+        )
+        out = tout
+    else:
+        ct_args = []
+        for t in (ta, tout):
+            ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+
+        # Per-core runtime args: only the output block index differs.
+        per_core = {c: [ta.buffer_address(), tout.buffer_address(), i] for i, c in enumerate(cores)}
+
+        program = unified_program(
+            kernel_source=KERNEL,
+            core_ranges=core_ranges,
+            cores=cores,
+            cbs=[make_cb(CB_IN, core_ranges, num_pages=tiles), make_cb(CB_OUT, core_ranges, num_pages=tiles)],
+            compile_time_args=ct_args,
+            named_compile_time_args=named_ct_args,
+            runtime_args=per_core,
+            defines=defines,
+        )
+        out = ttnn.generic_op([ta, tout], program)
 
     got = ttnn.to_torch(out).to(torch.float32)
     want = torch.exp(a.to(torch.float32)).repeat(1, 1, row, 1)
@@ -86,11 +122,12 @@ def main(argv=None):
     p.add_argument("--dm-thread", type=int, default=0, choices=[0, 1], help="which DM thread broadcasts")
     p.add_argument("--barrier", action="store_true", help="synchronize_cores() twice mid-kernel")
     p.add_argument("--pcc", type=float, default=0.99)
+    p.add_argument("--metal2", action="store_true", help="build a Metal 2.0 ProgramSpec")
     args = p.parse_args(argv)
 
     device = ttnn.open_device(device_id=0)
     try:
-        got, want = run(device, args.row, args.tiles, args.dm_thread, args.barrier)
+        got, want = run(device, args.row, args.tiles, args.dm_thread, args.barrier, metal2=args.metal2)
     finally:
         ttnn.close_device(device)
 
