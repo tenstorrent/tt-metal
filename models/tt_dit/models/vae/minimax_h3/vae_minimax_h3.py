@@ -236,6 +236,7 @@ class MiniMaxH3Vae(Module):
         ccl_manager=None,
         pixel_denorm: tuple[Sequence[float], Sequence[float]] | None = None,
         readback_uint8: bool = False,
+        waves_per_device: int = 1,
     ) -> None:
         super().__init__()
         self.config = config
@@ -270,6 +271,11 @@ class MiniMaxH3Vae(Module):
         # Synchronize after each decode forward so `device` and `readback` are separable in the
         # profile -- which also serializes them, so it is opt-in.
         self.profile = profile
+        # Decode tiles per device per wave: each device runs a `waves_per_device`-sized batch, so a
+        # full wave covers `num_devices * waves_per_device` tiles. >1 trades activation memory for
+        # bigger matmuls and fewer waves; 1 is the original one-tile-per-device schedule.
+        assert waves_per_device >= 1, f"waves_per_device must be >= 1, got {waves_per_device}"
+        self.waves_per_device = waves_per_device
         self._encoder_state: dict[str, torch.Tensor] | None = None
         self._decoders: dict[tuple[int, int, int], object] = {}
         self._decoder_state: dict[str, torch.Tensor] | None = None
@@ -671,7 +677,8 @@ class MiniMaxH3Vae(Module):
         assert not odd, f"units must share a shape; {units[0].shape} vs {odd[0]}"
         _, _, num_frames, height, width = units[0].shape
         decoder = self._decoder_for(num_frames, height, width)
-        wave_size = self.mesh_device.get_num_devices()
+        # A wave spans every device, each running a `waves_per_device`-sized batch (dim-0 shard).
+        wave_size = self.mesh_device.get_num_devices() * self.waves_per_device
 
         profile = self._profile
         # Synchronizing after each forward is what makes `device` and `readback` separable in the
