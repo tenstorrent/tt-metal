@@ -488,7 +488,10 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
-            default_block_size=agmm_block_size(self.hidden_size, 3 * self.inner_dim // tp_factor),
+            default_block_size=agmm_block_size(
+                self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
+            ),
+            force_transpose=False,  # let the op pick by M>N; H3 qkv is M<N -> non-transposed
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -600,7 +603,10 @@ class MiniMaxH3Attention(Module):
             spatial_1BND,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
-            default_block_size=agmm_block_size(self.inner_dim, self.hidden_size // tp_factor),
+            default_block_size=agmm_block_size(
+                self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]
+            ),
+            force_transpose=False,  # let the op pick by M>N; to_out is M>N -> transposed
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
         )
