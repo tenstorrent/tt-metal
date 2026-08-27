@@ -60,7 +60,9 @@ def main(argv=None):
     device = open_device()
     try:
         pipe = TtVoxtralPipeline(device)
-        pipe.warmup()
+        # ~74 s: every prefill shape, every codec bucket, one trace capture. Verbose so
+        # the wait is explained rather than looking like a hang.
+        pipe.warmup(verbose=True)
         embeds = frontend.build_prompt_embeds(a.text, a.voice, pipe.wb)
         frames, _, _ = pipe.generate(embeds, max_frames=a.max_frames, seed=a.seed, verbose=False)
         wav = pipe.decode(frames)

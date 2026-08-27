@@ -114,3 +114,39 @@ def test_perf(pipe):
     print(f"\n  ms/frame spread across lengths: {min(mspf):.2f} .. {max(mspf):.2f} "
           f"({max(mspf) - min(mspf):.2f} ms) -- should be nearly flat")
     assert not failed, "per-stage ceilings exceeded:\n    " + "\n    ".join(failed)
+
+
+@pytest.mark.slow
+def test_warmup_compiles_every_prefill_shape_and_codec_bucket():
+    """Warmup must leave nothing for a request to compile.
+
+    Before this, `warmup()` ran ONE 32-token prompt, so it compiled 1 of the 16 reachable prefill
+    shapes and a single codec bucket -- every request at a new prompt length paid a JIT compile
+    mid-request. The sibling xtts_v2 model warms every prefill shape and every vocoder bucket, and
+    its README makes that a promise ("no request pays a compile at request time"); this asserts the
+    same promise here instead of trusting it.
+
+    Uses its own device so the timing is a cold-cache figure worth reporting, not one inherited from
+    another test's warm program cache.
+    """
+    from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt
+
+    d = open_device()
+    try:
+        p = TtVoxtralPipeline(d)
+        assert p.warmed == {}, "warmed should be empty before warmup()"
+        p.warmup(verbose=True)
+        w = p.warmed
+        step = gpt.PREFILL_MULTIPLE
+        expected_shapes = list(range(step, p.backbone.max_seq_len + 1, step))
+        print(f"\n  warmup {w['seconds']:.1f}s: {len(w['prefill_shapes'])} prefill shapes, "
+              f"{len(w['codec_buckets'])} codec buckets, traced={w['traced']}")
+        assert w["prefill_shapes"] == expected_shapes, (
+            f"warmup compiled {len(w['prefill_shapes'])} of {len(expected_shapes)} prefill shapes: "
+            f"missing {sorted(set(expected_shapes) - set(w['prefill_shapes']))}")
+        assert w["codec_buckets"], "no codec bucket compiled"
+        assert w["codec_buckets"][0] == (p.codec.bucket or 1)
+        assert w["traced"], "the frame-loop trace was not captured, so generate() still pays it"
+        p.close()
+    finally:
+        ttnn.close_device(d)

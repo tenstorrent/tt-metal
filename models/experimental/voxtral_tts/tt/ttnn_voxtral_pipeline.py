@@ -53,6 +53,8 @@ class TtVoxtralPipeline:
         # be computed as total - prefill - decode, which silently folds in the per-frame host
         # overhead and reads as if the codec were 20x its real cost.
         self.last_timings = {}
+        # What warmup() actually compiled, so callers (and tests) can check rather than assume.
+        self.warmed = {}
 
     # ------------------------------------------------------------------
     # TRACED FRAME LOOP -- NOTES.md [pipe-05], STATUS.md 6.65
@@ -142,21 +144,101 @@ class TtVoxtralPipeline:
         ac = flow._fsq_quantize(ttnn.to_torch(xr).float().reshape(1, flow.N_ACOUSTIC_CODEBOOK))
         return torch.cat([sem, ac + flow.N_AUDIO_SPECIAL], dim=1)
 
-    def warmup(self):
-        """Pay the program compiles once, on a synthetic prompt, so the first real request does not.
+    def warmup(self, max_frames=640, capture_trace=True, verbose=False):
+        """Compile every program the request path can reach, then capture the frame-loop trace.
 
-        Deliberately does NOT go through `generate()`: on random embeds Block 2 can emit
-        [END_AUDIO] on frame 0, which `generate()` raises on. Warmup only needs each block's
-        programs built, so it drives them directly.
+        Without this, the first request at each new prompt length pays a JIT compile mid-request.
+        Prefill compiles PER PADDED LENGTH -- `Sp = ceil(S/PREFILL_MULTIPLE)*PREFILL_MULTIPLE` -- so
+        a 2048-row cache has 16 reachable shapes, and the codec buckets its frame count the same way.
+        This walks all of them, the way the sibling xtts_v2 model's `warmup()` walks every prefill
+        shape and every vocoder bucket.
+
+        ORDER MATTERS, and it is the same discipline xtts_v2 follows: everything that ALLOCATES
+        compiles BEFORE any trace capture. A program compiled after a capture risks landing where the
+        trace keeps its intermediates -- BUG-5, which shows up as a warning, then a hang, then a card
+        that needs `tt-smi -r`.
+
+        `torch.zeros` inputs are correct here and only here: warmup needs the kernels built, not the
+        right numbers, and it never asserts anything. (Trap 12 forbids quoting ACCURACY off synthetic
+        activations, which this does not do.) Block 2 emits [END_AUDIO] on zeros, which is fine for
+        compiling Block 2 itself but useless downstream -- see the codec step, which synthesises its
+        own codes for that reason.
+
+        Args:
+            max_frames: how many frames of codec bucket to compile for. Defaults to 640, i.e. ~51 s
+                of audio, which covers every utterance the quality set produces. Raise it if callers
+                generate longer, or the first long request pays a codec compile.
+            capture_trace: also capture and release the per-frame trace, so the first `generate()`
+                does not pay the capture. Skip only when debugging the eager path.
+            verbose: per-stage timings.
+
+        Sets `self.warmed` to what was actually compiled, so it can be asserted rather than assumed.
         """
-        from models.experimental.voxtral_tts.reference.voxtral_common_ref import DIM
+        import time as _time
 
-        torch.manual_seed(0)
-        embeds = torch.randn(1, 32, DIM) * 0.02
-        h = self.backbone.prefill_last(embeds)
-        codes = self.flow(h[:, 0])
-        self.decode(codes)
+        from models.experimental.voxtral_tts.reference.voxtral_common_ref import DIM
+        from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as _gpt
+
+        t_all = _time.perf_counter()
+        log = (lambda m: print(f"[warmup] {m}", flush=True)) if verbose else (lambda m: None)
+
+        # 1) Prefill, at every padded shape this cache can hold. The expensive part.
+        t0 = _time.perf_counter()
+        step = _gpt.PREFILL_MULTIPLE
+        shapes = list(range(step, self.backbone.max_seq_len + 1, step))
+        for sp in shapes:
+            self.backbone.reset()
+            self.backbone.prefill(torch.zeros(1, sp, DIM), last_only=True)
         self.backbone.reset()
+        log(f"prefill: {len(shapes)} shapes ({shapes[0]}..{shapes[-1]}) in "
+            f"{_time.perf_counter() - t0:.1f}s")
+
+        # 2) Block 2 once -- one shape, it is per-frame and length-independent.
+        t0 = _time.perf_counter()
+        h = self.backbone.prefill_last(torch.zeros(1, step, DIM))
+        codes = self.flow(h[:, 0])
+        self.backbone.reset()
+        log(f"block 2: 1 shape in {_time.perf_counter() - t0:.1f}s")
+
+        # 3) Codec, at every length bucket a request can reach.
+        #
+        # Synthetic CODEC-side codes, not Block 2's output: on zero inputs Block 2 emits
+        # [END_AUDIO], and `self.decode()` runs `strip_offset_and_trim`, which cuts at END_AUDIO and
+        # hands the codec an EMPTY tensor -- `slice start[2] (0) must be less than shape[2] (0)`.
+        # Driving `self.codec` directly with `make_synthetic_codes` compiles the same programs.
+        t0 = _time.perf_counter()
+        from models.experimental.voxtral_tts.reference import voxtral_codec_ref as _cref
+
+        bucket = self.codec.bucket or 1
+        buckets = list(range(bucket, max(max_frames, bucket) + 1, bucket))
+        for n in buckets:
+            self.codec(_cref.make_synthetic_codes(n))
+        log(f"codec: {len(buckets)} buckets ({buckets[0]}..{buckets[-1]}) in "
+            f"{_time.perf_counter() - t0:.1f}s")
+
+        # 4) The frame-loop trace, LAST, after every compile above.
+        traced = False
+        if capture_trace and TRACE_REGION_SIZE > 0:
+            t0 = _time.perf_counter()
+            try:
+                self.backbone.reset()
+                self.backbone.prefill(torch.zeros(1, step, DIM), last_only=True)
+                self._trace_capture(CFG_ALPHA, N_DECODING_STEPS)
+                traced = True
+                log(f"trace captured in {_time.perf_counter() - t0:.1f}s")
+            except Exception as exc:
+                log(f"trace capture failed ({type(exc).__name__}), leaving it to generate()")
+            finally:
+                self._trace_release()
+                self.backbone.reset()
+
+        self.warmed = {
+            "prefill_shapes": shapes,
+            "codec_buckets": buckets,
+            "traced": traced,
+            "seconds": _time.perf_counter() - t_all,
+        }
+        log(f"total {self.warmed['seconds']:.1f}s")
         return self
 
     def close(self):
@@ -167,6 +249,7 @@ class TtVoxtralPipeline:
         """
         self._trace_release()
         self.last_timings = {}
+        self.warmed = {}
 
     @torch.no_grad()
     def generate(self, embeds, max_frames=150, cfg_alpha=CFG_ALPHA, seed=0, verbose=True):

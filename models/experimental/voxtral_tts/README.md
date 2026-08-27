@@ -172,8 +172,13 @@ case 0 excluded because it pays one-time program-cache compilation:
 | medium (13.0 s) | 163 | 0.14 s | 4.52 s | 27.88 ms | 0.24 s | 4.91 s | 2.65x |
 | long (37.3 s) | 466 | 0.68 s | 12.77 s | 27.42 ms | 0.74 s | 14.18 s | 2.63x |
 
-Quality at the same build: long-form **WER 0 wrong of 894 words**, MOS long-form **4.61**,
-132/132 tests passing.
+Quality at the same build: long-form **WER 0 wrong of 894 words**, MOS long-form **4.61**.
+
+One-time `warmup()` takes **~74 s** with a hot kernel cache — 16 prefill shapes (32.8 s), Block 2
+(6.0 s), 5 codec buckets (32.6 s) and one trace capture (2.6 s) — and longer on a first-ever run
+when kernels build from scratch. It compiles **every** prefill shape and **every** codec bucket, so
+no request pays a compile at request time. `TtVoxtralPipeline.warmed` records what was compiled;
+`test_perf.py::test_warmup_compiles_every_prefill_shape_and_codec_bucket` asserts it.
 
 > **Quote ms/frame, not RTF, when comparing builds.** ms/frame is repeatable to 0.390 ms; RTF also
 > carries prefill, the codec and trace capture, which amortise differently as frame counts change —
