@@ -517,3 +517,88 @@ function" from "wrong input", and two of them free:
    reach them; "should" is not evidence.)
 3. **HF's own MLP re-applied to the device's own MLP input**, compared against the
    device's MLP output. This is the decisive one for the 0.096.
+| 24 | `logs3/a3_24_bisect_probes.log` | bisection + the MLP-as-a-function probe | **MLP wrong as a function**: 0.0846 on its own input |
+| 25 | `logs3/a3_25_host_quick.log` | host after dropping the attention weights from the prefetcher | 1 failed — a host assertion pinned the old registration |
+| 26 | `logs3/a3_26_host_quick.log` | host after updating it | **127 passed** |
+| 27 | `logs3/a3_27_bisect_noprefetch.log` | bisection with attention unprefetched | **D-B25a fixed**: MLP 0.096 -> 0.939, as a function 0.085 -> **0.99985**; RoPE tables **1.0** |
+
+## Result 24-27 — D-B25a: the MLP was reading the attention's weights
+
+The probe that settled it, from `logs3/a3_24_bisect_probes.log`:
+
+```text
+[bisect] bisect decode mlp out user 0:              0.0960404663734013
+[bisect] probe mlp on the device's own input:       0.0846090164672149
+```
+
+HF's own MLP applied to the device's own MLP input disagrees with the device's
+MLP output. So the MLP is a **wrong function**, and its 0.93-correlated input is
+not the explanation.
+
+Everything about the MLP's configuration is nonetheless right. Checked on host,
+field by field, against the *qualified Milestone A* decode configuration
+(`models/common/tests/modules/_mlp_2d_galaxy.py::decode_ring_config`):
+
+```text
+decode_input_memcfg        WIDTH_SHARDED L1 shard=(32, 96)  cores=24   equal
+decode_w1_w3_output_memcfg WIDTH_SHARDED L1 shard=(32, 160) cores=24   equal
+decode_w2_input_memcfg     WIDTH_SHARDED L1 shard=(32, 160) cores=24   equal
+decode_w2_output_memcfg    WIDTH_SHARDED L1 shard=(32, 96)  cores=24   equal
+decode_w1_w3_prg_config                                                equal
+decode_w2_prg_config                                                   equal
+```
+
+The 24 ring core coordinates and the 24 receiver coordinates are identical to the
+qualified test's, in the same order, and the weight mesh mappers match too
+(`[Shard(-1), Shard(-2)]` for w1/w3, `[Shard(-2), Shard(-1)]` for w2). The ring
+program configs also match the *production* `FF1_3_TG_RING_PROGCFG` and
+`FF2_TG_RING_PROGCFG` argument for argument.
+
+**So the defect was not in the module or its config. It was the prefetcher.**
+
+The global circular buffer is received by the 24 ring cores
+(`galaxy_sender_receiver_mapping`), and a prefetched matmul takes its weight from
+that buffer in registration order. The MLP's three projections run on the ring.
+The attention decode projections **do not**: Milestone A limitation L3 forced them
+onto a confined three-column worker rectangle so they would not straddle the
+prefetch sub-device partition. So registering `wqkv` and `wo` put two entries per
+layer into the buffer that nothing on the ring ever consumed, and the MLP's `w1`
+read the entry meant for `wqkv`.
+
+**Fixed** by registering only `("w1", "w3", "w2")`. Attention keeps its worker
+sub-device id through a new `_UnprefetchedContext` - without it a ttnn matmul
+defaults to sub-device *zero*, the prefetch senders (D-B13) - and reads its
+weights straight from DRAM.
+
+`logs3/a3_27_bisect_noprefetch.log`:
+
+```text
+[bisect] bisect decode mlp out user 0:          0.096 -> 0.9392486006493238
+[bisect] probe mlp on the device's own input:   0.085 -> 0.9998512706499623
+[pcc]    bisect decode logits user 0:           0.063 -> 0.9303782778911268
+```
+
+**The confirmation that the mechanism is understood and not merely correlated
+with the fix**: the attention PCC is *bit-identical* across the two runs -
+`0.7372848194843996` before and after. The attention matmuls never read the
+global CB at all; they only desynchronised it for the ones that did.
+
+### Two things this run eliminated for free
+
+```text
+[probe] decode global_cb bound: True
+[bisect] probe decode cos user 0:  1.0     probe decode sin user 0:  1.0
+[bisect] probe decode cos user 8:  1.0     probe decode sin user 8:  1.0
+[bisect] probe decode cos user 16: 1.0     probe decode sin user 16: 1.0
+[bisect] probe decode cos user 24: 1.0     probe decode sin user 24: 1.0
+```
+
+* the deferred global CB (D-B20's fix) **is** bound for decode;
+* **the decode RoPE tables are exact** on every column-local user. `RotarySetup2D`
+  produces exactly the Meta-layout table row the adaptor built. `job1_llama.md`
+  ranked "RoPE composed with `Attention2D`" as the expected first failure; the
+  *tables* are not it, so if RoPE is implicated at all it is the application, not
+  the data.
+
+D-B25b remains: **decode attention output PCC 0.737**, with an exact norm before
+it and exact tables beside it.

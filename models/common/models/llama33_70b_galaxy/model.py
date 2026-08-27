@@ -970,7 +970,24 @@ def build_llama33_70b_galaxy_transformer_2d_config(
     rope_theta: float,
     rope_scaling_factor: float | None = None,
     original_context_len: int | None = None,
-    use_qk_fused_rotary: bool = False,
+    # True, matching the production Galaxy model. `TtLlamaAttention.forward_decode`
+    # selects the fused op on exactly this condition -
+    #     if self.use_prefetcher:
+    #         q, k = ttnn.experimental.rotary_embedding_llama_fused_qk(...)
+    #     else:
+    #         ... rotary_embedding_llama(q, ...); rotary_embedding_llama(k, ...)
+    # - so on a prefetcher mesh the non-fused pair is the *fallback* path, kept for
+    # Blackhole, and it expects a different cos/sin layout ("`get_rot_mats` returns
+    # [1, 1, local_batch, head_dim], which is the format expected by the non-fused
+    # decode rotary op; `get_rm_rot_mats` expands to [1, expanded_batch, heads,
+    # head_dim] for the fused path").
+    #
+    # Measured on `(8, 4)` with the non-fused pair (D-B25b): the decode step wrote
+    # a K of |max| = inf into the cache at the current position while V, which does
+    # not pass through RoPE, was exact at PCC 0.99973 - and the prefix the prefill
+    # wrote was still 0.99993. Q has eight real head rows in its 32-row shard and K
+    # has one, and only K was corrupted.
+    use_qk_fused_rotary: bool = True,
     paged_attention_config: GalaxyPagedAttentionConfig | None = None,
     enable_device_sampling: bool = True,
     chunked_prefill_sequence_lengths: tuple[int, ...] = (),
@@ -1711,7 +1728,24 @@ def build_llama33_70b_galaxy_model(
     precision: Llama33_70BGalaxyPrecision = LLAMA33_70B_GALAXY_ACCURACY,
     paged_attention_config: GalaxyPagedAttentionConfig | None = None,
     enable_device_sampling: bool = True,
-    use_qk_fused_rotary: bool = False,
+    # True, matching the production Galaxy model. `TtLlamaAttention.forward_decode`
+    # selects the fused op on exactly this condition -
+    #     if self.use_prefetcher:
+    #         q, k = ttnn.experimental.rotary_embedding_llama_fused_qk(...)
+    #     else:
+    #         ... rotary_embedding_llama(q, ...); rotary_embedding_llama(k, ...)
+    # - so on a prefetcher mesh the non-fused pair is the *fallback* path, kept for
+    # Blackhole, and it expects a different cos/sin layout ("`get_rot_mats` returns
+    # [1, 1, local_batch, head_dim], which is the format expected by the non-fused
+    # decode rotary op; `get_rm_rot_mats` expands to [1, expanded_batch, heads,
+    # head_dim] for the fused path").
+    #
+    # Measured on `(8, 4)` with the non-fused pair (D-B25b): the decode step wrote
+    # a K of |max| = inf into the cache at the current position while V, which does
+    # not pass through RoPE, was exact at PCC 0.99973 - and the prefix the prefill
+    # wrote was still 0.99993. Q has eight real head rows in its 32-row shard and K
+    # has one, and only K was corrupted.
+    use_qk_fused_rotary: bool = True,
     cache_path: Path | str | None = None,
     global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
     prefetcher_injections: dict[str, Any] | None = None,

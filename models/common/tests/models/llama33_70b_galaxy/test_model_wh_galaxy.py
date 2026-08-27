@@ -312,6 +312,39 @@ def _compose_kv(tensor: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> torch.Tens
     ).float()
 
 
+def _report_kv_pcc(
+    expected_k: torch.Tensor,
+    expected_v: torch.Tensor,
+    kv_pair: list,
+    mesh_device: ttnn.MeshDevice,
+    *,
+    length: int,
+    case: str,
+) -> None:
+    """The KV comparison of `_assert_kv_pcc`, reported rather than asserted."""
+
+    actual_k = _compose_kv(kv_pair[0], mesh_device)
+    actual_v = _compose_kv(kv_pair[1], mesh_device)
+    permuted_k = reverse_permute_1d(expected_k)
+    for user in (0, 8):
+        # Three windows, not one. `length` covers the position this decode step
+        # appended; `length - 1` covers only what prefill wrote; and the single
+        # appended row isolates the write itself. One number cannot tell "the
+        # decode write is garbage" from "the whole cache is garbage", and a single
+        # large garbage row is enough to crush the PCC of the whole window.
+        _report_pcc(permuted_k[0, :, : length - 1, :], actual_k[user, :, : length - 1, :], f"{case} K prefix user {user}")
+        _report_pcc(permuted_k[0, :, :length, :], actual_k[user, :, :length, :], f"{case} K user {user}")
+        _report_pcc(permuted_k[0, :, length - 1, :], actual_k[user, :, length - 1, :], f"{case} K appended row user {user}")
+        _report_pcc(expected_v[0, :, : length - 1, :], actual_v[user, :, : length - 1, :], f"{case} V prefix user {user}")
+        _report_pcc(expected_v[0, :, length - 1, :], actual_v[user, :, length - 1, :], f"{case} V appended row user {user}")
+        print(
+            f"[probe] {case} user {user}: appended K device |max|="
+            f"{float(actual_k[user, :, length - 1, :].abs().max()):.4g} "
+            f"reference |max|={float(permuted_k[0, :, length - 1, :].abs().max()):.4g}",
+            flush=True,
+        )
+
+
 def _assert_kv_pcc(
     expected_k: torch.Tensor,
     expected_v: torch.Tensor,
@@ -633,6 +666,7 @@ def test_llama33_70b_galaxy_decode_bisection(mesh_device: ttnn.MeshDevice):
     hf = _one_layer_reference(hf_model)
     weights = convert_hf_model_weights(hf, params=params)
     stages = _reference_decode_stages(hf, tokens, _PREFILL_LENGTH)
+    _, reference_k_full, reference_v_full = _reference_logits_and_cache(hf, tokens)
     # Kept alive on purpose: `layer.mlp` is re-applied below to the device's *own*
     # MLP input, which is the only way to tell "the MLP is a wrong function" from
     # "the MLP was handed a wrong input".
@@ -726,10 +760,25 @@ def test_llama33_70b_galaxy_decode_bisection(mesh_device: ttnn.MeshDevice):
             )
             attention_input = _relocate(attention_input, layer.config.decode_attention_input_memcfg)
             attention_output = layer.attention.decode_forward(attention_input, rot_mats, metadata)
-            _report_pcc(
-                stages["attention out"],
-                _compose_residual(attention_output, mesh_device)[0],
-                "bisect decode attention out user 0",
+            attention_host = _compose_residual(attention_output, mesh_device)
+            # All four column-local users, not just user 0. Prefill filled local
+            # user 0 of every mesh column, so these four rows should be identical;
+            # if they are not, the fault is a placement across columns rather than
+            # an arithmetic one inside attention.
+            for user in (0, 8, 16, 24):
+                _report_pcc(stages["attention out"], attention_host[user], f"bisect decode attention out user {user}")
+            # And the cache the decode step just wrote. `reference_k`/`reference_v`
+            # cover 0..128 inclusive, so length 129 includes the position this
+            # decode step appended. If K at 129 is right and the attention output
+            # is not, the fault is on the read side (SDPA, the mask, the length)
+            # rather than the write side.
+            _report_kv_pcc(
+                reference_k_full,
+                reference_v_full,
+                kv_cache[0],
+                mesh_device,
+                length=_PREFILL_LENGTH + 1,
+                case="bisect decode cache",
             )
             mlp_input, h = layer.ff_norm.decode_forward(attention_output, residual=h)
             _report_pcc(
