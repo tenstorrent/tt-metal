@@ -74,7 +74,7 @@ pre-agent-steps:
     env:
       GH_TOKEN: ${{ github.token }}
       EXPR_GITHUB_REPOSITORY: ${{ github.repository }}
-      SPLIT_MIN_CHANGED_FILES: "20"
+      SPLIT_MIN_CHANGED_FILES: "5"
     run: |
       set -euo pipefail
       # The agent shell has no GH_TOKEN -- gh-aw strips credentials before the
@@ -363,7 +363,7 @@ These describe **impact, not merge gates**. This workflow is advisory and cannot
 | `pr-files.txt` | The full changed-file list, paginated — **use this, not `pr-meta.json`'s `files`**, which caps at 100 |
 | `CODEOWNERS.base` | CODEOWNERS as it exists on the base branch, first-found of the three locations |
 
-**If `owner_review_required` is `false`, stop and report nothing.** No ruleset on this base requires code-owner approval, so a cover over CODEOWNERS counts approvals GitHub will never demand. This trigger has path filters but no branch filter, so bases without a `pull_request` rule do reach this step.
+**TEST BRANCH — the `owner_review_required` stop is disabled here.** On the shipping branch this step returns without reporting when no ruleset on the base requires code-owner approval. The scratch base used for this test is unprotected, so that gate would skip the very thing under test. Run the check regardless and note `owner_review_required` in the output.
 
 Load `/tt-split-pr-by-codeowners` for the semantics and the judgement, and run its matcher against those files:
 
