@@ -855,3 +855,32 @@ Compare `logs3/a3_42`, the same code path at one layer:
 other 79 layers arriving correctly.
 
 433 s, of which the checkpoint load is 30 s and the weight staging is cache hits.
+| 46 | `logs3/a3_46_batch32_isolation.log` | 80-layer batch-32 slot isolation (two runners) | **FAILED** — the *predicted* prefill-after-decode limitation, verbatim |
+
+## Result 46 — the limitation D-B20 predicted, arriving exactly as predicted
+
+```text
+TT_THROW ... Statically allocated circular buffers in program 100 clash with L1
+             buffers on core range [0-0 - 0-3]. L1 buffer allocated at 544832
+             and static circular buffer region ends at 630080
+  (from ttnn.embedding, prefill, under GalaxyDirectRunner.prefill_row)
+```
+
+Same program, same op, same four sender cores as D-B20 - only the resident buffer's
+base address differs (544832 here, 579104 there, because more is resident at 80
+layers).
+
+`test_llama33_70b_galaxy_batch32_slots_are_isolated` opens **two runners in one
+process**: it generates for slot 0 alone, then generates for all 32 slots. The
+second runner prefills *after* the first has decoded, and by then
+`activate("decode")` has allocated the global circular buffer, which nothing frees.
+
+This is written down in `defer_global_cb`'s own docstring and in
+`REPORT.md` §A3.4 as the residual limitation the deferral does not remove, and in
+the handoff as something to expect. **It is a limitation with a name, not a new
+defect**, and it is reported rather than worked around.
+
+What it does *not* block: batch 32 through a **single** runner, which is what
+`demo.py::test_..._direct_demo_batch32_has_no_cross_slot_contamination` does - all
+32 slots prefill before any of them decodes. That is the run that carries the
+"batch 32" claim, and it is queued.

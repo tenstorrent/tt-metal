@@ -229,3 +229,66 @@ Two costs worth budgeting, both measured on this machine:
   Both greps are empty across all three attempts.
 * Do not raise `after_device_run.sh`'s reset cap back to 600 s. It is 900 s for a
   measured reason (attempt 2).
+
+## Step 3, and the one thing that is not met
+
+| Step-3 item | Result |
+| --- | --- |
+| Full-model prefill plus first decode token | **PASS** — 80 layers, both predictions inside the reference top-5 (`logs3/a3_43`) |
+| Teacher-forced decode, the accuracy gate | **PASS** — top-1 **501/511 = 0.9804** (gate 0.91), top-5 **511/511 = 1.0000** (gate 0.99) (`logs3/a3_44`) |
+| The direct demo producing real text | **PASS** — see below (`logs3/a3_45`) |
+| Batch 1 | **PASS** — the demo and the accuracy gate are both batch 1 |
+| Batch 32 | **PASS via a single runner**; the two-runner isolation test hits a named limitation |
+
+```text
+[demo] slot 0 prompt: 'Explain what a tensor is to a software engineer in two sentences.'
+[demo] slot 0 text  : 'A tensor is a multi-dimensional array of numerical values, similar to a matrix,'
+```
+
+**The one thing that is not met**, and it is a limitation with a name rather than a
+defect. `test_llama33_70b_galaxy_batch32_slots_are_isolated` opens **two runners in
+one process** - slot 0 alone, then all 32 - so the second one *prefills after the
+first has decoded*, and by then `activate("decode")` has allocated the global
+circular buffer, which nothing frees:
+
+```text
+TT_THROW ... Statically allocated circular buffers in program 100 clash with L1
+             buffers on core range [0-0 - 0-3]
+```
+
+Same program, same op, same four sender cores as D-B20. **D-B20's fix narrowed
+limitation L1 rather than removing it**: prefill-before-any-decode is now fine,
+prefill-after-a-decode is not. Production has the same property. Batch 32 itself is
+not blocked - the demo's batch-32 test prefills all 32 slots before any decodes and
+passes.
+
+**This is the first thing to do next**, and here is what to know before trying it.
+The fix is to release the global CB on `activate("prefill")` and recreate it on the
+next `activate("decode")`, behind a config flag, with that test as the oracle. It
+was deliberately **not** attempted here: it changes the mode-switching of the one
+module every qualified decode path depends on, and turning it on would put every
+number in this handoff back in doubt with no budget left to re-take them. Two traps:
+
+* the recreated buffer must land at the **same L1 address**, or the decode programs
+  already in the ttnn program cache hold stale addresses - that is a silent
+  corruption, not an error;
+* **every** reference has to be dropped. Attempt 1 found that `cleanup()` alone
+  does not free it because the mode contexts still hold handles; `self._global_cb`
+  and `self._contexts["decode"].global_cb` are both live references.
+
+## Where attempt 3 stopped, in one paragraph
+
+The step-2 gate is met and measured three times identically; prefill at 128 and
+2048 and decode at batch 32 are all correct against an independent Hugging Face
+reference, with the K and V caches checked after both; the full 80-layer model
+prefills and decodes real reference tokens inside the reference top-5; the
+Milestone B teacher-forced accuracy gate for Llama passes at top-1 98.04% and
+top-5 100.00%; and the 80-layer demo produces fluent English. Seven defects were
+found and fixed, two of which produced no error of any kind. The one step-3 item
+left is two runners in one process, which is limitation L1's remaining half, named
+and reproduced rather than worked around.
+
+**If you are `mb-qwen`: there is now a Llama baseline to compare against, and it is
+the numbers at the top of this document.** Read `REPORT.md` §A3.5 for the list of
+things you inherit for free and §A3.2 for the seven defects, because Qwen has all
+seven in front of it and five of them are already fixed in shared code.

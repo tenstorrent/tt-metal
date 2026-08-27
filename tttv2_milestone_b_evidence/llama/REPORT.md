@@ -1,8 +1,17 @@
 # `mb-llama` — Milestone B steps 1–3, Llama-3.3-70B on WH Galaxy `(8, 4)`
 
+> **READ THE LAST SECTION FIRST.** This file is three attempts appended in order
+> and **the verdict below is attempt 1's**, from a night that produced no numbers.
+> The current verdict is §"Attempt 3" — jump to `## Verdict up front` *under that
+> heading*, or to §A3.1. In one line: **the step-2 gate is met (prefill 0.99958,
+> decode 0.99975, KV 0.99993), the teacher-forced accuracy gate is met (top-1
+> 98.04%, top-5 100.00%) and the 80-layer demo produces coherent text.** Nothing
+> in attempts 1 or 2 has been edited or deleted.
+
 Written 2026-08-27 by the `mb-llama` job, unattended.
 Environment, exact commands and mesh facts: `ENVIRONMENT.md`.
-Every log from every attempt: `logs/` (105 files, none overwritten).
+Every log from every attempt: `logs/` (attempt 1), `logs2/` (attempt 2),
+`logs3/` (attempt 3). None overwritten.
 
 ## Verdict up front
 
@@ -1234,8 +1243,8 @@ numbers.
 | One Llama block qualified in **prefill** at PCC >= 0.99 | **MET** — 0.99958 at 128 |
 | One Llama block qualified in **decode** at PCC >= 0.99 | **MET** — 0.99975 at batch 32 |
 | **KV-cache** PCC >= 0.99 | **MET** — K 0.99993, V 0.99975, after prefill *and* after decode, on all four column-local users |
-| 80-layer model producing coherent demo output | *see §A3.6* |
-| Teacher-forced accuracy measured and recorded | *see §A3.6* |
+| 80-layer model producing coherent demo output | **MET** — see §A3.6 |
+| Teacher-forced accuracy measured and recorded | **MET** — top-1 501/511 = 98.04%, top-5 511/511 = 100.00%, both gates passed |
 | Handoff written | **MET** — `job1_completion_handoff_attempt3.md` |
 
 ## A3.1 The step-2 gate, measured
@@ -1424,6 +1433,94 @@ precedent" - that file *is* the precedent named in the README.
 | `compose_galaxy_logits` | Qwen's logits compose along the same wrong axis, and just as silently. |
 | `defer_global_cb=True` for Galaxy | Qwen prefills before it decodes too. |
 | `from_pretrained(load_hf_model=...)` | Qwen's checkpoint is smaller but the three-runs rule still costs three loads. |
+
+## A3.6 Step 3 — the 80-layer model, the accuracy gate and the demo
+
+Three of the four step-3 items are met, with logs; the fourth is a **named
+limitation**, not a new defect, and it is reported rather than worked around.
+
+### The accuracy gate — the number this job exists to produce
+
+```text
+[accuracy] reference=Llama-3.3-70B-Instruct prompt=512 decode=511
+[accuracy] top-1 501/511 = 0.9804 (gate >= 0.91)
+[accuracy] top-5 511/511 = 1.0000 (gate >= 0.99)
+```
+
+**Both gates pass**, top-1 by seven points and top-5 exactly. Raw counts, not just
+percentages, as `job1_llama.md` asks.
+
+* command:
+  `run3.sh a3_44_accuracy_gate_run1 'models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_teacher_forced_accuracy_batch1'`
+* reference file:
+  `models/tt_transformers/tests/reference_outputs/Llama-3.3-70B-Instruct.refpt`,
+  loaded by `galaxy_hardware.load_reference_tokens` and aligned by
+  `align_top5`; scored by `galaxy_hardware.teacher_forcing_accuracy`, so the
+  number is comparable to the existing product gates
+* configuration: teacher-forced, batch 1, prefill 512 / decode 511, all 80 layers,
+  **paged** KV (`from_pretrained` offers no contiguous option), greedy argmax over
+  the composed logits
+* log: `logs3/a3_44_accuracy_gate_run1.log`, 1 passed in 1356 s
+
+The 22 minutes is **not** a decode-latency figure. `run3.sh` exports
+`TTTV2_GALAXY_CCL_TRACE=1`, which synchronises after each LM head collective op -
+three extra device synchronizes per token across 511 tokens. It cannot change
+numerics; it dominates the wall clock.
+
+### The full 80-layer model on real reference tokens
+
+`logs3/a3_43_full_prefill_first_token.log`, **1 passed**. Prefills 128 tokens of
+the reference sequence, asserts the prefill's predicted token is in the reference
+model's top-5, decodes one token at position 128 and asserts *that* is in the
+reference's top-5 too. Its docstring says why the pair matters: "a decode step that
+silently reads the wrong KV blocks shows up as a top-5 miss even though the prefill
+passed."
+
+### The demo — coherent text
+
+`logs3/a3_45_demo_batch1_80layer.log`, **1 passed**:
+
+```text
+[demo] slot 0 prompt: 'Explain what a tensor is to a software engineer in two sentences.'
+[demo] slot 0 text  : 'A tensor is a multi-dimensional array of numerical values, similar to a matrix,'
+```
+
+Sixteen greedy tokens through `GalaxyDirectRunner` on a paged cache with device
+sampling enabled, cut off mid-sentence only by the token budget. For contrast, the
+identical code path at one layer (`logs3/a3_42`) produced
+`' RekALAR ZahirtyohaTL Succ体系'`.
+
+### What is *not* met: two runners in one process
+
+`test_llama33_70b_galaxy_batch32_slots_are_isolated` fails, and it fails for the
+reason this report predicted in §A3.4 before running it:
+
+```text
+TT_THROW ... Statically allocated circular buffers in program 100 clash with L1
+             buffers on core range [0-0 - 0-3]
+```
+
+The test opens two runners: one for slot 0 alone, one for all 32 slots. The second
+**prefills after the first has decoded**, and by then `activate("decode")` has
+allocated the global circular buffer, which nothing frees. Same program, same op,
+same four sender cores as D-B20; only the resident base address differs.
+
+This is the residual half of limitation L1, and D-B20's fix narrowed it rather than
+removing it: prefill-before-any-decode is now fine, prefill-after-a-decode is not.
+Production has the same property. **Batch 32 itself is not blocked** - all 32 slots
+prefilling before any of them decodes works, which is what the demo's batch-32 test
+does.
+
+The fix is to release the global CB on `activate("prefill")` and recreate it on the
+next `activate("decode")`. It was **not** attempted tonight, deliberately: it
+changes the mode-switching of the one module every qualified decode path depends
+on, and enabling it would put every number in this report back in doubt with no
+time budgeted to re-take them. It is the first thing the next session should do,
+behind a config flag, with this test as its oracle. Two things to know before
+trying: the recreated buffer must land at the same L1 address or the decode
+programs already in the program cache will hold stale addresses, and every
+reference has to be dropped - attempt 1 found that `cleanup()` alone does not free
+it because the contexts still hold handles.
 
 ## A3.7 Harness — three changes, each paid for by a lost run
 
