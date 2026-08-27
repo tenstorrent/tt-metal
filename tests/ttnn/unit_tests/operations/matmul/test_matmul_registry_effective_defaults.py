@@ -124,7 +124,7 @@ def test_effective_default_ckc_is_bound_to_exact_context_and_attestation(device)
     assert after == before
 
 
-def test_effective_default_ckc_rejects_caller_overrides_and_unsupported_family(device) -> None:
+def test_effective_default_ckc_rejects_caller_overrides_and_unsupported_family(device, expect_error) -> None:
     tensor_a, tensor_b = _inputs(device)
     kwargs = {
         "program_config": _compact_program(),
@@ -139,11 +139,11 @@ def test_effective_default_ckc_rejects_caller_overrides_and_unsupported_family(d
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
-    with pytest.raises(ValueError, match="compute_kernel_config to be omitted"):
+    with expect_error(ValueError, "compute_kernel_config to be omitted"):
         REGISTRY.matmul_registry_effective_default_compute_kernel_config(
             tensor_a, tensor_b, compute_kernel_config=caller_ckc, **kwargs
         )
-    with pytest.raises(ValueError, match="core_grid to be omitted"):
+    with expect_error(ValueError, "core_grid to be omitted"):
         REGISTRY.matmul_registry_effective_default_compute_kernel_config(
             tensor_a, tensor_b, core_grid=ttnn.CoreGrid(x=8, y=8), **kwargs
         )
@@ -157,7 +157,7 @@ def test_effective_default_ckc_rejects_caller_overrides_and_unsupported_family(d
         per_core_N=16,
         transpose_mcast=False,
     )
-    with pytest.raises(ValueError, match="only MatmulMultiCoreReuseProgramConfig"):
+    with expect_error(ValueError, "only MatmulMultiCoreReuseProgramConfig"):
         REGISTRY.matmul_registry_effective_default_compute_kernel_config(
             tensor_a, tensor_b, **{**kwargs, "program_config": multicast}
         )
