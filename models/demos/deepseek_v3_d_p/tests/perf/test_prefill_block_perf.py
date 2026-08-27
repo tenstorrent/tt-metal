@@ -88,7 +88,8 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
         ),
         pytest.param(
             f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer0 and gate_device and no_ref and isl_2k56' --wrapper-invocation",
-            17_978_418,
+            4_913_214,  # Re-measured 2026-08-27 at 640 tokens/chip on the 14kW galaxy bh-glx-120-d08u02
+            # (is_high_power). Mean of 2 runs, 4.9120-4.9144 ms, 0.05% peak to peak.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer0_dense_torus_y",
             1,
