@@ -100,6 +100,11 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
                     0);
             }
         }
+
+        // Both loop bounds are runtime, so counting cannot find where the
+        // recording stops and the compiler has to be told.  The loops issue
+        // num_faces * pacrs_per_face - 1 PACRs, which is replay_len exactly.
+        lltt::record_end();
     }
 
     // --- Program MOP ---
