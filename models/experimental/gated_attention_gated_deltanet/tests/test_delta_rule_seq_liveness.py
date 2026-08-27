@@ -3,6 +3,8 @@
 
 """Host-only lifetime tests for the sequential gated-delta schedule."""
 
+import inspect
+
 
 def test_masked_gram_releases_kk_before_allocating_sum(monkeypatch):
     from models.experimental.gated_attention_gated_deltanet.tt import ttnn_delta_rule_seq as seq
@@ -151,3 +153,15 @@ def test_multiply_into_dead_lhs_uses_lhs_as_output(monkeypatch):
 
     assert result is lhs
     assert calls == [(lhs, rhs, memory_config, lhs)]
+
+
+def test_qk_consumes_qk_inputs_before_decay_overwrites_them():
+    from models.experimental.gated_attention_gated_deltanet.tt import ttnn_delta_rule_seq as seq
+
+    source = inspect.getsource(seq.chunk_gated_delta_rule_seq)
+
+    qk = source.index("qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t")
+    q_decay = source.index("q_decay_4d = _multiply_into_dead_lhs(q_c_4d")
+    k_decay = source.index("k_decay_4d = _multiply_into_dead_lhs(k_c_4d")
+    assert qk < q_decay
+    assert qk < k_decay
