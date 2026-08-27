@@ -19,6 +19,27 @@ from models.common.lightweightmodule import LightweightModule
 _BFP4_WEIGHTS: set[str] = set()  # empty: all weights bfloat8_b (bfp4 fails e2e spectrogram PCC)
 L1 = ttnn.L1_MEMORY_CONFIG
 
+# ttnn only auto-raises matmul fidelity when NO program_config is given (see the
+# increase_fidelity heuristic in matmul_device_operation.cpp). Every matmul here passes one, so
+# leaving compute_kernel_config unset silently runs the whole stack at LoFi — 5 mantissa bits on
+# bf16 activations. HiFi2 uses the full bfloat8_b weight mantissa and is what holds latent PCC.
+MM_FIDELITY = ttnn.MathFidelity.HiFi2
+_MM_CFG_CACHE = {}
+
+
+def matmul_compute_config(device):
+    """Return the cached compute-kernel config shared by every GPT matmul."""
+    key = (id(device), MM_FIDELITY)
+    if key not in _MM_CFG_CACHE:
+        _MM_CFG_CACHE[key] = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=MM_FIDELITY,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+    return _MM_CFG_CACHE[key]
+
 
 _KV_WRITE_CORES = ((0, 0), (1, 0))  # K and V inputs must land on non-overlapping cores
 
@@ -204,8 +225,10 @@ def _mm_1d_config(device, m, k, n, fused_activation=None):
     gx, gy = int(grid.x), int(grid.y)
     mt, kt, nt = math.ceil(m / 32), math.ceil(k / 32), math.ceil(n / 32)
     if mt == 1:
-        # Decode: ibw=8 flips greedy argmax; pcn from decode sweep.
-        ibw = next(b for b in (4, 2, 1) if kt % b == 0)
+        # Decode: pcn from decode sweep. ibw=8 was rejected under LoFi (it flipped greedy argmax on a
+        # near-tie); with MM_FIDELITY it is both faster and no less exact — a wider in0 block means
+        # fewer bf16 partial-sum roundings, not more.
+        ibw = next(b for b in (8, 4, 2, 1) if kt % b == 0)
         pcn = 3 if nt <= 32 else (4 if nt <= 96 else 6)
         osw = 2 if pcn % 2 == 0 else 1
         ncols = math.ceil(nt / pcn)
@@ -309,6 +332,7 @@ class TtXttsGptBlock(LightweightModule):
             self.attn_c_attn_weight,
             bias=self.attn_c_attn_bias,
             program_config=_mm_1d_config(self.device, x.shape[-2], x.shape[-1], self.attn_c_attn_weight.shape[-1]),
+            compute_kernel_config=matmul_compute_config(self.device),
             memory_config=L1,
         )
         b, s, three_h = qkv.shape
@@ -346,7 +370,12 @@ class TtXttsGptBlock(LightweightModule):
                     mcast_in0=True,
                 )
                 proj = ttnn.linear(
-                    out, self.attn_c_proj_weight, bias=self.attn_c_proj_bias, program_config=pc, memory_config=mem
+                    out,
+                    self.attn_c_proj_weight,
+                    bias=self.attn_c_proj_bias,
+                    program_config=pc,
+                    compute_kernel_config=matmul_compute_config(self.device),
+                    memory_config=mem,
                 )
                 ttnn.deallocate(out)
                 return proj
@@ -355,6 +384,7 @@ class TtXttsGptBlock(LightweightModule):
             self.attn_c_proj_weight,
             bias=self.attn_c_proj_bias,
             program_config=_mm_1d_config(self.device, m, k, n),
+            compute_kernel_config=matmul_compute_config(self.device),
             memory_config=L1,
         )
         ttnn.deallocate(out)
@@ -373,6 +403,7 @@ class TtXttsGptBlock(LightweightModule):
                 self.mlp_c_fc_weight.shape[-1],
                 fused_activation=(ttnn.UnaryOpType.GELU, False),
             ),
+            compute_kernel_config=matmul_compute_config(self.device),
             memory_config=L1,
         )
         ttnn.deallocate(x)
@@ -382,6 +413,7 @@ class TtXttsGptBlock(LightweightModule):
                 self.mlp_c_proj_weight,
                 bias=self.mlp_c_proj_bias,
                 program_config=_mm_1d_config(self.device, h.shape[-2], h.shape[-1], self.mlp_c_proj_weight.shape[-1]),
+                compute_kernel_config=matmul_compute_config(self.device),
                 memory_config=L1,
             )
             ttnn.deallocate(h)
@@ -393,7 +425,12 @@ class TtXttsGptBlock(LightweightModule):
             hs = ttnn.to_memory_config(h, in_mc)
             ttnn.deallocate(h)
             out = ttnn.linear(
-                hs, self.mlp_c_proj_weight, bias=self.mlp_c_proj_bias, program_config=pc, memory_config=out_mc
+                hs,
+                self.mlp_c_proj_weight,
+                bias=self.mlp_c_proj_bias,
+                program_config=pc,
+                compute_kernel_config=matmul_compute_config(self.device),
+                memory_config=out_mc,
             )
             ttnn.deallocate(hs)
             return out
@@ -402,6 +439,7 @@ class TtXttsGptBlock(LightweightModule):
             self.mlp_c_proj_weight,
             bias=self.mlp_c_proj_bias,
             program_config=_mm_1d_config(self.device, h.shape[-2], h.shape[-1], self.mlp_c_proj_weight.shape[-1]),
+            compute_kernel_config=matmul_compute_config(self.device),
             memory_config=L1,
         )
         ttnn.deallocate(h)

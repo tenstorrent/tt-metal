@@ -34,10 +34,16 @@ MAX_NEW_TOKENS = 240
 TEMPERATURE, TOP_K, TOP_P, REP_PENALTY = 0.65, 50, 0.85, 5.0
 
 MARGIN = 0.40
-EXPECTED_SETUP_S = 0.044
-EXPECTED_DECODE_MS_PER_CODE = 8.12
-EXPECTED_VOCODER_MS_PER_CODE = 0.116
-EXPECTED_RTF = 0.180
+# Raising GPT matmul and vocoder conv fidelity off LoFi/HiFi2 (MM_FIDELITY in tt/xtts_gpt_block.py,
+# _CONV_FIDELITY in tt/xtts_hifigan.py) took e2e spectrogram PCC 0.988 -> 0.997 and cost some speed.
+# These are the previous baselines scaled by the regression measured back-to-back on one host
+# (decode +5.6%, vocoder +26%, setup +6.0%, RTF +6.1%) rather than by absolute numbers off a loaded
+# dev box, so they stay calibrated to whatever machine the originals came from. Nearly all of the
+# RTF cost is decode -- the vocoder is under 2% of replay, so its +26% barely registers.
+EXPECTED_SETUP_S = 0.047
+EXPECTED_DECODE_MS_PER_CODE = 8.58
+EXPECTED_VOCODER_MS_PER_CODE = 0.146
+EXPECTED_RTF = 0.191
 EXPECTED_COMPILE_S = 44.0
 
 
