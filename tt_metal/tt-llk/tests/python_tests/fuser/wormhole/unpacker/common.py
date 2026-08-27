@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from fuser.fpu_node import FpuNode
 from helpers.format_config import DataFormat
+from helpers.llk_params import EltwiseBinaryReuseDestType
 
 if TYPE_CHECKING:
     from fuser.fuser_config import GlobalConfig
@@ -20,6 +21,12 @@ def is_unary_unpacker(compute_node: FpuNode) -> bool:
     return False
 
 
+def get_operand_b(compute_node: FpuNode):
+    if compute_node.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
+        return compute_node.src_a
+    return compute_node.src_b if compute_node.src_b is not None else compute_node.src_a
+
+
 def hw_configure_unpack(
     compute_node: FpuNode,
     dest_acc: str,
@@ -32,14 +39,10 @@ def hw_configure_unpack(
     num_faces_a = compute_node.src_a.tile_shape.total_num_faces()
     tile_size_a = compute_node.src_a.tile_size
 
-    if compute_node.src_b is not None:
-        face_r_dim_b = compute_node.src_b.tile_shape.face_r_dim
-        num_faces_b = compute_node.src_b.tile_shape.total_num_faces()
-        tile_size_b = compute_node.src_b.tile_size
-    else:
-        face_r_dim_b = face_r_dim_a
-        num_faces_b = num_faces_a
-        tile_size_b = tile_size_a
+    operand_b = get_operand_b(compute_node)
+    face_r_dim_b = operand_b.tile_shape.face_r_dim
+    num_faces_b = operand_b.tile_shape.total_num_faces()
+    tile_size_b = operand_b.tile_size
 
     return (
         f"_llk_unpack_hw_configure_<{dest_acc}>(\n"
@@ -90,9 +93,7 @@ def configure_unpack(
         code += "\n);\n"
 
     if srcb_changed:
-        operand_b = (
-            compute_node.src_b if compute_node.src_b is not None else compute_node.src_a
-        )
+        operand_b = get_operand_b(compute_node)
         srcb_tile_size = operand_b.tile_size
         new_face_r_dim_b = operand_b.tile_shape.face_r_dim
         new_num_faces_b = operand_b.tile_shape.total_num_faces()
