@@ -47,6 +47,11 @@ inline bool has_genuine_torus_axis(FabricType fabric_type, const MeshShape& mesh
     return has_flag(fabric_type, torus_flag_for_axis(axis)) && is_genuine_torus_dim(mesh_shape[axis]);
 }
 
+// Validates that a FabricConfig requesting a ring/torus is applied to a mesh whose wrapped
+// dimension has more than two devices. Throws instead of letting the wrap silently degrade to a
+// line. Extent-1 axes and single-chip meshes are exempt (they carry no links at all).
+void validate_fabric_config_ring_extents(tt::tt_fabric::FabricConfig fabric_config, const MeshShape& mesh_shape);
+
 // Helper to validate that requested FabricType doesn't require more connectivity than available FabricType provides
 // Returns true if requested_type requires more connections than available_type provides
 // mesh_shape: [rows, cols], used to compare realized per-axis torus connectivity.

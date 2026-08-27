@@ -1642,6 +1642,13 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     // Get the total number of chips in the physical system descriptor
     const auto total_number_of_chips = physical_system_descriptor.get_asic_descriptors().size();
 
+    // A 1D ring needs more than 2 devices; reject early instead of exhausting shape candidates.
+    TT_FATAL(
+        fabric_config != tt::tt_fabric::FabricConfig::FABRIC_1D_RING || total_number_of_chips > 2,
+        "FabricConfig FABRIC_1D_RING requires a ring of more than 2 devices, but the physical system has only {} "
+        "chip(s)",
+        total_number_of_chips);
+
     // Extract ASIC IDs from the descriptors map
     std::vector<tt::tt_metal::AsicID> all_asic_ids;
     all_asic_ids.reserve(total_number_of_chips);

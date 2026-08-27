@@ -184,7 +184,7 @@ TEST(MeshGraphDescriptorTests, ParsesFromTextProtoString) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
 }
 
-TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateDimensions) {
+TEST(MeshGraphDescriptorTests, RejectsRingOnDegenerateDimensions) {
     const std::string text_proto = R"proto(
         mesh_descriptors: {
           name: "M0"
@@ -199,13 +199,15 @@ TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateDimensions) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    MeshGraphDescriptor desc(text_proto);
-    const auto& instance = desc.get_instance(desc.instances_by_name("M0").at(0));
-    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
-    EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc), FabricType::TORUS_XY);
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("RING"),
+            ::testing::HasSubstr("extent of at least 3"),
+            ::testing::HasSubstr("Mesh: M0"))));
 }
 
-TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateSwitchDimensions) {
+TEST(MeshGraphDescriptorTests, RejectsRingOnDegenerateSwitchDimensions) {
     const std::string text_proto = R"proto(
         switch_descriptors: {
           name: "SW0"
@@ -219,54 +221,12 @@ TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateSwitchDimensi
         top_level_instance: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
     )proto";
 
-    MeshGraphDescriptor desc(text_proto);
-    const auto& instance = desc.get_instance(desc.instances_by_name("SW0").at(0));
-    const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
-    EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(switch_desc), FabricType::TORUS_XY);
-}
-
-TEST(MeshGraphDescriptorTests, CollapsedTorusSwitchRetainsMeshDirectionsAndEdgePorts) {
-    const std::string text_proto = R"proto(
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 1, 1 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 1 ] }
-        }
-        switch_descriptors: {
-          name: "SW0"
-          arch: WORMHOLE_B0
-          device_topology: {
-            dims: [ 2, 4 ]
-            dim_types: [ RING, RING ]
-          }
-          channels: { count: 1 }
-        }
-        graph_descriptors: {
-          name: "G0"
-          type: "FABRIC"
-          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
-          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
-        }
-        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
-    )proto";
-    const auto test_file = std::filesystem::temp_directory_path() / "test_collapsed_torus_switch.textproto";
-    {
-        std::ofstream file(test_file);
-        file << text_proto;
-    }
-
-    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::T3K, test_file.string());
-    std::filesystem::remove(test_file);
-
-    const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(0);
-    EXPECT_EQ(connectivity.at(0).at(4).port_direction, RoutingDirection::S);
-    EXPECT_EQ(connectivity.at(4).at(0).port_direction, RoutingDirection::N);
-
-    const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(0);
-    EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
-    EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 4);
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("RING"),
+            ::testing::HasSubstr("extent of at least 3"),
+            ::testing::HasSubstr("Switch: SW0"))));
 }
 
 TEST(MeshGraphDescriptorTests, ParsesFromTextProtoFile) {
@@ -862,7 +822,7 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
           name: "M0"
           arch: WORMHOLE_B0
           device_topology: { dims: [ 2, 3 ]
-                             dim_types: [ RING, LINE ] }
+                             dim_types: [ LINE, RING ] }
           channels: { count: 1 }
           host_topology: { dims: [ 2, 3 ] }
           express_connections: { src: 0 dst: 5 }
@@ -890,7 +850,7 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
     // Check intra mesh connections
     const auto& all_connections = desc.connections_by_type("MESH");
 
-    ASSERT_EQ(all_connections.size(), 24);
+    ASSERT_EQ(all_connections.size(), 22);
 
     // Layout should look like this with wrapping in x direction and express connections
     // 0 1 2
@@ -898,17 +858,17 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
     auto device_0 = desc.instances_by_name("D0")[0];
     auto connections = desc.connections_by_source_device_id(device_0);
     ASSERT_EQ(connections.size(), 4);
-    check_connections(desc, connections, {1, 3, 5}, 1u, mesh_ids[0], {"D1", "D3", "D5"});
+    check_connections(desc, connections, {1, 2, 3, 5}, 1u, mesh_ids[0], {"D1", "D2", "D3", "D5"});
 
     auto device_1 = desc.instances_by_name("D1")[0];
     connections = desc.connections_by_source_device_id(device_1);
-    ASSERT_EQ(connections.size(), 5);
-    check_connections(desc, connections, {2, 4, 0, 5}, 1u, mesh_ids[0], {"D0", "D2", "D4", "D5"});
+    ASSERT_EQ(connections.size(), 4);
+    check_connections(desc, connections, {0, 2, 4, 5}, 1u, mesh_ids[0], {"D0", "D2", "D4", "D5"});
 
     auto device_2 = desc.instances_by_name("D2")[0];
     connections = desc.connections_by_source_device_id(device_2);
     ASSERT_EQ(connections.size(), 3);
-    check_connections(desc, connections, {1, 5}, 1u, mesh_ids[0], {"D1", "D5"});
+    check_connections(desc, connections, {0, 1, 5}, 1u, mesh_ids[0], {"D0", "D1", "D5"});
 
     // Test all_names() returns unique names (as unordered_set)
     {

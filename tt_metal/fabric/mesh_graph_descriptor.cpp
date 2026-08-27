@@ -513,6 +513,20 @@ void MeshGraphDescriptor::validate_mesh_topology(
                     fmt::format("Device topology dimensions and types must be the same size (Mesh: {})", mesh.name()));
                 continue;
             }
+
+            // A RING dimension only realizes a distinct wrap edge at extent three or larger;
+            // declaring RING on a smaller dimension is disallowed — use LINE instead.
+            for (int i = 0; i < mesh.device_topology().dims_size(); i++) {
+                if (mesh.device_topology().dim_types(i) == proto::TorusTopology::RING &&
+                    mesh.device_topology().dims(i) <= 2) {
+                    error_messages.push_back(fmt::format(
+                        "Device topology dimension {} has type RING but extent {}; RING requires an extent of at "
+                        "least 3 — use LINE for this dimension (Mesh: {})",
+                        i,
+                        mesh.device_topology().dims(i),
+                        mesh.name()));
+                }
+            }
         }
 
         // Check that the device and host topology dimensions are the same size
@@ -614,6 +628,20 @@ void MeshGraphDescriptor::validate_switch_descriptors(
                 error_messages.push_back(fmt::format(
                     "Device topology dimensions and types must be the same size (Switch: {})", switch_desc.name()));
                 continue;
+            }
+
+            // A RING dimension only realizes a distinct wrap edge at extent three or larger;
+            // declaring RING on a smaller dimension is disallowed — use LINE instead.
+            for (int i = 0; i < switch_desc.device_topology().dims_size(); i++) {
+                if (switch_desc.device_topology().dim_types(i) == proto::TorusTopology::RING &&
+                    switch_desc.device_topology().dims(i) <= 2) {
+                    error_messages.push_back(fmt::format(
+                        "Device topology dimension {} has type RING but extent {}; RING requires an extent of at "
+                        "least 3 — use LINE for this dimension (Switch: {})",
+                        i,
+                        switch_desc.device_topology().dims(i),
+                        switch_desc.name()));
+                }
             }
         }
 

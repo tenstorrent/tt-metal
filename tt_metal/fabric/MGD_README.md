@@ -29,11 +29,12 @@ Read more about Text proto at [Mesh Graph Descriptor 2.0](https://docs.google.co
 
 ### Torus dimensions
 
-`device_topology.dim_types` records declared topology. A `RING` axis remains
-declared as torus even when its extent is one or two; Fabric realizes a distinct
-wrap edge only at size three or greater. Size-two links retain ordinary mesh
-directionality and boundary ports, while deadlock avoidance remains based on
-the declared torus configuration.
+`device_topology.dim_types` records declared topology. A `RING` axis realizes a
+distinct wrap edge only at size three or greater, so declaring `RING` on a
+dimension of extent one or two is a validation error — use `LINE` for such
+dimensions. The same rule applies to fabric configs: requesting
+`FABRIC_1D_RING` on a mesh with no dimension larger than two, or a
+`FABRIC_2D_TORUS_*` wrap along an extent-two axis, fails at initialization.
 
 
 ## Minimal workflow

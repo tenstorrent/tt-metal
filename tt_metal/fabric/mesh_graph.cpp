@@ -405,6 +405,8 @@ void MeshGraph::initialize_from_mgd(
 
         if (fabric_config.has_value()) {
             FabricType requested_fabric_type = get_fabric_type(*fabric_config, is_ubb_galaxy);
+            // Disallow ring/torus requests whose wrapped dimension has 2 or fewer devices
+            validate_fabric_config_ring_extents(*fabric_config, mesh_shape);
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, mesh_shape)) {
                 TT_THROW(
@@ -538,6 +540,8 @@ void MeshGraph::initialize_from_mgd(
 
         if (fabric_config.has_value()) {
             FabricType requested_fabric_type = get_fabric_type(*fabric_config, is_ubb_galaxy);
+            // Disallow ring/torus requests whose wrapped dimension has 2 or fewer devices
+            validate_fabric_config_ring_extents(*fabric_config, switch_shape);
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, switch_shape)) {
                 TT_THROW(

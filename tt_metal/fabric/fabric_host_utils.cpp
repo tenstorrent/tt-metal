@@ -25,6 +25,7 @@
 #include <unordered_set>
 #include <filesystem>
 #include <fstream>
+#include <enchantum/enchantum.hpp>
 #include <fmt/format.h>
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
@@ -80,6 +81,41 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ub
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return FabricType::TORUS_Y;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return FabricType::TORUS_XY;
         default: return FabricType::MESH;
+    }
+}
+
+void validate_fabric_config_ring_extents(tt::tt_fabric::FabricConfig fabric_config, const MeshShape& mesh_shape) {
+    // A ring/torus wrap is only meaningful with more than two devices along the wrapped dimension.
+    // Reject configs that request one on a smaller extent instead of silently degrading to a line.
+    // Extent-1 axes and single-chip meshes are exempt: they carry no links at all (e.g. the 1x1
+    // gateway meshes of a TG MGD, or the trivial axis of a 1xN mesh under FABRIC_1D_RING on galaxy,
+    // where the blanket TORUS_XY mapping declares a wrap the mesh never realizes).
+    switch (fabric_config) {
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING:
+            TT_FATAL(
+                mesh_shape.mesh_size() == 1 || std::max(mesh_shape[0], mesh_shape[1]) > 2,
+                "FabricConfig FABRIC_1D_RING requires a ring of more than 2 devices, but mesh shape {} has no "
+                "dimension larger than 2",
+                mesh_shape);
+            break;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: {
+            const FabricType requested_type = get_fabric_type(fabric_config, /*is_ubb_galaxy=*/false);
+            for (uint32_t axis = 0; axis < 2; ++axis) {
+                if (has_flag(requested_type, torus_flag_for_axis(axis))) {
+                    TT_FATAL(
+                        mesh_shape[axis] != 2,
+                        "FabricConfig {} requests a torus wrap along axis {} of mesh shape {}, but a ring requires "
+                        "more than 2 devices along the wrapped dimension",
+                        enchantum::to_string(fabric_config),
+                        axis,
+                        mesh_shape);
+                }
+            }
+            break;
+        }
+        default: break;
     }
 }
 
