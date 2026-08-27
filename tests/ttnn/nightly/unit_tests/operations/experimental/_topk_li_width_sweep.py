@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Per-cell bench for topk_large_indices width scaling (Pavle's prefill sweep).
-Usage: _topk_li_width_sweep.py <rows> <W> <k> [iters]
+Usage: _topk_li_width_sweep.py <rows> <W> <k> [iters] [valid_length]
 Run under `python -m tracy -r -v`; parse ops_perf_results CSV afterward.
 """
 import sys

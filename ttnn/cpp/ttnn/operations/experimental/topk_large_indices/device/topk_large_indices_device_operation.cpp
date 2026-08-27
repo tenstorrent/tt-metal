@@ -4,8 +4,6 @@
 
 #include "topk_large_indices_device_operation.hpp"
 
-#include <algorithm>
-
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
 #include <tt-metalium/hal.hpp>
@@ -248,7 +246,7 @@ struct HybridSplit {
     uint32_t remainder_slices;
 };
 std::optional<HybridSplit> hybrid_row_split(
-    const Tensor& input, uint32_t k, std::optional<uint32_t> num_slices, std::optional<uint32_t> valid_length) {
+    const Tensor& input, uint32_t k, std::optional<uint32_t> num_slices) {
     if (num_slices.has_value()) {
         // An internal caller already chose an explicit P: keep its single launch.
         return std::nullopt;
@@ -274,34 +272,18 @@ std::optional<HybridSplit> hybrid_row_split(
     const uint32_t r2 = rows - r1;
     // Split only when the remainder genuinely takes (and wins on) the
     // multi-rectangle path; otherwise the extra launch + concat is pure cost.
-    // Model on the SEARCHED width (valid_length when set), not the buffer's
-    // logical width: preallocated-buffer callers (the DSA indexer grows
-    // valid_length across prefill inside a fixed 1M buffer) otherwise get a
-    // rect window sized for chunks that never run -- measured 2204us for a
-    // 30-row remainder vs 1424us for a FULL 130-row wave at buf=1M/valid=512k,
-    // turning the hybrid into a net loss. The chosen num_slices is an op attr
-    // (hashed), so distinct valid regimes compile distinct remainder programs;
-    // the cost model quantizes P to a handful of values, so cache growth is
-    // bounded.
+    // Model the hybrid structure on the PHYSICAL width, matching the regular
+    // column-parallel path. valid_length is a runtime-only search bound: it
+    // rebalances active chunks inside the already-selected slices and must not
+    // select a different factory, P, or program hash as a prefix grows.
     const uint32_t n = shape[shape.rank() - 1];
-    const uint32_t searched = std::min(valid_length.value_or(n), n);
-    // Model on the searched width. Note the rect window's slice boundaries
-    // are position-based over the LOGICAL row, so a short valid prefix
-    // empties trailing slices and the busy ones keep near-full per-slice
-    // work (measured at buf=1M/valid=512k k=2048: remainder 1424us vs 720us
-    // when the trees are sized to the valid width) -- degraded, but still
-    // well ahead of the row-parallel wave (2204us/row-set at that shape), so
-    // the split stays profitable at any valid_length. Runtime slice
-    // rebalancing from valid_length is the follow-up that recovers the gap.
     const auto cfg = operations::experimental::topk_large_indices::program::compute_column_split_config(
-        k, searched, r2, grid, std::nullopt, /*allow_multi_row=*/true);
+        k, n, r2, grid, std::nullopt, /*allow_multi_row=*/true);
     if (!cfg.enabled || cfg.num_rects < 2) {
         return std::nullopt;
     }
-    // The remainder launch passes cfg.num_slices explicitly to pin the P
-    // modeled on the SEARCHED width above: the device op's own auto model
-    // (column_split_config_for) runs on the physical width and could pick a
-    // different split (or none) for the remainder window.
+    // Pin the remainder P explicitly so its row-window launch uses exactly the
+    // physical-width split selected here.
     return HybridSplit{r1, r2, cfg.num_slices};
 }
 
@@ -309,7 +291,7 @@ std::optional<HybridSplit> hybrid_row_split(
 
 Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
     using Op = operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation;
-    if (const auto split = hybrid_row_split(input_tensor, k, std::nullopt, valid_length)) {
+    if (const auto split = hybrid_row_split(input_tensor, k, std::nullopt)) {
         auto run = [&](uint32_t start, uint32_t count, std::optional<uint32_t> window_slices) {
             auto [attrs, args] = Op::invoke(input_tensor, k, valid_length, window_slices, start, count);
             return ttnn::device_operation::launch<Op>(attrs, args);
@@ -317,7 +299,8 @@ Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<
         Tensor full_waves = run(0, split->full_wave_rows, std::nullopt);
         Tensor remainder = run(split->full_wave_rows, split->remainder_rows, split->remainder_slices);
         const int rows_dim = static_cast<int>(input_tensor.logical_shape().rank()) - 2;
-        return ttnn::concat(std::vector<Tensor>{full_waves, remainder}, rows_dim);
+        return ttnn::concat(
+            std::vector<Tensor>{full_waves, remainder}, rows_dim, input_tensor.memory_config());
     }
     auto [operation_attributes, tensor_args] = Op::invoke(input_tensor, k, valid_length);
     return ttnn::device_operation::launch<Op>(operation_attributes, tensor_args);

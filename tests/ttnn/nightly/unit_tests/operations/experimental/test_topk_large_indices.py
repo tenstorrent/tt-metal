@@ -403,6 +403,35 @@ def test_topk_large_indices_program_cache_per_engine_regime(device):
         device.disable_and_clear_program_cache()
 
 
+def test_topk_large_indices_hybrid_row_window_cache_reuse(device):
+    # A P150 worker grid has 13x10=130 cores. With 160 rows, the first 130
+    # rows take one full row-parallel wave and the remaining 30 rows take the
+    # multi-rectangle engine (P=4 at this width). This exercises row-window
+    # input addressing, output-relative writes, concat ordering, and cached
+    # runtime-argument patching on both launches. Growing valid_length must
+    # reuse that same physical-width hybrid structure and cached programs.
+    k, num_rows, n = 2048, 160, 65536
+    torch_input = torch.zeros((num_rows, n), dtype=torch.bfloat16)
+    hi16 = (0x3F80 + np.arange(k, dtype=np.uint32)).astype(np.uint32)
+    high_values = torch.from_numpy((hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+    torch_input[:, 8192 - k : 8192] = high_values
+    tt_input = _to_device(torch_input, device)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        cache_entries = []
+        for valid_length in (n, 8192, 32768):
+            tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
+            _assert_topk_matches_torch(torch_input[:, :valid_length], tt_indices, k)
+            cache_entries.append(device.num_program_cache_entries())
+
+        assert cache_entries[0] > 0
+        assert max(cache_entries) == min(cache_entries)
+    finally:
+        device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize(
     "k,num_chunks",
     [
@@ -525,11 +554,13 @@ def test_topk_large_indices_segmented_valid_length_collapses_to_one_segment(devi
     tt_input = _to_device(torch_input, device)
     device.enable_program_cache()
     device.clear_program_cache()
-    for valid_length in (n, 40960, 98304):  # 256 chunks, 20 chunks (1 seg), 48 chunks (2 segs)
-        tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
-        _assert_topk_matches_torch(torch_input[:, :valid_length], tt_indices, k)
-    assert device.num_program_cache_entries() == 1  # one program serves every runtime length
-    device.disable_and_clear_program_cache()
+    try:
+        for valid_length in (n, 40960, 98304):  # 256 chunks, 20 chunks (1 seg), 48 chunks (2 segs)
+            tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
+            _assert_topk_matches_torch(torch_input[:, :valid_length], tt_indices, k)
+        assert device.num_program_cache_entries() == 1  # one program serves every runtime length
+    finally:
+        device.disable_and_clear_program_cache()
 
 
 # ---------------------------------------------------------------------------
