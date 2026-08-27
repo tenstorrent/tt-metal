@@ -66,6 +66,7 @@ MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::mov
     // Apply fabric config from descriptor
     const auto& fc = descriptor_.fabric_config_descriptor();
     fabric_config_ = fc.fabric_config;
+    requested_fabric_config_ = fc.fabric_config;
     fabric_reliability_mode_ = fc.reliability_mode;
     fabric_tensix_config_ = fc.fabric_tensix_config;
     fabric_udm_mode_ = fc.fabric_udm_mode;
@@ -267,10 +268,13 @@ bool MetalEnvImpl::set_fabric_config(
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
         fabric_config == tt_fabric::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
+        this->requested_fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;
     } else {
+        // fabric_config_ may hold the consolidated (downgraded) config; re-requesting either the
+        // effective or the originally requested value is idempotent.
         TT_FATAL(
-            this->fabric_config_ == fabric_config,
+            this->fabric_config_ == fabric_config || this->requested_fabric_config_ == fabric_config,
             "Tried to override previous value of fabric config: {}, with: {}",
             enchantum::to_string(this->fabric_config_),
             enchantum::to_string(fabric_config));
@@ -340,6 +344,7 @@ void MetalEnvImpl::teardown_fabric_config() {
                                     !MetalContext::instance().device_manager()->get_all_active_devices().empty();
 
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+    this->requested_fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
     if (!devices_still_open) {
@@ -352,9 +357,11 @@ void MetalEnvImpl::initialize_fabric_config() {
         return;
     }
 
+    // Construct the control plane first: it may consolidate the fabric config with the mesh shapes
+    // (#54650), and the ethernet cores must be configured from the effective config.
+    auto& cp = this->get_control_plane();
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(
         this->fabric_config_, this->num_fabric_active_routing_planes_);
-    auto& cp = this->get_control_plane();
     cp.configure_routing_tables_for_fabric_ethernet_channels();
 }
 
@@ -471,6 +478,11 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             this->fabric_router_config_,
             this->fabric_manager_);
     }
+
+    // The control plane may consolidate the fabric config with the mesh shapes (a ring/torus axis no
+    // mesh realizes is downgraded, #54650). Mirror the effective config so every fabric consumer
+    // outside the control plane reads the same value.
+    this->fabric_config_ = control_plane_->get_fabric_config();
 }
 
 void MetalEnvImpl::construct_control_plane() {
@@ -493,6 +505,9 @@ void MetalEnvImpl::construct_control_plane() {
         this->fabric_udm_mode_,
         this->fabric_router_config_,
         this->fabric_manager_);
+
+    // Mirror the control plane's (possibly consolidated) fabric config, see above.
+    this->fabric_config_ = control_plane_->get_fabric_config();
 }
 
 // ─── System mesh ──────────────────────────────────────────────────────────────

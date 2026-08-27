@@ -142,6 +142,9 @@ private:
 
     // --- Fabric config state ---
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+    // Config as the user requested it, before the control plane consolidated it with the mesh shapes
+    // (#54650). Used to keep repeated set_fabric_config calls with the original value idempotent.
+    tt_fabric::FabricConfig requested_fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricReliabilityMode fabric_reliability_mode_ =
         tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
