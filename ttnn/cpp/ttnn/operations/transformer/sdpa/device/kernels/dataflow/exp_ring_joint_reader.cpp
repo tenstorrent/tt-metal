@@ -11,6 +11,7 @@
 #include "api/core_local_mem.h"
 #include "dataflow_common.hpp"
 #include "exp_fused_op_indexer.hpp"
+#include "api/debug/dprint.h"
 void kernel_main() {
     Noc noc;
     noc.async_write_barrier();
@@ -91,9 +92,23 @@ void kernel_main() {
     const uint32_t receiver_semaphore_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 1);
     const uint32_t valid_semaphore_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 2);
     constexpr bool mcast_enabled = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 3) == 1;
+    // Sparse frames use a decoupled data path: the chain relays only a monotonic ready signal (no K/V
+    // data mcast), the fabric writer sources its own shard from dram, and every core reads its own K/V.
+    // This tolerates the per-column matmul/drain skew that deadlocks the lock-step dense path.
+    constexpr bool sparse_frames_enabled =
+        get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 4) == 1;
 
-    // Receiver flips this to INVALID before each wait; initialize so the first iteration sees it as VALID.
-    Semaphore<>(valid_semaphore_id).set(VALID);
+    // Dense: receiver flips valid to INVALID before each wait; init so the first iteration sees VALID.
+    // Sparse: the relay is a monotonic counter, so both semaphores start at 0 and only ever increase.
+    if constexpr (sparse_frames_enabled) {
+        Semaphore<>(valid_semaphore_id).set(0);
+        Semaphore<>(receiver_semaphore_id).set(0);
+    } else {
+        Semaphore<>(valid_semaphore_id).set(VALID);
+    }
+    // Sparse monotonic relay counters (unused in the dense path).
+    uint32_t valid_count = 0;
+    uint32_t recv_expected = 0;
 
     uint32_t sender_wait_count = 1;
     if constexpr (mcast_enabled) {
@@ -249,87 +264,142 @@ void kernel_main() {
                 if (is_injector && ring_iter > 0 && !kv_chunk_is_joint) {
                     chunks_signaled_by_remote++;
                     for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
-                        noc_semaphore_wait_min(per_link_sem_ptrs[lnk], chunks_signaled_by_remote);
+                        uint32_t dbg_spin = 0;
+                        while (*per_link_sem_ptrs[lnk] < chunks_signaled_by_remote) {
+                            if (nq == 1 && ++dbg_spin == 4000000) {
+                                DPRINT(
+                                    "injh1 rit{} kc{} lnk{} want{} have{}\n",
+                                    (uint32_t)ring_iter,
+                                    (uint32_t)k_chunk,
+                                    (uint32_t)lnk,
+                                    (uint32_t)chunks_signaled_by_remote,
+                                    (uint32_t)(*per_link_sem_ptrs[lnk]));
+                                dbg_spin = 0;
+                            }
+                        }
                     }
                 }
 
                 // K: get data into CB buffer
                 CircularBuffer cb_k(cb_k_in);
-                CircularBuffer cb_k_writer(cb_k_writer_in);
-                cb_k.reserve_back(k_chunk_tiles);
-                if (is_mux_writer) {
-                    cb_k_writer.reserve_back(k_chunk_tiles);
-                }
-                uint32_t cb_k_start_address = cb_k.get_write_ptr();
-                if (should_receive) {
-                    Semaphore<> receiver_sem(receiver_semaphore_id);
-                    receiver_sem.set(INVALID);
-                    Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
-                    receiver_sem.wait(VALID);
-                } else {
+                if constexpr (sparse_frames_enabled) {
+                    // Gather-ready signal relay (monotonic, one-way, no data, no back-pressure) followed by
+                    // an own-dram fetch. The chain no longer carries K data and the fabric writer sources
+                    // its own copy, so nothing here waits on a compute-lagged neighbour.
+                    if (should_receive) {
+                        Semaphore<> receiver_sem(receiver_semaphore_id);
+                        receiver_sem.wait_min(++recv_expected);
+                    }
+                    if (should_forward) {
+                        Semaphore<>(valid_semaphore_id).set(++valid_count);
+                        if constexpr (mcast_enabled) {
+                            Semaphore<>(valid_semaphore_id)
+                                .relay_multicast(
+                                    noc,
+                                    Semaphore<>(receiver_semaphore_id),
+                                    prev_physical_x,
+                                    prev_physical_y,
+                                    next_physical_x,
+                                    next_physical_y,
+                                    mcast_num_dests,
+                                    /*linked=*/false);
+                        } else {
+                            Semaphore<>(valid_semaphore_id)
+                                .relay_unicast(
+                                    noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
+                        }
+                        noc.async_writes_flushed();
+                    }
+                    cb_k.reserve_back(k_chunk_tiles);
                     fetch_block(
                         kv_chunk_is_joint ? joint_k_generator
                                           : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
                         kv_slice,
                         end_seq_tile,
                         cb_k_in,
-                        cb_k_start_address,
+                        cb_k.get_write_ptr(),
                         k_tile_bytes,
                         true /*transpose*/
                     );
-                }
-
-                // Forward K to next core(s) before push_back — prevents compute from
-                // popping the buffer while the mcast is still reading from it.
-                if (should_forward) {
-                    Semaphore<> sender_sem(sender_semaphore_id);
-                    sender_sem.wait(sender_wait_count);
-                    sender_sem.set(0);
-                    if constexpr (mcast_enabled) {
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(cb_k_start_address),
-                            MulticastEndpoint{},
-                            k_chunk_tiles * k_tile_bytes,
-                            mcast_num_dests,
-                            {},
-                            {.noc_x_start = prev_physical_x,
-                             .noc_y_start = prev_physical_y,
-                             .noc_x_end = next_physical_x,
-                             .noc_y_end = next_physical_y,
-                             .addr = cb_k_start_address},
-                            true /* linked: semaphore mcast follows */);
-                        // Must be back-to-back after the linked data write — any flush between them
-                        // deadlocks the linked transaction.
-                        Semaphore<>(valid_semaphore_id)
-                            .relay_multicast(
-                                noc,
-                                Semaphore<>(receiver_semaphore_id),
-                                prev_physical_x,
-                                prev_physical_y,
-                                next_physical_x,
-                                next_physical_y,
-                                mcast_num_dests,
-                                /*linked=*/false);
+                    cb_k.push_back(k_chunk_tiles);
+                } else {
+                    CircularBuffer cb_k_writer(cb_k_writer_in);
+                    cb_k.reserve_back(k_chunk_tiles);
+                    if (is_mux_writer) {
+                        cb_k_writer.reserve_back(k_chunk_tiles);
+                    }
+                    uint32_t cb_k_start_address = cb_k.get_write_ptr();
+                    if (should_receive) {
+                        Semaphore<> receiver_sem(receiver_semaphore_id);
+                        receiver_sem.set(INVALID);
+                        Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
+                        receiver_sem.wait(VALID);
                     } else {
-                        noc.async_write(
-                            CoreLocalMem<uint32_t>(cb_k_start_address),
-                            UnicastEndpoint{},
-                            k_chunk_tiles * k_tile_bytes,
-                            {},
-                            {.noc_x = next_physical_x, .noc_y = next_physical_y, .addr = cb_k_start_address});
+                        fetch_block(
+                            kv_chunk_is_joint ? joint_k_generator
+                                              : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
+                            kv_slice,
+                            end_seq_tile,
+                            cb_k_in,
+                            cb_k_start_address,
+                            k_tile_bytes,
+                            true /*transpose*/
+                        );
                     }
-                    noc.async_writes_flushed();
-                    if constexpr (!mcast_enabled) {
-                        Semaphore<>(valid_semaphore_id)
-                            .relay_unicast(noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
-                    }
-                }
 
-                // Make K available to compute
-                cb_k.push_back(k_chunk_tiles);
-                if (is_mux_writer) {
-                    cb_k_writer.push_back(k_chunk_tiles);
-                    ASSERT(cb_k.get_write_ptr() == cb_k_writer.get_write_ptr());
+                    // Forward K to next core(s) before push_back — prevents compute from
+                    // popping the buffer while the mcast is still reading from it.
+                    if (should_forward) {
+                        Semaphore<> sender_sem(sender_semaphore_id);
+                        sender_sem.wait(sender_wait_count);
+                        sender_sem.set(0);
+                        if constexpr (mcast_enabled) {
+                            noc.async_write_multicast(
+                                CoreLocalMem<uint32_t>(cb_k_start_address),
+                                MulticastEndpoint{},
+                                k_chunk_tiles * k_tile_bytes,
+                                mcast_num_dests,
+                                {},
+                                {.noc_x_start = prev_physical_x,
+                                 .noc_y_start = prev_physical_y,
+                                 .noc_x_end = next_physical_x,
+                                 .noc_y_end = next_physical_y,
+                                 .addr = cb_k_start_address},
+                                true /* linked: semaphore mcast follows */);
+                            // Must be back-to-back after the linked data write — any flush between them
+                            // deadlocks the linked transaction.
+                            Semaphore<>(valid_semaphore_id)
+                                .relay_multicast(
+                                    noc,
+                                    Semaphore<>(receiver_semaphore_id),
+                                    prev_physical_x,
+                                    prev_physical_y,
+                                    next_physical_x,
+                                    next_physical_y,
+                                    mcast_num_dests,
+                                    /*linked=*/false);
+                        } else {
+                            noc.async_write(
+                                CoreLocalMem<uint32_t>(cb_k_start_address),
+                                UnicastEndpoint{},
+                                k_chunk_tiles * k_tile_bytes,
+                                {},
+                                {.noc_x = next_physical_x, .noc_y = next_physical_y, .addr = cb_k_start_address});
+                        }
+                        noc.async_writes_flushed();
+                        if constexpr (!mcast_enabled) {
+                            Semaphore<>(valid_semaphore_id)
+                                .relay_unicast(
+                                    noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
+                        }
+                    }
+
+                    // Make K available to compute
+                    cb_k.push_back(k_chunk_tiles);
+                    if (is_mux_writer) {
+                        cb_k_writer.push_back(k_chunk_tiles);
+                        ASSERT(cb_k.get_write_ptr() == cb_k_writer.get_write_ptr());
+                    }
                 }
 
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
@@ -362,80 +432,121 @@ void kernel_main() {
 
                 // V: get data into CB buffer
                 CircularBuffer cb_v(cb_v_in);
-                CircularBuffer cb_v_writer(cb_v_writer_in);
-                cb_v.reserve_back(v_chunk_tiles);
-                if (is_mux_writer) {
-                    cb_v_writer.reserve_back(v_chunk_tiles);
-                }
-                uint32_t cb_v_start_address = cb_v.get_write_ptr();
-                if (should_receive) {
-                    Semaphore<> receiver_sem(receiver_semaphore_id);
-                    receiver_sem.set(INVALID);
-                    Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
-                    receiver_sem.wait(VALID);
-                } else {
+                if constexpr (sparse_frames_enabled) {
+                    // Mirror of the K path: monotonic ready-signal relay, then own-dram fetch.
+                    if (should_receive) {
+                        Semaphore<> receiver_sem(receiver_semaphore_id);
+                        receiver_sem.wait_min(++recv_expected);
+                    }
+                    if (should_forward) {
+                        Semaphore<>(valid_semaphore_id).set(++valid_count);
+                        if constexpr (mcast_enabled) {
+                            Semaphore<>(valid_semaphore_id)
+                                .relay_multicast(
+                                    noc,
+                                    Semaphore<>(receiver_semaphore_id),
+                                    prev_physical_x,
+                                    prev_physical_y,
+                                    next_physical_x,
+                                    next_physical_y,
+                                    mcast_num_dests,
+                                    /*linked=*/false);
+                        } else {
+                            Semaphore<>(valid_semaphore_id)
+                                .relay_unicast(
+                                    noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
+                        }
+                        noc.async_writes_flushed();
+                    }
+                    cb_v.reserve_back(v_chunk_tiles);
                     fetch_block(
                         kv_chunk_is_joint ? joint_v_generator
                                           : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
                         kv_slice,
                         end_seq_tile,
                         cb_v_in,
-                        cb_v_start_address,
+                        cb_v.get_write_ptr(),
                         v_tile_bytes,
                         false /*transpose*/
                     );
-                }
-
-                // Forward V to next core(s) before push_back — prevents compute from
-                // popping the buffer while the mcast is still reading from it.
-                if (should_forward) {
-                    Semaphore<> sender_sem(sender_semaphore_id);
-                    sender_sem.wait(sender_wait_count);
-                    sender_sem.set(0);
-                    if constexpr (mcast_enabled) {
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(cb_v_start_address),
-                            MulticastEndpoint{},
-                            v_chunk_tiles * v_tile_bytes,
-                            mcast_num_dests,
-                            {},
-                            {.noc_x_start = prev_physical_x,
-                             .noc_y_start = prev_physical_y,
-                             .noc_x_end = next_physical_x,
-                             .noc_y_end = next_physical_y,
-                             .addr = cb_v_start_address},
-                            true /* linked: semaphore mcast follows */);
-                        // Companion semaphore mcast — see K path above for rationale.
-                        Semaphore<>(valid_semaphore_id)
-                            .relay_multicast(
-                                noc,
-                                Semaphore<>(receiver_semaphore_id),
-                                prev_physical_x,
-                                prev_physical_y,
-                                next_physical_x,
-                                next_physical_y,
-                                mcast_num_dests,
-                                /*linked=*/false);
+                    cb_v.push_back(v_chunk_tiles);
+                } else {
+                    CircularBuffer cb_v_writer(cb_v_writer_in);
+                    cb_v.reserve_back(v_chunk_tiles);
+                    if (is_mux_writer) {
+                        cb_v_writer.reserve_back(v_chunk_tiles);
+                    }
+                    uint32_t cb_v_start_address = cb_v.get_write_ptr();
+                    if (should_receive) {
+                        Semaphore<> receiver_sem(receiver_semaphore_id);
+                        receiver_sem.set(INVALID);
+                        Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
+                        receiver_sem.wait(VALID);
                     } else {
-                        noc.async_write(
-                            CoreLocalMem<uint32_t>(cb_v_start_address),
-                            UnicastEndpoint{},
-                            v_chunk_tiles * v_tile_bytes,
-                            {},
-                            {.noc_x = next_physical_x, .noc_y = next_physical_y, .addr = cb_v_start_address});
+                        fetch_block(
+                            kv_chunk_is_joint ? joint_v_generator
+                                              : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
+                            kv_slice,
+                            end_seq_tile,
+                            cb_v_in,
+                            cb_v_start_address,
+                            v_tile_bytes,
+                            false /*transpose*/
+                        );
                     }
-                    noc.async_writes_flushed();
-                    if constexpr (!mcast_enabled) {
-                        Semaphore<>(valid_semaphore_id)
-                            .relay_unicast(noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
-                    }
-                }
 
-                // Make V available to compute
-                cb_v.push_back(v_chunk_tiles);
-                if (is_mux_writer) {
-                    cb_v_writer.push_back(v_chunk_tiles);
-                    ASSERT(cb_v.get_write_ptr() == cb_v_writer.get_write_ptr());
+                    // Forward V to next core(s) before push_back — prevents compute from
+                    // popping the buffer while the mcast is still reading from it.
+                    if (should_forward) {
+                        Semaphore<> sender_sem(sender_semaphore_id);
+                        sender_sem.wait(sender_wait_count);
+                        sender_sem.set(0);
+                        if constexpr (mcast_enabled) {
+                            noc.async_write_multicast(
+                                CoreLocalMem<uint32_t>(cb_v_start_address),
+                                MulticastEndpoint{},
+                                v_chunk_tiles * v_tile_bytes,
+                                mcast_num_dests,
+                                {},
+                                {.noc_x_start = prev_physical_x,
+                                 .noc_y_start = prev_physical_y,
+                                 .noc_x_end = next_physical_x,
+                                 .noc_y_end = next_physical_y,
+                                 .addr = cb_v_start_address},
+                                true /* linked: semaphore mcast follows */);
+                            // Companion semaphore mcast — see K path above for rationale.
+                            Semaphore<>(valid_semaphore_id)
+                                .relay_multicast(
+                                    noc,
+                                    Semaphore<>(receiver_semaphore_id),
+                                    prev_physical_x,
+                                    prev_physical_y,
+                                    next_physical_x,
+                                    next_physical_y,
+                                    mcast_num_dests,
+                                    /*linked=*/false);
+                        } else {
+                            noc.async_write(
+                                CoreLocalMem<uint32_t>(cb_v_start_address),
+                                UnicastEndpoint{},
+                                v_chunk_tiles * v_tile_bytes,
+                                {},
+                                {.noc_x = next_physical_x, .noc_y = next_physical_y, .addr = cb_v_start_address});
+                        }
+                        noc.async_writes_flushed();
+                        if constexpr (!mcast_enabled) {
+                            Semaphore<>(valid_semaphore_id)
+                                .relay_unicast(
+                                    noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
+                        }
+                    }
+
+                    // Make V available to compute
+                    cb_v.push_back(v_chunk_tiles);
+                    if (is_mux_writer) {
+                        cb_v_writer.push_back(v_chunk_tiles);
+                        ASSERT(cb_v.get_write_ptr() == cb_v_writer.get_write_ptr());
+                    }
                 }
             }
         }
@@ -454,22 +565,30 @@ void kernel_main() {
             // Gate on q_per_core > 0 to match the writer. (Active cores use q_per_core == 1, so this
             // is a no-op for every shape the dense path exercises — idle cores only occur when
             // total_q_chunks < num_sdpa_cores, e.g. the small sparse-frames shapes.)
-            if (is_mux_writer && q_per_core > 0) {
-                CircularBuffer cb_k_writer(cb_k_writer_in);
-                CircularBuffer cb_v_writer(cb_v_writer_in);
-                cb_k_writer.reserve_back(k_chunk_tiles);
-                cb_v_writer.reserve_back(v_chunk_tiles);
-                cb_k_writer.push_back(k_chunk_tiles);
-                cb_v_writer.push_back(v_chunk_tiles);
+            // Sparse: the fabric writer sources its own K/V from dram, so there is no reader-fed writer
+            // CB to phase-align. Dense: keep the writer-facing dummy in lock-step with the compute one.
+            if constexpr (!sparse_frames_enabled) {
+                if (is_mux_writer && q_per_core > 0) {
+                    CircularBuffer cb_k_writer(cb_k_writer_in);
+                    CircularBuffer cb_v_writer(cb_v_writer_in);
+                    cb_k_writer.reserve_back(k_chunk_tiles);
+                    cb_v_writer.reserve_back(v_chunk_tiles);
+                    cb_k_writer.push_back(k_chunk_tiles);
+                    cb_v_writer.push_back(v_chunk_tiles);
+                }
             }
         }
     }
 
-    // Reset all per-link out-ready semaphores so they are clean for the next invocation
-    if (is_injector) {
-        for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
-            // noc_semaphore_wait_min(per_link_sem_ptrs[lnk], chunks_signaled_by_remote+1);
-            noc_semaphore_set(per_link_sem_ptrs[lnk], 0);
+    // Reset per-link out-ready semaphores for the next invocation. Dense: the injector is the sole
+    // waiter, so an end-of-kernel reset is safe. Sparse: the fabric writer is a second waiter on the
+    // same semaphore, so resetting here could race it — the host resets it between invocations instead
+    // (reset_global_semaphore_value; the test uses fresh semaphores, so a single invocation is clean).
+    if constexpr (!sparse_frames_enabled) {
+        if (is_injector) {
+            for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
+                noc_semaphore_set(per_link_sem_ptrs[lnk], 0);
+            }
         }
     }
     noc.async_writes_flushed();

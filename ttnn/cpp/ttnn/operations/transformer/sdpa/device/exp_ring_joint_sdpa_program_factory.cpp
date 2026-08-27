@@ -457,6 +457,10 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
+    // Sparse only: the fabric writer's own K/V scratch (c_14/c_15), un-aliased from the compute CBs.
+    // Single-buffered — the writer fetches, sends, and frees one chunk at a time at the ring pace.
+    uint32_t k_writer_tiles = Sk_chunk_t * DHt;
+    uint32_t v_writer_tiles = Sk_chunk_t * DHt;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * DHt;
     uint32_t out0_t = Sq_chunk_t * DHt;  // finalized below once out_out_subblock_h is known
@@ -619,6 +623,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     reader_compile_time_args.push_back(receiver_semaphore_id);
     reader_compile_time_args.push_back(valid_semaphore_id);
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder (patched after chain construction)
+    // sparse_frames_enabled (reader CT idx sem_args_offset+4): selects the decoupled signal-only chain.
+    reader_compile_time_args.push_back(args.has_sparse_frames() ? 1 : 0);
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -796,38 +802,83 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             .page_size = q_tile_size,
         }}},
     });
-    // K and V input CBs with overlapping handles (c_1+c_14 for K, c_2+c_15 for V) so both
-    // compute and MUX writer can pop independently from the same L1 address space.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = k_tiles * k_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors =
-            {{CBFormatDescriptor{
-                  .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-                  .data_format = k_df,
-                  .page_size = k_tile_size,
-              },
-              CBFormatDescriptor{
-                  .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
-                  .data_format = k_df,
-                  .page_size = k_tile_size,
-              }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = v_tiles * v_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors =
-            {{CBFormatDescriptor{
-                  .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-                  .data_format = v_df,
-                  .page_size = v_tile_size,
-              },
-              CBFormatDescriptor{
-                  .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_15),
-                  .data_format = v_df,
-                  .page_size = v_tile_size,
-              }}},
-    });
+    if (!sparse_frames_enabled) {
+        // Dense: K and V input CBs with overlapping handles (c_1+c_14 for K, c_2+c_15 for V) so both
+        // compute and MUX writer pop independently from the same L1 address space. The mcast chain keeps
+        // compute and the fabric writer in lock-step, so sharing the buffer is safe and saves L1.
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = k_tiles * k_tile_size,
+            .core_ranges = sdpa_grid_set,
+            .format_descriptors =
+                {{CBFormatDescriptor{
+                      .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+                      .data_format = k_df,
+                      .page_size = k_tile_size,
+                  },
+                  CBFormatDescriptor{
+                      .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
+                      .data_format = k_df,
+                      .page_size = k_tile_size,
+                  }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = v_tiles * v_tile_size,
+            .core_ranges = sdpa_grid_set,
+            .format_descriptors =
+                {{CBFormatDescriptor{
+                      .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
+                      .data_format = v_df,
+                      .page_size = v_tile_size,
+                  },
+                  CBFormatDescriptor{
+                      .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_15),
+                      .data_format = v_df,
+                      .page_size = v_tile_size,
+                  }}},
+        });
+    } else {
+        // Sparse: compute CBs (c_1/c_2) and fabric-writer CBs (c_14/c_15) are un-aliased. Compute skew
+        // must not stall the fabric feed, so the writer owns its own single-buffered scratch on the mux
+        // columns only (keeps the extra L1 off every other core).
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = k_tiles * k_tile_size,
+            .core_ranges = sdpa_grid_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+                .data_format = k_df,
+                .page_size = k_tile_size,
+            }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = v_tiles * v_tile_size,
+            .core_ranges = sdpa_grid_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
+                .data_format = v_df,
+                .page_size = v_tile_size,
+            }}},
+        });
+        const auto mux_writer_cb_set =
+            CoreRangeSet(CoreRange({sdpa_grid.x - 2, 0}, {sdpa_grid.x - 1, sdpa_grid.y - 1}));
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = k_writer_tiles * k_tile_size,
+            .core_ranges = mux_writer_cb_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
+                .data_format = k_df,
+                .page_size = k_tile_size,
+            }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = v_writer_tiles * v_tile_size,
+            .core_ranges = mux_writer_cb_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_15),
+                .data_format = v_df,
+                .page_size = v_tile_size,
+            }}},
+        });
+    }
 
     // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
     if (needs_lightweight_mask) {
@@ -1543,6 +1594,11 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     writer_fabric_compile_time_args.push_back(ag_page_size);
     TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(writer_fabric_compile_time_args);
     TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(writer_fabric_compile_time_args);
+    // Local K/V input accessors: the sparse fabric writer sources its own shard from dram and reads
+    // local input on ring iter 0 (gathered accessors above cover iter>0). Appended for all fabric
+    // writers to keep the CT layout identical; the dense path constructs but never uses them.
+    TensorAccessorArgs(input_tensor_k.buffer()).append_to(writer_fabric_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.buffer()).append_to(writer_fabric_compile_time_args);
 
     auto writer_fabric_defines = defines;
     writer_fabric_defines["USE_MUX"] = "1";
@@ -1816,6 +1872,12 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                 writer_args.push_back(ag_output_Ht);
                 writer_args.push_back(gathered_k_buf);
                 writer_args.push_back(gathered_v_buf);
+                writer_args.push_back(k_buf);  // local K input (sparse fabric writer own-fetch, ring iter 0)
+                writer_args.push_back(v_buf);  // local V input
+                // Private scratch for the sparse writer's cross-core gather-ready poll. MUST be a
+                // distinct semaphore, never per_link_sem: when the head's injector is reselected onto a
+                // mux-writer core, polling into per_link_sem would race the remote atomic +1 and drop it.
+                writer_args.push_back(allocate_per_core_semaphore(desc, core));
             }
             append_writer_sparse_bitmap(writer_args);
             writer_fabric_kernel.emplace_runtime_args(core, writer_args);

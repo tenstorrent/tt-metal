@@ -23,7 +23,7 @@ from models.tt_dit.utils.test import line_params, ring_params_8k
 # Mesh + topology enumeration
 # ---------------------------------------------------------------------------
 
-_SDPA_L1 = {"worker_l1_size": 1344544, "trace_region_size": 1000000}
+_SDPA_L1 = {}  # "worker_l1_size": 1344544, "trace_region_size": 1000000}
 _LINE = {**_SDPA_L1, **line_params}  # no router_config for line (matches sibling tests)
 _RING = {**_SDPA_L1, **ring_params_8k}  # ring uses the 8k router config
 
@@ -254,7 +254,14 @@ def _run_sparse_frames_op(
     # ------- Set up the ring op on device --------------------------------
     full_compute_grid = mesh_device.compute_with_storage_grid_size()
     if use_exp:
-        sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y)
+        # The exp op maps one q_chunk per SDPA column and puts its fabric-gather mux writers on the
+        # last two columns, so any trailing column with no q_chunk deadlocks the gather. Size the grid
+        # to exactly num_q_chunks columns + 1 for the CCL, matching AvatarSparseSelfAttention._exp_ring_sdpa_pc.
+        num_q_chunks = per_device_seq // q_chunk_size_tokens
+        assert (
+            num_q_chunks + 1 <= full_compute_grid.x
+        ), f"num_q_chunks ({num_q_chunks}) + 1 CCL column exceeds device grid width ({full_compute_grid.x})"
+        sdpa_compute_grid = (num_q_chunks + 1, full_compute_grid.y)
     else:
         sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
     ccl_core_grid_offset = (0, full_compute_grid.y - 1)
@@ -806,6 +813,26 @@ class TestSparseFramesRing:
         reason="exp_ring_joint_scaled_dot_product_attention requires a Blackhole Galaxy cluster",
     )
     @_MESH_TOPOLOGY_EXP
+    @pytest.mark.parametrize(
+        ("nf", "tpf", "q_chunk", "k_chunk", "nh", "sparse_frames_enabled"),
+        [
+            # All keep num_q_chunks=11 and (nh=40 -> 10 rows) so grid packing is held constant; each
+            # case varies one axis to bisect the hang. frames/shard = (nf*tpf/sp) / tpf.
+            pytest.param(22, 2560, 640, 128, 40, True, id="sparse"),  # our config: 2.75 frames/shard
+            pytest.param(22, 2560, 640, 128, 40, False, id="dense"),  # same shapes, no sparsity
+            pytest.param(22, 1024, 256, 256, 40, True, id="frac_small_chunks"),  # 2.75 frames/shard, 256/256
+            pytest.param(8, 7040, 640, 128, 40, True, id="whole_our_chunks"),  # 1.0 frame/shard, 640/128
+            pytest.param(16, 1024, 256, 256, 40, True, id="whole_two_frames"),  # 2.0 frames/shard (aligned)
+            # Baseline check: same narrow grid (num_q_chunks=8) as whole_two_frames but NON-sparse. If this
+            # also hangs, the narrow grid is unsupported by the baseline exp op, not our sparse changes.
+            pytest.param(16, 1024, 256, 256, 40, False, id="whole_two_frames_dense"),  # 2.0, num_q_chunks=8, dense
+            pytest.param(
+                8, 2816, 256, 256, 40, True, id="whole_small_chunks"
+            ),  # 1.0 frame/shard, 256/256 (passing baseline)
+            pytest.param(4, 1024, 128, 128, 40, True, id="sub_half_frame"),  # 0.5 frames/shard (frame spans 2 devices)
+            pytest.param(6, 1024, 256, 256, 40, True, id="sub_straddle"),  # 0.75 frames/shard (~ the real sp=32 ratio)
+        ],
+    )
     def test_exp_sparse_frames(
         self,
         mesh_device,
@@ -817,9 +844,13 @@ class TestSparseFramesRing:
         device_params,
         all_gather_topology,
         reset_seeds,
+        nf,
+        tpf,
+        q_chunk,
+        k_chunk,
+        nh,
+        sparse_frames_enabled,
     ):
-        nf = 22
-        tpf = 2560
         _run_sparse_frames_op(
             mesh_device=mesh_device,
             sp_axis=sp_axis,
@@ -831,12 +862,13 @@ class TestSparseFramesRing:
             num_frames_padded=nf,
             tokens_per_frame=tpf,
             b=1,
-            nh=40,
+            nh=nh,
             d=128,
             window=5,
             add_last_frame=True,
             all_gather_topology=all_gather_topology,
-            q_chunk_size_tokens=640,
-            k_chunk_size_tokens=128,
+            q_chunk_size_tokens=q_chunk,
+            k_chunk_size_tokens=k_chunk,
+            sparse_frames_enabled=sparse_frames_enabled,
             use_exp=True,
         )

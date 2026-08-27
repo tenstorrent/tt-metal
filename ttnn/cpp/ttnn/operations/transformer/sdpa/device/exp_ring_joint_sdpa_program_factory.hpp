@@ -52,11 +52,11 @@ inline constexpr uint32_t reader_arg_count(uint32_t num_links) {
 // Per-core fabric-writer runtime-arg slot of out_ready_sem_addr (= args.semaphore[link].address()).
 inline constexpr uint32_t kWriterFabricOutReadySemArg = 25;
 // Fabric-writer args after out_ready_sem_addr: injector x/y, num_muxes, mux index, AG Wt/Ht,
-// gathered k/v addresses. This is the DENSE count; with sparse frames the writer carries an extra
-// trailing per-q_chunk work bitmap (num_q_chunks words) AFTER these fixed args, so the fixed
-// dynamic-semaphore slots keep their indices and only the total count grows — override_runtime_arguments
-// adds `has_sparse_frames() ? num_q_chunks : 0` before asserting.
-inline constexpr uint32_t kWriterFabricArgCount = kWriterFabricOutReadySemArg + 9;
+// gathered k/v addresses, local k/v input addresses. This is the DENSE count; with sparse frames the
+// writer carries an extra trailing per-q_chunk work bitmap (num_q_chunks words) AFTER these fixed args,
+// so the fixed dynamic-semaphore slots keep their indices and only the total count grows —
+// override_runtime_arguments adds `has_sparse_frames() ? num_q_chunks : 0` before asserting.
+inline constexpr uint32_t kWriterFabricArgCount = kWriterFabricOutReadySemArg + 12;
 }  // namespace exp_ring_joint_sdpa_dynamic
 
 namespace detail {

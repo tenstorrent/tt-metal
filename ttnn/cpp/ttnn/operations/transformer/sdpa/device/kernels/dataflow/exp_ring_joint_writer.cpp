@@ -10,6 +10,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "exp_fused_op_indexer.hpp"
+#include "api/debug/dprint.h"
 
 #ifdef USE_MUX
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
@@ -117,6 +118,10 @@ void kernel_main() {
     constexpr uint32_t ag_page_size = get_compile_time_arg_val(ag_ct_base + 1);
     constexpr auto ag_gathered_k_args = TensorAccessorArgs<ag_ct_base + 2>();
     constexpr auto ag_gathered_v_args = TensorAccessorArgs<ag_gathered_k_args.next_compile_time_args_offset()>();
+    // Local K/V input accessors — sparse fabric writer reads its own shard from local input on ring
+    // iter 0 (gathered accessors above cover iter>0). Present for all fabric writers; dense ignores.
+    constexpr auto local_k_input_args = TensorAccessorArgs<ag_gathered_v_args.next_compile_time_args_offset()>();
+    constexpr auto local_v_input_args = TensorAccessorArgs<local_k_input_args.next_compile_time_args_offset()>();
 #endif
 
     uint32_t argidx = 0;
@@ -184,11 +189,17 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_sem_inc = nullptr;
     uint32_t ag_output_Wt = 0, ag_output_Ht = 0;
     uint32_t gathered_k_addr_ag_rt = 0, gathered_v_addr_ag_rt = 0;
+    // Local K/V input addresses (sparse fabric writer sources its own shard from dram; unused in dense).
+    uint32_t local_k_addr_rt = 0, local_v_addr_rt = 0;
+    // Private L1 scratch for the gather-ready poll's noc read destination (never per_link_sem).
+    uint32_t poll_scratch_addr = 0;
+    // Hoisted so the sparse fabric loop below can wait on this device's per-link gather-ready semaphore.
+    uint32_t out_ready_sem_addr = 0;
     uint32_t injector_noc_x = 0, injector_noc_y = 0;
     uint32_t num_muxes_in_direction = 1, my_mux_index = 0;
 
     if (mux_connection_valid) {
-        const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(argidx++);
+        out_ready_sem_addr = get_arg_val<uint32_t>(argidx++);
         injector_noc_x = get_arg_val<uint32_t>(argidx++);
         injector_noc_y = get_arg_val<uint32_t>(argidx++);
         num_muxes_in_direction = get_arg_val<uint32_t>(argidx++);
@@ -197,9 +208,13 @@ void kernel_main() {
         ag_output_Ht = get_arg_val<uint32_t>(argidx++);
         gathered_k_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         gathered_v_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
-
-        // OpSignaler constructor advances argidx past its RT args
-        OpSignaler(argidx);
+        local_k_addr_rt = get_arg_val<uint32_t>(argidx++);
+        local_v_addr_rt = get_arg_val<uint32_t>(argidx++);
+        poll_scratch_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+        // (Removed a vestigial OpSignaler construction here: the program factory pushes no signaler RT
+        // args — kWriterFabricArgCount ends at the local K/V addresses — so it read a data-dependent
+        // number of unrelated words and, under sparse, misaligned the per-q_chunk work bitmap parsed
+        // below, corrupting write_output_now. It was never used to signal anything.)
 
         pkt_scatter_hdr = PacketHeaderPool::allocate_header();
         pkt_unicast_hdr = PacketHeaderPool::allocate_header();
@@ -241,6 +256,21 @@ void kernel_main() {
 
     const auto gathered_k_writer = TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt);
     const auto gathered_v_writer = TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt);
+
+    // Read generators for the sparse fabric writer's own-fetch: local input shard on ring iter 0, this
+    // device's gathered buffer (ring_size shards of local_padded_Nt) on iter>0. Constructed for all
+    // fabric writers; only the sparse path issues reads through them.
+    const uint32_t writer_padded_Nt = local_padded_Nt * ring_size;
+    const auto writer_input_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
+    const auto writer_gathered_tile_logical = TensorTileShape(B, NH, writer_padded_Nt, DHt);
+    const auto local_k_fetch_gen =
+        PaddedAddrGenerator(TensorAccessor(local_k_input_args, local_k_addr_rt), writer_input_tile_logical);
+    const auto local_v_fetch_gen =
+        PaddedAddrGenerator(TensorAccessor(local_v_input_args, local_v_addr_rt), writer_input_tile_logical);
+    const auto gathered_k_fetch_gen =
+        PaddedAddrGenerator(TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt), writer_gathered_tile_logical);
+    const auto gathered_v_fetch_gen =
+        PaddedAddrGenerator(TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt), writer_gathered_tile_logical);
 #endif
 
     // Per-q_chunk work bitmap (one uint32 per q_chunk; bit `iter` set iff that q_chunk processes any
@@ -259,6 +289,9 @@ void kernel_main() {
     constexpr uint32_t cb_k_writer_in = tt::CBIndex::c_14;
     constexpr uint32_t cb_v_writer_in = tt::CBIndex::c_15;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+    // Per-tile byte sizes for the sparse fabric writer's own-fetch into c_14/c_15.
+    constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_writer_in);
+    constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_writer_in);
 
     CircularBuffer cb_k_w(cb_k_writer_in);
     CircularBuffer cb_v_w(cb_v_writer_in);
@@ -296,6 +329,30 @@ void kernel_main() {
     const uint32_t last_active_ring_iter =
         find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
 
+#ifdef USE_MUX
+    // Sparse own-fetch gather-ready. The per-link out-ready semaphore is incremented by the previous
+    // device's writer onto THIS device's INJECTOR core (injector_noc_x/y), not this writer core — so the
+    // writer must poll the injector's copy over the local noc. It is compute-independent (the previous
+    // writer's send drives it), which is exactly why it can gate the fabric feed without re-coupling to
+    // compute. The read lands in a PRIVATE scratch semaphore — never per_link_sem: if this writer core is
+    // also the head's (reselected) injector, reading into per_link_sem would race the remote atomic +1.
+    const uint64_t injector_gather_sem_noc_addr = get_noc_addr(injector_noc_x, injector_noc_y, out_ready_sem_addr);
+    volatile tt_l1_ptr uint32_t* writer_gather_scratch =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll_scratch_addr);
+    uint32_t writer_gather_ready_count = 0;
+#endif
+
+    // This core's normalized output is drained AFTER the ring loop, not at the iter that produced it.
+    // Under sparse each core's producing iter differs, so an in-loop drain (which waits on this core's
+    // compute) would stall this core's later fabric forwards and deadlock the cross-device gather.
+    // Captured here at the producing iter, drained post-loop. Dense produces on the last iter, so its
+    // timing is unchanged.
+    QChunkInfo pending_qi{};
+    bool output_pending = false;
+
+    uint32_t dbg_incs = 0;
+    uint32_t dbg_nq = 999;
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
 
@@ -318,6 +375,7 @@ void kernel_main() {
             for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
+                dbg_nq = nq;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
                 const auto qi = get_q_chunk_info(
@@ -332,9 +390,11 @@ void kernel_main() {
                 bool write_output_now = is_last_ring_iter;
                 if constexpr (sparse_frames_enabled) {
                     const uint32_t qb = writer_q_work_bitmap[q_chunk];
-                    // qb != 0: last work iter = highest set bit. qb == 0 (no attended K — only padded
-                    // q frames): compute's normalize falls back to is_last_ring_iter, so match it.
-                    write_output_now = (qb != 0u) ? (ring_iter == (31u - __builtin_clz(qb))) : is_last_ring_iter;
+                    // qb != 0: compute normalizes on this q_chunk's last work iter (highest set bit).
+                    // qb == 0: the q_chunk attends no K on any iter (a padded q frame — a real frame
+                    // always attends its own), so compute takes the zero-work drain path every iter and
+                    // never pushes cb_out. Do NOT drain here, or the deferred output write blocks forever.
+                    write_output_now = (qb != 0u) && (ring_iter == (31u - __builtin_clz(qb)));
                 }
 
 #ifdef USE_MUX
@@ -365,150 +425,249 @@ void kernel_main() {
 
                         const uint32_t bh_offset = (nb * NH + nq) * ag_output_Wt * ag_output_Ht;
 
-                        // Wait for reader to fill K, forward this writer's row slice over fabric
-                        cb_k_w.wait_front(k_chunk_tiles);
-                        if (!is_last_ring_iter) {
-                        if (!kv_chunk_is_joint) {
-                            const uint32_t base_k_read_ptr = cb_k_w.get_read_ptr();
-                            for (uint32_t col = 0; col < DHt; ++col) {
-                                for (uint32_t row = my_row_start; row < my_row_end; row += ag_packet_size_in_pages) {
-                                    uint32_t tiles_in_batch = 0;
-                                    uint64_t k_noc_addrs[4] = {0, 0, 0, 0};
-                                    for (uint32_t i = 0; i < ag_packet_size_in_pages && row + i < my_row_end; i++) {
-                                        if (kv_slice.d2_start + row + i >= end_seq_tile) break;
-                                        const uint32_t dest_id = bh_offset
-                                            + (kv_global_start_tile + row + i) * ag_output_Wt + col;
-                                        k_noc_addrs[tiles_in_batch] =
-                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                                gathered_k_writer, dest_id, 0);
-                                        tiles_in_batch++;
+                        // Source this chunk's K into c_14. Sparse: own-fetch from dram (local on ring
+                        // iter 0, this device's gathered buffer on iter>0, gated on gather-ready) so the
+                        // fabric feed never waits on the local compute. Dense: take the reader-filled CB.
+                        uint32_t base_k_read_ptr = 0;
+                        if constexpr (sparse_frames_enabled) {
+                            if (!is_last_ring_iter && !kv_chunk_is_joint) {
+                                if (ring_iter > 0) {
+                                    writer_gather_ready_count++;
+                                    // Poll the injector's copy of the per-link semaphore (cross-core, local
+                                    // noc) until our row slice for this chunk has arrived from the previous
+                                    // device. wait_min can't be used — the incremented copy is not local. The
+                                    // read lands in poll_scratch_addr (private), never per_link_sem.
+                                    while (true) {
+                                        noc_async_read(
+                                            injector_gather_sem_noc_addr, poll_scratch_addr, sizeof(uint32_t));
+                                        noc_async_read_barrier();
+                                        if (*writer_gather_scratch >= writer_gather_ready_count) {
+                                            break;
+                                        }
                                     }
-                                    if (tiles_in_batch == 0) break;
-                                    const uint32_t src_l1_addr = base_k_read_ptr
-                                        + (row + col * Sk_chunk_t) * ag_page_size;
-                                    if (tiles_in_batch == ag_packet_size_in_pages) {
-                                        uint16_t k_cs[3] = {
-                                            static_cast<uint16_t>(ag_page_size),
-                                            static_cast<uint16_t>(ag_page_size),
-                                            static_cast<uint16_t>(ag_page_size)};
-                                        fabric_unicast_noc_scatter_write_with_state<
-                                            UnicastScatterWriteUpdateMask::DstAddrs |
-                                            UnicastScatterWriteUpdateMask::ChunkSizes |
-                                            UnicastScatterWriteUpdateMask::PayloadSize>(
-                                            &mux_conn, pkt_scatter_hdr, src_l1_addr,
-                                            NocUnicastScatterCommandHeader(k_noc_addrs, k_cs, tiles_in_batch),
-                                            ag_page_size * tiles_in_batch);
-                                        noc.async_writes_flushed();
-                                    } else {
-                                        // Partial batch: fall back to per-tile unicast writes to avoid
-                                        // variable chunk_count scatter writes which cause non-determinism.
-                                        // noc.async_writes_flushed() after each send ensures the previous
-                                        // header NOC write completes before pkt_unicast_hdr is modified
-                                        // for the next tile (they share the same L1 header).
-                                        for (uint32_t i = 0; i < tiles_in_batch; i++) {
-                                            fabric_unicast_noc_unicast_write_with_state<
-                                                UnicastWriteUpdateMask::DstAddr>(
+                                }
+                                cb_k_w.reserve_back(k_chunk_tiles);
+                                base_k_read_ptr = cb_k_w.get_write_ptr();
+                                fetch_block(
+                                    ring_iter == 0 ? local_k_fetch_gen : gathered_k_fetch_gen,
+                                    ring_iter == 0
+                                        ? Slice(nb, nq, k_chunk * Sk_chunk_t, k_chunk * Sk_chunk_t + Sk_chunk_t, 0, DHt)
+                                        : kv_slice,
+                                    ring_iter == 0 ? std::min(logical_nt, local_padded_Nt) : end_seq_tile,
+                                    cb_k_writer_in,
+                                    base_k_read_ptr,
+                                    k_tile_bytes,
+                                    true /*transpose*/);
+                            }
+                        } else {
+                            cb_k_w.wait_front(k_chunk_tiles);
+                            base_k_read_ptr = cb_k_w.get_read_ptr();
+                        }
+                        if (!is_last_ring_iter) {
+                            if (!kv_chunk_is_joint) {
+                                for (uint32_t col = 0; col < DHt; ++col) {
+                                    for (uint32_t row = my_row_start; row < my_row_end;
+                                         row += ag_packet_size_in_pages) {
+                                        uint32_t tiles_in_batch = 0;
+                                        uint64_t k_noc_addrs[4] = {0, 0, 0, 0};
+                                        for (uint32_t i = 0; i < ag_packet_size_in_pages && row + i < my_row_end; i++) {
+                                            if (kv_slice.d2_start + row + i >= end_seq_tile) {
+                                                break;
+                                            }
+                                            const uint32_t dest_id =
+                                                bh_offset + (kv_global_start_tile + row + i) * ag_output_Wt + col;
+                                            k_noc_addrs[tiles_in_batch] =
+                                                tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                    gathered_k_writer, dest_id, 0);
+                                            tiles_in_batch++;
+                                        }
+                                        if (tiles_in_batch == 0) {
+                                            break;
+                                        }
+                                        const uint32_t src_l1_addr =
+                                            base_k_read_ptr + (row + col * Sk_chunk_t) * ag_page_size;
+                                        if (tiles_in_batch == ag_packet_size_in_pages) {
+                                            uint16_t k_cs[3] = {
+                                                static_cast<uint16_t>(ag_page_size),
+                                                static_cast<uint16_t>(ag_page_size),
+                                                static_cast<uint16_t>(ag_page_size)};
+                                            fabric_unicast_noc_scatter_write_with_state<
+                                                UnicastScatterWriteUpdateMask::DstAddrs |
+                                                UnicastScatterWriteUpdateMask::ChunkSizes |
+                                                UnicastScatterWriteUpdateMask::PayloadSize>(
                                                 &mux_conn,
-                                                pkt_unicast_hdr,
-                                                src_l1_addr + i * ag_page_size,
-                                                NocUnicastCommandHeader{k_noc_addrs[i]});
+                                                pkt_scatter_hdr,
+                                                src_l1_addr,
+                                                NocUnicastScatterCommandHeader(k_noc_addrs, k_cs, tiles_in_batch),
+                                                ag_page_size * tiles_in_batch);
                                             noc.async_writes_flushed();
+                                        } else {
+                                            // Partial batch: fall back to per-tile unicast writes to avoid
+                                            // variable chunk_count scatter writes which cause non-determinism.
+                                            // noc.async_writes_flushed() after each send ensures the previous
+                                            // header NOC write completes before pkt_unicast_hdr is modified
+                                            // for the next tile (they share the same L1 header).
+                                            for (uint32_t i = 0; i < tiles_in_batch; i++) {
+                                                fabric_unicast_noc_unicast_write_with_state<
+                                                    UnicastWriteUpdateMask::DstAddr>(
+                                                    &mux_conn,
+                                                    pkt_unicast_hdr,
+                                                    src_l1_addr + i * ag_page_size,
+                                                    NocUnicastCommandHeader{k_noc_addrs[i]});
+                                                noc.async_writes_flushed();
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                        if constexpr (!sparse_frames_enabled) {
+                            cb_k_w.pop_front(k_chunk_tiles);
                         }
-                        cb_k_w.pop_front(k_chunk_tiles);
 
-                        // Wait for reader to fill V, forward this writer's row slice over fabric
-                        cb_v_w.wait_front(v_chunk_tiles);
+                        // Source this chunk's V into c_15. Gather-ready was already awaited for K above
+                        // (one per-chunk signal covers both), so sparse just fetches; dense waits on the CB.
+                        uint32_t base_v_read_ptr = 0;
+                        if constexpr (sparse_frames_enabled) {
+                            if (!is_last_ring_iter && !kv_chunk_is_joint) {
+                                cb_v_w.reserve_back(v_chunk_tiles);
+                                base_v_read_ptr = cb_v_w.get_write_ptr();
+                                fetch_block(
+                                    ring_iter == 0 ? local_v_fetch_gen : gathered_v_fetch_gen,
+                                    ring_iter == 0
+                                        ? Slice(nb, nq, k_chunk * Sk_chunk_t, k_chunk * Sk_chunk_t + Sk_chunk_t, 0, DHt)
+                                        : kv_slice,
+                                    ring_iter == 0 ? std::min(logical_nt, local_padded_Nt) : end_seq_tile,
+                                    cb_v_writer_in,
+                                    base_v_read_ptr,
+                                    v_tile_bytes,
+                                    false /*transpose*/);
+                            }
+                        } else {
+                            cb_v_w.wait_front(v_chunk_tiles);
+                            base_v_read_ptr = cb_v_w.get_read_ptr();
+                        }
                         if (!is_last_ring_iter) {
-                        if (!kv_chunk_is_joint) {
-                            const uint32_t base_v_read_ptr = cb_v_w.get_read_ptr();
-                            for (uint32_t row = my_row_start; row < my_row_end; ++row) {
-                                if (kv_slice.d2_start + row >= end_seq_tile) break;
-                                for (uint32_t col = 0; col < DHt; col += ag_packet_size_in_pages) {
-                                    uint32_t tiles_in_batch = 0;
-                                    uint64_t v_noc_addrs[4] = {0, 0, 0, 0};
-                                    for (uint32_t i = 0; i < ag_packet_size_in_pages && col + i < DHt; i++) {
-                                        const uint32_t dest_id = bh_offset
-                                            + (kv_global_start_tile + row) * ag_output_Wt + col + i;
-                                        v_noc_addrs[tiles_in_batch] =
-                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                                                gathered_v_writer, dest_id, 0);
-                                        tiles_in_batch++;
+                            if (!kv_chunk_is_joint) {
+                                for (uint32_t row = my_row_start; row < my_row_end; ++row) {
+                                    if (kv_slice.d2_start + row >= end_seq_tile) {
+                                        break;
                                     }
-                                    if (tiles_in_batch == 0) break;
-                                    const uint32_t src_l1_addr = base_v_read_ptr
-                                        + (row * DHt + col) * ag_page_size;
-                                    if (tiles_in_batch == ag_packet_size_in_pages) {
-                                        uint16_t v_cs[3] = {
-                                            static_cast<uint16_t>(ag_page_size),
-                                            static_cast<uint16_t>(ag_page_size),
-                                            static_cast<uint16_t>(ag_page_size)};
-                                        fabric_unicast_noc_scatter_write_with_state<
-                                            UnicastScatterWriteUpdateMask::DstAddrs |
-                                            UnicastScatterWriteUpdateMask::ChunkSizes |
-                                            UnicastScatterWriteUpdateMask::PayloadSize>(
-                                            &mux_conn, pkt_scatter_hdr, src_l1_addr,
-                                            NocUnicastScatterCommandHeader(v_noc_addrs, v_cs, tiles_in_batch),
-                                            ag_page_size * tiles_in_batch);
-                                        noc.async_writes_flushed();
-                                    } else {
-                                        // Partial batch: fall back to per-tile unicast writes to avoid
-                                        // variable chunk_count scatter writes which cause non-determinism.
-                                        // noc.async_writes_flushed() after each send ensures the previous
-                                        // header NOC write completes before pkt_unicast_hdr is modified
-                                        // for the next tile (they share the same L1 header).
-                                        for (uint32_t i = 0; i < tiles_in_batch; i++) {
-                                            fabric_unicast_noc_unicast_write_with_state<
-                                                UnicastWriteUpdateMask::DstAddr>(
+                                    for (uint32_t col = 0; col < DHt; col += ag_packet_size_in_pages) {
+                                        uint32_t tiles_in_batch = 0;
+                                        uint64_t v_noc_addrs[4] = {0, 0, 0, 0};
+                                        for (uint32_t i = 0; i < ag_packet_size_in_pages && col + i < DHt; i++) {
+                                            const uint32_t dest_id =
+                                                bh_offset + (kv_global_start_tile + row) * ag_output_Wt + col + i;
+                                            v_noc_addrs[tiles_in_batch] =
+                                                tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                    gathered_v_writer, dest_id, 0);
+                                            tiles_in_batch++;
+                                        }
+                                        if (tiles_in_batch == 0) {
+                                            break;
+                                        }
+                                        const uint32_t src_l1_addr = base_v_read_ptr + (row * DHt + col) * ag_page_size;
+                                        if (tiles_in_batch == ag_packet_size_in_pages) {
+                                            uint16_t v_cs[3] = {
+                                                static_cast<uint16_t>(ag_page_size),
+                                                static_cast<uint16_t>(ag_page_size),
+                                                static_cast<uint16_t>(ag_page_size)};
+                                            fabric_unicast_noc_scatter_write_with_state<
+                                                UnicastScatterWriteUpdateMask::DstAddrs |
+                                                UnicastScatterWriteUpdateMask::ChunkSizes |
+                                                UnicastScatterWriteUpdateMask::PayloadSize>(
                                                 &mux_conn,
-                                                pkt_unicast_hdr,
-                                                src_l1_addr + i * ag_page_size,
-                                                NocUnicastCommandHeader{v_noc_addrs[i]});
+                                                pkt_scatter_hdr,
+                                                src_l1_addr,
+                                                NocUnicastScatterCommandHeader(v_noc_addrs, v_cs, tiles_in_batch),
+                                                ag_page_size * tiles_in_batch);
                                             noc.async_writes_flushed();
+                                        } else {
+                                            // Partial batch: fall back to per-tile unicast writes to avoid
+                                            // variable chunk_count scatter writes which cause non-determinism.
+                                            // noc.async_writes_flushed() after each send ensures the previous
+                                            // header NOC write completes before pkt_unicast_hdr is modified
+                                            // for the next tile (they share the same L1 header).
+                                            for (uint32_t i = 0; i < tiles_in_batch; i++) {
+                                                fabric_unicast_noc_unicast_write_with_state<
+                                                    UnicastWriteUpdateMask::DstAddr>(
+                                                    &mux_conn,
+                                                    pkt_unicast_hdr,
+                                                    src_l1_addr + i * ag_page_size,
+                                                    NocUnicastCommandHeader{v_noc_addrs[i]});
+                                                noc.async_writes_flushed();
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                        if constexpr (!sparse_frames_enabled) {
+                            cb_v_w.pop_front(v_chunk_tiles);
                         }
-                        cb_v_w.pop_front(v_chunk_tiles);
 
                         if (!is_last_ring_iter) {
                             fabric_unicast_noc_unicast_atomic_inc_with_state(&mux_conn, pkt_hdr_sem_inc);
                             noc.async_writes_flushed();
+                            dbg_incs++;
+                            if (nq == 1 && my_mux_index == 0 && ring_iter <= 1) {
+                                DPRINT(
+                                    "wrinc rit{} kc{} incs{} tgt{} {}\n",
+                                    (uint32_t)ring_iter,
+                                    (uint32_t)k_chunk,
+                                    (uint32_t)dbg_incs,
+                                    (uint32_t)injector_noc_x,
+                                    (uint32_t)injector_noc_y);
+                            }
                         }
                     }
 
-                    if (KV_chunks_processed_in_iter % 2 == 0) {
-                        cb_k_w.wait_front(k_chunk_tiles);
-                        cb_v_w.wait_front(v_chunk_tiles);
-                        cb_k_w.pop_front(k_chunk_tiles);
-                        cb_v_w.pop_front(v_chunk_tiles);
+                    // Phase-alignment dummy: dense keeps the reader-fed writer CB in lock-step with the
+                    // compute CB. Sparse own-fetches c_14/c_15 (no reader feed), so there is nothing to drain.
+                    if constexpr (!sparse_frames_enabled) {
+                        if (KV_chunks_processed_in_iter % 2 == 0) {
+                            cb_k_w.wait_front(k_chunk_tiles);
+                            cb_v_w.wait_front(v_chunk_tiles);
+                            cb_k_w.pop_front(k_chunk_tiles);
+                            cb_v_w.pop_front(v_chunk_tiles);
+                        }
                     }
                 }
 #endif
 
-                // Drain normalized output to DRAM on the iter where compute produced it (see
-                // write_output_now above: geometric last for dense, per-q_chunk last work iter for sparse).
+                // Capture the output-drain descriptor on the iter compute produced it; the actual drain
+                // is deferred to after the ring loop (see pending_qi declaration).
                 if (write_output_now) {
-                    // Default trid here → pass 0 so per-group flush waits exactly for these writes.
-                    write_block_row_grouped_trid(
-                        noc,
-                        qi.is_joint_q ? joint_out_generator : out_generator,
-                        qi.out_slice,
-                        qi.end_seq_tile,
-                        cb_out,
-                        tile_bytes,
-                        out_subblock_h,
-                        /*flush_trid=*/0);
-                    noc.async_write_barrier();
+                    pending_qi = qi;
+                    output_pending = true;
                 }
             }
         }
+    }
+
+#ifdef USE_MUX
+    if (mux_connection_valid && dbg_nq == 1) {
+        DPRINT("wrh1 link{} incs{}\n", (uint32_t)my_mux_index, (uint32_t)dbg_incs);
+    }
+#endif
+
+    // Deferred output drain (all writers), BEFORE the fabric teardown. cb_out holds compute's output
+    // until here; draining it (rather than mid-loop) kept every ring iter's fabric forward off this
+    // core's compute critical path. Draining before the teardown barrier means each writer releases its
+    // compute (via cb_out) independently — a writer cannot be trapped at the barrier while its compute
+    // waits on this drain.
+    if (output_pending) {
+        write_block_row_grouped_trid(
+            noc,
+            pending_qi.is_joint_q ? joint_out_generator : out_generator,
+            pending_qi.out_slice,
+            pending_qi.end_seq_tile,
+            cb_out,
+            tile_bytes,
+            out_subblock_h,
+            /*flush_trid=*/0);
+        noc.async_write_barrier();
     }
 
 #ifdef USE_MUX
