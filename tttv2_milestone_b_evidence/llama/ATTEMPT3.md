@@ -833,3 +833,25 @@ composed along the wrong mesh axis and silently narrowed (D-B23), so even after 
 skip was fixed the number would have been computed from four copies of one mesh
 row's vocabulary slice. Two independent silent failures stood between this
 measurement and a plausible-looking wrong answer.
+| 45 | `logs3/a3_45_demo_batch1_80layer.log` | **the 80-layer direct demo, batch 1** | **1 passed** in 433 s — coherent English |
+
+## Result 45 — the 80-layer model produces real text
+
+```text
+[demo] slot 0 prompt: 'Explain what a tensor is to a software engineer in two sentences.'
+[demo] slot 0 text  : 'A tensor is a multi-dimensional array of numerical values, similar to a matrix,'
+[demo] slot 0 tokens: [32, 16000, 374, 264, 7447, 33520, 1358, 315, 35876, 2819, 11, 4528, 311, 264, 6303, 11]
+```
+
+Sixteen tokens, greedy, through `GalaxyDirectRunner` on a paged cache with device
+sampling enabled: `from_pretrained` -> `prefill_row` -> 16 eager decode steps ->
+sampling -> detokenization. Fluent, grammatical, on topic, and cut off mid-sentence
+only because the token budget is 16.
+
+This is what `job1_llama.md` asks for by "the direct demo... producing real text",
+and it is the first coherent output the Galaxy Llama reconstruction has produced.
+Compare `logs3/a3_42`, the same code path at one layer:
+`' RekALAR ZahirtyohaTL Succ体系'`. The difference between those two lines is the
+other 79 layers arriving correctly.
+
+433 s, of which the checkpoint load is 30 s and the weight staging is cache hits.
