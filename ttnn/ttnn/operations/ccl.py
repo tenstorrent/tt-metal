@@ -194,8 +194,10 @@ def _golden_function_point_to_point(
 
     sender_index = _mesh_coordinate_to_index(sender_coord, _ttnn_golden_mesh_shape)
     receiver_index = _mesh_coordinate_to_index(receiver_coord, _ttnn_golden_mesh_shape)
-    # Comparison observes rank zero, replacing it only when rank zero is the receiver.
-    return input_tensors[sender_index] if receiver_index == 0 else input_tensors[0]
+    output = input_tensors[sender_index].clone()
+    # Point-to-point initializes only the receiver shard of its fresh output tensor.
+    output._ttnn_mesh_index = receiver_index
+    return output
 
 
 ttnn.attach_golden_function(
@@ -459,26 +461,58 @@ ttnn.attach_golden_function(
 )
 
 
+def _preprocess_moe_routing_remap_golden_inputs(function_args, function_kwargs):
+    """Convert the replicated routing weights and retain their device mesh shape."""
+
+    input_tensor = function_args[0] if function_args else function_kwargs["routing_weights_tensor"]
+    golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
+        function_args, function_kwargs
+    )
+    golden_kwargs["_ttnn_golden_mesh_shape"] = tuple(input_tensor.device().shape)
+    return golden_args, golden_kwargs
+
+
 def _golden_function_moe_routing_remap(
     routing_weights_tensor,
     non_zero_weight_size,
     expert_parallel_size,
     cluster_axis,
     *args,
+    _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
     import torch
 
-    # Host comparison represents the first cluster member's contiguous share of non-zero weights.
-    output = torch.zeros_like(routing_weights_tensor)
+    if _ttnn_golden_mesh_shape is None:
+        return None
+
     non_zero_indices = torch.nonzero(routing_weights_tensor.flatten(), as_tuple=False).flatten()
     local_non_zero_size = non_zero_weight_size // expert_parallel_size
-    local_indices = non_zero_indices[:local_non_zero_size]
-    output.flatten()[local_indices] = routing_weights_tensor.flatten()[local_indices]
-    return output
+
+    num_devices = 1
+    for dimension in _ttnn_golden_mesh_shape:
+        num_devices *= dimension
+    member_stride = 1
+    for dimension in _ttnn_golden_mesh_shape[cluster_axis + 1 :]:
+        member_stride *= dimension
+
+    per_device_outputs = []
+    for device_index in range(num_devices):
+        member_index = (device_index // member_stride) % _ttnn_golden_mesh_shape[cluster_axis]
+        local_start = member_index * local_non_zero_size
+        local_indices = non_zero_indices[local_start : local_start + local_non_zero_size]
+        output = torch.zeros_like(routing_weights_tensor)
+        output.flatten()[local_indices] = routing_weights_tensor.flatten()[local_indices]
+        per_device_outputs.append(output)
+    # Comparison composes the mesh output by concatenating its per-device [1, experts] rows.
+    return torch.cat(per_device_outputs, dim=0)
 
 
-ttnn.attach_golden_function(ttnn.moe_routing_remap, golden_function=_golden_function_moe_routing_remap)
+ttnn.attach_golden_function(
+    ttnn.moe_routing_remap,
+    golden_function=_golden_function_moe_routing_remap,
+    preprocess_golden_function_inputs=_preprocess_moe_routing_remap_golden_inputs,
+)
 
 __all__ = [
     "Topology",

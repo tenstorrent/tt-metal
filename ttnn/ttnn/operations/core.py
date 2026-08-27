@@ -589,12 +589,12 @@ def _typecast_golden_function(
         elif len(dtype_args) == 1:
             output_dtype = dtype_args[0]
         elif len(dtype_args) >= 2:
-            input_dtype = input_dtype or dtype_args[0]
+            input_dtype = input_dtype if input_dtype is not None else dtype_args[0]
             output_dtype = dtype_args[1]
     if output_dtype is None:
         raise TypeError("ttnn.typecast golden requires an output dtype")
 
-    input_dtype = _ttnn_input_dtype or input_dtype
+    input_dtype = _ttnn_input_dtype if _ttnn_input_dtype is not None else input_dtype
     arch_name = (_ttnn_arch_name or ttnn.get_arch_name()).lower()
     if any("quasar" in os.environ.get(variable, "").lower() for variable in ("ARCH_NAME", "CHIP_ARCH")):
         arch_name = "quasar"

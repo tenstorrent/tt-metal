@@ -11,6 +11,12 @@ from ttnn.operations import integer_golden
 
 __all__ = []
 
+# Scalar BF16 add follows the device test contract of at most one ULP.
+_DEGENERATE_SCALAR_ADD_ULP_THRESHOLD = 1
+# Other low-precision scalar arithmetic uses the empirically validated three-ULP
+# degenerate-output bound shared with squared_difference.
+_DEGENERATE_SCALAR_ARITHMETIC_ULP_THRESHOLD = 3
+
 
 def _preprocess_binary_golden_function_inputs(function_args, function_kwargs):
     """Normalize binary golden arguments and retain TT dtype metadata.
@@ -199,7 +205,7 @@ def _golden_function_add(
     return _set_binary_scalar_comparison_config(
         output_tensor,
         input_tensor_b,
-        ulp_threshold=1,
+        ulp_threshold=_DEGENERATE_SCALAR_ADD_ULP_THRESHOLD,
         _ttnn_input_tensor_a_dtype=_ttnn_input_tensor_a_dtype,
         _ttnn_output_tensor_dtype=_ttnn_output_tensor_dtype,
     )
@@ -247,7 +253,7 @@ def _golden_function_subtract(
     return _set_binary_scalar_comparison_config(
         output_tensor,
         input_tensor_b,
-        ulp_threshold=3,
+        ulp_threshold=_DEGENERATE_SCALAR_ARITHMETIC_ULP_THRESHOLD,
         _ttnn_input_tensor_a_dtype=_ttnn_input_tensor_a_dtype,
         _ttnn_output_tensor_dtype=_ttnn_output_tensor_dtype,
     )
@@ -295,7 +301,7 @@ def _golden_function_rsub(
     return _set_binary_scalar_comparison_config(
         output_tensor,
         input_tensor_b,
-        ulp_threshold=3,
+        ulp_threshold=_DEGENERATE_SCALAR_ARITHMETIC_ULP_THRESHOLD,
         _ttnn_input_tensor_a_dtype=_ttnn_input_tensor_a_dtype,
         _ttnn_output_tensor_dtype=_ttnn_output_tensor_dtype,
     )
@@ -343,7 +349,7 @@ def _golden_function_multiply(
     return _set_binary_scalar_comparison_config(
         output_tensor,
         input_tensor_b,
-        ulp_threshold=3,
+        ulp_threshold=_DEGENERATE_SCALAR_ARITHMETIC_ULP_THRESHOLD,
         _ttnn_input_tensor_a_dtype=_ttnn_input_tensor_a_dtype,
         _ttnn_output_tensor_dtype=_ttnn_output_tensor_dtype,
     )
@@ -550,7 +556,7 @@ def _golden_function_divide(
     return _set_binary_scalar_comparison_config(
         output_tensor,
         input_tensor_b,
-        ulp_threshold=3,
+        ulp_threshold=_DEGENERATE_SCALAR_ARITHMETIC_ULP_THRESHOLD,
         _ttnn_input_tensor_a_dtype=_ttnn_input_tensor_a_dtype,
         _ttnn_output_tensor_dtype=_ttnn_output_tensor_dtype,
     )
@@ -660,7 +666,12 @@ def _golden_function_squared_difference(
             output_tensor, method="allclose", scope="degenerate", rtol=0.4, atol=0.35
         )
     elif output_tensor.dtype in (torch.bfloat16, torch.float16):
-        ttnn.decorators.set_golden_comparison_config(output_tensor, method="ulp", scope="degenerate", ulp_threshold=3)
+        ttnn.decorators.set_golden_comparison_config(
+            output_tensor,
+            method="ulp",
+            scope="degenerate",
+            ulp_threshold=_DEGENERATE_SCALAR_ARITHMETIC_ULP_THRESHOLD,
+        )
     return output_tensor
 
 

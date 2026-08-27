@@ -82,13 +82,16 @@ def set_golden_comparison_config(
 
 
 def _copy_golden_comparison_config(source, destination):
-    """Copy an attached golden comparison policy between tensors.
-    Leaves the destination unchanged when the source has no policy.
+    """Copy recognized golden comparison metadata between tensors.
+    Leaves each destination attribute unchanged when the source does not define it.
     """
 
     comparison_config = getattr(source, "_ttnn_comparison_config", None)
     if comparison_config is not None:
         destination._ttnn_comparison_config = comparison_config
+    mesh_index = getattr(source, "_ttnn_mesh_index", None)
+    if mesh_index is not None:
+        destination._ttnn_mesh_index = mesh_index
     return destination
 
 
@@ -865,7 +868,7 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
     for output, golden_output in zip(outputs, golden_outputs):
         if output.tensor_id is None:
             raise RuntimeError(f"Output tensor does not have a tensor_id")
-        # Clone the value as a storage boundary, but retain only the recognized comparison contract.
+        # Clone the value as a storage boundary, but retain only recognized comparison metadata.
         # This lets a later to_torch validate the originating operation without copying arbitrary metadata.
         golden_clone = golden_output.clone()
         TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = _copy_golden_comparison_config(
