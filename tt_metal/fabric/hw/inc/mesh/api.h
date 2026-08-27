@@ -1233,7 +1233,7 @@ FORCE_INLINE uint8_t fabric_multicast_source_inject_noc_unicast_write(
 
     // Re-encoded per header rather than copied between them, to avoid copying through volatile L1
     // pointers.
-    const uint8_t root_action = fabric_set_indexed_mcast_route(
+    const uint8_t root_action = fabric_set_2d_mcast_route(
         headers,
         dst_dev_id,
         dst_mesh_id,
@@ -1243,17 +1243,17 @@ FORCE_INLINE uint8_t fabric_multicast_source_inject_noc_unicast_write(
         ranges.s,
         FABRIC_2D_MESH_Y_SIZE,
         FABRIC_2D_MESH_X_SIZE);
-    const uint8_t root_outputs = root_action & IndexedMeshRoutingFields::ACTION_ETH_MASK;
+    const uint8_t root_outputs = root_action & Routing2DCodec::ACTION_ETH_MASK;
 
     uint8_t copy_index = 0;
     for (uint8_t dir = 0; dir < static_cast<uint8_t>(eth_chan_directions::COUNT); ++dir) {
-        if ((root_outputs & IndexedMeshRoutingFields::action_bit(static_cast<eth_chan_directions>(dir))) == 0) {
+        if ((root_outputs & Routing2DCodec::action_bit(static_cast<eth_chan_directions>(dir))) == 0) {
             continue;
         }
         ASSERT(copy_index < num_headers);
         volatile PACKET_HEADER_TYPE* header = headers + copy_index;
         if (copy_index != 0) {
-            fabric_set_indexed_mcast_route(
+            fabric_set_2d_mcast_route(
                 header,
                 dst_dev_id,
                 dst_mesh_id,
@@ -1285,7 +1285,7 @@ FORCE_INLINE uint8_t fabric_multicast_source_inject_noc_unicast_write(
 
     // Injection bypasses the source RX, so no router decodes this chip's own action byte and this
     // write is the only thing that delivers here. Exactly once, not once per copy.
-    if (root_action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) {
+    if (root_action & Routing2DCodec::ACTION_LOCAL_DELIVER) {
         noc_async_write(src_addr, noc_unicast_command_header.noc_address, size);
     }
 

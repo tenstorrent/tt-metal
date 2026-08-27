@@ -431,7 +431,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     packet_header->routing_fields.value = new_value;
 }
 
-// 2D transit is immutable: the indexed action maps are complete when the worker writes them, and no
+// 2D transit is immutable: the destination-major action maps are complete when the worker writes them, and no
 // router advances a cursor. These two overloads used to implement the legacy hop-program advance --
 // `routing_fields.value + 1` on the RX side, and the equivalent remote slot-word write on the sender
 // side, selected by UPDATE_PKT_HDR_ON_RX_CH. Both are now no-ops.

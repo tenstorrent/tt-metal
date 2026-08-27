@@ -84,10 +84,10 @@ public:
         tt::tt_fabric::fabric_client_connect<mux_num_buffers_per_channel>(edm);
 
         if constexpr (FABRIC_2D) {
-            // 2D decodes destination-indexed action maps, which the direction/hop-count form cannot
+            // 2D decodes destination-major action maps, which the direction/hop-count form cannot
             // express, so always go through the unicast producer. The old GALAXY_CLUSTER arm called
-            // fabric_set_route() -- the raw hop-program primitive -- which has no indexed equivalent
-            // by construction.
+            // fabric_set_route() -- the raw hop-program primitive -- which has no 2D action-map
+            // equivalent by construction.
             tt::tt_fabric::fabric_set_unicast_route(
                 (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr, to_dev_id, to_mesh_id);
         } else {

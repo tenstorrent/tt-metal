@@ -418,9 +418,9 @@ constexpr bool is_intermesh_router_on_edge = NAMED_CT_ARG("IS_INTERMESH_ROUTER_O
 constexpr bool is_intramesh_router_on_edge = NAMED_CT_ARG("IS_INTRAMESH_ROUTER_ON_EDGE") != 0;
 
 // ============================================================================
-// Indexed 2D routing
+// 2D action-map routing
 // ============================================================================
-// Every 2D router decodes destination-keyed action maps -- there is one 2D codec, so this is keyed on
+// Every 2D router decodes destination-major action maps -- there is one 2D codec, so this is keyed on
 // FABRIC_2D rather than on express enablement. The #else arm exists for 1D builds, which get neither
 // the shape nor the ingress CT args.
 #if defined(FABRIC_2D)
