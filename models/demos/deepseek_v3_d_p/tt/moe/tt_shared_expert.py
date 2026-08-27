@@ -74,12 +74,14 @@ MAX_IN0_BLOCK_W = 16
 def _in0_block_w(k_tiles: int) -> int:
     """Largest K block that tiles k_tiles without a remainder.
 
-    Full K is admissible past the cap when it costs no more L1 than the capped block would. The
-    matmul buffers the in0/in1 CBs one deep at a single K block and two deep at more than one, so a
-    full-K block that is at most twice the capped width occupies the same L1 while dropping the
-    block loop. Stated as that ratio rather than an L1 budget on purpose: it stays correct without
-    tracking the CB sizing, whose buffering depth, tile alignment and unreserved base all live in
-    the matmul factory.
+    The in0/in1 CBs are double-buffered only when K splits into more than one block, so 24 tiles
+    over one pass is the same L1 as 12 over two. Full K is therefore free exactly when the capped
+    block would have needed two passes. Of the shapes in this family only DeepSeek-V4-Pro's 24-tile
+    down projection is changed by it -- 12 becomes 24, worth 9.1%; Kimi-K3's 48 tiles would overflow
+    L1 by 3.8% and stay capped.
+
+    A ratio rather than an L1 budget, so it holds without tracking the factory's buffering depth,
+    tile alignment and unreserved base.
     """
     assert k_tiles > 0, f"k_tiles must be positive, got {k_tiles}"
     capped = 1
@@ -95,8 +97,10 @@ def _out_subblock(per_core_M: int, per_core_N: int, deep_k: bool) -> tuple[int, 
 
     Which shape wins splits on K, measured across every model's gate and down projection: the
     gate's deep K (128-224 tiles) prefers one tall column, the down's shallow K (16-48) prefers the
-    widest block that fits. Area-first is the wrong objective for the gate -- 3x1 beat 1x5 on all
-    five gate shapes.
+    widest block that fits.
+
+    The search below is the down projections' rule -- gate and up return above it. Only a per_core_M
+    past the DST budget sends deep K into it: unreachable below a ~2300-token chunk, unreported above.
     """
     if deep_k and per_core_M <= 8:
         return (per_core_M, 1)
