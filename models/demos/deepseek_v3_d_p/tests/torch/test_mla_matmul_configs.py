@@ -40,11 +40,17 @@ def test_tuned_matmul_cfg_is_rejected_when_block_width_does_not_divide_k(in0_blo
     """
     stub = SimpleNamespace(q_a_proj_weight=SimpleNamespace(shape=(kt * ttnn.TILE_SIZE, 1024)))
     cfg = {"program_config": SimpleNamespace(in0_block_w=in0_block_w)}
-    assert ttMLA._cfg_fits_weight(stub, cfg, "q_a_proj") is fits
+    assert (
+        ttMLA._cfg_fits_weight(stub, cfg, "q_a_proj") is fits
+    ), f"in0_block_w={in0_block_w} against Kt={kt}: expected fits={fits}"
 
 
 def test_tuned_matmul_cfg_kept_when_there_is_nothing_to_check_against():
     """A config with no in0_block_w, or a weight that is absent, must not be rejected."""
     stub = SimpleNamespace(q_a_proj_weight=SimpleNamespace(shape=(1024, 1024)))
-    assert ttMLA._cfg_fits_weight(stub, {"program_config": SimpleNamespace()}, "q_a_proj") is True
-    assert ttMLA._cfg_fits_weight(SimpleNamespace(), {"program_config": SimpleNamespace(in0_block_w=14)}, "q_a_proj")
+    assert (
+        ttMLA._cfg_fits_weight(stub, {"program_config": SimpleNamespace()}, "q_a_proj") is True
+    ), "a config with no in0_block_w has nothing to check against and must be kept"
+    assert ttMLA._cfg_fits_weight(
+        SimpleNamespace(), {"program_config": SimpleNamespace(in0_block_w=14)}, "q_a_proj"
+    ), "an absent weight has nothing to check against and must be kept"
