@@ -180,9 +180,20 @@ void kernel_main() {
     uint32_t last_tile_height =
         num_out_sticks_this_core % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_core % TILE_HEIGHT;
 
+    // [threading] The divided stick loop below deals sticks in (in_cb_0, in_cb_1) pairs per thread,
+    // so the per-core stick count must be divisible by 2*num_threads: that guarantees both an exact
+    // per-thread split AND an even per-thread share (an odd share makes every thread consume one
+    // extra in_cb_0 entry than exists -> deadlock). NOT always true (cliff cores can get any stick
+    // count), and it cannot be a static_assert: out_nhw_this_core is a per-core RUNTIME arg. Fail
+    // loudly (watcher assert names this line) instead of silently deadlocking or corrupting.
+    ASSERT(get_num_threads() == 1 || (num_out_sticks_this_core % (2 * get_num_threads())) == 0);
+
+    DPRINT("num_out_sticks_this_core: {}\n", num_out_sticks_this_core);
+    DPRINT("get_num_threads(): {}\n", get_num_threads());
+
     uint32_t tilize_stick_counter = 0;
     uint32_t tilize_stick_total = 0;
-    for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
+    for (uint32_t n = 0; n < num_out_sticks_this_core / get_num_threads(); ++n) {
         const bool reader0 = !(use_split_reader && (n & 0x1));
         const bool use_reader1_scalar = !reader0 && !one_scalar_per_core;
         // The reader1 (split) DFB tokens only exist under SPLIT_READER; gate the selection at
@@ -376,7 +387,7 @@ void kernel_main() {
                 // base_l1 grew. Each c-block packs its channel slice into this shared stick below; the whole
                 // stick is pushed once on the last c-block so the DM reader consumes exactly one stick per pop.
                 if (first_c_block) {
-                    curr_scratch_cb.reserve_back(scratch_npages);
+                    curr_scratch_cb.reserve_back(1);
                 }
                 // QSR fix (split-reader second stream): the top-of-kernel pack_untilize_dest_init targets
                 // scratch_cb_0 only, so odd (reader1) sticks packing into scratch_cb_1 used a packer
@@ -428,7 +439,7 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
                     PACK(TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK));
 #endif
-                    curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
+                    curr_scratch_cb.push_back(1);  // hand off to the DM reader, which writes the output
                 }
 #else
                 // Production RM path: narrow pack straight into out_cb (already reserved above). Pair the
