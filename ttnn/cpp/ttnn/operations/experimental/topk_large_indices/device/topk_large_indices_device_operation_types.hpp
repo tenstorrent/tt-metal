@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -32,12 +33,41 @@ struct operation_attributes_t {
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id{};
     std::optional<CoreRangeSet> sub_core_grid{};
     tt::tt_metal::SubDeviceManagerId subdevice_manager_id{};
+    // The caller-selected structural core set (sub_core_grid, else the whole
+    // TENSIX subdevice), resolved at invoke time. Kernel/CB placement is
+    // program structure, so it is part of the program hash. When the set is a
+    // single dense rectangle the multi-engine paths run inside it (placements
+    // translated by the rectangle origin); otherwise the op falls back to the
+    // row-parallel engine over the enumerated cores.
     CoreRangeSet resolved_worker_core_grid{};
     // Restrict the search to the first `valid_length` columns of each row instead of the full last
     // dimension. Lets top-k run over the real prefix of an over-allocated row (whose tail may be stale)
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
     // validated on cache hit) so a serving loop growing valid_length reuses one program.
     std::optional<uint32_t> valid_length{};
+    // INTERNAL (not exposed through the public API): override the column-parallel slice count P
+    // (tree cores splitting each row). Single row: the classic column-parallel tree. Multiple
+    // rows: the multi-rectangle variant — one P-core tree per rectangle, rows split contiguously
+    // over as many rectangles as tile the worker grid, all concurrent (the cost model can also
+    // auto-select this form when it models a win; the override bypasses the model and pins an
+    // exact P — the hybrid wrapper's remainder window sets it to a searched-width-modeled P).
+    // Values outside [2, 128] or above the row's chunk count are loud errors; P is clamped only
+    // against the physical core grid (with a warning). Changes the program structure, so it is
+    // part of the program hash. nullopt = the built-in cost model.
+    std::optional<uint32_t> num_slices{};
+    // Composite-internal row window [row_start, row_start + row_count): the op reads only these
+    // input rows and emits a row_count-row output. Set by the hybrid wrapper (ttnn::experimental::
+    // topk_large_indices) to run row-parallel full waves and a multi-rectangle remainder wave as
+    // two launches over one un-sliced input; not exposed through the public bindings. Requires the
+    // canonical [1.., R, W] shape (leading dims 1). Runtime-only for the program itself (rows are
+    // runtime args); the effective row count feeds the derived split config, whose hashed fields
+    // already capture any structural difference.
+    std::optional<uint32_t> row_start{};
+    std::optional<uint32_t> row_count{};
+    // Sequential tie-breaking: equal values return their indices in ascending
+    // global-index order (the stable=True contract of ttnn.topk). Selects the
+    // TOPK_XL_STABLE_TIES kernel compile, so it is part of the program hash.
+    bool stable{false};
 };
 
 struct tensor_args_t {

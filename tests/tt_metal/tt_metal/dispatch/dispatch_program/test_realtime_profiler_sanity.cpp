@@ -437,6 +437,7 @@ TEST(RealtimeProfilerSanity, DeviceIntervalsProveOverlapAndSerialization) {
     }
     const std::array cores{CoreCoord{0, 0}, CoreCoord{1, 0}};
     std::vector<SubDevice> sub_devices;
+    sub_devices.reserve(cores.size());
     for (const auto& core : cores) {
         sub_devices.emplace_back(std::array{CoreRangeSet(CoreRange(core, core))});
     }
@@ -618,6 +619,7 @@ TEST(RealtimeProfilerSanity, QualificationHookMeasuresObserverDeviceCycles) {
         CoreCoord{6, 0},
         CoreCoord{7, 0}};
     std::vector<SubDevice> sub_devices;
+    sub_devices.reserve(cores.size());
     for (const auto& core : cores) {
         sub_devices.emplace_back(std::array{CoreRangeSet(CoreRange(core, core))});
     }
@@ -715,6 +717,7 @@ TEST(RealtimeProfilerSanity, ExactWatermarkCollectsEverySelectedStream) {
     }
     const std::array cores{CoreCoord{0, 0}, CoreCoord{1, 0}, CoreCoord{2, 0}};
     std::vector<SubDevice> sub_devices;
+    sub_devices.reserve(cores.size());
     for (const auto& core : cores) {
         sub_devices.emplace_back(std::array{CoreRangeSet(CoreRange(core, core))});
     }

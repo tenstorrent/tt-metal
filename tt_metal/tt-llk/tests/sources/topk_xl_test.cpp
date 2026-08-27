@@ -60,24 +60,27 @@ std::uint32_t math_sync_tile_dst_index = 0;
 constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_C_DIM;
 constexpr std::uint32_t TILES_PER_SEQ     = (TOPK_XL_K + ELEMENTS_PER_TILE - 1) / ELEMENTS_PER_TILE;
 constexpr std::uint32_t SLOT0             = 0;
-constexpr bool APPROX                     = false; // The wrappers take this param but never use it.
 
 constexpr bool INDEX_OP_ROW_MAJOR  = (TOPK_XL_INDEX_OP == 0);
 constexpr bool INDEX_OP_SEPARATE   = (TOPK_XL_INDEX_OP == 1);
 constexpr bool INDEX_OP_REMOVE_MSB = (TOPK_XL_INDEX_OP == 2);
 
 constexpr bool FUSED_REDUCE = TOPK_XL_FUSED_REDUCE;
+// Fused END-TO-END (the topk_large_indices wide-row family): runtime chunk-id
+// stamp in index bits [15:11], fused merge/rebuild, one row-major GLOBAL split
+// at the end (plain, or with a segment base for segmented fusion).
+constexpr bool FUSED_E2E = TOPK_XL_FUSED_E2E;
 
 // Second merge operand. `_topk_xl_merge_` reads it at a fixed distance from the
 // first: 64 dest units (one tile) per sequence-tile when fused, 128 (value +
 // index region) when unfused, so the slot stride follows the mode.
-constexpr std::uint32_t SLOT1 = FUSED_REDUCE ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
+constexpr std::uint32_t SLOT1 = (FUSED_REDUCE || FUSED_E2E) ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
 
 // A lone chunk has nothing to merge with, but the row-major path still rebuilds it;
 // the fused path merges/rebuilds only when there is a second operand.
 // Both TRISCs use this: MATH issues the rebuild, UNPACK the SrcB dummy valid feeding it.
 // Fused variants leave TOPK_XL_INDEX_OP at its 0 default and ignore it, hence the !FUSED_REDUCE.
-constexpr bool REBUILD_LONE_CHUNK = !FUSED_REDUCE && INDEX_OP_ROW_MAJOR && TOPK_XL_NUM_CHUNKS == 1;
+constexpr bool REBUILD_LONE_CHUNK = !FUSED_REDUCE && !FUSED_E2E && INDEX_OP_ROW_MAJOR && TOPK_XL_NUM_CHUNKS == 1;
 
 constexpr std::uint32_t CHUNK_BASE_HI16 = (TOPK_XL_CHUNK_BASE >> 16) & 0xFFFF;
 constexpr std::uint32_t CHUNK_BASE_LO16 = TOPK_XL_CHUNK_BASE & 0xFFFF;
@@ -183,19 +186,19 @@ inline void topk_xl_init()
 template <std::uint32_t K>
 inline void topk_xl_local_sort(std::uint32_t dst_index, bool ascending)
 {
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_local_sort_<K, APPROX>, dst_index, VectorMode::RC_custom, dst_index, ascending);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_local_sort_<K>, dst_index, VectorMode::RC_custom, dst_index, ascending);
 }
 
 template <std::uint32_t K, bool fused>
 inline void topk_xl_merge(std::uint32_t dst_index)
 {
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_merge_<K, APPROX, fused>, dst_index, VectorMode::RC_custom, dst_index);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_merge_<K, fused>, dst_index, VectorMode::RC_custom, dst_index);
 }
 
 template <std::uint32_t K, bool fused>
 inline void topk_xl_rebuild(std::uint32_t dst_index, bool ascending)
 {
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_rebuild_<K, APPROX, fused>, dst_index, VectorMode::RC_custom, dst_index, ascending);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_rebuild_<K, fused>, dst_index, VectorMode::RC_custom, dst_index, ascending);
 }
 
 inline void topk_xl_add_lsb_indices_init()
@@ -208,7 +211,7 @@ template <std::uint32_t K, std::uint32_t core_id>
 inline void topk_xl_add_lsb_indices(std::uint32_t dst_index)
 {
     static_assert(core_id < 32, "core_id occupies index bits [15:11]");
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_add_lsb_indices_<K, APPROX, core_id>, dst_index, VectorMode::RC_custom);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_add_lsb_indices_<K, core_id>, dst_index, VectorMode::RC_custom);
 }
 
 // --- Row-major index split (topk_large_indices op path) ---
@@ -244,7 +247,7 @@ inline void topk_xl_separate_indices_row_major_reinit()
 template <std::uint32_t K>
 inline void topk_xl_separate_indices_row_major(std::uint32_t dst_index)
 {
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_separate_indices_row_major_<K, APPROX>, dst_index, VectorMode::RC_custom);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_separate_indices_row_major_<K>, dst_index, VectorMode::RC_custom);
 }
 
 template <std::uint32_t K>
@@ -264,7 +267,7 @@ inline void topk_xl_separate_indices_init(std::uint32_t group_id_bit_shift)
 template <std::uint32_t K, std::uint32_t group_id>
 inline void topk_xl_separate_indices(std::uint32_t dst_index)
 {
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_separate_indices_<K, APPROX, group_id>, dst_index, VectorMode::RC_custom);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_separate_indices_<K, group_id>, dst_index, VectorMode::RC_custom);
 }
 
 // Shared core: copy the chunk into `slot`, stamp indices, fused local-sort.
@@ -283,6 +286,41 @@ __attribute__((noinline)) void copy_sort(std::uint32_t slot, std::uint32_t activ
 
     topk_xl_init<K, true>();
     topk_xl_local_sort<K>(slot, ascending);
+}
+
+// Fused-e2e variant of copy_sort: the chunk id is stamped at RUNTIME into
+// index bits [15:11] (the topk_large_indices compute kernels' path).
+template <std::uint32_t K>
+__attribute__((noinline)) void copy_sort_rt(std::uint32_t slot, std::uint32_t active_elements, bool ascending, std::uint32_t chunk_id, std::uint32_t dst_format)
+{
+    ckernel::_llk_math_topk_xl_copy_init_(dst_format);
+    for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+    {
+        ckernel::_llk_math_topk_xl_copy_(slot + t, dst_format, tile_active_elements(active_elements, t));
+    }
+
+    topk_xl_add_lsb_indices_init();
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_add_lsb_indices_rt_<K>, slot, VectorMode::RC_custom, chunk_id);
+
+    topk_xl_init<K, true>();
+    topk_xl_local_sort<K>(slot, ascending);
+}
+
+inline void topk_xl_separate_indices_row_major_global_init()
+{
+    ckernel::sfpu::_topk_xl_separate_indices_row_major_global_init_();
+}
+
+template <std::uint32_t K>
+inline void topk_xl_separate_indices_row_major_global(std::uint32_t dst_index)
+{
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_separate_indices_row_major_global_<K>, dst_index, VectorMode::RC_custom);
+}
+
+template <std::uint32_t K>
+inline void topk_xl_separate_indices_row_major_global_base(std::uint32_t dst_index, std::uint32_t seg_base)
+{
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_separate_indices_row_major_global_base_<K>, dst_index, VectorMode::RC_custom, seg_base);
 }
 
 // Row-major process_chunk: copy_sort then split into unfused values + row-major
@@ -344,7 +382,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_wait_for_dest_available_<dest_sync>();
 
-        if constexpr (FUSED_REDUCE)
+        if constexpr (FUSED_E2E)
+        {
+            // Fused end-to-end: runtime chunk-id stamps, fused merge/rebuild,
+            // then ONE global split -- plain or with a segment base.
+            copy_sort_rt<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* ascending */, 0, math_format);
+            for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
+            {
+                copy_sort_rt<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, c, math_format);
+                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */);
+            }
+            topk_xl_separate_indices_row_major_global_init();
+            if constexpr (TOPK_XL_SEG_BASE != 0)
+            {
+                topk_xl_separate_indices_row_major_global_base<TOPK_XL_K>(SLOT0, TOPK_XL_SEG_BASE);
+            }
+            else
+            {
+                topk_xl_separate_indices_row_major_global<TOPK_XL_K>(SLOT0);
+            }
+        }
+        else if constexpr (FUSED_REDUCE)
         {
             // Fused reduction: chunks stay in the fused [value|index] form all the
             // way through merge/rebuild, and the index split happens once at the end.

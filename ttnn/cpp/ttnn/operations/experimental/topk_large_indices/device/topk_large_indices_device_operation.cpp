@@ -4,10 +4,13 @@
 
 #include "topk_large_indices_device_operation.hpp"
 
+#include <algorithm>
+
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
-#include <algorithm>
 #include <limits>
 
 namespace ttnn::operations::experimental::topk_large_indices {
@@ -87,11 +90,32 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
     if (attrs.valid_length.has_value()) {
         const uint32_t valid_length = attrs.valid_length.value();
         TT_FATAL(valid_length > 0, "topk_large_indices valid_length must be > 0");
+        // valid_length < k is supported by design — lanes beyond the prefix's
+        // capacity emit the 0xFFFFFFFF sentinel index; the documented and
+        // tested domain is (0, last dimension].
         TT_FATAL(
             valid_length <= n,
             "topk_large_indices valid_length {} must be <= the input last dimension {}",
             valid_length,
             n);
+    }
+
+    // Composite-internal row window: must map onto the canonical rows dimension (all leading dims 1)
+    // and stay in bounds. Both fields travel together.
+    TT_FATAL(
+        attrs.row_start.has_value() == attrs.row_count.has_value(),
+        "topk_large_indices row_start and row_count must be set together");
+    if (attrs.row_count.has_value()) {
+        TT_FATAL(
+            shape.rank() >= 2 && num_rows == shape[shape.rank() - 2],
+            "topk_large_indices row windows require the canonical [1.., R, W] shape (leading dims 1)");
+        const uint64_t row_end = static_cast<uint64_t>(*attrs.row_start) + *attrs.row_count;
+        TT_FATAL(
+            *attrs.row_count > 0 && row_end <= num_rows,
+            "topk_large_indices row window [{}, {}) out of bounds for {} rows",
+            *attrs.row_start,
+            row_end,
+            num_rows);
     }
 }
 
@@ -108,16 +132,88 @@ void TopkLargeIndicesDeviceOperation::validate_on_program_cache_miss(
     validate_runtime_args(attrs, tensor_args);
 }
 
+namespace {
+
+program::ColumnSplitConfig column_split_config_for(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input_tensor;
+    const auto& shape = input.logical_shape();
+    const uint32_t n = shape[shape.rank() - 1];
+    const uint32_t num_rows = attrs.row_count.value_or(flattened_rows_excluding_last_dim(shape));
+    // The multi-engine paths need a dense rectangle (tree placement and the
+    // cost model's a x b search): a non-rectangular resolved set (an
+    // enumerated subdevice profile) keeps the row-parallel engine over the
+    // enumerated cores -- the pre-engine behavior, still correct at any set.
+    const auto rect = program::topk_li_worker_rect(attrs.resolved_worker_core_grid);
+    if (!rect.has_value()) {
+        return program::ColumnSplitConfig{};
+    }
+    const CoreCoord grid(rect->end_coord.x - rect->start_coord.x + 1, rect->end_coord.y - rect->start_coord.y + 1);
+    // The cost model may auto-select the multi-row rectangle engine when it
+    // models a win: 2*ceil(chunks/P) + ceil(log2 P) beating the row-parallel
+    // 2*chunks by the extra multi-row margin (measured routed 477 -> 330 us
+    // at 32x65536 k=2048). Engine selection changes only WHICH of the tied
+    // bf16 values win — tie identity is the documented non-stable contract;
+    // the selected value multiset is engine-invariant. The program hash
+    // carries the derived split-config fields, so an engine change
+    // recompiles — bounded, because the model quantizes P to a handful of
+    // choices per (k, width, rows, grid) and fixed-shape callers compile
+    // once. Explicit (internal) num_slices still bypasses the model and pins
+    // P directly (the hybrid wrapper's remainder window).
+    return program::compute_column_split_config(
+        attrs.k, n, num_rows, grid, attrs.num_slices, /*allow_multi_row=*/true);
+}
+
+}  // namespace
+
+TopkLargeIndicesDeviceOperation::program_factory_t TopkLargeIndicesDeviceOperation::select_program_factory(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    if (column_split_config_for(attrs, tensor_args).enabled) {
+        return program::TopkLargeIndicesMultiCoreProgramFactory{};
+    }
+    return program::TopkLargeIndicesProgramFactory{};
+}
+
 ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
+    // Factory selection (and, on the column-parallel path, the program
+    // structure) depends on the derived split config, so its fields must be
+    // hashed. On the row-parallel path the config is all zeros, preserving the
+    // original shape-free hash: row counts and row widths keep patching
+    // through runtime args without recompiles.
+    const auto split_config = column_split_config_for(attrs, tensor_args);
+
     return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
         attrs.k,
-        attrs.resolved_worker_core_grid,
+        // Internal P override: also reflected in the derived split_config fields
+        // below, but hashed directly so intent and derivation can never skew.
+        attrs.num_slices,
+        // Sequential-ties mode compiles different kernels (TOPK_XL_STABLE_TIES).
+        attrs.stable,
         input.dtype(),
         input.layout(),
         input.memory_config().memory_layout(),
-        input.memory_config().buffer_type());
+        input.memory_config().buffer_type(),
+        // The caller-selected structural core set: placement is program
+        // structure (kernel/CB/semaphore core sets), so distinct resolved
+        // grids -- including the same rectangle at a different origin --
+        // compile distinct programs.
+        attrs.resolved_worker_core_grid,
+        split_config.enabled,
+        split_config.num_slices,
+        split_config.local_grid_x,
+        split_config.local_grid_y,
+        // Rectangle count is program structure (kernel core placement); row
+        // distribution within a fixed rectangle layout stays runtime-only.
+        split_config.num_rects,
+        // Compute-body mode, single-sourced with the factory's kernel-define
+        // selection (see compute_body_mode). For k >= 1024 the mode is
+        // width-independent (one segmented codepath at every width), so the
+        // hash carries NO width term there -- growing-prefill callers never
+        // recompile crossing the old 65536 fused boundary. For smaller k the
+        // mode still folds in the <= 32-chunk fused bit, the only width term.
+        static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1])));
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(
@@ -129,10 +225,15 @@ spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(
         output_shape_vec.push_back(input_shape[i]);
     }
     output_shape_vec.back() = attrs.k;
+    if (attrs.row_count.has_value()) {
+        // Row-window launch: the output carries only the window's rows.
+        output_shape_vec[output_shape_vec.size() - 2] = *attrs.row_count;
+    }
+    const ttnn::Shape output_shape(std::move(output_shape_vec));
 
     const auto memory_config = tensor_args.input_tensor.memory_config();
     return tt::tt_metal::TensorSpec(
-        ttnn::Shape(std::move(output_shape_vec)),
+        output_shape,
         tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config));
 }
 
@@ -147,7 +248,11 @@ TopkLargeIndicesDeviceOperation::invoke(
     uint32_t k,
     std::optional<uint32_t> valid_length,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    std::optional<uint32_t> num_slices,
+    std::optional<uint32_t> row_start,
+    std::optional<uint32_t> row_count,
+    bool stable) {
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "topk_large_indices input must be on device");
     auto* device = input_tensor.device();
     TT_FATAL(device != nullptr, "topk_large_indices input must have a device");
@@ -181,7 +286,11 @@ TopkLargeIndicesDeviceOperation::invoke(
             .sub_core_grid = sub_core_grid,
             .subdevice_manager_id = subdevice_manager_id,
             .resolved_worker_core_grid = resolved_worker_core_grid,
-            .valid_length = valid_length},
+            .valid_length = valid_length,
+            .num_slices = num_slices,
+            .row_start = row_start,
+            .row_count = row_count,
+            .stable = stable},
         tensor_args_t{.input_tensor = input_tensor}};
 }
 
@@ -189,18 +298,127 @@ TopkLargeIndicesDeviceOperation::invoke(
 
 namespace ttnn::experimental {
 
+namespace {
+
+// Hybrid row split: for canonical multi-row calls whose rows exceed the worker
+// grid (>= 2 row-parallel waves), peel the partially-filled last wave off into
+// a concurrent multi-rectangle launch — the row-parallel full waves keep every
+// core busy, and the remainder rows run column-parallel trees on the cores the
+// last wave would have left idle. Two launches over one un-sliced input (the
+// device op's internal row window), then a cheap [rows, k] concat. Returns
+// (full-wave rows, remainder rows, remainder P), or nullopt when the plain
+// single launch is already the right program.
+struct HybridSplit {
+    uint32_t full_wave_rows;
+    uint32_t remainder_rows;
+    uint32_t remainder_slices;
+};
+std::optional<HybridSplit> hybrid_row_split(
+    const Tensor& input,
+    uint32_t k,
+    std::optional<uint32_t> num_slices,
+    std::optional<uint32_t> valid_length,
+    const CoreRangeSet& resolved_worker_core_grid) {
+    if (num_slices.has_value()) {
+        // An internal caller already chose an explicit P: keep its single launch.
+        return std::nullopt;
+    }
+    if (input.storage_type() != StorageType::DEVICE || input.device() == nullptr) {
+        return std::nullopt;
+    }
+    const auto& shape = input.logical_shape();
+    if (shape.rank() < 2) {
+        return std::nullopt;
+    }
+    const uint32_t rows = operations::experimental::topk_large_indices::flattened_rows_excluding_last_dim(shape);
+    if (rows == 0 || rows != shape[shape.rank() - 2]) {
+        return std::nullopt;  // the row window needs the canonical [1.., R, W] shape
+    }
+    // The remainder window runs column-parallel trees, so the split needs a
+    // rectangular worker set; non-rectangular resolved sets keep the single
+    // row-parallel launch over the enumerated cores.
+    const auto rect =
+        operations::experimental::topk_large_indices::program::topk_li_worker_rect(resolved_worker_core_grid);
+    if (!rect.has_value()) {
+        return std::nullopt;
+    }
+    const CoreCoord grid(rect->end_coord.x - rect->start_coord.x + 1, rect->end_coord.y - rect->start_coord.y + 1);
+    const uint32_t cores = static_cast<uint32_t>(grid.x) * static_cast<uint32_t>(grid.y);
+    if (cores == 0 || rows <= cores) {
+        return std::nullopt;  // single row-parallel wave (or the model's own rect pick) already optimal
+    }
+    const uint32_t waves = tt::div_up(rows, cores);
+    const uint32_t r1 = cores * (waves - 1);
+    const uint32_t r2 = rows - r1;
+    // Split only when the remainder genuinely takes (and wins on) the
+    // column-parallel path; a one-row remainder intentionally uses the
+    // supported single-rectangle tree.
+    // Model on the SEARCHED width (valid_length when set), not the buffer's
+    // logical width: preallocated-buffer callers (the DSA indexer grows
+    // valid_length across prefill inside a fixed 1M buffer) otherwise get a
+    // rect window sized for chunks that never run -- measured 2204us for a
+    // 30-row remainder vs 1424us for a FULL 130-row wave at buf=1M/valid=512k,
+    // turning the hybrid into a net loss. The chosen num_slices is an op attr
+    // (hashed), so distinct valid regimes compile distinct remainder programs;
+    // the cost model quantizes P to a handful of values, so cache growth is
+    // bounded.
+    const uint32_t n = shape[shape.rank() - 1];
+    const uint32_t searched = std::min(valid_length.value_or(n), n);
+    // Model on the searched width. `compute_slice_runtime` distributes valid
+    // chunks evenly over the selected slices at launch time, so a short valid
+    // prefix does not strand trailing slices. The model still uses `searched`
+    // here so cfg.num_slices reflects the work actually performed rather than
+    // the physical buffer width.
+    const auto cfg = operations::experimental::topk_large_indices::program::compute_column_split_config(
+        k, searched, r2, grid, std::nullopt, /*allow_multi_row=*/true);
+    if (!cfg.enabled) {
+        return std::nullopt;
+    }
+    // The remainder launch passes cfg.num_slices explicitly to pin the P
+    // modeled on the SEARCHED width above: the device op's own auto model
+    // (column_split_config_for) runs on the physical width and could pick a
+    // different split (or none) for the remainder window.
+    return HybridSplit{r1, r2, cfg.num_slices};
+}
+
+}  // namespace
+
 Tensor topk_large_indices(
     const Tensor& input_tensor,
     uint32_t k,
     std::optional<uint32_t> valid_length,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
-    auto [operation_attributes, tensor_args] =
-        operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(
-            input_tensor, k, valid_length, subdevice_id, sub_core_grid);
-    return ttnn::device_operation::launch<
-        operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation>(
-        operation_attributes, tensor_args);
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    bool stable) {
+    using Op = operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation;
+    auto [operation_attributes, tensor_args] = Op::invoke(
+        input_tensor, k, valid_length, subdevice_id, sub_core_grid, std::nullopt, std::nullopt, std::nullopt, stable);
+    // The hybrid split is a composite (two topk launches + a concat). The
+    // concat carries no core selection, so under a caller core restriction or
+    // a non-default subdevice manager it would land on cores the caller is
+    // fencing off (and trip the kernel-group/subdevice containment check).
+    // Restricted callers get the single-launch engines only.
+    const bool core_restricted = subdevice_id.has_value() || sub_core_grid.has_value() ||
+                                 input_tensor.device()->get_active_sub_device_manager_id() !=
+                                     input_tensor.device()->get_default_sub_device_manager_id();
+    if (const auto split =
+            core_restricted
+                ? std::optional<HybridSplit>{}
+                : hybrid_row_split(
+                      input_tensor, k, std::nullopt, valid_length, operation_attributes.resolved_worker_core_grid)) {
+        // Both hybrid dispatches carry the same core selection: the full waves
+        // and the remainder window each stay inside the resolved grid.
+        auto run = [&](uint32_t start, uint32_t count, std::optional<uint32_t> window_slices) {
+            auto [attrs, args] = Op::invoke(
+                input_tensor, k, valid_length, subdevice_id, sub_core_grid, window_slices, start, count, stable);
+            return ttnn::device_operation::launch<Op>(attrs, args);
+        };
+        Tensor full_waves = run(0, split->full_wave_rows, std::nullopt);
+        Tensor remainder = run(split->full_wave_rows, split->remainder_rows, split->remainder_slices);
+        const int rows_dim = static_cast<int>(input_tensor.logical_shape().rank()) - 2;
+        return ttnn::concat(std::vector<Tensor>{full_waves, remainder}, rows_dim);
+    }
+    return ttnn::device_operation::launch<Op>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::experimental
