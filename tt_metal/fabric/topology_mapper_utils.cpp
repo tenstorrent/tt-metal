@@ -836,8 +836,7 @@ std::map<MeshId, MeshPhysicalLayout> mesh_physical_layouts_from_psd_placements(
 // -----------------------------------------------------------------------------
 // Shared round-robin mesh-packing machinery used by both
 // build_physical_multi_mesh_adjacency_graph overloads (single-MGD and
-// multi-MGD). MeshEnumState, the bitmask helpers, and DisjointPackingSearch
-// below were previously duplicated verbatim inside each overload.
+// multi-MGD).
 //
 // MeshEnumState bundles everything needed to drive one shape's solver and
 // remember what it has found so far:
