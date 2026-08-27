@@ -44,6 +44,10 @@ struct AvgPoolConfig {
 struct FactoryParameters {
     uint32_t multi_buffering_factor{};
     bool split_reader{};
+    // SPMD compute threads (Tensix engines) per cluster. Consumed only by the Gen2/Quasar pool
+    // factory (scratch CB slot count + compute KernelSpec num_threads); Gen1 (WH/BH) kernel
+    // specs must keep num_threads = 1.
+    uint32_t num_threads_per_cluster{1};
     uint32_t nbytes{};
     uint32_t index_nbytes{};
     tt::DataFormat data_format{};

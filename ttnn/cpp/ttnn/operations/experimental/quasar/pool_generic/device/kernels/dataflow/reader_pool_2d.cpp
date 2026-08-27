@@ -213,6 +213,7 @@ void kernel_main() {
     constexpr uint32_t reader_id = get_arg(args::reader_id);
 
     constexpr uint32_t bf16_scalar = get_arg(args::bf16_scalar);
+    constexpr uint32_t num_compute_threads = get_arg(args::num_compute_threads);
     constexpr uint32_t bf16_init_value = get_arg(args::bf16_init_value);
 
     constexpr uint32_t in_nblocks_c = get_arg(args::in_nblocks_c);
@@ -351,18 +352,24 @@ void kernel_main() {
 
     // initialize the scalar CB
     if constexpr (reader_id == 0 && one_scalar_per_core) {
-        // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
-        // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
-        // between the first and second face.
-        fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
+        // One scalar copy per compute thread: the scalar DFB should be an ALL (broadcast) consumer, but
+        // the runtime under-allocates ALL-consumer tile counters when consumer threads > producer
+        // threads (issue #54505), so push a per-thread copy through the default STRIDED deal instead.
+        for (uint32_t t = 0; t < num_compute_threads; ++t) {
+            // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the
+            // values for the remaining faces will be reused from the first one. This is safe here because there’s no
+            // difference between the first and second face.
+            fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
 #ifdef ARCH_QUASAR
-        // Quasar sim coherency: the reduce scalar is a CPU-store fill through the DM L1/L2 cache, but the
-        // compute reduce reads it directly from TL1. Without write-back compute multiplies by a STALE scalar
-        // -> wrong reduce magnitude (the /TILE_HEIGHT scale on the const-channel test) and, if the stale value
-        // varies per reduce, decorrelated output (low PCC). Mirrors the in_cb / scratch->out write-backs.
-        flush_l2_cache_range(static_cast<uintptr_t>(in_scalar_cb.get_write_ptr()), static_cast<size_t>(FACE_WIDTH) * 2);
+            // Quasar sim coherency: the reduce scalar is a CPU-store fill through the DM L1/L2 cache, but the
+            // compute reduce reads it directly from TL1. Without write-back compute multiplies by a STALE scalar
+            // -> wrong reduce magnitude (the /TILE_HEIGHT scale on the const-channel test) and, if the stale value
+            // varies per reduce, decorrelated output (low PCC). Mirrors the in_cb / scratch->out write-backs.
+            flush_l2_cache_range(
+                static_cast<uintptr_t>(in_scalar_cb.get_write_ptr()), static_cast<size_t>(FACE_WIDTH) * 2);
 #endif
-        in_scalar_cb.push_back(1);
+            in_scalar_cb.push_back(1);
+        }
     }
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
 
@@ -505,7 +512,7 @@ void kernel_main() {
             // ROW_MAJOR path's broken narrow pack, so it must be skipped here -- otherwise this wait_front
             // blocks forever on a push that will never come (the actual bug behind this fix).
 #ifndef OUTPUT_TILED
-            scratch_cb.wait_front(scratch_npages);
+            scratch_cb.wait_front(1);
             {
                 const uint32_t global_stick =
                     use_split_reader ? (2u * out_stick_counter + reader_id) : out_stick_counter;
@@ -555,7 +562,7 @@ void kernel_main() {
                     }
                 }
             }
-            scratch_cb.pop_front(scratch_npages);
+            scratch_cb.pop_front(1);
 #endif  // !OUTPUT_TILED
             out_stick_counter++;
             if (use_split_reader && ind == end) {

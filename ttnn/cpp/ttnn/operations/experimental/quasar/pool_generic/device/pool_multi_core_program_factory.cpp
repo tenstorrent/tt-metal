@@ -842,12 +842,12 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // [DEBUG scratch 32x32] FULL-TILE pack target: face geometry {face_r_dim=16, num_faces=4} so the
         // pack reads DEST as a full 32x32 tile (not the narrow face_r_dim=1 pool output). Sized for one full
         // 32-row write: output_shard_width * out_nbytes * TILE_HEIGHT (page = FACE_WIDTH*nbytes face unit).
-        const uint32_t scratch_npages =
-            (output_shard_shape[1] / tt::constants::FACE_WIDTH) * tt::constants::TILE_HEIGHT;
+        const uint32_t scratch_npages = params.num_threads_per_cluster;
+        const uint32_t scratch_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
         const auto scratch_full_face = FaceGeometry{.face_r_dim = tt::constants::FACE_HEIGHT, .num_faces = 4};
         dfbs.push_back(local_dfb(
             DFB_SCRATCH_0,
-            cb_sizes.out_cb_pagesize,
+            scratch_pagesize,
             scratch_npages,
             params.output_data_format,
             std::optional{scratch_full_face},
@@ -856,7 +856,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         if (cb_sizes.has_split_reader) {
             dfbs.push_back(local_dfb(
                 DFB_SCRATCH_1,
-                cb_sizes.out_cb_pagesize,
+                scratch_pagesize,
                 scratch_npages,
                 params.output_data_format,
                 std::optional{scratch_full_face},
@@ -904,6 +904,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         {"in_c", in_c_per_shard_ceil},
         {"split_reader", params.split_reader},
         {"reader_id", 0u},
+        {"num_compute_threads", params.num_threads_per_cluster},
         {"bf16_scalar", bf16_scalar},
         {"bf16_init_value", bf16_init_value},
         {"in_nblocks_c", in_nblocks_c},
@@ -1232,21 +1233,32 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     }
 
     Group<DFBBinding> compute_bindings;
-    compute_bindings.push_back(
-        DFBBinding{.dfb_spec_name = DFB_IN_0, .accessor_name = "in_cb_0", .endpoint_type = DFBEndpointType::CONSUMER});
+    compute_bindings.push_back(DFBBinding{
+        .dfb_spec_name = DFB_IN_0,
+        .accessor_name = "in_cb_0",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .access_pattern = DFBAccessPattern::STRIDED});
     compute_bindings.push_back(DFBBinding{
         .dfb_spec_name = DFB_IN_SCALAR_0,
         .accessor_name = "in_scalar_cb_0",
-        .endpoint_type = DFBEndpointType::CONSUMER});
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        // Should be ALL (broadcast scalar), but ALL under-allocates consumer tile counters when
+        // consumer threads > producer threads (issue #54505); reader pushes one copy per thread instead.
+        .access_pattern = DFBAccessPattern::STRIDED});
     // pool2d split-reader compute consumes the second input + scalar streams (both DFBs exist
     // whenever has_second_input_cb; the kernel references them under #ifdef SPLIT_READER).
     if (has_second_input_cb) {
         compute_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFB_IN_1, .accessor_name = "in_cb_1", .endpoint_type = DFBEndpointType::CONSUMER});
+            .dfb_spec_name = DFB_IN_1,
+            .accessor_name = "in_cb_1",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_IN_SCALAR_1,
             .accessor_name = "in_scalar_cb_1",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            // Should be ALL — same workaround as in_scalar_cb_0 above (issue #54505).
+            .access_pattern = DFBAccessPattern::STRIDED});
     }
     if (!return_indices) {
         // pool2d: compute produces output directly into the borrowed output DFB.  The
@@ -1256,82 +1268,106 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // check (mirrors the mpwi writer-face self-loop on DFB_OUT); no kernel-side
         // pop is needed since the data is the final resident output.
         compute_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::PRODUCER});
+            .dfb_spec_name = DFB_OUT,
+            .accessor_name = "out_cb",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         compute_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::CONSUMER});
+            .dfb_spec_name = DFB_OUT,
+            .accessor_name = "out_cb",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         // [DEBUG scratch->DM] compute is PRODUCER of the per-reader scratch CB(s); the matching DM reader
         // is the CONSUMER (see make_reader_bindings), so it can wait_front + DPRINT the packed L1.
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_SCRATCH_0,
             .accessor_name = "scratch_cb_0",
-            .endpoint_type = DFBEndpointType::PRODUCER});
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         if (cb_sizes.has_split_reader) {
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_SCRATCH_1,
                 .accessor_name = "scratch_cb_1",
-                .endpoint_type = DFBEndpointType::PRODUCER});
+                .endpoint_type = DFBEndpointType::PRODUCER,
+                .access_pattern = DFBAccessPattern::STRIDED});
         }
         if (cb_sizes.has_pre_tilize) {
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_PRE_TILIZE,
                 .accessor_name = "pre_tilize_cb",
-                .endpoint_type = DFBEndpointType::PRODUCER});
+                .endpoint_type = DFBEndpointType::PRODUCER,
+                .access_pattern = DFBAccessPattern::STRIDED});
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_PRE_TILIZE,
                 .accessor_name = "pre_tilize_cb",
-                .endpoint_type = DFBEndpointType::CONSUMER});
+                .endpoint_type = DFBEndpointType::CONSUMER,
+                .access_pattern = DFBAccessPattern::STRIDED});
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_FAST_TILIZE,
                 .accessor_name = "fast_tilize_cb",
-                .endpoint_type = DFBEndpointType::PRODUCER});
+                .endpoint_type = DFBEndpointType::PRODUCER,
+                .access_pattern = DFBAccessPattern::STRIDED});
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_FAST_TILIZE,
                 .accessor_name = "fast_tilize_cb",
-                .endpoint_type = DFBEndpointType::CONSUMER});
+                .endpoint_type = DFBEndpointType::CONSUMER,
+                .access_pattern = DFBAccessPattern::STRIDED});
         }
     } else {
         // mpwi: compute consumes index/inc CBs (reader-produced), produces pack tmps + self-loops scratch idx.
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_CLEAR_VALUE,
             .accessor_name = "clear_value_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::ALL});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_IN_IDX, .accessor_name = "in_idx_cb", .endpoint_type = DFBEndpointType::CONSUMER});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_RIGHT_INC,
             .accessor_name = "right_inc_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::ALL});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_DOWN_LEFT,
             .accessor_name = "down_left_wrap_inc_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::ALL});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_UP_LEFT,
             .accessor_name = "up_left_wrap_inc_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::ALL});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_INTRA_RIGHT,
             .accessor_name = "intra_kernel_right_inc_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::ALL});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_INTRA_DOWN_LEFT,
             .accessor_name = "intra_kernel_down_left_wrap_inc_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::ALL});
         compute_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFB_PACK_TMP, .accessor_name = "pack_tmp_cb", .endpoint_type = DFBEndpointType::PRODUCER});
+            .dfb_spec_name = DFB_PACK_TMP,
+            .accessor_name = "pack_tmp_cb",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_PACK_IDX_TMP,
             .accessor_name = "pack_idx_tmp_cb",
-            .endpoint_type = DFBEndpointType::PRODUCER});
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         // compute_tmp_idx: self-loop accumulator on compute.
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_COMPUTE_TMP_IDX,
             .accessor_name = "compute_tmp_idx_cb",
-            .endpoint_type = DFBEndpointType::PRODUCER});
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .access_pattern = DFBAccessPattern::STRIDED});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_COMPUTE_TMP_IDX,
             .accessor_name = "compute_tmp_idx_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::STRIDED});
     }
 
     // Compute defines (REDUCE_OP / REDUCE_DIM, etc.) plus the conditional-binding gates the
@@ -1369,6 +1405,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,
         .source = std::filesystem::path{return_indices ? COMPUTE_MPWI_PATH : COMPUTE_POOL_PATH},
+        .num_threads = params.num_threads_per_cluster,
         .dfb_bindings = std::move(compute_bindings),
         .compile_time_args = compute_cta,
         .runtime_arg_schema = {.runtime_arg_names = compute_rta_names},
