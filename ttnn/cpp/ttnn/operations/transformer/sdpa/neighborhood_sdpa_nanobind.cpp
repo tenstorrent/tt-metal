@@ -13,7 +13,7 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_contract.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
 #include "ttnn/operations/transformer/sdpa/device/neighborhood_sdpa_device_operation.hpp"
 
 namespace ttnn::operations::transformer {
@@ -21,7 +21,7 @@ namespace ttnn::operations::transformer {
 namespace {
 
 namespace neighborhood = ttnn::transformer::neighborhood;
-namespace contract = ttnn::transformer::neighborhood::kernel_contract;
+namespace kernel_args = ttnn::transformer::neighborhood::kernel_args;
 
 using AxisTuple = std::array<uint32_t, 3>;
 // Signed, because a halo at the low edge of the volume puts a shard at a negative origin.
@@ -102,13 +102,13 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
 
             // Flattened gather origin table, GATHER_ORIGIN_COLUMNS wide so each chunk's entry is
             // one DRAM-aligned page. Columns carry this chunk's gather origin (local sites) and
-            // this device's shard origin (global sites) -- see contract::gather_origin_column.
+            // this device's shard origin (global sites) -- see kernel_args::gather_origin_column.
             std::vector<uint32_t> gather_origin_table(
-                static_cast<size_t>(plan.chunk_count) * contract::GATHER_ORIGIN_COLUMNS, 0u);
+                static_cast<size_t>(plan.chunk_count) * kernel_args::GATHER_ORIGIN_COLUMNS, 0u);
             for (uint32_t chunk_index = 0; chunk_index < plan.chunk_count; ++chunk_index) {
                 const neighborhood::Site& origin = plan.gather_origin_by_chunk[chunk_index];
-                const size_t row = static_cast<size_t>(chunk_index) * contract::GATHER_ORIGIN_COLUMNS;
-                namespace column = contract::gather_origin_column;
+                const size_t row = static_cast<size_t>(chunk_index) * kernel_args::GATHER_ORIGIN_COLUMNS;
+                namespace column = kernel_args::gather_origin_column;
                 gather_origin_table[row + column::gather_time] = origin.time();
                 gather_origin_table[row + column::gather_height] = origin.height();
                 gather_origin_table[row + column::gather_width] = origin.width();
@@ -143,7 +143,7 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
                 AxisTuple{plan.gather_bricks.time(), plan.gather_bricks.height(), plan.gather_bricks.width()};
             result["gather_brick_count"] = plan.gather_brick_count;
             result["gather_origin_table"] = gather_origin_table;
-            result["gather_origin_columns"] = contract::GATHER_ORIGIN_COLUMNS;
+            result["gather_origin_columns"] = kernel_args::GATHER_ORIGIN_COLUMNS;
             return result;
         },
         nb::arg("volume"),

@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "neighborhood_kernel_contract.hpp"
+#include "neighborhood_kernel_args.hpp"
 
 // How a query CHUNK maps onto bricks, shared by the reader and the writer so they cannot
 // disagree about which tile row is which query.
@@ -27,7 +27,7 @@ struct BrickCoordinate {
 };
 
 // Row-major decode shared by both levels: chunks within the volume, bricks within a chunk.
-FORCE_INLINE BrickCoordinate decode_row_major(uint32_t index, const kernel_contract::AxisExtents& extent) {
+FORCE_INLINE BrickCoordinate decode_row_major(uint32_t index, const kernel_args::AxisExtents& extent) {
     const uint32_t per_time_slice = extent.height * extent.width;
     const uint32_t time = index / per_time_slice;
     const uint32_t remainder = index % per_time_slice;
@@ -36,9 +36,7 @@ FORCE_INLINE BrickCoordinate decode_row_major(uint32_t index, const kernel_contr
 
 // The brick coordinate of a chunk's first brick.
 FORCE_INLINE BrickCoordinate chunk_origin_brick(
-    uint32_t chunk_index,
-    const kernel_contract::AxisExtents& volume_chunks,
-    const kernel_contract::AxisExtents& chunk_bricks) {
+    uint32_t chunk_index, const kernel_args::AxisExtents& volume_chunks, const kernel_args::AxisExtents& chunk_bricks) {
     const BrickCoordinate chunk = decode_row_major(chunk_index, volume_chunks);
     return BrickCoordinate{
         chunk.time * chunk_bricks.time, chunk.height * chunk_bricks.height, chunk.width * chunk_bricks.width};
@@ -46,18 +44,18 @@ FORCE_INLINE BrickCoordinate chunk_origin_brick(
 
 // The brick coordinate of the `index`-th brick inside a chunk.
 FORCE_INLINE BrickCoordinate brick_within_chunk(
-    uint32_t index_in_chunk, const BrickCoordinate& origin, const kernel_contract::AxisExtents& chunk_bricks) {
+    uint32_t index_in_chunk, const BrickCoordinate& origin, const kernel_args::AxisExtents& chunk_bricks) {
     const BrickCoordinate offset = decode_row_major(index_in_chunk, chunk_bricks);
     return BrickCoordinate{origin.time + offset.time, origin.height + offset.height, origin.width + offset.width};
 }
 
 // Linear brick index into the bricked tensor.
-FORCE_INLINE uint32_t brick_index(const BrickCoordinate& brick, const kernel_contract::AxisExtents& volume_bricks) {
+FORCE_INLINE uint32_t brick_index(const BrickCoordinate& brick, const kernel_args::AxisExtents& volume_bricks) {
     return (brick.time * volume_bricks.height + brick.height) * volume_bricks.width + brick.width;
 }
 
 // A brick that runs past the volume holds only ghost sites; its queries are discarded.
-FORCE_INLINE bool brick_is_inside(const BrickCoordinate& brick, const kernel_contract::AxisExtents& volume_bricks) {
+FORCE_INLINE bool brick_is_inside(const BrickCoordinate& brick, const kernel_args::AxisExtents& volume_bricks) {
     return brick.time < volume_bricks.time && brick.height < volume_bricks.height && brick.width < volume_bricks.width;
 }
 

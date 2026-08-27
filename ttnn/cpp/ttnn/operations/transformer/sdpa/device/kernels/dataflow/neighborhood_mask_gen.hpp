@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_contract.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_window_rule.hpp"
 
 // Additive attention masks for one (query brick, key brick) pair, generated on device.
@@ -49,8 +49,7 @@ struct SiteInBrick {
     uint32_t width;
 };
 
-FORCE_INLINE SiteInBrick
-site_in_brick_from_index(uint32_t site_index_in_brick, kernel_contract::AxisExtents brick_sites) {
+FORCE_INLINE SiteInBrick site_in_brick_from_index(uint32_t site_index_in_brick, kernel_args::AxisExtents brick_sites) {
     const uint32_t sites_per_time_slice = brick_sites.height * brick_sites.width;
     const uint32_t time = site_index_in_brick / sites_per_time_slice;
     const uint32_t remainder = site_index_in_brick % sites_per_time_slice;
@@ -61,7 +60,7 @@ site_in_brick_from_index(uint32_t site_index_in_brick, kernel_contract::AxisExte
 // Both arrive LOCAL to this device's tensor and are lifted to global here, because a window is
 // clamped at the true volume boundary and never at a shard seam.
 inline bool key_is_visible(
-    const SiteInBrick& query_site, const SiteInBrick& key_site, const kernel_contract::NeighborhoodExtents& extents) {
+    const SiteInBrick& query_site, const SiteInBrick& key_site, const kernel_args::NeighborhoodExtents& extents) {
     // An axis shorter than the window is attended to in full; clamp exactly as the host does.
     const uint32_t window_time =
         extents.context_window.time < extents.volume.time ? extents.context_window.time : extents.volume.time;
@@ -114,7 +113,7 @@ constexpr uint32_t SITES_PER_BRICK_AXIS_MAX = 32;
 inline BrickCoverage classify_brick(
     const SiteInBrick& query_brick_origin,
     const SiteInBrick& key_brick_origin,
-    const kernel_contract::NeighborhoodExtents& extents) {
+    const kernel_args::NeighborhoodExtents& extents) {
     const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
     const uint32_t stride[3] = {extents.stride.time, extents.stride.height, extents.stride.width};
     const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
@@ -181,7 +180,7 @@ FORCE_INLINE void fill_mask_tile(
     uint32_t write_address,
     SiteInBrick query_brick_origin,
     SiteInBrick key_brick_origin,
-    kernel_contract::NeighborhoodExtents extents) {
+    kernel_args::NeighborhoodExtents extents) {
     constexpr uint32_t FACE_HEIGHT = 16;
     constexpr uint32_t FACE_WIDTH = 16;
     // A 16-bit half of one face row, as bfloat16 pairs packed into words. Indexed by two MASK

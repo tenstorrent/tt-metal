@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/transformer/sdpa/device/neighborhood_sdpa_device_operation.hpp"
 
-#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_contract.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
 
 #include <algorithm>
 
@@ -91,11 +91,11 @@ void NeighborhoodSDPAOperation::validate_on_program_cache_miss(
 
     const auto table_shape = gather_origin_table.logical_shape();
     TT_FATAL(
-        table_shape[2] == plan.chunk_count && table_shape[3] == neighborhood::kernel_contract::GATHER_ORIGIN_COLUMNS,
+        table_shape[2] == plan.chunk_count && table_shape[3] == neighborhood::kernel_args::GATHER_ORIGIN_COLUMNS,
         "neighborhood_sdpa: gather_origin_table must be [1, 1, {}, {}], got {} -- one row per "
         "query CHUNK, not per brick",
         plan.chunk_count,
-        neighborhood::kernel_contract::GATHER_ORIGIN_COLUMNS,
+        neighborhood::kernel_args::GATHER_ORIGIN_COLUMNS,
         table_shape);
     TT_FATAL(
         gather_origin_table.dtype() == DataType::UINT32 && gather_origin_table.layout() == Layout::ROW_MAJOR,

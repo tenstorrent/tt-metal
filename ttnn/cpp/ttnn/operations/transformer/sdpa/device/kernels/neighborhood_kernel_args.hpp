@@ -6,8 +6,8 @@
 
 #include <cstdint>
 
-// The contract between the program factory and the three kernels: circular buffer ids, the
-// compile-time argument layout, and the geometry the reader needs to address bricks.
+// The argument layout shared by the program factory and the three kernels: circular buffer
+// ids, the compile-time argument slots, and the geometry the reader needs to address bricks.
 //
 // Everything here is named on BOTH sides. The factory writes an argument by name into a
 // vector sized ...::COUNT; each kernel reads it back by the same name. Neither side counts
@@ -16,7 +16,7 @@
 // sliding_window_geometry.hpp warns about in its own header, where the reader and the compute
 // kernel each recompute the same bounds and must agree.
 
-namespace ttnn::transformer::neighborhood::kernel_contract {
+namespace ttnn::transformer::neighborhood::kernel_args {
 
 // Fixed ids rather than compile-time arguments: one definition, no ordering to keep in sync.
 enum CircularBufferId : uint32_t {
@@ -240,4 +240,4 @@ struct NeighborhoodExtents {
     AxisExtents resident;            // how much of it this device holds (owned + halo)
 };
 
-}  // namespace ttnn::transformer::neighborhood::kernel_contract
+}  // namespace ttnn::transformer::neighborhood::kernel_args
