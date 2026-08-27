@@ -21,6 +21,11 @@
 #   tt-qwen3-text-ver, tt_mm_throttle_perf: server / benchmark configuration.
 #   coherence-test / structured-output / multimodal / sampling-tests: optional test toggles.
 #   sampling-test-filter: -k filter for the sampling test step.
+#   chunked-prefill-budget: enables the chunked-prefill test step and tells it the
+#     served max_num_batched_tokens, which it uses to size prompts that are
+#     guaranteed to be split across engine steps. Must equal the
+#     --max-num-batched-tokens passed in additional-server-args.
+#   chunked-prefill-test-timeout: per-step timeout for that step (minutes, default 15).
 #
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -363,6 +368,35 @@
       timeout: 75
       tier: 2
   owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+
+- name: "Llama-3.1-8B-Instruct (chunked prefill)"
+  model: meta-llama/Llama-3.1-8B-Instruct
+  server-timeout: 15
+  benchmark-timeout: 5
+  chunked-prefill-test-timeout: 10
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-llama-text-ver: tt_transformers
+  # sample_on_device_mode is what makes this leg cover the intermediate-chunk
+  # sampling fallback: the runner forces host sampling for a step containing a
+  # mid-prompt row, and with device sampling off that branch never runs.
+  # trace_region_size as on the prefix-caching leg: declaring chunked prefill
+  # also reserves a traced resumed prefill per traced sequence length at warmup,
+  # which the 50 MB default does not cover.
+  tt-config: '{"fabric_config": "FABRIC_1D", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
+  multimodal: false
+  additional-server-args: "--enable-chunked-prefill --max-num-batched-tokens 2048 --max_model_len 32768 --async-scheduling"
+  # Prompts long enough to be split, at a concurrency that makes continuations
+  # and fresh admissions land in the same prefill step.
+  additional-benchmark-args: "--random-input-len 4096 --random-output-len 32 --num-prompts 8 --max-concurrency 4"
+  chunked-prefill-budget: 2048
+  skus:
+    wh_llmbox:
+      timeout: 45
+      tier: 2
+  owner_id: U08E1JCDVNX # Pavle Petrovic
+  co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
 - name: "Llama-3.1-8B-Instruct DP=4"

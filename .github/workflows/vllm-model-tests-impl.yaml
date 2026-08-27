@@ -139,6 +139,7 @@ jobs:
       FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
       FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
       FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
+      FILE_CHUNKED_PREFILL_TESTS_LOG: "./output/vllm_chunked_prefill_tests.log"
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -162,6 +163,7 @@ jobs:
         FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
         FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
         FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
+        FILE_CHUNKED_PREFILL_TESTS_LOG: "./output/vllm_chunked_prefill_tests.log"
         FILE_COHERENCE_TEST_LOG: "./output/vllm_coherence_test.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -638,6 +640,36 @@ jobs:
             else
               pytest "${PLUGIN_DIR}/tests/tt" -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
             fi
+
+      - name: 🧪 Run chunked prefill tests
+        if: ${{ matrix.test-group.chunked-prefill-budget }}
+        timeout-minutes: ${{ matrix.test-group.chunked-prefill-test-timeout || 15 }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_CHUNKED_PREFILL_TESTS_LOG }}
+          run: |
+            # Confirm the server really has the feature on at this budget before
+            # trusting the tests. Without this they would pass against a server that
+            # silently disabled chunked prefill, e.g. one whose model class does
+            # not declare the capability.
+            BUDGET=${{ matrix.test-group.chunked-prefill-budget }}
+            EXPECTED="Chunked prefill enabled"
+            if ! grep -q "$EXPECTED" "${FILE_SERVER_LOG}"; then
+              echo "❌ server log has no '$EXPECTED' line, so chunked prefill is not active"
+              exit 1
+            fi
+            RESOLVED=$(grep "$EXPECTED" "${FILE_SERVER_LOG}" | tail -1 \
+              | grep -o "max_num_batched_tokens=[0-9]\+" | cut -d= -f2)
+            if [ "$RESOLVED" != "$BUDGET" ]; then
+              echo "❌ server resolved max_num_batched_tokens=$RESOLVED, tests were told $BUDGET"
+              exit 1
+            fi
+            echo "✅ chunked prefill active at max_num_batched_tokens=$RESOLVED"
+
+            pytest "${PLUGIN_DIR}/tests/tt/test_chunked_prefill.py" -v \
+              --tt-server-url=http://localhost:8000 \
+              --tt-model-name=${{ matrix.test-group.model }} \
+              --tt-chunked-prefill-budget="$BUDGET"
 
       - name: 🧹 Cleanup server process
         if: always()
