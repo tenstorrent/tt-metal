@@ -193,14 +193,17 @@ inline __attribute__((always_inline)) void publish_tail() {
 inline __attribute__((always_inline)) void publish_tail_batched(uint32_t words_written) {
     constexpr uint32_t kBatchShift = __builtin_ctz(SPSC_PUBLISH_BATCH_WORDS);
     static_assert((1u << kBatchShift) == SPSC_PUBLISH_BATCH_WORDS, "batch must be a power of two");
-    // Pressure override: above 3/4 ring, publish every packet. The batch's up-to-63 unpublished words
-    // are invisible to the drainer but count against the producer's own stall bound, so near capacity
-    // the batching converts straight into stalls (measured at the knee: scan-visible peaks 384-448
-    // words while producers blocked at ~506 -- the gap is this batch). g_head_cache only lags the true
-    // head, so the check can only fire early, never late.
+    // Pressure-scaled batch: above 3/4 ring the publish boundary shrinks 64 -> 16 words. The batch's
+    // unpublished words are invisible to the drainer but count against the producer's own stall bound,
+    // so near capacity the batching converts straight into stalls (measured at the knee: scan-visible
+    // peaks 384-448 words while producers blocked at ~506 -- the gap is this batch). Shrinking rather
+    // than abandoning the batch keeps the fence amortized (one per ~8 small zones at worst, never one
+    // per packet); the <=15 words it still hides are a fraction of a knee point. g_head_cache only lags
+    // the true head, so pressure can only fire early, never late.
+    constexpr uint32_t kPressureShift = kBatchShift > 2 ? kBatchShift - 2 : 0;
     constexpr uint32_t kPressureWords = RING_CAPACITY - (RING_CAPACITY >> 2);
-    const bool boundary = (wIndex >> kBatchShift) != ((wIndex - words_written) >> kBatchShift);
-    if (__builtin_expect(boundary || wIndex - g_head_cache > kPressureWords, 0)) {
+    const uint32_t shift = wIndex - g_head_cache > kPressureWords ? kPressureShift : kBatchShift;
+    if (__builtin_expect((wIndex >> shift) != ((wIndex - words_written) >> shift), 0)) {
         publish_tail();
     }
 }
