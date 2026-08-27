@@ -476,9 +476,17 @@ Tensor fold(
             real_c = static_cast<uint32_t>(input_tensor.logical_shape()[3]);
             in_grid = input_tensor.is_sharded() ? input_tensor.shard_spec().value().grid
                                                 : core_grid.value();  // caller must pass grid_size when interleaved
+            // [#54488] Spill the transient L1-interleaved copy of the fold input to DRAM. The sharded input
+            // (~800 KB) plus a second L1-interleaved copy of it did not co-fit the small (e.g. 3 MB/core,
+            // ~2.68 MB usable) Quasar bank on the 2-core grid -> OOM here at the fold. The very next step,
+            // interleaved_to_sharded below, re-shards this into L1 anyway, so DRAM only removes the redundant
+            // full copy from the bank -- extending the same dram_interleaved spill the fold OUTPUT already
+            // uses (see step-6 note above). Unconditional on the channels-last (Quasar) path: a device-size
+            // gate does NOT work, l1_size_per_core() reports the nominal arch L1, not the sim's reduced bank;
+            // the cost on a full-size bank is only a one-time DRAM round-trip for the stem fold input.
             processed_tensor =
                 input_tensor.is_sharded()
-                    ? ttnn::operations::experimental::quasar::sharded_to_interleaved(input_tensor, l1_interleaved)
+                    ? ttnn::operations::experimental::quasar::sharded_to_interleaved(input_tensor, dram_interleaved)
                     : input_tensor;
         } else {
             // NCHW input (WH/BH). Transpose to NHWC on-device via transpose(1,2) then transpose(2,3).
