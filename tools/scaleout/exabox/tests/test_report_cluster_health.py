@@ -18,6 +18,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -33,6 +34,7 @@ from analyze_host_health_results import main as analyze_main  # noqa: E402
 from report_backfill import Leftover  # noqa: E402
 from report_cluster_health import (  # noqa: E402
     RecordRequest,
+    _ensure_date_dir,
     _read_optional,
     build_record,
     leftover_namespace,
@@ -60,6 +62,8 @@ def _assert_shared_dir_mode(testcase: unittest.TestCase, path: Path) -> None:
     testcase.assertEqual(mode & stat.S_IRWXG, stat.S_IRWXG)
     testcase.assertEqual(mode & stat.S_IRWXO, 0)
     testcase.assertTrue(mode & stat.S_ISVTX)
+    if sys.platform.startswith("linux"):
+        testcase.assertTrue(mode & stat.S_ISGID)
 
 
 def _run(argv: list[str], env: dict[str, str] | None = None) -> tuple[int, str, str]:
@@ -436,6 +440,78 @@ class TestStoreWrite(unittest.TestCase):
             self.assertEqual(rc, 0, err)
             _assert_shared_dir_mode(self, date_dir)
 
+    def test_date_dir_is_assigned_store_group(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_gid = Path(tmp).stat().st_gid
+            with patch("report_cluster_health.os.fchown", wraps=os.fchown) as fchown:
+                rc, _out, err = _run(
+                    [
+                        "--test-type",
+                        "physical",
+                        "--hosts",
+                        HOSTS,
+                        "--analyzer-code",
+                        "0",
+                        "--artifact-dir",
+                        fixtures.ARTIFACT_DIR,
+                        "--ts",
+                        TS,
+                        "--store-root",
+                        tmp,
+                    ]
+                )
+            self.assertEqual(rc, 0, err)
+            fchown.assert_called_once()
+            _date_dir_fd, owner, group = fchown.call_args.args
+            self.assertEqual(owner, -1)
+            self.assertEqual(group, store_gid)
+
+    def test_failed_group_assignment_warns_on_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root_stat = root.stat()
+            stderr = io.StringIO()
+            with (
+                patch("report_cluster_health.os.fchown", side_effect=PermissionError),
+                patch(
+                    "report_cluster_health.os.fstat",
+                    side_effect=[root_stat, SimpleNamespace(st_gid=root_stat.st_gid + 1)],
+                ),
+                redirect_stderr(stderr),
+            ):
+                date_dir_fd = _ensure_date_dir(root, "2026-08-19")
+            os.close(date_dir_fd)
+            self.assertIn("date directory group does not match store root group", stderr.getvalue())
+
+    def test_date_dir_symlink_is_not_followed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "store"
+            store.mkdir()
+            target = Path(tmp) / "target"
+            target.mkdir()
+            original_mode = target.stat().st_mode
+            (store / "2026-08-19").symlink_to(target, target_is_directory=True)
+            rc, out, err = _run(
+                [
+                    "--test-type",
+                    "physical",
+                    "--hosts",
+                    HOSTS,
+                    "--analyzer-code",
+                    "0",
+                    "--artifact-dir",
+                    fixtures.ARTIFACT_DIR,
+                    "--ts",
+                    TS,
+                    "--store-root",
+                    str(store),
+                ]
+            )
+            self.assertEqual(rc, 0)
+            self.assertIn("store write failed", err)
+            self.assertNotIn("record_id", json.loads(out))
+            self.assertEqual(target.stat().st_mode, original_mode)
+
     def test_only_date_dir_is_group_writable(self):
         """Missing store-root ancestors keep default mkdir permissions."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -454,7 +530,11 @@ class TestStoreWrite(unittest.TestCase):
                 "--store-root",
                 str(store),
             ]
-            rc, out, err = _run(argv)
+            previous_umask = os.umask(0o022)
+            try:
+                rc, out, err = _run(argv)
+            finally:
+                os.umask(previous_umask)
             self.assertEqual(rc, 0, err)
             date_dir = store / "2026-08-19"
             self.assertTrue(date_dir.is_dir())
