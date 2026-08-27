@@ -282,9 +282,7 @@ void kernel_main() {
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(36) == 1;
     constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
-    // Latent-V (shared K buffer) never streams V through the head chain, so the factory skips
-    // building it there (frees its semaphores/args). Must mirror the factory's definition.
-    constexpr bool use_head_chain = enable_kv_chains && !gqa_grouped_kv && !v_shares_k_buffer;
+    constexpr bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     // In-place latent-V (single-tile Q): the compute kernel reads V straight from K^T, so the
     // reader never materializes V. Shared with the program factory and compute kernel.
     constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
@@ -363,7 +361,7 @@ void kernel_main() {
         gathered_joint_k_addr = get_arg_val<uint32_t>(argidx++);
         gathered_joint_v_addr = get_arg_val<uint32_t>(argidx++);
     }
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     uint32_t kv_cache_batch_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_per_core = global_q_end - global_q_start;
@@ -395,11 +393,11 @@ void kernel_main() {
 
 #ifdef ROTATED_Q_SPLIT
     // Rotated per-ring-iteration Q distribution: the factory appends, per ring iteration,
-    // [row_loop_count, my_count, chunk ids x ROTATED_Q_SPLIT]. ROTATED_Q_SPLIT's value is the
-    // fixed chunk-list stride (base chunks + 1 float slot). The static global_q_start/global_q_end
-    // range is superseded; only q_per_core > 1 gating still relies on it.
+    // [row_slot_count, my_count, chunk ids x ROTATED_Q_SPLIT]. ROTATED_Q_SPLIT's value is the
+    // chunk-LIST LENGTH (base chunks + 1 float slot); the arg stride adds this kernel's header
+    // words. The static global_q_start/global_q_end range is superseded entirely.
     constexpr uint32_t rot_max_slots = ROTATED_Q_SPLIT;
-    constexpr uint32_t rot_iter_stride = 2 + rot_max_slots;
+    constexpr uint32_t rot_iter_stride = kRotReaderIterHeaderWords + rot_max_slots;
     const uint32_t rot_args_base = argidx;
 #endif
 
@@ -750,6 +748,14 @@ void kernel_main() {
             }
         }
 
+#ifdef ROTATED_Q_SPLIT
+        // The factory precomputes this row's mcast slot count per ring iteration (its row max, so
+        // members with less real work still run the padded handshakes), superseding the static
+        // per-chain maxima used by every other schedule.
+        const uint32_t rot_iter_base = rot_args_base + ring_iter * rot_iter_stride;
+        const uint32_t loop_q_count = get_arg_val<uint32_t>(rot_iter_base);
+        const uint32_t rot_my_count = get_arg_val<uint32_t>(rot_iter_base + 1);
+#else
         // When K/V mcast is enabled, loop the per-chain max so receivers with less real Q work
         // still participate in padded multicast handshakes without pushing compute-visible data.
         uint32_t loop_q_count = q_per_core;
@@ -759,22 +765,20 @@ void kernel_main() {
         if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
             loop_q_count = gqa_max_q_per_core;
         }
-        uint32_t gqa_group_q_iter = 0;
-
-#ifdef ROTATED_Q_SPLIT
-        const uint32_t rot_iter_base = rot_args_base + ring_iter * rot_iter_stride;
-        loop_q_count = get_arg_val<uint32_t>(rot_iter_base);  // this row's mcast slot count this iteration
-        const uint32_t rot_my_count = get_arg_val<uint32_t>(rot_iter_base + 1);
 #endif
+        uint32_t gqa_group_q_iter = 0;
 
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
             // Check if this is a real iteration or only padded chain/mcast synchronization.
 #ifdef ROTATED_Q_SPLIT
             const bool is_padded_iter = (q_iter >= rot_my_count);
-            // Padded iterations only handshake; decode a valid owned chunk so downstream index
-            // math stays in range (its values are never used for reads or pushes).
-            const uint32_t rot_flat_q =
-                get_arg_val<uint32_t>(rot_iter_base + 2 + (is_padded_iter ? rot_my_count - 1 : q_iter));
+            // Padded iterations only handshake; decode a valid owned chunk so downstream index math
+            // stays in range (its values are never used for reads or pushes). Every core owns at
+            // least one chunk per iteration and never more than the pushed list holds -- otherwise
+            // the rot_my_count - 1 below underflows, or the read runs past the list.
+            ASSERT(rot_my_count >= 1 && rot_my_count <= rot_max_slots);
+            const uint32_t rot_flat_q = get_arg_val<uint32_t>(
+                rot_iter_base + kRotReaderIterHeaderWords + (is_padded_iter ? rot_my_count - 1 : q_iter));
 #else
             const bool is_padded_iter = (q_iter >= q_per_core);
 #endif
@@ -859,7 +863,14 @@ void kernel_main() {
 
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
+#ifdef ROTATED_Q_SPLIT
+            // This core's owned count varies per ring iteration, so the "single Q chunk stays
+            // fronted in L1" optimization never applies: compute derives its q_per_core from the
+            // fixed slot count and would wait on a Q chunk the reader never re-pushed.
+            const bool need_q_read = true;
+#else
             const bool need_q_read = (q_per_core > 1) || !q_pushed;
+#endif
 
             ring_joint::SlidingQWorkPlan sliding_q_plan;
             if constexpr (has_sliding_window) {

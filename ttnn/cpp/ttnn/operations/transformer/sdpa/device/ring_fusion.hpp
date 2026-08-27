@@ -40,6 +40,14 @@ struct RingSDPAFusedOpSignaler {
         ttnn::experimental::ccl::FusedOpSignalerMode fused_op_signaler_mode =
             ttnn::experimental::ccl::FusedOpSignalerMode::MULTI);
 
+    // Runtime args push_ring_sdpa_fused_op_rt_args() appends:
+    // {ring_size, ring_index, fwd_writes, bwd_writes, sem0, sem1, split_fwd, split_shard_id,
+    // split_second_half_wait}. A kernel whose receiver is built with wait_for_op_signal=false
+    // consumes only the first four and must step over the rest to read its own args (see
+    // ring_joint_writer.cpp); the ring-joint factory TT_FATALs on this count so adding a word here
+    // fails the build instead of silently shifting those args.
+    static constexpr uint32_t kRtArgCount = 9;
+
     void push_ring_sdpa_fused_op_rt_args(std::vector<uint32_t>& out_rt_args);
 };
 

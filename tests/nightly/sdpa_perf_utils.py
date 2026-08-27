@@ -12,6 +12,7 @@ Used by:
 """
 
 import math
+import os
 from dataclasses import dataclass, field
 from typing import ClassVar, Tuple, List
 
@@ -61,9 +62,30 @@ def _detect_devices_without_opening():
 # Blackhole harvests whole tensix columns, so the row count is fixed and only the column
 # count varies with the flashed harvesting mask.
 BLACKHOLE_TENSIX_ROWS = 10
+BLACKHOLE_TENSIX_COLUMNS = 14
 # metal reserves one enabled tensix column for dispatch, so the program grid is one column
 # narrower than the enabled-column count.
 BLACKHOLE_DISPATCH_COLUMNS = 1
+
+
+def parse_grid_spec(spec, var_name):
+    """(cols, rows) from a "<cols>x<rows>" spec, or ValueError naming var_name.
+
+    Shared by the SDPA_PERF_PROGRAM_GRID and RING_MLA_SDPA_GRID_OVERRIDE env vars. Both feed a
+    program grid straight to the device, where a nonsensical value hangs rather than errors, so
+    reject malformed input loudly instead of letting int() raise something that does not say which
+    variable was wrong.
+    """
+    parts = spec.lower().split("x")
+    if len(parts) != 2 or not all(p.strip().isdigit() for p in parts):
+        raise ValueError(f'{var_name}="{spec}" is not of the form "<cols>x<rows>" (e.g. "12x10")')
+    cols, rows = (int(p) for p in parts)
+    if not (1 <= cols <= BLACKHOLE_TENSIX_COLUMNS and 1 <= rows <= BLACKHOLE_TENSIX_ROWS):
+        raise ValueError(
+            f'{var_name}="{spec}" is outside the {BLACKHOLE_TENSIX_COLUMNS}x{BLACKHOLE_TENSIX_ROWS} '
+            "physical tensix grid"
+        )
+    return (cols, rows)
 
 
 def _detect_program_grid():
@@ -85,16 +107,16 @@ def _detect_program_grid():
     SDPA_PERF_PROGRAM_GRID="<cols>x<rows>" forces the answer, both as an escape hatch for hosts
     where telemetry is unavailable and as a kill switch for the detection itself.
     """
-    import os
-
     forced = os.environ.get("SDPA_PERF_PROGRAM_GRID")
     if forced:
-        cols, rows = (int(v) for v in forced.lower().split("x"))
-        return (cols, rows)
+        return parse_grid_spec(forced, "SDPA_PERF_PROGRAM_GRID")
 
     try:
         import pyluwen
-    except ImportError:
+    except Exception:
+        # pyluwen is a compiled extension: absent, or ABI-skewed against this python, it can raise
+        # OSError as readily as ImportError. This runs at import time, so anything escaping here
+        # would fail collection of every module that imports this file.
         return None
 
     enabled_cols = []
@@ -114,7 +136,9 @@ def _detect_program_grid():
         return None
     # Mixed harvesting across boards: metal's mesh grid is the one common to every chip.
     cols = min(enabled_cols) - BLACKHOLE_DISPATCH_COLUMNS
-    if cols < 1:
+    # Out of range on either end means tensix_enabled_col is not the field we think it is; fall
+    # back rather than size a program for a grid the chip does not have.
+    if not (1 <= cols < BLACKHOLE_TENSIX_COLUMNS):
         return None
     return (cols, BLACKHOLE_TENSIX_ROWS)
 

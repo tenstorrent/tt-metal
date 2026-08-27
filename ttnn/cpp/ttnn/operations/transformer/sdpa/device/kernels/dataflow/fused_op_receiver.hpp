@@ -21,6 +21,13 @@ struct RingSDPAOpReceiver {
     uint32_t split_shard_id = 0;
     uint32_t split_second_half_wait = 0;
 
+    // Words push_ring_sdpa_fused_op_rt_args() always pushes, versus the number this constructor
+    // consumes when wait_for_op_signal is false (it skips the two all-gather semaphore ids and the
+    // three split-forwarding words). A kernel that reads its own runtime args after a non-waiting
+    // receiver must step over the difference; see ring_joint_writer.cpp.
+    static constexpr uint32_t kPushedRtArgCount = 9;
+    static constexpr uint32_t kConsumedRtArgCountNoWait = 4;
+
     RingSDPAOpReceiver() {}
 
     RingSDPAOpReceiver(bool wait_for_op_signal, uint32_t& rt_args_idx) : wait_for_op_signal(wait_for_op_signal) {

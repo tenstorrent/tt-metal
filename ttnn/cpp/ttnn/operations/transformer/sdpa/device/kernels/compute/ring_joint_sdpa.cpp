@@ -138,7 +138,7 @@ void kernel_main() {
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t q_per_core = global_q_end - global_q_start;
+    [[maybe_unused]] const uint32_t q_per_core = global_q_end - global_q_start;
 
     const uint32_t ring_size_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t ring_index_runtime = get_arg_val<uint32_t>(argidx++);
@@ -152,10 +152,15 @@ void kernel_main() {
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
 
 #ifdef ROTATED_Q_SPLIT
+    // Only sdpa_ring_v2 reads the rotated chunk list; the sdpa_ring branch below would keep using
+    // global_q_start/global_q_end and silently desync from the reader and writer. The host pairs
+    // latent-V with streaming compute, but only via a chain of implications, so pin it here.
+    static_assert(use_streaming_compute, "ROTATED_Q_SPLIT requires the streaming compute path");
+    static_assert(ROTATED_Q_SPLIT >= 3, "ROTATED_Q_SPLIT is rot_base_chunks + 1, and the host requires base >= 2");
     // Rotated per-ring-iteration Q distribution: per ring iteration the factory appends
     // [my_count, chunk ids x ROTATED_Q_SPLIT] (fixed stride). See the program factory comment.
     constexpr uint32_t rot_max_slots = ROTATED_Q_SPLIT;
-    constexpr uint32_t rot_iter_stride = 1 + rot_max_slots;
+    constexpr uint32_t rot_iter_stride = kRotComputeIterHeaderWords + rot_max_slots;
     const uint32_t rot_args_base = argidx;
 #endif
 
@@ -260,6 +265,12 @@ void kernel_main() {
     bool seen_active_iter = false;
     constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+#ifdef ROTATED_Q_SPLIT
+        // This iteration's [my_count, chunk ids...] block. Read once: the call below wants the
+        // count as the q-loop end and the id-list base, and takes the mode selector separately.
+        const uint32_t rot_iter_base = rot_args_base + ring_iter * rot_iter_stride;
+        const uint32_t rot_my_count = get_arg_val<uint32_t>(rot_iter_base);
+#endif
         // Sliding folds all local/halo source ranges into one synthetic local iteration.
         // The dataflow reader has already waited for the required halo completion signals.
         const uint32_t ring_id =
@@ -448,7 +459,7 @@ void kernel_main() {
                 // Rotated: iterate [0, my_count) and map each index to its flat chunk id via the
                 // per-iteration runtime-arg list (rot_list_arg_base below).
                 0,
-                get_arg_val<uint32_t>(rot_args_base + ring_iter * rot_iter_stride),
+                rot_my_count,
 #else
                 global_q_start,
                 global_q_end,
@@ -468,7 +479,10 @@ void kernel_main() {
                 acc_state,
                 is_last_ring_iter,
 #ifdef ROTATED_Q_SPLIT
-                get_arg_val<uint32_t>(rot_args_base + ring_iter * rot_iter_stride),
+                // NOT this iteration's count: q_per_core only selects L1-persistent vs
+                // DRAM-round-trip accumulators, and that choice must be the same on every iteration
+                // and must match the reader and writer. The fixed slot count (base + 1 >= 2) is.
+                rot_max_slots,
 #else
                 q_per_core,
 #endif
@@ -481,7 +495,7 @@ void kernel_main() {
 #ifdef ROTATED_Q_SPLIT
                 ,
                 /*q_base_tiles=*/0,
-                rot_args_base + ring_iter * rot_iter_stride + 1
+                rot_iter_base + kRotComputeIterHeaderWords
 #endif
             );
         } else {

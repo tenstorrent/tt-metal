@@ -45,16 +45,29 @@ constexpr uint32_t chunks_until_next_multiple(uint32_t processed_chunks, uint32_
 // program factory, the reader, and the compute kernel. In-place latent-V reads V straight
 // from K^T (skipping V materialization) when the latent K/V buffer is shared AND the Q chunk
 // is a single tile, where the softmax@V matmul is data-movement bound.
-// Rotated-Q-split handoff semaphores. The semaphore for ring iteration t is live only within
-// iteration t: the donor's deferred accumulator save flushes and signals at the start of the
-// receiver's use iteration, and the receiver waits in that same iteration. Distinct ids per
-// iteration therefore only guard against CROSS-ITERATION aliasing -- a donor already in iteration
-// t+1 bumping a slot a slower core is still consuming for iteration t. Inter-core skew is bounded
-// well below one iteration by two per-iteration rendezvous (the K mcast chain's valid relay, which
-// every receiver blocks on per K chunk, and the fused all-gather that must land before compute
-// consumes an iteration's KV), so a small ring of slots indexed by (ring_iter - 1) % depth is
-// sufficient. 3 tolerates a full iteration of drift with margin, versus ring_size-1 before, which
-// scaled the scarce 16-semaphore program budget with ring length and capped rotation at ring-8.
+constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t) {
+    return v_shares_k_buffer && (Sq_chunk_t == 1);
+}
+
+// ---------------------------------------------------------------------------
+// Rotated Q split: the host/device contract.
+//
+// The remainder ("float") Q chunks of an uneven work split change owner core between ring
+// iterations so no single grid row pays the +1 K-mcast slot on every iteration. Everything below
+// is derived identically by the program factory and all three kernels; nothing here may be
+// duplicated on one side only, or the runtime-arg layout drifts and the kernels misparse it.
+// ---------------------------------------------------------------------------
+
+// Handoff semaphore ring depth. A slot is live only within one ring iteration: the donor's
+// deferred accumulator save flushes and signals during the receiver's use iteration, and the
+// receiver waits in that same iteration. Per-iteration ids would therefore only guard against
+// CROSS-iteration aliasing -- a donor already in iteration t+1 bumping a slot a slower core is
+// still consuming for iteration t. Inter-core skew is bounded well below one iteration by two
+// per-iteration rendezvous (the K mcast chain's valid relay, which every receiver blocks on per K
+// chunk, and the fused all-gather that must land before compute consumes an iteration's KV), so a
+// small ring of slots indexed by (ring_iter - 1) % depth suffices. 3 tolerates a full iteration of
+// drift with margin, and unlike ring_size-1 it does not scale the scarce 16-semaphore program
+// budget with ring length.
 constexpr uint32_t kRotHandoffSemDepth = 3;
 
 // Number of handoff semaphores to allocate/read for a given ring size. Host and kernel derive it
@@ -69,9 +82,20 @@ constexpr uint32_t rot_handoff_sem_count(uint32_t ring_size) {
     return depth > 0 ? depth : 1;
 }
 
-constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t) {
-    return v_shares_k_buffer && (Sq_chunk_t == 1);
-}
+// Per-ring-iteration runtime-arg block: each kernel's own header words, then exactly
+// (rot_base_chunks + 1) flat chunk ids -- the value of the ROTATED_Q_SPLIT define -- so every
+// iteration occupies a fixed stride. Kernels compute their stride from these; the factory pushes
+// in the same order.
+constexpr uint32_t kRotReaderIterHeaderWords = 2;   // [row_slot_count, my_count]
+constexpr uint32_t kRotWriterIterHeaderWords = 3;   // [my_count, float_migrated_in, float_dest]
+constexpr uint32_t kRotComputeIterHeaderWords = 1;  // [my_count]
+
+// The float's next owner, packed into one runtime arg by the factory and unpacked by the writer to
+// address the handoff semaphore increment, plus the "this float does not migrate" sentinel.
+constexpr uint32_t kRotNoDest = 0xFFFFFFFFu;
+constexpr uint32_t rot_pack_dest(uint32_t phys_x, uint32_t phys_y) { return (phys_x << 8) | phys_y; }
+constexpr uint32_t rot_dest_x(uint32_t packed_dest) { return packed_dest >> 8; }
+constexpr uint32_t rot_dest_y(uint32_t packed_dest) { return packed_dest & 0xFFu; }
 
 template <bool v_shares_k_buffer, bool kt_inplace_v = false>
 constexpr uint32_t dummy_kv_chunks_for_phase_alignment(uint32_t processed_chunks) {
