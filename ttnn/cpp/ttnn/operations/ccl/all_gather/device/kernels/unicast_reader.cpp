@@ -176,7 +176,8 @@ void kernel_main() {
     // CLEANUP
     ///////////////////////////////////////////////////
 
-    // Completion: wait for every chunk upstream delivers (relayed + sink), then reset for reuse.
+    // Completion: wait for every chunk upstream delivers (relayed + sink), then consume them.
     noc_semaphore_wait_min(data_valid_ptr, total_chunks);
-    noc_semaphore_set(data_valid_ptr, 0);
+    noc_semaphore_inc(get_noc_addr(data_valid_sem), uint32_t{0} - total_chunks);
+    noc.async_atomic_barrier();
 }

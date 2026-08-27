@@ -160,10 +160,8 @@ void kernel_main() {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
         }
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), barrier_wait_value);
-        // Atomic decrement (add -value), not reset to 0, so any increments from other phases are preserved.
-        noc_semaphore_inc(
-            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem),
-            (uint32_t)(-(int32_t)barrier_wait_value));
+        // Subtract, don't clear: a peer running ahead may already have posted credits for its next invocation
+        noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - barrier_wait_value);
     }
 
     ///////////////////////////////////////////////////
@@ -335,10 +333,9 @@ void kernel_main() {
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
     }
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), barrier_wait_value);
-    // Atomic decrement (add -value), not reset to 0, so any increments from other phases are preserved.
-    noc_semaphore_inc(
-        safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem),
-        (uint32_t)(-(int32_t)barrier_wait_value));
+    // Subtract, don't clear: a peer running ahead may already have posted credits for its next invocation
+    noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - barrier_wait_value);
+    noc.async_atomic_barrier();
 
     if constexpr (enable_fabric) {
         close_connections(fabric_connection);

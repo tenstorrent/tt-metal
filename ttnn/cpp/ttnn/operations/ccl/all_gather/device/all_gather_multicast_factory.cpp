@@ -151,10 +151,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Enabled if any axis is an even-sized ring.
     const bool load_balance_across_alt_routes = ew_load_balance || ns_load_balance;
 
-    // We use an init barrier to wait for remote output tensors to be allocated. This only
-    // matters when the output is freshly allocated by the op; a persistent/preallocated
-    // output is guaranteed to already exist on every device before op kernel begins.
-    const bool do_init_barrier = !tensor_args.persistent_output_tensor.has_value();
+    // We use an init barrier to wait for remote output tensors to be allocated.
+    // But we cannot skip init_barrier when persistent output buffer is used since:
+    // - The persistent output buffer may be reused across multiple invocations of this CCL.
+    // - The caller may write into the persistent output buffer between invocations.
+    const bool do_init_barrier = true;
 
     const uint32_t packet_size = operation_attributes.packet_size;
 

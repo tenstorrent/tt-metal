@@ -135,7 +135,11 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Even-sized ring: for load balancing, the antipode device receives the antipode stripe as halves from both
     // forward and backward directions.
     const bool ring_even_split = is_ring && (num_devices % 2 == 0);
-    const bool do_init_barrier = !tensor_args.persistent_output_tensor.has_value();
+    // We use an init barrier to wait for remote output tensors to be allocated.
+    // But we cannot skip init_barrier when persistent output buffer is used since:
+    // - The persistent output buffer is also an input source (store-and-forward in the relay iterations).
+    // - The persistent output buffer may be reused across multiple invocations of this CCL.
+    const bool do_init_barrier = true;
 
     const uint32_t packet_size = operation_attributes.packet_size;
     const auto arch = input_tensor.device()->arch();

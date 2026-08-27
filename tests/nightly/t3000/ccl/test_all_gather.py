@@ -1776,6 +1776,72 @@ def test_all_gather_2x4_non_flat_mesh(mesh_device, input_shape):
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "shape, gather_dim, num_iters",
+    [
+        ([1, 1, 4096, 4096], 3, 10),  # output over ~12 MB picks the unicast factory
+        ([1, 1, 1024, 1024], 3, 10),  # small output picks the multicast factory
+    ],
+    ids=["unicast", "multicast"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
+    indirect=True,
+    ids=["fabric_linear"],
+)
+def test_all_gather_overlap(mesh_device, shape, gather_dim, num_iters):
+    """Stress test overlapping multiple CCL invocations to exercise:
+    - Semaphore increments (credits) shouldn't be lost -> failure results in hang
+    - Reusing persistent output buffers shouldn't clobber data -> failure results in bad PCC
+
+    Performed by running cached invocations back to back with no sync.
+    """
+    dtype, layout = ttnn.bfloat16, ttnn.TILE_LAYOUT
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    def to_device(torch_tensor, mesh_mapper):
+        return ttnn.from_torch(
+            torch_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=dtype,
+            memory_config=mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+    torch.manual_seed(0)
+    torch_inputs = [torch.randn(shape, dtype=torch.bfloat16) for _ in range(num_iters)]
+    goldens = [ttnn.to_torch(ttnn.from_torch(t, dtype=dtype, layout=layout)) for t in torch_inputs]
+
+    tt_inputs = [to_device(t, ttnn.ShardTensorToMesh(mesh_device, dim=gather_dim)) for t in torch_inputs]
+    out_buffer = to_device(torch.zeros(shape), ttnn.ReplicateTensorToMesh(mesh_device))
+    captures = [to_device(torch.zeros(shape), ttnn.ReplicateTensorToMesh(mesh_device)) for _ in range(num_iters)]
+
+    # Stall every device except (0, 0), so the fast device's next all_gather writes into buffers
+    # the others have not read yet.
+    rows, cols = tuple(mesh_device.shape)
+    delays = [[0 if (r, c) == (0, 0) else 2_000_000 for c in range(cols)] for r in range(rows)]
+
+    signpost("start")
+    for i in range(num_iters):
+        out = ttnn.all_gather(tt_inputs[i], dim=gather_dim, memory_config=mem_config, output_tensor=out_buffer)
+        # skip ttnn.synchronize_device(mesh_device) here to get CCLs to overlap
+        ttnn.apply_device_delay(mesh_device, delays)  # insert skew here so CCL's syncs don't absorb this
+        ttnn.copy(out, captures[i])  # preserve output since next iteration reuses same output buffer
+    ttnn.synchronize_device(mesh_device)
+    signpost("stop")
+
+    for i in range(num_iters):
+        for device_idx, tt_out in enumerate(ttnn.get_device_tensors(captures[i])):
+            eq, output = comp_pcc(ttnn.to_torch(tt_out), goldens[i], 1.0)
+            assert eq, f"iter {i} device {device_idx} FAILED: {output}"
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True, ids=["mesh_1,8"])
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
