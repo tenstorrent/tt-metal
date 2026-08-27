@@ -77,7 +77,9 @@ jobs:
             ./.github/sku_config.yaml
 
   compile-quasar-perf:
-    if: ${{ inputs.architecture == 'all' || inputs.architecture == 'quasar' }}
+    # Quasar has no perf runner, so it only ever compiles.  Keeping it out of
+    # "all" makes the default dispatch measure the two architectures that run.
+    if: ${{ inputs.architecture == 'quasar' }}
     needs: [build-images]
     uses: ./.github/workflows/build-quasar-perf.yml
     with:
