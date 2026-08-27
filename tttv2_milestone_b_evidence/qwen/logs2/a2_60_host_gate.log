@@ -1,0 +1,1288 @@
+2026-08-27 22:42:43.358 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 570 items
+
+models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_resolve_attention_arch_config_selects_internal_state_without_mutating_common[wormhole-qkv_grid0-8-None] PASSED
+models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_resolve_attention_arch_config_selects_internal_state_without_mutating_common[blackhole-qkv_grid1-7-create_head_grid1] PASSED
+models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_resolve_attention_arch_config_returns_only_common_config PASSED
+models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_shared_attention_compute_defaults_preserve_six_explicit_slots PASSED
+models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_compute_slots_live_on_resolved_common_config PASSED
+models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_explicit_common_recipe_and_sku_overlay_take_precedence PASSED
+models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_explicit_common_invalid_compute_slot_fails_closed 2026-08-27 22:43:07.017 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="sdpa_prefill_compute_kernel_cfg"
+2026-08-27 22:43:07.018 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="sdpa_prefill_compute_kernel_cfg"
+PASSED
+models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_explicit_common_illegal_geometry_fails_closed 2026-08-27 22:43:07.203 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="does not match resolved width"
+2026-08-27 22:43:07.203 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="does not match resolved width"
+2026-08-27 22:43:07.204 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="prefill QKV grid"
+2026-08-27 22:43:07.204 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="prefill QKV grid"
+2026-08-27 22:43:07.204 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="decode_create_qkv_head_grid"
+2026-08-27 22:43:07.204 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="decode_create_qkv_head_grid"
+2026-08-27 22:43:07.204 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="decode_transformation_core_grid"
+2026-08-27 22:43:07.204 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="decode_transformation_core_grid"
+PASSED
+models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_attention_architecture_rejects_unsupported_mesh 2026-08-27 22:43:07.389 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="Unsupported Attention1D architecture"
+2026-08-27 22:43:07.390 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="Unsupported Attention1D architecture"
+PASSED
+models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_blackhole_common_config_uses_shared_baseline_and_mesh_sku_overlay PASSED
+models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_already_resolved_architecture_avoids_second_mesh_query PASSED
+models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_internal_config_resolution_contains_no_architecture_query PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_resolves_geometry_and_normalizes_architecture_enum PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_config_and_identity_recipe_mapping_are_frozen PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change0-mesh shape] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change1-32 devices] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change2-Wormhole only] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change3-max_batch_size=32] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change4-max_batch_size=32] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change5-divisible] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change6-identity-keyed] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change7-runtime_tensor_factory] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change8-policy is incomplete] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change9-policy is incomplete] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_weight_placement_must_match_exactly[wqkv_mesh_mapper_config-wrong-map] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_weight_placement_must_match_exactly[weight_memory_config-wrong-memory] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_weight_placement_must_match_exactly[weight_layout-row-major] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_weight_placement_must_match_exactly[wqkv_dtype-wrong-dtype] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_weight_shapes_and_atomic_qk_norm_fail_closed PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_wo_shape_follows_the_attention_projection_width PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_square_wo_resolves_when_attention_width_equals_hidden_size PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_wqkv_and_wo_each_carry_their_own_weight_memory_config PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_a_projection_placed_against_the_other_configs_value_is_rejected PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_wo_weight_memory_config_defaults_to_the_shared_placement PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_qk_norm_requires_explicit_head_local_geometry PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefetch_context_selectors_fail_closed[decode_prefetch_context-context0-different mesh] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefetch_context_selectors_fail_closed[prefill_prefetch_context-context1-incompatible mode] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_recipe_key_and_recipe_policy_fail_closed PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_kv_cache_shape_dtype_and_capacity_are_validated[binding_kwargs0-capacity] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_kv_cache_shape_dtype_and_capacity_are_validated[binding_kwargs1-paged KV cache shape] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_kv_cache_shape_dtype_and_capacity_are_validated[binding_kwargs2-identical rank-4] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_kv_cache_shape_dtype_and_capacity_are_validated[binding_kwargs3-dtype does not match metadata] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_kv_cache_shape_dtype_and_capacity_are_validated[binding_kwargs4-dtypes must match] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_contiguous_cache_shape_and_foreign_mesh_are_rejected PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_contract_fails_before_compute[table0-device-local rows] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_contract_fails_before_compute[table1-device-local rows] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_contract_fails_before_compute[table2-rank-2] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_contract_fails_before_compute[table3-capacity] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_contract_fails_before_compute[table4-dtype] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_accepts_the_device_local_batch_and_its_core_repeats[8] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_accepts_the_device_local_batch_and_its_core_repeats[16] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_accepts_the_device_local_batch_and_its_core_repeats[32] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_page_table_must_reach_every_filled_user PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_direct_ttnn_recipe_is_straight_line_and_owns_stages PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_uses_optional_fused_reduce_create_heads_hook PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_optionally_gathers_column_local_users_before_concat PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_prefetch_context_is_passed_to_both_projections PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_decode_contiguous_cache_selects_tensor_indexed_update_and_nonpaged_sdpa PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_qk_norm_runs_head_local_decode_and_prefill_paths PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[regular-regular-single-row] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[regular-regular-concat-32] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[regular-ring-single-row] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[regular-ring-concat-32] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[prefix/chunked-regular-single-row] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[prefix/chunked-regular-concat-32] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[prefix/chunked-ring-single-row] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[prefix/chunked-ring-concat-32] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_2048_recipe_and_passes_prefetch_context PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_concat32_contiguous_cache_fill_slices_each_physical_row PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_concat32_paged_cache_maps_source_rows_to_ordered_users PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_chunked_sdpa_reads_only_the_addressed_users_page_table_row PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_concat32_chunked_sdpa_keeps_the_full_page_table PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_invocation_policy_fails_before_compute[metadata0] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_invocation_policy_fails_before_compute[metadata1] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_invocation_policy_fails_before_compute[metadata2] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_invocation_policy_fails_before_compute[metadata3] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_invocation_policy_fails_before_compute[metadata4] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_prefill_invocation_policy_fails_before_compute[metadata5] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_activation_placement_and_dtype_fail_before_compute[decode-tensor0-placement] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_activation_placement_and_dtype_fail_before_compute[decode-tensor1-dtype] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_activation_placement_and_dtype_fail_before_compute[prefill-tensor2-placement] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_activation_placement_and_dtype_fail_before_compute[prefill-tensor3-dtype] PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_runtime_tensors_are_factory_owned_and_released_once PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_intermediates_are_drained_when_a_stage_raises PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_close_prevents_every_mutating_or_execution_entrypoint PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_cache_binding_is_borrowed_idempotent_and_owner_guarded PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_mode_specific_projection_weights_materialize_independently PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_transition_does_not_claim_or_release_borrowed_collective_output PASSED
+models/common/tests/modules/attention/test_attention_2d.py::test_module_owns_direct_ttnn_stages_and_has_no_legacy_or_model_imports PASSED
+models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_resolves_representative_geometry[llama-prefill-128] PASSED
+models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_resolves_representative_geometry[llama-prefill-2048] PASSED
+models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_resolves_representative_geometry[qwen-prefill-512] PASSED
+models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_config_is_immutable PASSED
+models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_normalizes_physical_weight_to_rank_four PASSED
+models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_fails_closed_on_platform[shape0-32-Arch.WORMHOLE_B0-shape \\(8, 4\\)] PASSED
+models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_fails_closed_on_platform[shape1-31-Arch.WORMHOLE_B0-exactly 32] PASSED
+models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_fails_closed_on_platform[shape2-32-Arch.BLACKHOLE-Wormhole only] PASSED
+models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_rejects_invalid_shape_and_cross_mesh_weight PASSED
+models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_deallocates_scaled_and_lazy_input_intermediates PASSED
+models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_release_is_repeatable PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_resolves_representative_geometry[llama] PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_resolves_representative_geometry[qwen] PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_supports_explicit_lazy_mode_weights_and_splits PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_config_is_immutable PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_fails_closed_on_platform[shape0-32-Arch.WORMHOLE_B0-shape \\(8, 4\\)] PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_fails_closed_on_platform[shape1-16-Arch.WORMHOLE_B0-exactly 32] PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_fails_closed_on_platform[shape2-32-Arch.BLACKHOLE-Wormhole only] PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_rejects_unpadded_or_mismatched_weights PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_rejects_missing_collective_and_cross_mesh_weight PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_rejects_invalid_vocab_and_input_geometry PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_accepts_column_local_device_activation_width PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_rejects_foreign_or_materialized_lazy_input PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_uses_per_axis_padding_and_exact_mask_metadata PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_default_mode_weights_alias_and_materialize_lazily PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_rejects_padding_between_vocab_splits PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_collective_contract_fails_closed PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_deallocates_projection_transients PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_repeat_projection_and_collective_failure_cleanup PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_release_deallocates_aliased_mode_weights_once PASSED
+models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_release_deduplicates_shared_values_across_distinct_lazy_weights PASSED
+models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_resolver_selects_architecture_and_effective_sku_defaults[Arch.WORMHOLE_B0-1024-12-8] PASSED
+models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_resolver_selects_architecture_and_effective_sku_defaults[Arch.BLACKHOLE-512-8-8] PASSED
+models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_resolver_selects_architecture_and_effective_sku_defaults[Arch.BLACKHOLE-512-7-7] PASSED
+models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_model_cutoff_precedes_sku_default_without_mutating_common_config PASSED
+models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_four_explicit_common_slots_preserve_semantics_and_are_independent PASSED
+models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_independent_resolutions_do_not_share_compute_configs PASSED
+models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_resolver_returns_only_common_config_state PASSED
+models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_illegal_blackhole_common_overrides_fail_closed 2026-08-27 22:43:29.685 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="positive multiple"
+2026-08-27 22:43:29.685 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="positive multiple"
+2026-08-27 22:43:29.685 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="does not match the resolved architecture/SKU"
+2026-08-27 22:43:29.685 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="does not match the resolved architecture/SKU"
+2026-08-27 22:43:29.685 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="exceeds mesh compute grid"
+2026-08-27 22:43:29.685 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="exceeds mesh compute grid"
+2026-08-27 22:43:29.685 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="missing fields"
+2026-08-27 22:43:29.686 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="missing fields"
+PASSED
+models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_unsupported_architecture_fails_before_compute_config_construction 2026-08-27 22:43:29.872 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="Unsupported MLP1D architecture"
+2026-08-27 22:43:29.872 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="Unsupported MLP1D architecture"
+PASSED
+models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_deferred_config_factories_contain_no_architecture_queries PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolves_representative_model_geometry[llama-3.3-70b] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolves_representative_model_geometry[qwen3-32b] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape0-32-Arch.WORMHOLE_B0-WH Galaxy mesh] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape1-8-Arch.WORMHOLE_B0-exactly 32 devices] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape2-32-Arch.BLACKHOLE-requires Wormhole] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_validates_projection_shapes PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_rejects_foreign_ccl_and_prefetch_resources PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_mode_specific_tunings_resolve_independently PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_prefill_program_configs_are_sequence_keyed PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_rejects_non_static_strategy_values[overrides0-collective_resource_selector must be callable] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_rejects_non_static_strategy_values[overrides1-mlp_activation_type must be a ttnn.UnaryOpType] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_rejects_non_static_strategy_values[overrides2-prefill_w1_w3_prg_config must be callable] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_rejects_non_static_strategy_values[overrides3-prefill_w2_prg_config must be callable] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_rejects_non_positive_prefill_cutoff PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_collective_selector_receives_mode_context_and_runtime_tensor[reduce_scatter-1-decode] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_collective_selector_receives_mode_context_and_runtime_tensor[reduce_scatter-1-prefill] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_collective_selector_receives_mode_context_and_runtime_tensor[all_gather-1-decode] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_collective_selector_receives_mode_context_and_runtime_tensor[all_gather-1-prefill] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_collective_selector_receives_mode_context_and_runtime_tensor[all_reduce-0-decode] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_collective_selector_receives_mode_context_and_runtime_tensor[all_reduce-0-prefill] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_prefetch_context_maps_to_ttnn_collaborator_arguments PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_from_model_args_is_not_part_of_contract PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_mode_bound_ccl_contexts_are_resolved_at_construction PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_fails_closed_when_collective_resources_are_incomplete PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_collectives_consume_resolved_buffers_and_subdevice PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_all_reduce_consumes_resolved_buffer_and_subdevice PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_prefill_all_reduce_uses_axis0_reduce_scatter_then_all_gather PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_decode_fused_matmul_uses_static_resource_key_and_preserves_output_order PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_decode_w3_uses_llama_reduce_scatter_padded_geometry PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_simple_constructor_requires_explicit_ccl_injection PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_decode_uses_configured_activation_and_releases_only_module_owned_transients[UnaryOpType.SILU] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_decode_uses_configured_activation_and_releases_only_module_owned_transients[UnaryOpType.GELU] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_prefill_uses_mode_specific_configs_and_configured_activation[UnaryOpType.SILU] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_prefill_uses_mode_specific_configs_and_configured_activation[UnaryOpType.GELU] PASSED
+models/common/tests/modules/mlp/test_mlp_2d.py::test_forward_rejects_unknown_mode PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_config_is_frozen_and_fails_closed_for_wh_8x4 PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_address_repeat_count_tracks_active_readers_not_dummy_global_cb_mappings PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_initialize_creates_only_both_managers_and_is_idempotent PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_registration_is_ordered_borrowed_and_compatibility_validated PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_seal_loads_decode_manager_before_global_cb_allocation PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_default_registration_rejects_duplicate_buffer_and_other_mesh PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_deferred_global_cb_is_allocated_on_first_decode_activation PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_seal_derives_cb_size_and_rejects_undersized_configuration PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_seal_is_transactional_and_retryable_after_metadata_failure PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_activation_starts_stops_and_releases_repeat_results PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_default_ttnn_session_includes_addresses_and_deallocates_stop_sentinel PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_borrow_context_requires_exact_sealed_subdevice_policy PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_failed_activation_rolls_back_mode_and_running_prefetch PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_failed_stop_preserves_active_session_ownership PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_failed_stall_transition_restores_previous_mode_without_publishing_target PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_cleanup_is_idempotent_releases_owned_results_and_never_weights PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_cleanup_continues_after_failure_and_remains_idempotent PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_context_manager_cleans_up_on_failure PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_releasing_the_global_cb_on_prefill_recreates_it_on_the_next_decode [prefetcher] released the global circular buffer on entering prefill
+PASSED
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_release_without_defer_is_rejected 2026-08-27 22:43:40.456 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="requires defer_global_cb"
+2026-08-27 22:43:40.457 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="requires defer_global_cb"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolves_representative_norm_geometries[llama-final-norm] PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolves_representative_norm_geometries[qwen-qk-norm] PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape0-32-Arch.WORMHOLE_B0-WH Galaxy mesh] 2026-08-27 22:43:41.025 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] AssertionError message="WH Galaxy mesh"
+2026-08-27 22:43:41.026 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] AssertionError message="WH Galaxy mesh"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape1-31-Arch.WORMHOLE_B0-exactly 32 devices] 2026-08-27 22:43:41.215 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] AssertionError message="exactly 32 devices"
+2026-08-27 22:43:41.215 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] AssertionError message="exactly 32 devices"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape2-32-Arch.BLACKHOLE-requires Wormhole] 2026-08-27 22:43:41.405 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] AssertionError message="requires Wormhole"
+2026-08-27 22:43:41.405 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] AssertionError message="requires Wormhole"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_rejects_resources_from_another_mesh 2026-08-27 22:43:41.595 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] AssertionError message="prefetch context"
+2026-08-27 22:43:41.595 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] AssertionError message="prefetch context"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_resolution_fails_closed_without_ccl_resources 2026-08-27 22:43:41.786 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] TypeError message="context"
+2026-08-27 22:43:41.787 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] TypeError message="context"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_fused_decode_returns_normalized_output_and_residual_sum PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_fused_decode_rejects_stats_buffer_off_the_norm_sender_core 2026-08-27 22:43:42.166 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="first core of the norm input shard grid"
+2026-08-27 22:43:42.167 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="first core of the norm input shard grid"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_decode_stays_interleaved PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_stats_share_the_norm_sender_core PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_qwen_128_wide_norm_is_head_local_and_skips_collectives PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_chunked_prefill_stats_shape_preserves_all_token_axes PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_consumes_resolved_gather_resources PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_prefill_uses_resolved_standard_gather PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_from_model_args_is_not_part_of_contract PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_mode_bound_ccl_contexts_are_resolved_at_construction PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_simple_constructor_accepts_explicit_galaxy_ccl PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_forward_rejects_unknown_mode 2026-08-27 22:43:44.061 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="mode must be"
+2026-08-27 22:43:44.061 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="mode must be"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_does_not_deallocate_a_tensor_it_returns PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_decode_without_a_compute_placement_is_one_rms_norm PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_decode_runs_the_kernel_in_the_compute_placement PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_decode_refuses_a_residual_it_cannot_place 2026-08-27 22:43:44.827 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="does not support a residual"
+2026-08-27 22:43:44.828 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="does not support a residual"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_compute_grid_must_be_a_one_wide_rectangle PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_resolves_llama_and_qwen_data[llama-scaled] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_resolves_llama_and_qwen_data[qwen] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fused_qk_keeps_users_grouped_per_column PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_config_is_immutable PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape0-32-Arch.WORMHOLE_B0-shape \\(8, 4\\)] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape1-16-Arch.WORMHOLE_B0-exactly 32] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape2-32-Arch.BLACKHOLE-Wormhole only] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_mismatched_tables_and_bad_batch_group PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_requires_explicit_fabric_safe_grids PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_prepares_grouped_decode_indices_with_resolved_mapper PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_invalid_decode_indices[positions0] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_invalid_decode_indices[positions1] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_release_is_repeatable PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_prefill_table_copy_is_tilized_and_decode_table_is_not PASSED
+models/common/tests/modules/sampling/test_sampling_1d_release.py::test_sampling_release_is_idempotent_preserves_borrowed_and_allows_reload PASSED
+models/common/tests/modules/sampling/test_sampling_1d_release.py::test_partial_load_failure_preserves_primary_and_releases_before_reload 2026-08-27 22:43:48.050 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] RuntimeError message="seed allocation failed"
+2026-08-27 22:43:48.050 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] RuntimeError message="seed allocation failed"
+PASSED
+models/common/tests/modules/sampling/test_sampling_1d_release.py::test_sampling_release_is_best_effort_and_retries_only_failed_buffer 2026-08-27 22:43:48.238 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] RuntimeError message="seed cleanup failed once"
+2026-08-27 22:43:48.239 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] RuntimeError message="seed cleanup failed once"
+PASSED
+models/common/tests/modules/sampling/test_sampling_1d_release.py::test_log_probs_calculator_release_deallocates_unique_owned_tensors_once PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_config_resolves_galaxy_vocab_and_user_placement PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_qwen_padded_vocab_is_tile_aligned_per_vocab_shard PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_config_fails_closed_outside_canonical_galaxy[cluster_shape-value0-cluster_shape] 2026-08-27 22:43:49.001 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="cluster_shape"
+2026-08-27 22:43:49.001 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="cluster_shape"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_config_fails_closed_outside_canonical_galaxy[architecture-blackhole-Wormhole] 2026-08-27 22:43:49.189 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="Wormhole"
+2026-08-27 22:43:49.190 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="Wormhole"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_config_fails_closed_outside_canonical_galaxy[max_batch_size-16-physical batch 32] 2026-08-27 22:43:49.377 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="physical batch 32"
+2026-08-27 22:43:49.378 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="physical batch 32"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_config_fails_closed_outside_canonical_galaxy[sampling_all_gather_axis-1-vocabulary axis 0] 2026-08-27 22:43:49.565 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="vocabulary axis 0"
+2026-08-27 22:43:49.566 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="vocabulary axis 0"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_config_rejects_wrong_device_count 2026-08-27 22:43:49.756 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="32 devices"
+2026-08-27 22:43:49.757 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="32 devices"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_config_rejects_non_wormhole_mesh 2026-08-27 22:43:49.946 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="Wormhole"
+2026-08-27 22:43:49.946 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="Wormhole"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_config_rejects_unaligned_local_vocabulary 2026-08-27 22:43:50.134 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="tile aligned"
+2026-08-27 22:43:50.135 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="tile aligned"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_config_accepts_ring_exact_padding_and_rejects_more_than_one_shard 2026-08-27 22:43:50.327 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="more than one"
+2026-08-27 22:43:50.328 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="more than one"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_mutable_device_state_uses_lazy_buffers_with_2d_mappers PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_slot_placement_is_contiguous_across_galaxy_columns PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_prepare_call_preserves_each_per_call_value_without_module_state PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_prepare_call_refreshes_lazy_sources_by_global_slot PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_greedy_sampling_rejects_high_padded_logits PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_seeded_sampling_is_repeatable_and_slot_stable PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_device_temperature_buffer_holds_reciprocal_temperature PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_unseeded_sampling_uses_fresh_randomness PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_invalid_per_call_values_are_rejected[kwargs0-top_k] 2026-08-27 22:43:52.043 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="top_k"
+2026-08-27 22:43:52.044 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="top_k"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_invalid_per_call_values_are_rejected[kwargs1-top_p] 2026-08-27 22:43:52.234 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="top_p"
+2026-08-27 22:43:52.235 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="top_p"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_invalid_per_call_values_are_rejected[kwargs2-temperature] 2026-08-27 22:43:52.426 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="temperature"
+2026-08-27 22:43:52.426 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="temperature"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_invalid_per_call_values_are_rejected[kwargs3-seed] 2026-08-27 22:43:52.615 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="seed"
+2026-08-27 22:43:52.616 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="seed"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_invalid_per_call_values_are_rejected[kwargs4-unique] 2026-08-27 22:43:52.805 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="unique"
+2026-08-27 22:43:52.805 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="unique"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_source_has_no_legacy_or_penalties_dependency PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_config_requires_explicit_device_execution_resources 2026-08-27 22:43:53.187 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="explicit sub_core_grids"
+2026-08-27 22:43:53.188 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="explicit sub_core_grids"
+PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_decode_deallocates_all_owned_transients_and_preserves_borrowed_tensors PASSED
+models/common/tests/modules/sampling/test_sampling_2d.py::test_release_is_repeatable_and_clears_materialized_handles PASSED
+models/common/tests/modules/test_tensor_utils.py::test_pad_dim_to_size PASSED
+models/common/tests/modules/test_tensor_utils.py::test_pad_dim_to_size_positive_dim PASSED
+models/common/tests/modules/test_tensor_utils.py::test_pad_to_shape PASSED
+models/common/tests/modules/test_tensor_utils.py::test_pad_to_shape_no_op PASSED
+models/common/tests/modules/test_tensor_utils.py::test_pad_to_shape_single_dim PASSED
+models/common/tests/modules/test_tensor_utils.py::test_pad_to_shape_error_on_smaller_target PASSED
+models/common/tests/modules/test_tensor_utils.py::test_parse_shard_dims_from_mesh_mapper_config PASSED
+models/common/tests/modules/test_tensor_utils.py::test_get_rot_transformation_mat_tile_size PASSED
+models/common/tests/modules/test_tensor_utils.py::test_get_rot_transformation_mat_large PASSED
+models/common/tests/modules/test_tensor_utils.py::test_get_rot_transformation_mat PASSED
+models/common/tests/modules/test_tensor_utils.py::test_zeros_like_kv_cache PASSED
+models/common/tests/modules/test_tensor_utils.py::test_zeros_like_paged_cache PASSED
+models/common/tests/modules/test_tensor_utils.py::test_program_config_to_dict_with_to_json PASSED
+models/common/tests/modules/test_tensor_utils.py::test_program_config_to_dict_without_to_json PASSED
+models/common/tests/modules/test_tensor_utils.py::test_program_config_to_str PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_config_is_frozen_and_normalizes_resource_sequences PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_resource_key_validates_canonical_axes_but_allows_attention_axes[reduce_scatter-2] PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_resource_key_validates_canonical_axes_but_allows_attention_axes[all_reduce-2] PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_resource_key_validates_canonical_axes_but_allows_attention_axes[all_gather_concat-1] PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_resource_key_validates_canonical_axes_but_allows_attention_axes[all_gather-2] PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_config_fails_closed_for_non_wh_8x4_mesh[mesh0-mesh device shape] PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_config_fails_closed_for_non_wh_8x4_mesh[mesh1-exactly 32 devices] PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_config_fails_closed_for_non_wh_8x4_mesh[mesh2-architecture does not match] PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_config_rejects_duplicate_keys_and_missing_factory PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_context_keys_by_operation_axis_geometry_and_sequence PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_context_cycles_independently_per_full_key_and_legacy_helpers_remain_usable PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_factory_resources_are_owned_borrowed_resources_are_not_and_cleanup_is_idempotent PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_factory_failure_releases_already_created_resources_in_reverse_order PASSED
+models/common/tests/models/galaxy/test_ccl.py::test_context_rejects_unknown_mode_and_collective PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_concat32_qkv_reduction_returns_one_row_per_user PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_concat32_output_reduction_merges_the_rows_before_reducing PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_single_row_prefill_and_decode_are_never_reshaped[None] PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_single_row_prefill_and_decode_are_never_reshaped[recipe1] PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_a_token_stream_that_does_not_split_into_32_rows_fails_closed PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_the_selector_is_the_identity_sharded_over_the_user_axis PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_the_selector_materializes_once PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_selection_returns_one_columns_users PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape0] PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape1] PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape2] PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_release_is_idempotent PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_deallocating_an_already_released_tensor_is_a_no_op PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_decode_output_reduction_uses_all_reduce_async_not_the_scatter_pair PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_every_active_slot_owns_a_disjoint_contiguous_block_run PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_idle_slots_get_their_own_sink_block PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_a_pool_too_small_for_the_served_context_fails_closed PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_active_slots_apply_to_paged_pools_only PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_page_table_columns_are_padded_to_the_chunked_sdpa_stick PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_an_already_aligned_table_is_returned_unchanged PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_only_the_prefill_table_is_stick_aligned PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_prefill_padding_picks_the_smallest_covering_recipe[1-128] PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_prefill_padding_picks_the_smallest_covering_recipe[128-128] PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_prefill_padding_picks_the_smallest_covering_recipe[129-512] PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_prefill_padding_picks_the_smallest_covering_recipe[512-512] PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_a_prompt_beyond_every_recipe_fails_closed PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_batched_padding_uses_the_batched_recipe_family PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_greedy_is_temperature_zero_or_top_one PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_greedy_host_sampling_is_argmax PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_seeded_stochastic_host_sampling_repeats PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_graph_calls_before_open_fail_closed PASSED
+models/common/tests/models/galaxy/test_direct_runner.py::test_close_is_idempotent_before_open PASSED
+models/common/tests/models/galaxy/test_plans.py::test_decode_plan_covers_exactly_the_qualified_collectives[llama-3.3-70b] 2026-08-27 22:44:05.434 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 22:44:05.434 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 22:44:05.454 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 22:44:05.454 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-27 22:44:05.511 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:575)
+2026-08-27 22:44:05.542 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-27 22:44:06.956 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[21, 18, 22, 20, 17, 23, 19, 16, 26, 30, 29, 31, 24, 27, 28, 25, 12, 14, 13, 10, 8, 15, 11, 9, 5, 6, 2, 4, 3, 7, 1, 0] and remote chip ids {} (cluster.cpp:173)
+2026-08-27 22:44:06.956 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-27 22:44:06.956 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:150)
+2026-08-27 22:44:06.956 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-27 22:44:06.982 | info     |             UMD | Starting devices in cluster (cluster.cpp:1198)
+2026-08-27 22:44:07.041 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1206)
+PASSED
+models/common/tests/models/galaxy/test_plans.py::test_decode_plan_covers_exactly_the_qualified_collectives[qwen3-32b] PASSED
+models/common/tests/models/galaxy/test_plans.py::test_prefill_plan_is_sequence_keyed_and_unique[llama-3.3-70b] PASSED
+models/common/tests/models/galaxy/test_plans.py::test_prefill_plan_is_sequence_keyed_and_unique[qwen3-32b] PASSED
+models/common/tests/models/galaxy/test_plans.py::test_batched_prefill_reuses_the_single_row_plan_at_its_token_count[llama-3.3-70b] PASSED
+models/common/tests/models/galaxy/test_plans.py::test_batched_prefill_reuses_the_single_row_plan_at_its_token_count[qwen3-32b] PASSED
+models/common/tests/models/galaxy/test_plans.py::test_a_batched_length_that_duplicates_a_single_row_length_is_not_registered_twice PASSED
+models/common/tests/models/galaxy/test_plans.py::test_reduce_scatter_plans_carry_intermediate_buffers PASSED
+models/common/tests/models/galaxy/test_plans.py::test_selector_finds_the_plan_that_matches_the_observed_tensor PASSED
+models/common/tests/models/galaxy/test_plans.py::test_selector_keys_prefill_stages_apart PASSED
+models/common/tests/models/galaxy/test_plans.py::test_mode_plans_partition_prefill_and_decode_subdevices PASSED
+models/common/tests/models/galaxy/test_plans.py::test_mode_plans_fail_closed_on_a_semaphore_set_narrower_than_the_workers PASSED
+models/common/tests/models/galaxy/test_plans.py::test_mode_plan_builders_reject_duplicate_keys PASSED
+models/common/tests/models/galaxy/test_plans.py::test_prefetch_mapping_pairs_every_sender_with_receivers PASSED
+models/common/tests/models/galaxy/test_plans.py::test_prefetch_address_placement_tracks_the_registered_weight_count PASSED
+models/common/tests/models/galaxy/test_plans.py::test_dram_prefetch_producer_streams_one_layer_plus_addresses PASSED
+models/common/tests/models/galaxy/test_plans.py::test_dram_prefetch_producer_fails_when_registration_is_short PASSED
+models/common/tests/models/galaxy/test_prefetcher_resources_composition.py::test_concrete_owners_share_contexts_and_serialize_repeated_decode_and_mode_switch PASSED
+models/common/tests/models/galaxy/test_prefetcher_resources_composition.py::test_galaxy_cleanup_releases_only_its_resources_before_prefetcher_cleanup PASSED
+models/common/tests/models/galaxy/test_prefetcher_resources_composition.py::test_concrete_prefetcher_policy_mismatch_is_rejected_before_ccl_allocation PASSED
+models/common/tests/models/galaxy/test_prefetcher_resources_composition.py::test_concrete_prefetcher_activation_failure_is_not_published_by_galaxy_owner PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_partitions_the_mesh_consistently[llama-3.3-70b] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_partitions_the_mesh_consistently[qwen3-32b] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_reports_galaxy_aligned_vocabularies PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_the_lm_head_reduction_leaves_the_collective_worker_cores PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides0-physical batch 32] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides1-must shard over 4 columns] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides2-must shard over 8 rows] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides3-must shard over the 8 mesh rows] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides4-must shard over the 8 mesh rows] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides5-tile aligned] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides6-distributed norm grid] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides7-multiple of 128] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides8-exceeds max_seq_len] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides9-positive multiple of 128] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_mesh_validation_requires_wormhole_galaxy PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_residual_placement_matches_the_rmsnorm2d_default[llama-3.3-70b] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_residual_placement_matches_the_rmsnorm2d_default[qwen3-32b] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_decode_placements_derive_every_shard_from_the_geometry[llama-3.3-70b] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_decode_placements_derive_every_shard_from_the_geometry[qwen3-32b] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_ring_padding_is_tile_and_core_aligned PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_llama_decode_reduce_scatter_width_matches_the_qualified_recipe PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_prefill_placements_cover_every_qualified_sequence_length[llama-3.3-70b] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_prefill_placements_cover_every_qualified_sequence_length[qwen3-32b] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_batched_prefill_placements_are_resolved_per_row_length[llama-3.3-70b] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_batched_prefill_placements_are_resolved_per_row_length[qwen3-32b] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_batched_prefill_token_counts_drive_the_collective_geometry PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_batched_prefill_lengths_are_validated_like_single_row_lengths PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_default_geometry_resolves_no_batched_recipe PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_weight_placement_pads_the_ring_output_width PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_sampling_and_rope_core_grids_are_explicit PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_prefill_reshape_matches_the_mlp_cutoff PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_geometry_is_frozen PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_rope_batch_grid_lies_inside_the_worker_sub_device[plain] PASSED
+models/common/tests/models/galaxy/test_recipes.py::test_rope_batch_grid_lies_inside_the_worker_sub_device[qk-fused] PASSED
+models/common/tests/models/galaxy/test_resources.py::test_resource_config_is_explicit_frozen_and_rejects_incomplete_geometry PASSED
+models/common/tests/models/galaxy/test_resources.py::test_factory_allocates_exact_mode_geometry_and_semaphore_cardinality PASSED
+models/common/tests/models/galaxy/test_resources.py::test_activation_serializes_mode_switches_and_cleanup_is_reverse_and_idempotent PASSED
+models/common/tests/models/galaxy/test_resources.py::test_public_synchronize_is_worker_scoped_and_terminal_after_cleanup PASSED
+models/common/tests/models/galaxy/test_resources.py::test_allocation_failure_rolls_back_only_ccl_resources PASSED
+models/common/tests/models/galaxy/test_resources.py::test_prefetcher_activation_failure_does_not_publish_ccl_mode PASSED
+models/common/tests/models/galaxy/test_resources.py::test_incompatible_prefetcher_is_rejected_before_ccl_allocation PASSED
+models/common/tests/models/galaxy/test_resources.py::test_cleanup_continues_after_release_error PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len128] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len256] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len512] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len1024] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len2048] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active16] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active31] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active32] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active16] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active31] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active32] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_an_empty_row_is_caught_by_the_generation_entry_point_not_by_the_prefill PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len128] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len256] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len512] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len1024] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len2048] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_each_concatenated_source_row_touches_exactly_one_page_table_row PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_a_row_count_between_one_and_thirty_two_has_no_prefill_recipe PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_a_single_row_prefill_still_indexes_the_table_by_user PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_concatenated_prefill_requires_the_whole_physical_batch PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_a_short_row_count_is_refused PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len128] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len256] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len512] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len1024] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len2048] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_a_prompt_past_the_longest_batched_recipe_fails_closed PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len128] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len256] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len512] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len1024] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len2048] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_a_batched_length_beyond_the_served_context_is_refused PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_each_long_context_geometry_resolves[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_each_long_context_geometry_resolves[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_each_long_context_geometry_resolves[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_block_pool_covers_the_served_context_and_every_idle_sink[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_block_pool_covers_the_served_context_and_every_idle_sink[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_block_pool_covers_the_served_context_and_every_idle_sink[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_runner_accepts_the_batch_one_long_context_allocation[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_runner_accepts_the_batch_one_long_context_allocation[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_runner_accepts_the_batch_one_long_context_allocation[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_page_table_stays_small_even_at_the_longest_context[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_page_table_stays_small_even_at_the_longest_context[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_page_table_stays_small_even_at_the_longest_context[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_rope_tables_grow_linearly_with_the_served_context[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_rope_tables_grow_linearly_with_the_served_context[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_rope_tables_grow_linearly_with_the_served_context[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_capacity_grows_linearly_in_context_and_is_reported_for_all_three PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunked_prefill_plan_walks_the_context_without_revisiting_a_block[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunked_prefill_plan_walks_the_context_without_revisiting_a_block[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_a_decode_after_a_full_prefill_still_has_a_block_to_write_into PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_served_context_must_stay_a_multiple_of_the_chunk_alignment PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[1] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[8] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[16] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[31] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[32] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_an_idle_slots_sink_never_lands_in_an_active_slots_run[1] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_an_idle_slots_sink_never_lands_in_an_active_slots_run[16] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_an_idle_slots_sink_never_lands_in_an_active_slots_run[31] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[1] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[8] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[16] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[31] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[32] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_each_active_slot_owns_enough_blocks_for_the_whole_served_context PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_prefill_and_decode_stage_two_different_tables_two_different_ways PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_padding_the_prefill_table_cannot_invent_a_block_a_slot_does_not_own PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_paged_capacity_resolved_after_construction_reaches_every_layer[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_paged_capacity_resolved_after_construction_reaches_every_layer[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_paged_capacity_cannot_be_resolved_while_a_cache_is_bound[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_paged_capacity_cannot_be_resolved_while_a_cache_is_bound[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_binding_every_layer_is_all_or_nothing[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_binding_every_layer_is_all_or_nothing[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_malformed_layer_entry_also_unwinds_every_earlier_layer[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_malformed_layer_entry_also_unwinds_every_earlier_layer[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_unbind_is_transactional_and_repeatable[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_unbind_is_transactional_and_repeatable[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_rebinding_replaces_the_previous_binding_rather_than_stacking[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_rebinding_replaces_the_previous_binding_rather_than_stacking[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_layer_count_mismatch_is_refused_before_anything_is_bound[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_layer_count_mismatch_is_refused_before_anything_is_bound[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_only_the_binding_owner_may_unbind PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_the_kv_contract_presents_one_layer_view_per_spec_and_forwards_binding PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_the_kv_contract_refuses_a_model_with_no_resolved_mesh PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_contiguous_spec_has_no_paged_shape_and_no_binding_metadata PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_decode_rejects_a_table_that_cannot_carry_one_mesh_columns_users PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_prefill_rejects_a_decode_shaped_table_that_cannot_reach_the_addressed_user PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_decode_cannot_tell_the_prefill_layout_from_a_four_core_l1_repeat PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[1] PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[2] PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[7] PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_never_reaches_another_slots_blocks PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_an_unaligned_chunk_start_is_refused PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_past_a_slots_allocation_is_refused PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_chunked_prefill_needs_a_paged_cache PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_the_first_chunk_is_an_ordinary_prefill_and_later_chunks_are_prefix_cached PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_every_chunk_table_is_released_before_the_next_chunk_is_staged PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_prefix_cached_request_leaves_the_next_plain_request_unchanged PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_prefix_cached_and_plain_requests_mix_across_slots_without_sharing_state PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_chunked_prefill_needs_a_positive_chunk_and_at_least_one_token PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_single_row_chunked_sdpa_reads_one_row_and_it_is_the_prefix_users PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_prefix_user_outside_the_addressed_users_is_refused PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_the_sliced_row_follows_prefix_user_id_when_it_differs_from_the_filled_user PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_an_already_single_row_table_is_passed_straight_through PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_concatenated_prefill_keeps_the_full_table_because_q_carries_every_row PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_page_table_alone_selects_the_prefix_chunked_recipe PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_two_identical_requests_stage_identical_tokens_positions_and_tables PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_repeated_request_reuses_the_bound_cache_and_tables_rather_than_restaging PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_the_same_slot_addresses_the_same_blocks_on_every_repeat PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_close_unbinds_the_cache_releases_the_tables_and_is_idempotent PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_closed_runner_refuses_further_graph_calls PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_failed_open_leaves_nothing_bound PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_reopening_after_a_close_allocates_a_fresh_cache PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_open_is_idempotent_while_already_open PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_cleanup_reports_no_owned_resources_while_never_freeing_the_global_cb PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_second_owner_on_the_same_mesh_reallocates_a_second_global_cb PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_cleanup_is_terminal_and_a_sealed_owner_cannot_be_resealed PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_the_galaxy_global_cb_size_is_a_topology_constant_not_a_model_choice PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_same_seed_in_the_same_slot_gives_the_same_token_across_runs PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_a_requests_row_position_in_the_call_does_not_change_its_stream PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_moving_a_seeded_request_to_another_slot_does_change_its_stream PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_one_seed_across_every_slot_does_not_collapse_the_batch PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_greedy_selects_exactly_the_host_argmax[llama] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_greedy_selects_exactly_the_host_argmax[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_forced_argmax_and_zero_temperature_agree[llama] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_forced_argmax_and_zero_temperature_agree[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_llama_now_pads_and_therefore_masks_like_qwen PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_qwen_pads_to_the_ring_exact_width_and_masks_the_remainder PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[greedy] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t0.7] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t1.0] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t2.0] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_device_path_masks_padding_additively_below_every_real_logit PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_each_slot_carries_its_own_top_k_top_p_and_temperature PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_heterogeneous_controls_change_the_tokens_they_are_supposed_to_change PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_top_k_stays_inside_the_configured_capacity PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.25] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.5] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.8] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[2.0] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[4.0] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_runners_host_reference_divides_by_t_rather_than_multiplying PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_a_greedy_policy_is_temperature_zero_or_top_one PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_runner_forces_argmax_for_a_greedy_policy PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_column_selector_gathers_rows_eight_c_through_eight_c_plus_seven PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_sampler_the_selector_and_the_runner_agree_on_every_slots_column PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_selector_refuses_a_tensor_that_is_not_the_physical_batch PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_accepts_the_exact_product PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides0-Unexpected Llama-3.3-70B geometry] PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides1-Unexpected Llama-3.3-70B geometry] PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides2-Unexpected Llama-3.3-70B geometry] PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides3-requires head_dim 128] PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides4-bias-free] PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides5-untied LM head] PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_rejects_an_out_of_range_layer_subset PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_parameters_resolve_the_galaxy_geometry PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_parameters_support_a_one_layer_model PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_parameters_reject_an_impossible_layer_count PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_rope_table_covers_twice_the_served_context PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_default_paged_geometry_covers_the_physical_batch PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_precision_recipes_differ_only_in_the_feed_forward_projection PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_reverse_permute_interleaves_each_head_pair PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_fused_qkv_packs_each_mesh_row_contiguously PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_fused_qkv_rejects_widths_that_cannot_shard_over_rows PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_attention_conversion_returns_tt_layout_shapes PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_mlp_conversion_transposes_every_projection PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_embedding_table_is_vocab_major_and_two_dimensional PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_lm_head_weight_is_transposed_and_zero_padded PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_rope_tables_come_from_the_provider_module PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_model_assembly_rejects_a_layer_count_mismatch PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_runtime_config_reports_the_galaxy_batched_prefill_policy PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_prefetch_registration_is_ordered_per_layer PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_batched_and_chunked_lengths_resolve_one_recipe_family_each PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_batched_prefill_is_off_by_default PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_a_chunked_length_without_its_plain_recipe_fails_closed PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_package_owns_its_graph_and_imports_no_model_named_implementation PASSED
+models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_distributed_norm_resolves_its_statistics_onto_the_decode_input_origin PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291
+  /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.71s call     models/common/tests/models/galaxy/test_plans.py::test_decode_plan_covers_exactly_the_qualified_collectives[llama-3.3-70b]
+0.75s call     models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_prefetch_registration_is_ordered_per_layer
+0.21s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_the_selector_refuses_a_tensor_that_is_not_the_physical_batch
+0.21s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active16]
+0.20s setup    models/common/tests/models/galaxy/test_plans.py::test_decode_plan_covers_exactly_the_qualified_collectives[qwen3-32b]
+0.20s setup    models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_batched_and_chunked_lengths_resolve_one_recipe_family_each
+0.20s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_the_sampler_the_selector_and_the_runner_agree_on_every_slots_column
+0.20s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active31]
+0.20s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active32]
+0.20s setup    models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[4k]
+0.20s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_open_is_idempotent_while_already_open
+0.20s setup    models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_chunked_prefill_needs_a_paged_cache
+0.20s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len1024]
+0.20s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active16]
+0.20s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len512]
+0.20s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len256]
+0.20s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_greedy_selects_exactly_the_host_argmax[llama]
+0.20s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len256]
+0.20s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len2048]
+0.20s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len512]
+0.20s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len1024]
+0.20s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[2.0]
+0.20s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_repeated_request_reuses_the_bound_cache_and_tables_rather_than_restaging
+0.20s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len1024]
+0.20s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_each_concatenated_source_row_touches_exactly_one_page_table_row
+=========================== short test summary info ============================
+PASSED models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_resolve_attention_arch_config_selects_internal_state_without_mutating_common[wormhole-qkv_grid0-8-None]
+PASSED models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_resolve_attention_arch_config_selects_internal_state_without_mutating_common[blackhole-qkv_grid1-7-create_head_grid1]
+PASSED models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_resolve_attention_arch_config_returns_only_common_config
+PASSED models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_shared_attention_compute_defaults_preserve_six_explicit_slots
+PASSED models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_compute_slots_live_on_resolved_common_config
+PASSED models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_explicit_common_recipe_and_sku_overlay_take_precedence
+PASSED models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_explicit_common_invalid_compute_slot_fails_closed
+PASSED models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_explicit_common_illegal_geometry_fails_closed
+PASSED models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_attention_architecture_rejects_unsupported_mesh
+PASSED models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_blackhole_common_config_uses_shared_baseline_and_mesh_sku_overlay
+PASSED models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_already_resolved_architecture_avoids_second_mesh_query
+PASSED models/common/tests/modules/attention/test_attention_1d_arch_config.py::test_internal_config_resolution_contains_no_architecture_query
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_resolves_geometry_and_normalizes_architecture_enum
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_config_and_identity_recipe_mapping_are_frozen
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change0-mesh shape]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change1-32 devices]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change2-Wormhole only]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change3-max_batch_size=32]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change4-max_batch_size=32]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change5-divisible]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change6-identity-keyed]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change7-runtime_tensor_factory]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change8-policy is incomplete]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_static_policy_fails_closed[change9-policy is incomplete]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_weight_placement_must_match_exactly[wqkv_mesh_mapper_config-wrong-map]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_weight_placement_must_match_exactly[weight_memory_config-wrong-memory]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_weight_placement_must_match_exactly[weight_layout-row-major]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_weight_placement_must_match_exactly[wqkv_dtype-wrong-dtype]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_weight_shapes_and_atomic_qk_norm_fail_closed
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_wo_shape_follows_the_attention_projection_width
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_square_wo_resolves_when_attention_width_equals_hidden_size
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_wqkv_and_wo_each_carry_their_own_weight_memory_config
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_a_projection_placed_against_the_other_configs_value_is_rejected
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_wo_weight_memory_config_defaults_to_the_shared_placement
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_qk_norm_requires_explicit_head_local_geometry
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefetch_context_selectors_fail_closed[decode_prefetch_context-context0-different mesh]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefetch_context_selectors_fail_closed[prefill_prefetch_context-context1-incompatible mode]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_recipe_key_and_recipe_policy_fail_closed
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_kv_cache_shape_dtype_and_capacity_are_validated[binding_kwargs0-capacity]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_kv_cache_shape_dtype_and_capacity_are_validated[binding_kwargs1-paged KV cache shape]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_kv_cache_shape_dtype_and_capacity_are_validated[binding_kwargs2-identical rank-4]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_kv_cache_shape_dtype_and_capacity_are_validated[binding_kwargs3-dtype does not match metadata]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_kv_cache_shape_dtype_and_capacity_are_validated[binding_kwargs4-dtypes must match]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_contiguous_cache_shape_and_foreign_mesh_are_rejected
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_contract_fails_before_compute[table0-device-local rows]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_contract_fails_before_compute[table1-device-local rows]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_contract_fails_before_compute[table2-rank-2]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_contract_fails_before_compute[table3-capacity]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_contract_fails_before_compute[table4-dtype]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_accepts_the_device_local_batch_and_its_core_repeats[8]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_accepts_the_device_local_batch_and_its_core_repeats[16]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_page_table_accepts_the_device_local_batch_and_its_core_repeats[32]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_page_table_must_reach_every_filled_user
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_direct_ttnn_recipe_is_straight_line_and_owns_stages
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_uses_optional_fused_reduce_create_heads_hook
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_optionally_gathers_column_local_users_before_concat
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_prefetch_context_is_passed_to_both_projections
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_decode_contiguous_cache_selects_tensor_indexed_update_and_nonpaged_sdpa
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_qk_norm_runs_head_local_decode_and_prefill_paths
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[regular-regular-single-row]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[regular-regular-concat-32]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[regular-ring-single-row]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[regular-ring-concat-32]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[prefix/chunked-regular-single-row]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[prefix/chunked-regular-concat-32]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[prefix/chunked-ring-single-row]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_every_composite_recipe[prefix/chunked-ring-concat-32]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_selects_2048_recipe_and_passes_prefetch_context
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_concat32_contiguous_cache_fill_slices_each_physical_row
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_concat32_paged_cache_maps_source_rows_to_ordered_users
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_chunked_sdpa_reads_only_the_addressed_users_page_table_row
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_concat32_chunked_sdpa_keeps_the_full_page_table
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_invocation_policy_fails_before_compute[metadata0]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_invocation_policy_fails_before_compute[metadata1]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_invocation_policy_fails_before_compute[metadata2]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_invocation_policy_fails_before_compute[metadata3]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_invocation_policy_fails_before_compute[metadata4]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_prefill_invocation_policy_fails_before_compute[metadata5]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_activation_placement_and_dtype_fail_before_compute[decode-tensor0-placement]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_activation_placement_and_dtype_fail_before_compute[decode-tensor1-dtype]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_activation_placement_and_dtype_fail_before_compute[prefill-tensor2-placement]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_activation_placement_and_dtype_fail_before_compute[prefill-tensor3-dtype]
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_runtime_tensors_are_factory_owned_and_released_once
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_intermediates_are_drained_when_a_stage_raises
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_close_prevents_every_mutating_or_execution_entrypoint
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_cache_binding_is_borrowed_idempotent_and_owner_guarded
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_mode_specific_projection_weights_materialize_independently
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_transition_does_not_claim_or_release_borrowed_collective_output
+PASSED models/common/tests/modules/attention/test_attention_2d.py::test_module_owns_direct_ttnn_stages_and_has_no_legacy_or_model_imports
+PASSED models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_resolves_representative_geometry[llama-prefill-128]
+PASSED models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_resolves_representative_geometry[llama-prefill-2048]
+PASSED models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_resolves_representative_geometry[qwen-prefill-512]
+PASSED models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_config_is_immutable
+PASSED models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_normalizes_physical_weight_to_rank_four
+PASSED models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_fails_closed_on_platform[shape0-32-Arch.WORMHOLE_B0-shape \\(8, 4\\)]
+PASSED models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_fails_closed_on_platform[shape1-31-Arch.WORMHOLE_B0-exactly 32]
+PASSED models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_fails_closed_on_platform[shape2-32-Arch.BLACKHOLE-Wormhole only]
+PASSED models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_rejects_invalid_shape_and_cross_mesh_weight
+PASSED models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_deallocates_scaled_and_lazy_input_intermediates
+PASSED models/common/tests/modules/embedding/test_embedding_2d.py::test_embedding_2d_release_is_repeatable
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_resolves_representative_geometry[llama]
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_resolves_representative_geometry[qwen]
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_supports_explicit_lazy_mode_weights_and_splits
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_config_is_immutable
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_fails_closed_on_platform[shape0-32-Arch.WORMHOLE_B0-shape \\(8, 4\\)]
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_fails_closed_on_platform[shape1-16-Arch.WORMHOLE_B0-exactly 32]
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_fails_closed_on_platform[shape2-32-Arch.BLACKHOLE-Wormhole only]
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_rejects_unpadded_or_mismatched_weights
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_rejects_missing_collective_and_cross_mesh_weight
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_rejects_invalid_vocab_and_input_geometry
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_accepts_column_local_device_activation_width
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_rejects_foreign_or_materialized_lazy_input
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_uses_per_axis_padding_and_exact_mask_metadata
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_default_mode_weights_alias_and_materialize_lazily
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_rejects_padding_between_vocab_splits
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_collective_contract_fails_closed
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_deallocates_projection_transients
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_repeat_projection_and_collective_failure_cleanup
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_release_deallocates_aliased_mode_weights_once
+PASSED models/common/tests/modules/lm_head/test_lm_head_2d.py::test_lm_head_2d_release_deduplicates_shared_values_across_distinct_lazy_weights
+PASSED models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_resolver_selects_architecture_and_effective_sku_defaults[Arch.WORMHOLE_B0-1024-12-8]
+PASSED models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_resolver_selects_architecture_and_effective_sku_defaults[Arch.BLACKHOLE-512-8-8]
+PASSED models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_resolver_selects_architecture_and_effective_sku_defaults[Arch.BLACKHOLE-512-7-7]
+PASSED models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_model_cutoff_precedes_sku_default_without_mutating_common_config
+PASSED models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_four_explicit_common_slots_preserve_semantics_and_are_independent
+PASSED models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_independent_resolutions_do_not_share_compute_configs
+PASSED models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_resolver_returns_only_common_config_state
+PASSED models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_illegal_blackhole_common_overrides_fail_closed
+PASSED models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_unsupported_architecture_fails_before_compute_config_construction
+PASSED models/common/tests/modules/mlp/test_mlp_1d_arch_config.py::test_deferred_config_factories_contain_no_architecture_queries
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolves_representative_model_geometry[llama-3.3-70b]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolves_representative_model_geometry[qwen3-32b]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape0-32-Arch.WORMHOLE_B0-WH Galaxy mesh]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape1-8-Arch.WORMHOLE_B0-exactly 32 devices]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape2-32-Arch.BLACKHOLE-requires Wormhole]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_validates_projection_shapes
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_rejects_foreign_ccl_and_prefetch_resources
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_mode_specific_tunings_resolve_independently
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_prefill_program_configs_are_sequence_keyed
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_rejects_non_static_strategy_values[overrides0-collective_resource_selector must be callable]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_rejects_non_static_strategy_values[overrides1-mlp_activation_type must be a ttnn.UnaryOpType]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_rejects_non_static_strategy_values[overrides2-prefill_w1_w3_prg_config must be callable]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_rejects_non_static_strategy_values[overrides3-prefill_w2_prg_config must be callable]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_rejects_non_positive_prefill_cutoff
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_collective_selector_receives_mode_context_and_runtime_tensor[reduce_scatter-1-decode]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_collective_selector_receives_mode_context_and_runtime_tensor[reduce_scatter-1-prefill]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_collective_selector_receives_mode_context_and_runtime_tensor[all_gather-1-decode]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_collective_selector_receives_mode_context_and_runtime_tensor[all_gather-1-prefill]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_collective_selector_receives_mode_context_and_runtime_tensor[all_reduce-0-decode]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_collective_selector_receives_mode_context_and_runtime_tensor[all_reduce-0-prefill]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_prefetch_context_maps_to_ttnn_collaborator_arguments
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_from_model_args_is_not_part_of_contract
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_mode_bound_ccl_contexts_are_resolved_at_construction
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_resolution_fails_closed_when_collective_resources_are_incomplete
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_collectives_consume_resolved_buffers_and_subdevice
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_all_reduce_consumes_resolved_buffer_and_subdevice
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_prefill_all_reduce_uses_axis0_reduce_scatter_then_all_gather
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_decode_fused_matmul_uses_static_resource_key_and_preserves_output_order
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_decode_w3_uses_llama_reduce_scatter_padded_geometry
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_simple_constructor_requires_explicit_ccl_injection
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_decode_uses_configured_activation_and_releases_only_module_owned_transients[UnaryOpType.SILU]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_decode_uses_configured_activation_and_releases_only_module_owned_transients[UnaryOpType.GELU]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_prefill_uses_mode_specific_configs_and_configured_activation[UnaryOpType.SILU]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_prefill_uses_mode_specific_configs_and_configured_activation[UnaryOpType.GELU]
+PASSED models/common/tests/modules/mlp/test_mlp_2d.py::test_forward_rejects_unknown_mode
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_config_is_frozen_and_fails_closed_for_wh_8x4
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_address_repeat_count_tracks_active_readers_not_dummy_global_cb_mappings
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_initialize_creates_only_both_managers_and_is_idempotent
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_registration_is_ordered_borrowed_and_compatibility_validated
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_seal_loads_decode_manager_before_global_cb_allocation
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_default_registration_rejects_duplicate_buffer_and_other_mesh
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_deferred_global_cb_is_allocated_on_first_decode_activation
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_seal_derives_cb_size_and_rejects_undersized_configuration
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_seal_is_transactional_and_retryable_after_metadata_failure
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_activation_starts_stops_and_releases_repeat_results
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_default_ttnn_session_includes_addresses_and_deallocates_stop_sentinel
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_borrow_context_requires_exact_sealed_subdevice_policy
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_failed_activation_rolls_back_mode_and_running_prefetch
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_failed_stop_preserves_active_session_ownership
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_failed_stall_transition_restores_previous_mode_without_publishing_target
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_cleanup_is_idempotent_releases_owned_results_and_never_weights
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_cleanup_continues_after_failure_and_remains_idempotent
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_context_manager_cleans_up_on_failure
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_releasing_the_global_cb_on_prefill_recreates_it_on_the_next_decode
+PASSED models/common/tests/modules/prefetcher/test_prefetcher_2d.py::test_release_without_defer_is_rejected
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolves_representative_norm_geometries[llama-final-norm]
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolves_representative_norm_geometries[qwen-qk-norm]
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape0-32-Arch.WORMHOLE_B0-WH Galaxy mesh]
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape1-31-Arch.WORMHOLE_B0-exactly 32 devices]
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape2-32-Arch.BLACKHOLE-requires Wormhole]
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_rejects_resources_from_another_mesh
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_resolution_fails_closed_without_ccl_resources
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_fused_decode_returns_normalized_output_and_residual_sum
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_fused_decode_rejects_stats_buffer_off_the_norm_sender_core
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_decode_stays_interleaved
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_stats_share_the_norm_sender_core
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_qwen_128_wide_norm_is_head_local_and_skips_collectives
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_chunked_prefill_stats_shape_preserves_all_token_axes
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_consumes_resolved_gather_resources
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_prefill_uses_resolved_standard_gather
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_from_model_args_is_not_part_of_contract
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_mode_bound_ccl_contexts_are_resolved_at_construction
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_simple_constructor_accepts_explicit_galaxy_ccl
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_forward_rejects_unknown_mode
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_does_not_deallocate_a_tensor_it_returns
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_decode_without_a_compute_placement_is_one_rms_norm
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_decode_runs_the_kernel_in_the_compute_placement
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_decode_refuses_a_residual_it_cannot_place
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_compute_grid_must_be_a_one_wide_rectangle
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_resolves_llama_and_qwen_data[llama-scaled]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_resolves_llama_and_qwen_data[qwen]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fused_qk_keeps_users_grouped_per_column
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_config_is_immutable
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape0-32-Arch.WORMHOLE_B0-shape \\(8, 4\\)]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape1-16-Arch.WORMHOLE_B0-exactly 32]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape2-32-Arch.BLACKHOLE-Wormhole only]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_mismatched_tables_and_bad_batch_group
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_requires_explicit_fabric_safe_grids
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_prepares_grouped_decode_indices_with_resolved_mapper
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_invalid_decode_indices[positions0]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_invalid_decode_indices[positions1]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_release_is_repeatable
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_prefill_table_copy_is_tilized_and_decode_table_is_not
+PASSED models/common/tests/modules/sampling/test_sampling_1d_release.py::test_sampling_release_is_idempotent_preserves_borrowed_and_allows_reload
+PASSED models/common/tests/modules/sampling/test_sampling_1d_release.py::test_partial_load_failure_preserves_primary_and_releases_before_reload
+PASSED models/common/tests/modules/sampling/test_sampling_1d_release.py::test_sampling_release_is_best_effort_and_retries_only_failed_buffer
+PASSED models/common/tests/modules/sampling/test_sampling_1d_release.py::test_log_probs_calculator_release_deallocates_unique_owned_tensors_once
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_config_resolves_galaxy_vocab_and_user_placement
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_qwen_padded_vocab_is_tile_aligned_per_vocab_shard
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_config_fails_closed_outside_canonical_galaxy[cluster_shape-value0-cluster_shape]
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_config_fails_closed_outside_canonical_galaxy[architecture-blackhole-Wormhole]
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_config_fails_closed_outside_canonical_galaxy[max_batch_size-16-physical batch 32]
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_config_fails_closed_outside_canonical_galaxy[sampling_all_gather_axis-1-vocabulary axis 0]
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_config_rejects_wrong_device_count
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_config_rejects_non_wormhole_mesh
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_config_rejects_unaligned_local_vocabulary
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_config_accepts_ring_exact_padding_and_rejects_more_than_one_shard
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_mutable_device_state_uses_lazy_buffers_with_2d_mappers
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_slot_placement_is_contiguous_across_galaxy_columns
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_prepare_call_preserves_each_per_call_value_without_module_state
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_prepare_call_refreshes_lazy_sources_by_global_slot
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_greedy_sampling_rejects_high_padded_logits
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_seeded_sampling_is_repeatable_and_slot_stable
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_device_temperature_buffer_holds_reciprocal_temperature
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_unseeded_sampling_uses_fresh_randomness
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_invalid_per_call_values_are_rejected[kwargs0-top_k]
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_invalid_per_call_values_are_rejected[kwargs1-top_p]
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_invalid_per_call_values_are_rejected[kwargs2-temperature]
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_invalid_per_call_values_are_rejected[kwargs3-seed]
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_invalid_per_call_values_are_rejected[kwargs4-unique]
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_source_has_no_legacy_or_penalties_dependency
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_config_requires_explicit_device_execution_resources
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_decode_deallocates_all_owned_transients_and_preserves_borrowed_tensors
+PASSED models/common/tests/modules/sampling/test_sampling_2d.py::test_release_is_repeatable_and_clears_materialized_handles
+PASSED models/common/tests/modules/test_tensor_utils.py::test_pad_dim_to_size
+PASSED models/common/tests/modules/test_tensor_utils.py::test_pad_dim_to_size_positive_dim
+PASSED models/common/tests/modules/test_tensor_utils.py::test_pad_to_shape
+PASSED models/common/tests/modules/test_tensor_utils.py::test_pad_to_shape_no_op
+PASSED models/common/tests/modules/test_tensor_utils.py::test_pad_to_shape_single_dim
+PASSED models/common/tests/modules/test_tensor_utils.py::test_pad_to_shape_error_on_smaller_target
+PASSED models/common/tests/modules/test_tensor_utils.py::test_parse_shard_dims_from_mesh_mapper_config
+PASSED models/common/tests/modules/test_tensor_utils.py::test_get_rot_transformation_mat_tile_size
+PASSED models/common/tests/modules/test_tensor_utils.py::test_get_rot_transformation_mat_large
+PASSED models/common/tests/modules/test_tensor_utils.py::test_get_rot_transformation_mat
+PASSED models/common/tests/modules/test_tensor_utils.py::test_zeros_like_kv_cache
+PASSED models/common/tests/modules/test_tensor_utils.py::test_zeros_like_paged_cache
+PASSED models/common/tests/modules/test_tensor_utils.py::test_program_config_to_dict_with_to_json
+PASSED models/common/tests/modules/test_tensor_utils.py::test_program_config_to_dict_without_to_json
+PASSED models/common/tests/modules/test_tensor_utils.py::test_program_config_to_str
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_config_is_frozen_and_normalizes_resource_sequences
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_resource_key_validates_canonical_axes_but_allows_attention_axes[reduce_scatter-2]
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_resource_key_validates_canonical_axes_but_allows_attention_axes[all_reduce-2]
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_resource_key_validates_canonical_axes_but_allows_attention_axes[all_gather_concat-1]
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_resource_key_validates_canonical_axes_but_allows_attention_axes[all_gather-2]
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_config_fails_closed_for_non_wh_8x4_mesh[mesh0-mesh device shape]
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_config_fails_closed_for_non_wh_8x4_mesh[mesh1-exactly 32 devices]
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_config_fails_closed_for_non_wh_8x4_mesh[mesh2-architecture does not match]
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_config_rejects_duplicate_keys_and_missing_factory
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_context_keys_by_operation_axis_geometry_and_sequence
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_context_cycles_independently_per_full_key_and_legacy_helpers_remain_usable
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_factory_resources_are_owned_borrowed_resources_are_not_and_cleanup_is_idempotent
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_factory_failure_releases_already_created_resources_in_reverse_order
+PASSED models/common/tests/models/galaxy/test_ccl.py::test_context_rejects_unknown_mode_and_collective
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_concat32_qkv_reduction_returns_one_row_per_user
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_concat32_output_reduction_merges_the_rows_before_reducing
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_single_row_prefill_and_decode_are_never_reshaped[None]
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_single_row_prefill_and_decode_are_never_reshaped[recipe1]
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_a_token_stream_that_does_not_split_into_32_rows_fails_closed
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_the_selector_is_the_identity_sharded_over_the_user_axis
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_the_selector_materializes_once
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_selection_returns_one_columns_users
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape0]
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape1]
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape2]
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_release_is_idempotent
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_deallocating_an_already_released_tensor_is_a_no_op
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_decode_output_reduction_uses_all_reduce_async_not_the_scatter_pair
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_every_active_slot_owns_a_disjoint_contiguous_block_run
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_idle_slots_get_their_own_sink_block
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_a_pool_too_small_for_the_served_context_fails_closed
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_active_slots_apply_to_paged_pools_only
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_page_table_columns_are_padded_to_the_chunked_sdpa_stick
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_an_already_aligned_table_is_returned_unchanged
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_only_the_prefill_table_is_stick_aligned
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_prefill_padding_picks_the_smallest_covering_recipe[1-128]
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_prefill_padding_picks_the_smallest_covering_recipe[128-128]
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_prefill_padding_picks_the_smallest_covering_recipe[129-512]
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_prefill_padding_picks_the_smallest_covering_recipe[512-512]
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_a_prompt_beyond_every_recipe_fails_closed
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_batched_padding_uses_the_batched_recipe_family
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_greedy_is_temperature_zero_or_top_one
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_greedy_host_sampling_is_argmax
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_seeded_stochastic_host_sampling_repeats
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_graph_calls_before_open_fail_closed
+PASSED models/common/tests/models/galaxy/test_direct_runner.py::test_close_is_idempotent_before_open
+PASSED models/common/tests/models/galaxy/test_plans.py::test_decode_plan_covers_exactly_the_qualified_collectives[llama-3.3-70b]
+PASSED models/common/tests/models/galaxy/test_plans.py::test_decode_plan_covers_exactly_the_qualified_collectives[qwen3-32b]
+PASSED models/common/tests/models/galaxy/test_plans.py::test_prefill_plan_is_sequence_keyed_and_unique[llama-3.3-70b]
+PASSED models/common/tests/models/galaxy/test_plans.py::test_prefill_plan_is_sequence_keyed_and_unique[qwen3-32b]
+PASSED models/common/tests/models/galaxy/test_plans.py::test_batched_prefill_reuses_the_single_row_plan_at_its_token_count[llama-3.3-70b]
+PASSED models/common/tests/models/galaxy/test_plans.py::test_batched_prefill_reuses_the_single_row_plan_at_its_token_count[qwen3-32b]
+PASSED models/common/tests/models/galaxy/test_plans.py::test_a_batched_length_that_duplicates_a_single_row_length_is_not_registered_twice
+PASSED models/common/tests/models/galaxy/test_plans.py::test_reduce_scatter_plans_carry_intermediate_buffers
+PASSED models/common/tests/models/galaxy/test_plans.py::test_selector_finds_the_plan_that_matches_the_observed_tensor
+PASSED models/common/tests/models/galaxy/test_plans.py::test_selector_keys_prefill_stages_apart
+PASSED models/common/tests/models/galaxy/test_plans.py::test_mode_plans_partition_prefill_and_decode_subdevices
+PASSED models/common/tests/models/galaxy/test_plans.py::test_mode_plans_fail_closed_on_a_semaphore_set_narrower_than_the_workers
+PASSED models/common/tests/models/galaxy/test_plans.py::test_mode_plan_builders_reject_duplicate_keys
+PASSED models/common/tests/models/galaxy/test_plans.py::test_prefetch_mapping_pairs_every_sender_with_receivers
+PASSED models/common/tests/models/galaxy/test_plans.py::test_prefetch_address_placement_tracks_the_registered_weight_count
+PASSED models/common/tests/models/galaxy/test_plans.py::test_dram_prefetch_producer_streams_one_layer_plus_addresses
+PASSED models/common/tests/models/galaxy/test_plans.py::test_dram_prefetch_producer_fails_when_registration_is_short
+PASSED models/common/tests/models/galaxy/test_prefetcher_resources_composition.py::test_concrete_owners_share_contexts_and_serialize_repeated_decode_and_mode_switch
+PASSED models/common/tests/models/galaxy/test_prefetcher_resources_composition.py::test_galaxy_cleanup_releases_only_its_resources_before_prefetcher_cleanup
+PASSED models/common/tests/models/galaxy/test_prefetcher_resources_composition.py::test_concrete_prefetcher_policy_mismatch_is_rejected_before_ccl_allocation
+PASSED models/common/tests/models/galaxy/test_prefetcher_resources_composition.py::test_concrete_prefetcher_activation_failure_is_not_published_by_galaxy_owner
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_partitions_the_mesh_consistently[llama-3.3-70b]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_partitions_the_mesh_consistently[qwen3-32b]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_reports_galaxy_aligned_vocabularies
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_the_lm_head_reduction_leaves_the_collective_worker_cores
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides0-physical batch 32]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides1-must shard over 4 columns]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides2-must shard over 8 rows]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides3-must shard over the 8 mesh rows]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides4-must shard over the 8 mesh rows]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides5-tile aligned]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides6-distributed norm grid]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides7-multiple of 128]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides8-exceeds max_seq_len]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_fails_closed_on_unsupported_shapes[overrides9-positive multiple of 128]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_mesh_validation_requires_wormhole_galaxy
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_residual_placement_matches_the_rmsnorm2d_default[llama-3.3-70b]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_residual_placement_matches_the_rmsnorm2d_default[qwen3-32b]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_decode_placements_derive_every_shard_from_the_geometry[llama-3.3-70b]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_decode_placements_derive_every_shard_from_the_geometry[qwen3-32b]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_ring_padding_is_tile_and_core_aligned
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_llama_decode_reduce_scatter_width_matches_the_qualified_recipe
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_prefill_placements_cover_every_qualified_sequence_length[llama-3.3-70b]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_prefill_placements_cover_every_qualified_sequence_length[qwen3-32b]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_batched_prefill_placements_are_resolved_per_row_length[llama-3.3-70b]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_batched_prefill_placements_are_resolved_per_row_length[qwen3-32b]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_batched_prefill_token_counts_drive_the_collective_geometry
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_batched_prefill_lengths_are_validated_like_single_row_lengths
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_default_geometry_resolves_no_batched_recipe
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_weight_placement_pads_the_ring_output_width
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_sampling_and_rope_core_grids_are_explicit
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_prefill_reshape_matches_the_mlp_cutoff
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_geometry_is_frozen
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_rope_batch_grid_lies_inside_the_worker_sub_device[plain]
+PASSED models/common/tests/models/galaxy/test_recipes.py::test_rope_batch_grid_lies_inside_the_worker_sub_device[qk-fused]
+PASSED models/common/tests/models/galaxy/test_resources.py::test_resource_config_is_explicit_frozen_and_rejects_incomplete_geometry
+PASSED models/common/tests/models/galaxy/test_resources.py::test_factory_allocates_exact_mode_geometry_and_semaphore_cardinality
+PASSED models/common/tests/models/galaxy/test_resources.py::test_activation_serializes_mode_switches_and_cleanup_is_reverse_and_idempotent
+PASSED models/common/tests/models/galaxy/test_resources.py::test_public_synchronize_is_worker_scoped_and_terminal_after_cleanup
+PASSED models/common/tests/models/galaxy/test_resources.py::test_allocation_failure_rolls_back_only_ccl_resources
+PASSED models/common/tests/models/galaxy/test_resources.py::test_prefetcher_activation_failure_does_not_publish_ccl_mode
+PASSED models/common/tests/models/galaxy/test_resources.py::test_incompatible_prefetcher_is_rejected_before_ccl_allocation
+PASSED models/common/tests/models/galaxy/test_resources.py::test_cleanup_continues_after_release_error
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len128]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len256]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len512]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len1024]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len2048]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active16]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active31]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active32]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active16]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active31]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active32]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_an_empty_row_is_caught_by_the_generation_entry_point_not_by_the_prefill
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len128]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len256]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len512]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len1024]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len2048]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_each_concatenated_source_row_touches_exactly_one_page_table_row
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_a_row_count_between_one_and_thirty_two_has_no_prefill_recipe
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_a_single_row_prefill_still_indexes_the_table_by_user
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_concatenated_prefill_requires_the_whole_physical_batch
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_a_short_row_count_is_refused
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len128]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len256]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len512]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len1024]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len2048]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_a_prompt_past_the_longest_batched_recipe_fails_closed
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len128]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len256]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len512]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len1024]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len2048]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_a_batched_length_beyond_the_served_context_is_refused
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_each_long_context_geometry_resolves[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_each_long_context_geometry_resolves[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_each_long_context_geometry_resolves[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_block_pool_covers_the_served_context_and_every_idle_sink[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_block_pool_covers_the_served_context_and_every_idle_sink[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_block_pool_covers_the_served_context_and_every_idle_sink[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_runner_accepts_the_batch_one_long_context_allocation[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_runner_accepts_the_batch_one_long_context_allocation[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_runner_accepts_the_batch_one_long_context_allocation[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_page_table_stays_small_even_at_the_longest_context[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_page_table_stays_small_even_at_the_longest_context[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_page_table_stays_small_even_at_the_longest_context[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_rope_tables_grow_linearly_with_the_served_context[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_rope_tables_grow_linearly_with_the_served_context[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_rope_tables_grow_linearly_with_the_served_context[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_capacity_grows_linearly_in_context_and_is_reported_for_all_three
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunked_prefill_plan_walks_the_context_without_revisiting_a_block[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunked_prefill_plan_walks_the_context_without_revisiting_a_block[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_a_decode_after_a_full_prefill_still_has_a_block_to_write_into
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_served_context_must_stay_a_multiple_of_the_chunk_alignment
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[1]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[8]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[16]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[31]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[32]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_an_idle_slots_sink_never_lands_in_an_active_slots_run[1]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_an_idle_slots_sink_never_lands_in_an_active_slots_run[16]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_an_idle_slots_sink_never_lands_in_an_active_slots_run[31]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[1]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[8]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[16]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[31]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[32]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_each_active_slot_owns_enough_blocks_for_the_whole_served_context
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_prefill_and_decode_stage_two_different_tables_two_different_ways
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_padding_the_prefill_table_cannot_invent_a_block_a_slot_does_not_own
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_paged_capacity_resolved_after_construction_reaches_every_layer[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_paged_capacity_resolved_after_construction_reaches_every_layer[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_paged_capacity_cannot_be_resolved_while_a_cache_is_bound[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_paged_capacity_cannot_be_resolved_while_a_cache_is_bound[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_binding_every_layer_is_all_or_nothing[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_binding_every_layer_is_all_or_nothing[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_malformed_layer_entry_also_unwinds_every_earlier_layer[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_malformed_layer_entry_also_unwinds_every_earlier_layer[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_unbind_is_transactional_and_repeatable[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_unbind_is_transactional_and_repeatable[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_rebinding_replaces_the_previous_binding_rather_than_stacking[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_rebinding_replaces_the_previous_binding_rather_than_stacking[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_layer_count_mismatch_is_refused_before_anything_is_bound[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_layer_count_mismatch_is_refused_before_anything_is_bound[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_only_the_binding_owner_may_unbind
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_the_kv_contract_presents_one_layer_view_per_spec_and_forwards_binding
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_the_kv_contract_refuses_a_model_with_no_resolved_mesh
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_contiguous_spec_has_no_paged_shape_and_no_binding_metadata
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_decode_rejects_a_table_that_cannot_carry_one_mesh_columns_users
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_prefill_rejects_a_decode_shaped_table_that_cannot_reach_the_addressed_user
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_decode_cannot_tell_the_prefill_layout_from_a_four_core_l1_repeat
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[1]
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[2]
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[7]
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_never_reaches_another_slots_blocks
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_an_unaligned_chunk_start_is_refused
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_past_a_slots_allocation_is_refused
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_chunked_prefill_needs_a_paged_cache
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_the_first_chunk_is_an_ordinary_prefill_and_later_chunks_are_prefix_cached
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_every_chunk_table_is_released_before_the_next_chunk_is_staged
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_prefix_cached_request_leaves_the_next_plain_request_unchanged
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_prefix_cached_and_plain_requests_mix_across_slots_without_sharing_state
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_chunked_prefill_needs_a_positive_chunk_and_at_least_one_token
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_single_row_chunked_sdpa_reads_one_row_and_it_is_the_prefix_users
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_prefix_user_outside_the_addressed_users_is_refused
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_the_sliced_row_follows_prefix_user_id_when_it_differs_from_the_filled_user
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_an_already_single_row_table_is_passed_straight_through
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_concatenated_prefill_keeps_the_full_table_because_q_carries_every_row
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_page_table_alone_selects_the_prefix_chunked_recipe
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_two_identical_requests_stage_identical_tokens_positions_and_tables
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_repeated_request_reuses_the_bound_cache_and_tables_rather_than_restaging
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_the_same_slot_addresses_the_same_blocks_on_every_repeat
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_close_unbinds_the_cache_releases_the_tables_and_is_idempotent
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_closed_runner_refuses_further_graph_calls
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_failed_open_leaves_nothing_bound
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_reopening_after_a_close_allocates_a_fresh_cache
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_open_is_idempotent_while_already_open
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_cleanup_reports_no_owned_resources_while_never_freeing_the_global_cb
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_second_owner_on_the_same_mesh_reallocates_a_second_global_cb
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_cleanup_is_terminal_and_a_sealed_owner_cannot_be_resealed
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_the_galaxy_global_cb_size_is_a_topology_constant_not_a_model_choice
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_same_seed_in_the_same_slot_gives_the_same_token_across_runs
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_a_requests_row_position_in_the_call_does_not_change_its_stream
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_moving_a_seeded_request_to_another_slot_does_change_its_stream
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_one_seed_across_every_slot_does_not_collapse_the_batch
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_greedy_selects_exactly_the_host_argmax[llama]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_greedy_selects_exactly_the_host_argmax[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_forced_argmax_and_zero_temperature_agree[llama]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_forced_argmax_and_zero_temperature_agree[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_llama_now_pads_and_therefore_masks_like_qwen
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_qwen_pads_to_the_ring_exact_width_and_masks_the_remainder
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[greedy]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t0.7]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t1.0]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t2.0]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_device_path_masks_padding_additively_below_every_real_logit
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_each_slot_carries_its_own_top_k_top_p_and_temperature
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_heterogeneous_controls_change_the_tokens_they_are_supposed_to_change
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_top_k_stays_inside_the_configured_capacity
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.25]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.5]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.8]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[2.0]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[4.0]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_runners_host_reference_divides_by_t_rather_than_multiplying
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_a_greedy_policy_is_temperature_zero_or_top_one
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_runner_forces_argmax_for_a_greedy_policy
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_column_selector_gathers_rows_eight_c_through_eight_c_plus_seven
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_sampler_the_selector_and_the_runner_agree_on_every_slots_column
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_selector_refuses_a_tensor_that_is_not_the_physical_batch
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_accepts_the_exact_product
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides0-Unexpected Llama-3.3-70B geometry]
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides1-Unexpected Llama-3.3-70B geometry]
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides2-Unexpected Llama-3.3-70B geometry]
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides3-requires head_dim 128]
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides4-bias-free]
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides5-untied LM head]
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_checkpoint_contract_rejects_an_out_of_range_layer_subset
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_parameters_resolve_the_galaxy_geometry
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_parameters_support_a_one_layer_model
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_parameters_reject_an_impossible_layer_count
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_rope_table_covers_twice_the_served_context
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_default_paged_geometry_covers_the_physical_batch
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_precision_recipes_differ_only_in_the_feed_forward_projection
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_reverse_permute_interleaves_each_head_pair
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_fused_qkv_packs_each_mesh_row_contiguously
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_fused_qkv_rejects_widths_that_cannot_shard_over_rows
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_attention_conversion_returns_tt_layout_shapes
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_mlp_conversion_transposes_every_projection
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_embedding_table_is_vocab_major_and_two_dimensional
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_lm_head_weight_is_transposed_and_zero_padded
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_rope_tables_come_from_the_provider_module
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_model_assembly_rejects_a_layer_count_mismatch
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_runtime_config_reports_the_galaxy_batched_prefill_policy
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_prefetch_registration_is_ordered_per_layer
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_batched_and_chunked_lengths_resolve_one_recipe_family_each
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_batched_prefill_is_off_by_default
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_a_chunked_length_without_its_plain_recipe_fails_closed
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_package_owns_its_graph_and_imports_no_model_named_implementation
+PASSED models/common/tests/models/llama33_70b_galaxy/test_model_host.py::test_distributed_norm_resolves_its_statistics_onto_the_decode_input_origin
+================= 570 passed, 3 warnings in 120.92s (0:02:00) ==================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-08-27 22:44:59.524 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-27 22:44:59.524 | info     |             UMD | Closing devices in cluster (cluster.cpp:1211)
+2026-08-27 22:44:59.643 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1220)
+2026-08-27 22:44:59.643 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-27 22:44:59.643 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+exit=0

@@ -1,0 +1,331 @@
+=== Thu Aug 27 18:09:15 UTC 2026 ===
+node: models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill
+commit: 690737450a845659ee5cf8cdb90146f9f2a4d813
+devices: 32
+2026-08-27 18:09:36.710 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 840.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill[wormhole_b0-8x4-device_params0] 2026-08-27 18:09:56.686 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 18:09:56.686 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 18:09:56.706 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 18:09:56.706 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-27 18:09:56.759 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:575)
+2026-08-27 18:09:56.789 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-27 18:09:58.216 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[22, 17, 19, 21, 16, 23, 20, 18, 25, 27, 26, 31, 24, 28, 29, 30, 14, 13, 11, 8, 9, 15, 10, 12, 5, 3, 2, 0, 6, 7, 1, 4] and remote chip ids {} (cluster.cpp:173)
+2026-08-27 18:09:58.216 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-27 18:09:58.216 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:150)
+2026-08-27 18:09:58.216 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-27 18:09:58.245 | info     |             UMD | Starting devices in cluster (cluster.cpp:1198)
+2026-08-27 18:09:58.305 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1206)
+2026-08-27 18:09:58.404 | INFO     | conftest:mesh_device:612 - No trace region size for (8, 4)
+2026-08-27 18:09:58.405 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-27 18:09:58.405 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-27 18:09:58.412 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2410)
+2026-08-27 18:09:58.412 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2418)
+2026-08-27 18:09:58.936 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.936 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.936 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.936 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.936 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.936 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.936 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.936 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.936 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.936 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:58.937 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:59.192 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-27 18:09:59.663 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-27 18:09:59.664 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-27 18:09:59.666 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-27 18:09:59.667 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-27 18:09:59.695 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:550)
+2026-08-27 18:09:59.696 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:550)
+2026-08-27 18:09:59.697 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:550)
+2026-08-27 18:09:59.698 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:550)
+2026-08-27 18:09:59.702 | info     |           Metal | Fabric initialized on Device 8 (device.cpp:550)
+2026-08-27 18:09:59.703 | info     |           Metal | Fabric initialized on Device 9 (device.cpp:550)
+2026-08-27 18:09:59.704 | info     |           Metal | Fabric initialized on Device 10 (device.cpp:550)
+2026-08-27 18:09:59.705 | info     |           Metal | Fabric initialized on Device 11 (device.cpp:550)
+2026-08-27 18:09:59.707 | info     |           Metal | Fabric initialized on Device 12 (device.cpp:550)
+2026-08-27 18:09:59.708 | info     |           Metal | Fabric initialized on Device 13 (device.cpp:550)
+2026-08-27 18:09:59.709 | info     |           Metal | Fabric initialized on Device 14 (device.cpp:550)
+2026-08-27 18:09:59.710 | info     |           Metal | Fabric initialized on Device 15 (device.cpp:550)
+2026-08-27 18:09:59.711 | info     |           Metal | Fabric initialized on Device 16 (device.cpp:550)
+2026-08-27 18:09:59.713 | info     |           Metal | Fabric initialized on Device 17 (device.cpp:550)
+2026-08-27 18:09:59.714 | info     |           Metal | Fabric initialized on Device 18 (device.cpp:550)
+2026-08-27 18:09:59.715 | info     |           Metal | Fabric initialized on Device 19 (device.cpp:550)
+2026-08-27 18:09:59.716 | info     |           Metal | Fabric initialized on Device 20 (device.cpp:550)
+2026-08-27 18:09:59.717 | info     |           Metal | Fabric initialized on Device 21 (device.cpp:550)
+2026-08-27 18:09:59.718 | info     |           Metal | Fabric initialized on Device 22 (device.cpp:550)
+2026-08-27 18:09:59.719 | info     |           Metal | Fabric initialized on Device 23 (device.cpp:550)
+2026-08-27 18:09:59.721 | info     |           Metal | Fabric initialized on Device 24 (device.cpp:550)
+2026-08-27 18:09:59.722 | info     |           Metal | Fabric initialized on Device 25 (device.cpp:550)
+2026-08-27 18:09:59.723 | info     |           Metal | Fabric initialized on Device 26 (device.cpp:550)
+2026-08-27 18:09:59.724 | info     |           Metal | Fabric initialized on Device 27 (device.cpp:550)
+2026-08-27 18:09:59.725 | info     |           Metal | Fabric initialized on Device 28 (device.cpp:550)
+2026-08-27 18:09:59.726 | info     |           Metal | Fabric initialized on Device 29 (device.cpp:550)
+2026-08-27 18:09:59.727 | info     |           Metal | Fabric initialized on Device 30 (device.cpp:550)
+2026-08-27 18:09:59.729 | info     |           Metal | Fabric initialized on Device 31 (device.cpp:550)
+2026-08-27 18:09:59.729 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:444)
+2026-08-27 18:09:59.729 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-27 18:10:00.820 | info     |           Metal | [Real-time profiler] Device 24 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2316654729130 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 16 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=2316249293002 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 25 sync complete: 100 samples, frequency=0.985502 GHz, device_time_at_sync=2316672397890 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 28 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2316530840164 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 20 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=2316339840421 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 17 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2316500955659 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 26 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2316515238242 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 29 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=2316571038671 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 21 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2316505608668 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 15 sync complete: 100 samples, frequency=0.985501 GHz, device_time_at_sync=2316343241691 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 30 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2316504690643 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 31 sync complete: 100 samples, frequency=0.985502 GHz, device_time_at_sync=2316670209842 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 27 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2316494787263 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 18 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2316557312291 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 6 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2316428839697 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 23 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2316357773426 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.821 | info     |           Metal | [Real-time profiler] Device 14 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2316347724142 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2316366081130 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=2316393644397 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2316237394292 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 22 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=2316334992283 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 19 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=2316547478925 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 11 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2316290582382 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 7 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2316452105138 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 10 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2316379995299 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 13 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2316470452628 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 9 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2316402095596 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 5 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=2316258626121 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 8 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2316386447984 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 4 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2316464626326 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2316290544335 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:00.822 | info     |           Metal | [Real-time profiler] Device 12 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2316335664099 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:10:01.151 | DEBUG    | conftest:mesh_device:630 - multidevice with 32 devices is created
+Fetching 3 files:   0%|          | 0/3 [00:00<?, ?it/s]Fetching 3 files: 100%|██████████| 3/3 [00:00<00:00, 12520.31it/s]
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+[qk-norm] q_norm weight (128,) k_norm weight (128,) eps=1e-06
+[stage] prefill q_norm rows=128 heads=8 enter
+Traceback (most recent call last):
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py", line 490, in test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill
+    _assert_pcc(
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py", line 241, in _assert_pcc
+    passing, message = comp_pcc(expected.float(), actual.float(), _PCC)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/utility_functions.py", line 527, in comp_pcc
+    if not bool((torch.isfinite(golden) & torch.isfinite(calculated)).all()):
+RuntimeError: The size of tensor a (131072) must match the size of tensor b (524288) at non-singleton dimension 0
+FAILED2026-08-27 18:11:21.498 | INFO     | conftest:pytest_runtest_teardown:1189 - In custom teardown, open device ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
+
+
+=================================== FAILURES ===================================
+_ test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill[wormhole_b0-8x4-device_params0] _
+
+mesh_device = MeshDevice(8x4 grid, 32 devices)
+
+    @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=True)
+    @pytest.mark.parametrize("mesh_device", [pytest.param(_MESH_SHAPE, id="8x4")], indirect=True)
+    @torch.no_grad()
+    def test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill(mesh_device: ttnn.MeshDevice):
+        """The per-head Q/K norm, alone, in both modes, against the HF reference.
+    
+        Milestone A's D2 defect was that a `HEAD_LOCAL` decode aborted in op
+        validation before producing any numerical result, so no prior Qwen Q/K norm
+        number exists anywhere. The brief asks for this to be validated *before* it
+        is trusted inside the block, because a failure here and a failure in the
+        decoupled attention geometry look identical from the block's logits.
+    
+        It runs with the real one-layer model built - so the prefetcher's sub-device
+        managers are loaded and `activate()` has partitioned the grid - but calls
+        `Attention2D`'s own `RMSNorm2D` instances directly. A head-local norm builds
+        a plain `ttnn.rms_norm` program, and whether that program is placeable under
+        the decode manager is exactly the open question D2 left.
+    
+        The device weight is `reverse_permute_1d` of HF's, because the created heads
+        are in Meta interleaved order. RMSNorm scales elementwise after a mean-square
+        over the whole 128-wide head, so the permutation commutes with the norm: the
+        reference is `permute(hf_norm(x))` against `device_norm(permute(x))`.
+        """
+    
+        hf_config = hf_config_or_skip(_hf_model(), revision=_hf_revision())
+        params = _params(hf_config, prefill_length=_PREFILL_LENGTH)
+        precision = QWEN3_32B_GALAXY_ACCURACY
+        ttnn.SetDefaultDevice(mesh_device)
+        torch.manual_seed(17)
+    
+        hf = _one_layer_reference(_hf_model())
+        weights = convert_hf_model_weights(hf, params=params)
+        reference_q_norm = hf.model.layers[0].self_attn.q_norm
+        reference_k_norm = hf.model.layers[0].self_attn.k_norm
+        assert reference_q_norm is not None and reference_k_norm is not None, "Qwen3-32B must carry per-head Q/K norms"
+        print(
+            f"[qk-norm] q_norm weight {tuple(reference_q_norm.weight.shape)} "
+            f"k_norm weight {tuple(reference_k_norm.weight.shape)} eps={params.rms_norm_eps}",
+            flush=True,
+        )
+        assert int(reference_q_norm.weight.shape[-1]) == params.head_dim
+    
+        model = build_qwen3_32b_galaxy_model(
+            mesh_device,
+            params=params,
+            weights=weights,
+            precision=precision,
+            paged_attention_config=None,
+            enable_device_sampling=False,
+        )
+        del weights
+        gc.collect()
+    
+        # `[1, rows, heads, head_dim]` is the shape `nlp_create_qkv_heads_decode`
+        # hands the norm: eight local Q heads and one local K head per mesh row.
+        local_q_heads = params.n_heads // _MESH_ROWS
+        local_k_heads = params.n_kv_heads // _MESH_ROWS
+        try:
+            attention = model.layers[0].attention
+            assert attention._q_norm is not None and attention._k_norm is not None
+    
+            for mode in ("prefill", "decode"):
+                model.activate(mode)
+                forward = "decode_forward" if mode == "decode" else "prefill_forward"
+                rows = _PHYSICAL_BATCH if mode == "decode" else _PREFILL_LENGTH
+                for name, norm, reference, heads in (
+                    ("q_norm", attention._q_norm, reference_q_norm, local_q_heads),
+                    ("k_norm", attention._k_norm, reference_k_norm, local_k_heads),
+                ):
+                    source_hf = torch.randn(1, rows, heads, params.head_dim, dtype=torch.float32)
+                    with torch.no_grad():
+                        expected_hf = reference(source_hf.to(torch.bfloat16)).float()
+                    expected = qwen_reverse_permute_1d(expected_hf)
+                    source = qwen_reverse_permute_1d(source_hf).to(torch.bfloat16)
+                    staged = out = None
+                    print(f"[stage] {mode} {name} rows={rows} heads={heads} enter", flush=True)
+                    try:
+                        staged = ttnn.from_torch(
+                            source,
+                            device=mesh_device,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                            dtype=precision.norm_dtype,
+                            layout=ttnn.TILE_LAYOUT,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                        out = getattr(norm, forward)(staged)
+                        actual = _compose_head_local(out, mesh_device)
+                        # Every device holds a replica; check them all, because a
+                        # head-local program that ran on only some of the mesh would
+                        # otherwise read as a pass on device (0, 0).
+                        for plane in range(actual.shape[0]):
+>                           _assert_pcc(
+                                expected.reshape(-1, params.head_dim),
+                                actual[plane].reshape(-1, params.head_dim),
+                                f"{mode} {name} plane {plane}",
+                            )
+
+models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py:490: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py:241: in _assert_pcc
+    passing, message = comp_pcc(expected.float(), actual.float(), _PCC)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+golden = tensor([ 1.1875, -1.7891,  0.6211,  ...,  0.6719, -2.7812,  0.4980])
+calculated = tensor([ 1.1875, -1.7969,  0.6211,  ...,  0.6680, -2.7812,  0.4980])
+pcc = 0.99, rtol = 1e-05, atol = 0.0001
+
+    def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
+        golden = torch.Tensor(golden)
+        calculated = torch.Tensor(calculated)
+    
+        if golden.dtype != calculated.dtype:
+            calculated = calculated.type(golden.dtype)
+    
+        if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
+            logger.warning("Both tensors are 'nan'")
+            return True, 1.0
+    
+        if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
+            logger.error("One tensor is all nan, the other is not.")
+            return False, 0.0
+    
+        # Test if either is completely zero — but a zero tensor is also a constant tensor,
+        # so fall back to allclose instead of a hard 0.0: zero-vs-small-constant may be
+        # within the caller's tolerances.
+        if torch.any(golden.bool()) != torch.any(calculated.bool()):
+            logger.warning("One tensor is all zero. PCC undefined; falling back to allclose.")
+            result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
+            return result, float(result)
+    
+        golden = torch.squeeze(golden).flatten()
+        calculated = torch.squeeze(calculated).flatten()
+    
+        # For now, mask all infs and nans (to zero) so that we check the rest... TODO
+        # Skip this for integer types which don't have NaN/Inf values.
+        if golden.dtype.is_floating_point:
+            # FP8 doesn't support isfinite/nan_to_num and bfloat16 products lose precision,
+            # so correlate these in float32.
+            if golden.dtype in (torch.float8_e4m3fn, torch.float8_e5m2, torch.bfloat16):
+                golden = golden.to(torch.float32)
+                calculated = calculated.to(torch.float32)
+    
+            # Zero out NaN/Inf, preserving the historical PCC values. nan_to_num allocates a
+            # full-size copy of each tensor, so only do it when invalid values are actually
+            # present; on the common all-finite path the tensors stay as views and no copy is
+            # made (this short-circuit is what keeps peak memory near 1x of one input).
+>           if not bool((torch.isfinite(golden) & torch.isfinite(calculated)).all()):
+E           RuntimeError: The size of tensor a (131072) must match the size of tensor b (524288) at non-singleton dimension 0
+
+models/common/utility_functions.py:527: RuntimeError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+76.54s call     models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill[wormhole_b0-8x4-device_params0]
+4.65s setup    models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill[wormhole_b0-8x4-device_params0]
+0.26s teardown models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill[wormhole_b0-8x4-device_params0]
+=========================== short test summary info ============================
+FAILED models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill[wormhole_b0-8x4-device_params0] - RuntimeError: The size of tensor a (131072) must match the size of tensor b (524288) at non-singleton dimension 0
+=================== 1 failed, 2 warnings in 92.25s (0:01:32) ===================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-08-27 18:11:23.244 | info     |    BuildKernels | JIT cache stats: 80/95 hits (84.2%) [80 cached, 626 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-27 18:11:23.244 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-27 18:11:23.270 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-27 18:11:23.270 | info     |             UMD | Closing devices in cluster (cluster.cpp:1211)
+2026-08-27 18:11:23.388 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1220)
+2026-08-27 18:11:23.389 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-27 18:11:23.389 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+NOTE: pytest reported a verdict at 130s; teardown grace 90s
+exit=1
+holders_after: 1

@@ -1,0 +1,3 @@
+1200 1100 a2_50_bisection models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128
+1200 1100 a2_51_bisection models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128
+1200 1100 a2_52_bisection models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128

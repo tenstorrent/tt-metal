@@ -1,0 +1,169 @@
+=== Thu Aug 27 18:08:24 UTC 2026 ===
+node: models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_geometry_is_decoupled_8x4_qwen3_32b
+commit: 690737450a845659ee5cf8cdb90146f9f2a4d813
+devices: 32
+2026-08-27 18:08:46.365 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 400.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_geometry_is_decoupled_8x4_qwen3_32b[wormhole_b0-8x4-device_params0] 2026-08-27 18:09:06.663 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 18:09:06.663 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 18:09:06.683 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 18:09:06.683 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-27 18:09:06.734 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:575)
+2026-08-27 18:09:06.764 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-27 18:09:08.200 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[22, 17, 19, 21, 16, 23, 20, 18, 25, 27, 26, 31, 24, 28, 29, 30, 14, 13, 11, 8, 9, 15, 10, 12, 5, 3, 2, 0, 6, 7, 1, 4] and remote chip ids {} (cluster.cpp:173)
+2026-08-27 18:09:08.200 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-27 18:09:08.200 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:150)
+2026-08-27 18:09:08.200 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-27 18:09:08.227 | info     |             UMD | Starting devices in cluster (cluster.cpp:1198)
+2026-08-27 18:09:08.287 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1206)
+2026-08-27 18:09:08.386 | INFO     | conftest:mesh_device:612 - No trace region size for (8, 4)
+2026-08-27 18:09:08.386 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-27 18:09:08.386 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-27 18:09:08.393 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2410)
+2026-08-27 18:09:08.393 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2418)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.935 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.935 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.935 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.935 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.935 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.935 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.935 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.935 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.935 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.935 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:08.934 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 18:09:09.188 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-27 18:09:09.672 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-27 18:09:09.673 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-27 18:09:09.674 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-27 18:09:09.675 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-27 18:09:09.677 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:550)
+2026-08-27 18:09:09.678 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:550)
+2026-08-27 18:09:09.679 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:550)
+2026-08-27 18:09:09.680 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:550)
+2026-08-27 18:09:09.748 | info     |           Metal | Fabric initialized on Device 8 (device.cpp:550)
+2026-08-27 18:09:09.750 | info     |           Metal | Fabric initialized on Device 9 (device.cpp:550)
+2026-08-27 18:09:09.751 | info     |           Metal | Fabric initialized on Device 10 (device.cpp:550)
+2026-08-27 18:09:09.752 | info     |           Metal | Fabric initialized on Device 11 (device.cpp:550)
+2026-08-27 18:09:09.753 | info     |           Metal | Fabric initialized on Device 12 (device.cpp:550)
+2026-08-27 18:09:09.754 | info     |           Metal | Fabric initialized on Device 13 (device.cpp:550)
+2026-08-27 18:09:09.755 | info     |           Metal | Fabric initialized on Device 14 (device.cpp:550)
+2026-08-27 18:09:09.756 | info     |           Metal | Fabric initialized on Device 15 (device.cpp:550)
+2026-08-27 18:09:09.758 | info     |           Metal | Fabric initialized on Device 16 (device.cpp:550)
+2026-08-27 18:09:09.759 | info     |           Metal | Fabric initialized on Device 17 (device.cpp:550)
+2026-08-27 18:09:09.760 | info     |           Metal | Fabric initialized on Device 18 (device.cpp:550)
+2026-08-27 18:09:09.761 | info     |           Metal | Fabric initialized on Device 19 (device.cpp:550)
+2026-08-27 18:09:09.762 | info     |           Metal | Fabric initialized on Device 20 (device.cpp:550)
+2026-08-27 18:09:09.763 | info     |           Metal | Fabric initialized on Device 21 (device.cpp:550)
+2026-08-27 18:09:09.765 | info     |           Metal | Fabric initialized on Device 22 (device.cpp:550)
+2026-08-27 18:09:09.766 | info     |           Metal | Fabric initialized on Device 23 (device.cpp:550)
+2026-08-27 18:09:09.767 | info     |           Metal | Fabric initialized on Device 24 (device.cpp:550)
+2026-08-27 18:09:09.768 | info     |           Metal | Fabric initialized on Device 25 (device.cpp:550)
+2026-08-27 18:09:09.769 | info     |           Metal | Fabric initialized on Device 26 (device.cpp:550)
+2026-08-27 18:09:09.770 | info     |           Metal | Fabric initialized on Device 27 (device.cpp:550)
+2026-08-27 18:09:09.771 | info     |           Metal | Fabric initialized on Device 28 (device.cpp:550)
+2026-08-27 18:09:09.772 | info     |           Metal | Fabric initialized on Device 29 (device.cpp:550)
+2026-08-27 18:09:09.774 | info     |           Metal | Fabric initialized on Device 30 (device.cpp:550)
+2026-08-27 18:09:09.775 | info     |           Metal | Fabric initialized on Device 31 (device.cpp:550)
+2026-08-27 18:09:09.775 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:444)
+2026-08-27 18:09:09.775 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-27 18:09:10.877 | info     |           Metal | [Real-time profiler] Device 16 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=2289504638446 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.877 | info     |           Metal | [Real-time profiler] Device 28 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2289771699251 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.877 | info     |           Metal | [Real-time profiler] Device 24 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2289899888998 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.877 | info     |           Metal | [Real-time profiler] Device 25 sync complete: 100 samples, frequency=0.985502 GHz, device_time_at_sync=2289913163653 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.877 | info     |           Metal | [Real-time profiler] Device 20 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=2289595725178 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.877 | info     |           Metal | [Real-time profiler] Device 26 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2289757422521 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.877 | info     |           Metal | [Real-time profiler] Device 30 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2289735327995 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.877 | info     |           Metal | [Real-time profiler] Device 17 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2289756791945 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.877 | info     |           Metal | [Real-time profiler] Device 29 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2289808636659 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.877 | info     |           Metal | [Real-time profiler] Device 21 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=2289760546732 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.877 | info     |           Metal | [Real-time profiler] Device 22 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=2289578399191 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.877 | info     |           Metal | [Real-time profiler] Device 23 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2289604535389 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2289520439426 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 11 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=2289561146562 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 15 sync complete: 100 samples, frequency=0.985502 GHz, device_time_at_sync=2289603393914 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 18 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2289812642361 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 13 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2289739658753 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 14 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=2289606154506 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 7 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2289722597313 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 31 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=2289901442029 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 6 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2289711589348 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 19 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=2289803892009 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=2289677017528 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 5 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2289542184796 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 10 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=2289650153322 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2289645142199 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 27 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2289736552150 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 9 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=2289671161208 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2289579810161 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 8 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=2289660975997 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 4 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2289748716655 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:10.878 | info     |           Metal | [Real-time profiler] Device 12 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=2289605135740 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 18:09:11.213 | DEBUG    | conftest:mesh_device:630 - multidevice with 32 devices is created
+[geometry] dim=5120 n_heads=64 head_dim=128 attention_dim=8192 (dim*1.60)
+[geometry] local_dim=1280 local_attention_dim=1024 local_qkv_size=1280 local_hidden_dim=3200
+[geometry] wo is [8192, 5120], per mesh row [1024, 1280]
+[geometry] wo memcfg (local_attention_dim) : MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":11,"y":0}], shape=[1024, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+[geometry] wo memcfg if dim were used      : MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":11,"y":0}], shape=[1280, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+4.75s setup    models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_geometry_is_decoupled_8x4_qwen3_32b[wormhole_b0-8x4-device_params0]
+0.26s teardown models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_geometry_is_decoupled_8x4_qwen3_32b[wormhole_b0-8x4-device_params0]
+0.02s call     models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_geometry_is_decoupled_8x4_qwen3_32b[wormhole_b0-8x4-device_params0]
+=========================== short test summary info ============================
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_geometry_is_decoupled_8x4_qwen3_32b[wormhole_b0-8x4-device_params0]
+======================== 1 passed, 2 warnings in 12.40s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-08-27 18:09:13.207 | info     |    BuildKernels | JIT cache stats: 80/80 hits (100.0%) [80 cached, 626 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-27 18:09:13.207 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-27 18:09:13.233 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-27 18:09:13.233 | info     |             UMD | Closing devices in cluster (cluster.cpp:1211)
+2026-08-27 18:09:13.348 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1220)
+2026-08-27 18:09:13.349 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-27 18:09:13.349 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+NOTE: pytest reported a verdict at 50s; teardown grace 90s
+exit=0
+holders_after: 1

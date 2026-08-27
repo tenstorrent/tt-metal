@@ -1,0 +1,447 @@
+=== Thu Aug 27 22:39:14 UTC 2026 ===
+node: models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128
+commit: ecab6060b9708bfc25e81dbfc070e3f739ea8ca4
+devices: 32
+2026-08-27 22:39:37.785 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 1100.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128[wormhole_b0-8x4-device_params0] 2026-08-27 22:39:57.952 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 22:39:57.952 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 22:39:57.972 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 22:39:57.972 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-27 22:39:58.026 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:575)
+2026-08-27 22:39:58.055 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-27 22:39:59.477 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[21, 18, 22, 20, 17, 23, 19, 16, 26, 30, 29, 31, 24, 27, 28, 25, 12, 14, 13, 10, 8, 15, 11, 9, 5, 6, 2, 4, 3, 7, 1, 0] and remote chip ids {} (cluster.cpp:173)
+2026-08-27 22:39:59.477 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-27 22:39:59.477 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:150)
+2026-08-27 22:39:59.477 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-27 22:39:59.503 | info     |             UMD | Starting devices in cluster (cluster.cpp:1198)
+2026-08-27 22:39:59.563 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1206)
+2026-08-27 22:39:59.661 | INFO     | conftest:mesh_device:612 - No trace region size for (8, 4)
+2026-08-27 22:39:59.662 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-27 22:39:59.662 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-27 22:39:59.669 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2410)
+2026-08-27 22:39:59.669 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2418)
+2026-08-27 22:39:59.827 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.217 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.216 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.217 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-27 22:40:00.468 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-27 22:40:00.948 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-27 22:40:00.949 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-27 22:40:00.951 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-27 22:40:00.952 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-27 22:40:00.954 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:550)
+2026-08-27 22:40:00.955 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:550)
+2026-08-27 22:40:00.956 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:550)
+2026-08-27 22:40:00.958 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:550)
+2026-08-27 22:40:00.959 | info     |           Metal | Fabric initialized on Device 8 (device.cpp:550)
+2026-08-27 22:40:00.961 | info     |           Metal | Fabric initialized on Device 9 (device.cpp:550)
+2026-08-27 22:40:00.962 | info     |           Metal | Fabric initialized on Device 10 (device.cpp:550)
+2026-08-27 22:40:00.963 | info     |           Metal | Fabric initialized on Device 11 (device.cpp:550)
+2026-08-27 22:40:00.965 | info     |           Metal | Fabric initialized on Device 12 (device.cpp:550)
+2026-08-27 22:40:00.966 | info     |           Metal | Fabric initialized on Device 13 (device.cpp:550)
+2026-08-27 22:40:00.968 | info     |           Metal | Fabric initialized on Device 14 (device.cpp:550)
+2026-08-27 22:40:00.969 | info     |           Metal | Fabric initialized on Device 15 (device.cpp:550)
+2026-08-27 22:40:00.970 | info     |           Metal | Fabric initialized on Device 16 (device.cpp:550)
+2026-08-27 22:40:00.972 | info     |           Metal | Fabric initialized on Device 17 (device.cpp:550)
+2026-08-27 22:40:00.973 | info     |           Metal | Fabric initialized on Device 18 (device.cpp:550)
+2026-08-27 22:40:00.975 | info     |           Metal | Fabric initialized on Device 19 (device.cpp:550)
+2026-08-27 22:40:01.019 | info     |           Metal | Fabric initialized on Device 20 (device.cpp:550)
+2026-08-27 22:40:01.020 | info     |           Metal | Fabric initialized on Device 21 (device.cpp:550)
+2026-08-27 22:40:01.021 | info     |           Metal | Fabric initialized on Device 22 (device.cpp:550)
+2026-08-27 22:40:01.022 | info     |           Metal | Fabric initialized on Device 23 (device.cpp:550)
+2026-08-27 22:40:01.024 | info     |           Metal | Fabric initialized on Device 24 (device.cpp:550)
+2026-08-27 22:40:01.025 | info     |           Metal | Fabric initialized on Device 25 (device.cpp:550)
+2026-08-27 22:40:01.026 | info     |           Metal | Fabric initialized on Device 26 (device.cpp:550)
+2026-08-27 22:40:01.027 | info     |           Metal | Fabric initialized on Device 27 (device.cpp:550)
+2026-08-27 22:40:01.028 | info     |           Metal | Fabric initialized on Device 28 (device.cpp:550)
+2026-08-27 22:40:01.029 | info     |           Metal | Fabric initialized on Device 29 (device.cpp:550)
+2026-08-27 22:40:01.030 | info     |           Metal | Fabric initialized on Device 30 (device.cpp:550)
+2026-08-27 22:40:01.032 | info     |           Metal | Fabric initialized on Device 31 (device.cpp:550)
+2026-08-27 22:40:01.032 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:444)
+2026-08-27 22:40:01.032 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-27 22:40:02.130 | info     |           Metal | [Real-time profiler] Device 28 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=9254956059138 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.130 | info     |           Metal | [Real-time profiler] Device 24 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=9255024699948 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.130 | info     |           Metal | [Real-time profiler] Device 29 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=9255144153009 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.130 | info     |           Metal | [Real-time profiler] Device 17 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=9254530764586 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.130 | info     |           Metal | [Real-time profiler] Device 20 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=9254328878759 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.130 | info     |           Metal | [Real-time profiler] Device 16 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=9254280319954 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.130 | info     |           Metal | [Real-time profiler] Device 21 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=9254501729947 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.130 | info     |           Metal | [Real-time profiler] Device 26 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=9254894767509 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.130 | info     |           Metal | [Real-time profiler] Device 25 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=9255105518706 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 30 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=9255221867381 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 27 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=9254901051522 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=9253575516414 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 7 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=9254038610338 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 19 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=9254509208692 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 14 sync complete: 100 samples, frequency=0.985507 GHz, device_time_at_sync=9254262659222 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 11 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=9253857920793 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 31 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=9255403555675 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 15 sync complete: 100 samples, frequency=0.985501 GHz, device_time_at_sync=9254219431669 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 18 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=9254546141271 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 6 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=9253648096540 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 23 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=9254599729051 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=9253490981404 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 22 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=9254679077747 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 10 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=9253956295470 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=9253712367698 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.131 | info     |           Metal | [Real-time profiler] Device 4 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=9253706549207 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.132 | info     |           Metal | [Real-time profiler] Device 5 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=9253472341281 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.132 | info     |           Metal | [Real-time profiler] Device 9 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=9254022450542 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.132 | info     |           Metal | [Real-time profiler] Device 13 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=9254051725816 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.132 | info     |           Metal | [Real-time profiler] Device 12 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=9253916670187 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.132 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=9253300755998 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.132 | info     |           Metal | [Real-time profiler] Device 8 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=9253837373439 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-27 22:40:02.500 | DEBUG    | conftest:mesh_device:630 - multidevice with 32 devices is created
+[geometry] dim=5120 n_heads=64 head_dim=128 attention_dim=8192 (dim*1.60)
+[geometry] local_dim=1280 local_attention_dim=1024 local_qkv_size=1280 local_hidden_dim=3200
+[geometry] wo is [8192, 5120], per mesh row [1024, 1280]
+Fetching 3 files:   0%|          | 0/3 [00:00<?, ?it/s]Fetching 3 files: 100%|██████████| 3/3 [00:00<00:00, 14217.98it/s]
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+[stage] bisect prefill enter
+2026-08-27 22:41:07.755 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 64, dfb size: 16, return value: 80 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:07.755 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:07.755 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:10.374 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:122)
+2026-08-27 22:41:10.374 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-27 22:41:10.381 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.385 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.386 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.386 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.387 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.387 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.388 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.388 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.389 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.390 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.391 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.392 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.393 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.394 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.395 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.396 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.396 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.397 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.399 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.400 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.401 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.401 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.402 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.402 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.403 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.403 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.404 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.405 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.406 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.406 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.407 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:10.408 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.780 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:122)
+2026-08-27 22:41:11.780 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-27 22:41:11.781 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.784 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.785 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.785 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.786 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.786 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.787 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.787 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.788 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.788 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.789 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.790 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.790 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.791 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.793 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.793 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.793 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.794 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.795 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.796 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.796 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.797 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.797 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.798 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.798 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.799 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.800 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.800 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.801 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.801 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.802 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:11.803 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:12.188 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 144, dfb size: 144, return value: 288 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:12.188 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:12.188 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:12.268 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 144, dfb size: 144, return value: 288 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:12.268 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:12.268 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:12.350 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 80, dfb size: 32, return value: 112 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:12.350 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:12.350 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:13.170 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:122)
+2026-08-27 22:41:13.170 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-27 22:41:13.171 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.175 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.175 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.176 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.177 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.177 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.177 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.178 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.178 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.179 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.179 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.180 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.180 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.181 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.181 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.182 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.183 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.183 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.184 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.184 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.185 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.185 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.186 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.187 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.187 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.188 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.188 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.189 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.189 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.190 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.190 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.191 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:13.373 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:122)
+2026-08-27 22:41:13.456 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 80, dfb size: 32, return value: 112 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:13.456 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:13.456 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-27 22:41:15.293 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:122)
+2026-08-27 22:41:15.294 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:122)
+2026-08-27 22:41:23.926 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-27 22:41:23.928 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.931 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.932 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.934 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.935 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.936 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.937 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.939 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.940 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.942 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.944 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.945 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.947 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.948 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.949 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.950 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.952 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.953 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.954 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.957 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.958 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.959 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.961 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.962 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.963 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.965 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.966 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.967 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.969 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.970 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.971 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:23.972 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+[stage] bisect decode enter
+[probe] decode global_cb bound: True
+[probe] decode cos composed (64, 128)
+[bisect] probe decode cos user 0: 1.0
+[bisect] probe decode sin user 0: 1.0
+[bisect] probe decode cos user 8: 1.0
+[bisect] probe decode sin user 8: 1.0
+[bisect] probe decode cos user 16: 1.0
+[bisect] probe decode sin user 16: 1.0
+[bisect] probe decode cos user 24: 1.0
+[bisect] probe decode sin user 24: 1.0
+[bisect] bisect decode embedding user 0: 1.0
+[bisect] bisect decode attention norm user 0: 0.9999910897024602
+2026-08-27 22:41:26.811 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:122)
+2026-08-27 22:41:26.811 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-27 22:41:26.812 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.817 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.818 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.819 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.819 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.820 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.821 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.822 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.822 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.823 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.823 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.824 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.825 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.826 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.826 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.827 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.828 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.828 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.829 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.830 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.830 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.831 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.831 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.832 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.832 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.833 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.833 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.834 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.835 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.836 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.836 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-27 22:41:26.837 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+[bisect] bisect decode attention out user 0: 0.9992340211925125
+[bisect] bisect decode attention out user 8: 0.9992340211925125
+[bisect] bisect decode attention out user 16: 0.9992340211925125
+[bisect] bisect decode attention out user 24: 0.9992340211925125
+[bisect] bisect decode cache K prefix user 0: 0.9998897994661545
+[bisect] bisect decode cache K user 0: 0.9998896420783983
+[bisect] bisect decode cache K appended row user 0: 0.9998437736663295
+[bisect] bisect decode cache V prefix user 0: 0.9998944730661905
+[bisect] bisect decode cache V appended row user 0: 0.9998828181814494
+[probe] bisect decode cache user 0: appended K device |max|=72 reference |max|=73
+[bisect] bisect decode cache K prefix user 8: 0.9998897994661545
+[bisect] bisect decode cache K user 8: 0.9998896420783983
+[bisect] bisect decode cache K appended row user 8: 0.9998437736663295
+[bisect] bisect decode cache V prefix user 8: 0.9998944730661905
+[bisect] bisect decode cache V appended row user 8: 0.9998828181814494
+[probe] bisect decode cache user 8: appended K device |max|=72 reference |max|=73
+[bisect] bisect decode residual after attention user 0: 0.9992551949454134
+[bisect] bisect decode ff norm user 0: 0.9993495387523257
+2026-08-27 22:41:30.518 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.524 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.526 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.528 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.531 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.533 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.536 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.538 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.541 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.543 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.546 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.548 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.550 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.553 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.555 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.558 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.560 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.563 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.565 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.568 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.571 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.574 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.576 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.578 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.581 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.583 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.586 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.588 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.591 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.593 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.595 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-27 22:41:30.597 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+[bisect] bisect decode mlp out user 0: 0.9995019825585748
+[bisect] probe mlp on the device's own input: 0.9997485357508168
+[bisect] bisect decode after layer 0 user 0: 0.9995262312962566
+[bisect] bisect decode final norm user 0: 0.9995821444530748
+[bisect] decode after layer 0 user 0 vs bfloat16(reference): 0.9995262312962566 |ref|max=8.375 |dev|max=8.875
+[bisect] decode final norm user 0 vs bfloat16(reference): 0.9995821444530748 |ref|max=58 |dev|max=58.75
+[bisect] decode attention out user 0 vs bfloat16(reference): 0.9992340211925125 |ref|max=1.656 |dev|max=1.719
+[bisect] probe cross reference final norm vs device residual: 0.9181927142562529
+[bisect] probe cross reference after layer 0 vs device normed: 0.9159249720677421
+[probe] composed shapes: residual (32, 5120) normed (32, 5120); |ref| after-layer-0 8.375 final-norm 58; |dev| residual 8.875 normed 58.75
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head in: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 800) cores=24 spec_tiles=600
+[ccl] lm_head staged, shape=(1, 1, 32, 19200)
+[ccl] lm_head staged, shape=(1, 1, 32, 19200) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 480) cores=40 spec_tiles=600
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 76800)
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 76800) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 76800) tiles=2400 shard=(32, 1920) cores=40 spec_tiles=2400
+[ccl] lm_head reduced: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 480) cores=40 spec_tiles=600
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 19200)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 19200) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+[pcc] bisect decode logits user 0: 0.999360219056066 (gate >= 0.99)
+PASSEDNOTE: pytest reported a verdict at 140s; teardown grace 90s
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+91.83s call     models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128[wormhole_b0-8x4-device_params0]
+4.73s setup    models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128[wormhole_b0-8x4-device_params0]
+0.27s teardown models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128[wormhole_b0-8x4-device_params0]
+=========================== short test summary info ============================
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128[wormhole_b0-8x4-device_params0]
+================== 1 passed, 2 warnings in 104.15s (0:01:44) ===================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-08-27 22:41:36.517 | info     |    BuildKernels | JIT cache stats: 461/461 hits (100.0%) [461 cached, 3328 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-27 22:41:36.517 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-27 22:41:36.546 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-27 22:41:36.546 | info     |             UMD | Closing devices in cluster (cluster.cpp:1211)
+2026-08-27 22:41:36.669 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1220)
+2026-08-27 22:41:36.669 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-27 22:41:36.669 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+exit=0
+holders_after: 0

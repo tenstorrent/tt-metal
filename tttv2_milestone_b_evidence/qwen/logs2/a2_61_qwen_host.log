@@ -1,0 +1,153 @@
+2026-08-27 22:45:32.796 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 50 items
+
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_accepts_the_exact_product PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides0-Unexpected Qwen3-32B geometry] PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides1-Unexpected Qwen3-32B geometry] PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides2-Unexpected Qwen3-32B geometry] PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides3-Unexpected Qwen3-32B geometry] PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides4-bias-free] PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides5-untied LM head] PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_parameters_resolve_the_decoupled_head_geometry PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_parameters_support_a_one_layer_model PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_parameters_reject_an_impossible_layer_count PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_default_paged_geometry_covers_the_physical_batch PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_accuracy_recipe_keeps_the_narrow_mlp_in_bfloat16 PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_head_local_vectors_use_the_same_interleave_as_the_projections PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_attention_conversion_returns_qk_norms_and_no_bias PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_attention_conversion_packs_a_present_bias_row_major PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_attention_conversion_reports_missing_qk_norms PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_lm_head_weight_pads_qwen_vocabulary_with_zero_columns PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_model_assembly_requires_per_head_qk_norm_weights PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_model_assembly_rejects_a_layer_count_mismatch PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_runtime_config_reports_the_galaxy_batched_prefill_policy PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_prefetch_registration_is_ordered_per_layer PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_qk_norms_resolve_to_head_local_geometry PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_lazy_weights_reject_a_fused_qkv_bias PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_batched_and_chunked_lengths_resolve_one_recipe_family_each PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_batched_prefill_is_off_by_default PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_a_chunked_length_without_its_plain_recipe_fails_closed PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_package_owns_its_graph_and_imports_no_model_named_implementation PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_head_local_qk_norm_agrees_with_the_module_default_by_contract PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_distributed_norm_resolves_its_statistics_onto_the_decode_input_origin PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_embedding_decode_output_is_the_residual_placement_not_interleaved_l1 PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_wo_weight_placement_is_paired_with_attention_dim_not_dim PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_relocate_never_uses_the_full_grid_copy_or_typecast_on_sharded_input PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_attention_decode_context_names_the_worker_subdevice_but_carries_no_global_cb PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_decode_lm_head_uses_the_ring_placement_and_the_bfloat8_reduction PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_the_fused_qk_rotary_is_the_default_everywhere_it_can_be_set PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_the_adaptor_exposes_a_checkpoint_loader_seam PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_relocate_reaches_an_interleaved_target_in_one_hop PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_real_qwen3_32b_geometry_is_decoupled_and_derives_the_contracted_widths PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_decode_ring_widths_differ_from_llama_by_exact_divisibility PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_qk_norm_relayout_is_the_same_permutation_as_the_projection_relayout PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_head_local_rms_norm_in_meta_layout_reproduces_hf_qk_norm PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_adaptor_extracts_qk_norm_and_refuses_a_checkpoint_without_one PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_meta_rope_tables_are_the_hf_qwen3_rotary_relaid_not_recomputed PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_fused_qkv_row_blocks_are_recoverable_projection_slices PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_converted_attention_weights_reproduce_the_hf_attention_output PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_converted_mlp_weights_reproduce_the_hf_mlp_output PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_converted_lm_head_reproduces_the_hf_logits PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_lm_head_padding_is_inert_at_the_real_vocabulary_widths PASSED
+models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_config_matches_the_contract_and_declares_no_qkv_bias PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+2.62s setup    models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_head_local_rms_norm_in_meta_layout_reproduces_hf_qk_norm
+0.53s call     models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_prefetch_registration_is_ordered_per_layer
+0.53s call     models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_attention_decode_context_names_the_worker_subdevice_but_carries_no_global_cb
+0.53s call     models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_the_fused_qk_rotary_is_the_default_everywhere_it_can_be_set
+0.52s call     models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_embedding_decode_output_is_the_residual_placement_not_interleaved_l1
+0.52s call     models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_decode_lm_head_uses_the_ring_placement_and_the_bfloat8_reduction
+0.52s call     models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_qk_norms_resolve_to_head_local_geometry
+0.52s call     models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_lazy_weights_reject_a_fused_qkv_bias
+0.19s setup    models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_converted_mlp_weights_reproduce_the_hf_mlp_output
+0.19s setup    models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_config_matches_the_contract_and_declares_no_qkv_bias
+0.19s setup    models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_the_adaptor_exposes_a_checkpoint_loader_seam
+0.19s setup    models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_meta_rope_tables_are_the_hf_qwen3_rotary_relaid_not_recomputed
+0.19s setup    models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_batched_and_chunked_lengths_resolve_one_recipe_family_each
+0.19s setup    models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_the_fused_qk_rotary_is_the_default_everywhere_it_can_be_set
+0.19s setup    models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_decode_lm_head_uses_the_ring_placement_and_the_bfloat8_reduction
+0.19s setup    models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_qk_norms_resolve_to_head_local_geometry
+0.19s setup    models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_lazy_weights_reject_a_fused_qkv_bias
+0.19s setup    models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_wo_weight_placement_is_paired_with_attention_dim_not_dim
+0.19s setup    models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_converted_attention_weights_reproduce_the_hf_attention_output
+0.18s setup    models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_fused_qkv_row_blocks_are_recoverable_projection_slices
+0.18s setup    models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_converted_lm_head_reproduces_the_hf_logits
+0.18s setup    models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_accepts_the_exact_product
+0.18s setup    models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_adaptor_extracts_qk_norm_and_refuses_a_checkpoint_without_one
+0.18s setup    models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_lm_head_padding_is_inert_at_the_real_vocabulary_widths
+0.18s setup    models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout
+=========================== short test summary info ============================
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_accepts_the_exact_product
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides0-Unexpected Qwen3-32B geometry]
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides1-Unexpected Qwen3-32B geometry]
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides2-Unexpected Qwen3-32B geometry]
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides3-Unexpected Qwen3-32B geometry]
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides4-bias-free]
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_checkpoint_contract_fails_closed[overrides5-untied LM head]
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_parameters_resolve_the_decoupled_head_geometry
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_parameters_support_a_one_layer_model
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_parameters_reject_an_impossible_layer_count
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_default_paged_geometry_covers_the_physical_batch
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_accuracy_recipe_keeps_the_narrow_mlp_in_bfloat16
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_head_local_vectors_use_the_same_interleave_as_the_projections
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_attention_conversion_returns_qk_norms_and_no_bias
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_attention_conversion_packs_a_present_bias_row_major
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_attention_conversion_reports_missing_qk_norms
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_lm_head_weight_pads_qwen_vocabulary_with_zero_columns
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_model_assembly_requires_per_head_qk_norm_weights
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_model_assembly_rejects_a_layer_count_mismatch
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_runtime_config_reports_the_galaxy_batched_prefill_policy
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_prefetch_registration_is_ordered_per_layer
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_qk_norms_resolve_to_head_local_geometry
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_lazy_weights_reject_a_fused_qkv_bias
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_batched_and_chunked_lengths_resolve_one_recipe_family_each
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_batched_prefill_is_off_by_default
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_a_chunked_length_without_its_plain_recipe_fails_closed
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_package_owns_its_graph_and_imports_no_model_named_implementation
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_head_local_qk_norm_agrees_with_the_module_default_by_contract
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_distributed_norm_resolves_its_statistics_onto_the_decode_input_origin
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_embedding_decode_output_is_the_residual_placement_not_interleaved_l1
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_wo_weight_placement_is_paired_with_attention_dim_not_dim
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_relocate_never_uses_the_full_grid_copy_or_typecast_on_sharded_input
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_attention_decode_context_names_the_worker_subdevice_but_carries_no_global_cb
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_decode_lm_head_uses_the_ring_placement_and_the_bfloat8_reduction
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_the_fused_qk_rotary_is_the_default_everywhere_it_can_be_set
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_the_adaptor_exposes_a_checkpoint_loader_seam
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_model_host.py::test_relocate_reaches_an_interleaved_target_in_one_hop
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_real_qwen3_32b_geometry_is_decoupled_and_derives_the_contracted_widths
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_decode_ring_widths_differ_from_llama_by_exact_divisibility
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_qk_norm_relayout_is_the_same_permutation_as_the_projection_relayout
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_head_local_rms_norm_in_meta_layout_reproduces_hf_qk_norm
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_adaptor_extracts_qk_norm_and_refuses_a_checkpoint_without_one
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_meta_rope_tables_are_the_hf_qwen3_rotary_relaid_not_recomputed
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_fused_qkv_row_blocks_are_recoverable_projection_slices
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_converted_attention_weights_reproduce_the_hf_attention_output
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_converted_mlp_weights_reproduce_the_hf_mlp_output
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_converted_lm_head_reproduces_the_hf_logits
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_lm_head_padding_is_inert_at_the_real_vocabulary_widths
+PASSED models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_config_matches_the_contract_and_declares_no_qkv_bias
+======================= 50 passed, 2 warnings in 22.97s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

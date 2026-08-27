@@ -138,5 +138,78 @@ bisect decode final norm user 0           0.7657172612914792
 bisect decode logits user 0               0.999360219056066   (asserted)
 ```
 
-Two of those are much lower than the rest and they are reported, not asserted.
-See §"The residual stream floor" in `REPORT.md`.
+Two of those were much lower than the rest, and they were **the test's
+reference, not the model**. `out.hidden_states[-1]` is the output of the model's
+*final norm*, not of the last decoder layer, so the residual was being compared
+against a normalized reference and the final norm against the norm applied
+twice. `a2_35_bisection` crossed the comparisons and found it; a host check on
+the real checkpoint confirmed it (`hidden_states[1]` is PCC 1.0 against
+`norm(layer0_output)` and 0.9178 against the layer output). With the labels
+corrected, `a2_50/51/52_bisection`, three fresh processes, bit-identical:
+
+```text
+probe decode global_cb bound              True
+probe decode cos / sin (users 0,8,16,24)  1.0 / 1.0
+bisect decode embedding user 0            1.0
+bisect decode attention norm user 0       0.9999910897024602
+bisect decode attention out (u0,8,16,24)  0.9992340211925125
+bisect decode cache K prefix/full/appended 0.9998897994661545 / 0.9998896420783983 / 0.9998437736663295
+bisect decode cache V prefix / appended   0.9998944730661905 / 0.9998828181814494
+probe appended K |max| device / reference 72 / 73
+bisect decode residual after attention    0.9992551949454134
+bisect decode ff norm user 0              0.9993495387523257
+bisect decode mlp out user 0              0.9995019825585748
+probe HF's MLP on the device's MLP input  0.9997485357508168
+bisect decode after layer 0 user 0        0.9995262312962566   |ref|max 8.375  |dev|max 8.875
+bisect decode final norm user 0           0.9995821444530748   |ref|max 58     |dev|max 58.75
+probe cross ref final norm vs dev residual  0.9181927142562529   (the sanity check, now low)
+probe cross ref after layer 0 vs dev normed 0.9159249720677421   (likewise)
+bisect decode logits user 0               0.999360219056066    (asserted)
+```
+
+**Every boundary of the Qwen decode step is >= 0.9992 against Hugging Face.**
+There is no residual-stream floor; there was a mislabelled reference.
+
+## 7. Step 6 — the full model
+
+| run | what | result |
+| --- | --- | --- |
+| `a2_19_fullmodel` | 64 layers, prefill 128 + first decode, cold staging | **1 passed, 9 m 59 s** |
+| `a2_23_fullmodel`, `a2_28_fullmodel` | the same, warm | 1 passed, 2 m 08 s |
+| `a2_20/33/34_accuracy` | teacher-forced, batch 1, 512 / 511 | **top-1 498/511 = 0.9746, top-5 511/511 = 1.0000**, three times identical |
+| `a2_21/29/30_demo_b1` | direct demo, batch 1 | 1 passed x3, identical text |
+| `a2_22/31/32_demo_b32` | direct demo, batch 32, cross-slot isolation | 1 passed x3, identical text |
+
+Device weight staging for the 64-layer model cost **one** 10-minute run; every
+later process is a cache hit (108 GB under `model_cache/Qwen`).
+
+## 8. Llama's regression gates
+
+| run | result |
+| --- | --- |
+| `a2_40/41/42_llama_step2` | 1 passed x3, all 21 `[pcc]` lines identical |
+| `a2_43_llama_prefill2048` | 1 passed, `prefill 2048: 0.9996201066107949` |
+| `a2_44_llama_fullmodel` | 1 passed, 13 m 44 s |
+| `a2_45_llama_accuracy` | 1 passed, 21 m 33 s, **top-1 501/511 = 0.9804, top-5 511/511 = 1.0000** |
+| `a2_46_llama_demo_b1`, `a2_47_llama_demo_b32` | 1 passed each, identical text |
+
+Every number is bit-identical to the values `job1_llama_state_for_qwen.md` §1
+records for `mb-llama` attempt 3.
+
+## 9. Host gates
+
+| run | result |
+| --- | --- |
+| `a2_60_host_gate` | `host_gate.sh` — **570 passed**, exit 0, no skips |
+| `a2_61_qwen_host` | Qwen host suites — **50 passed**, exit 0, no skips |
+
+## 10. Runs that produced nothing, and why they are still here
+
+`a2_02/03_qknorm`, `a2_04/06/07/10/12_block`, `a2_05/08_qknorm` each ended in an
+abort or a crash, and each named a defect. They are kept because the failure text
+is the evidence: three of this job's four findings are quoted from those logs and
+nowhere else. `a2_03` and `a2_05` also carry the harness note in
+`ENVIRONMENT.md` — a decode-mode `TT_FATAL` hangs the `mesh_device` fixture
+teardown *before* pytest writes any per-test verdict, so the wrapper's
+verdict-keyed grace timer never arms and only its full deadline reaps the
+process.

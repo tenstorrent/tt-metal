@@ -126,3 +126,59 @@ completes, and teardown is exactly what hangs. The log's last write was at
 15:36 and the process still held all 64 `/dev/tenstorrent` fds seven minutes
 later. Only the wrapper's full `MB_DEADLINE` would have reaped it. Budget for
 that, or watch the log's mtime rather than its contents.
+
+## Addendum — the exact invocations behind every published number
+
+Every device run was `run3_sequence.sh <manifest>`; the manifests are
+`seq_a2_*.txt` in this directory and each line is
+`<wrapper-deadline> <pytest-deadline> <logname> <node-id>`. The wrapper expands to
+
+```sh
+export HF_HOME=/localdev/ctr-apbernal/hf_data
+python -u -m pytest -v -rA --color=no -p no:cacheprovider \
+  --timeout=<pytest-deadline> <node-id> -o faulthandler_timeout=600 >> <log> 2>&1
+```
+
+with `tt-smi -glx_reset` after any non-clean run. `TTTV2_GALAXY_CCL_TRACE` was
+1 for `seq_a2_01` … `seq_a2_08` (which is where the `[ccl]` shard-exactness lines
+come from) and 0 from `seq_a2_09` on, because it adds three device synchronizes
+per token and the accuracy gate is 511 tokens.
+
+| gate | node id |
+| --- | --- |
+| step-5 block | `models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_one_layer_prefill_and_decode_8x4_qwen3_32b_b32_s128` |
+| prefill 2048 | `…::test_qwen3_32b_galaxy_one_layer_prefill_2048_8x4_qwen3_32b_b1_s2048` |
+| Q/K norm alone | `…::test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill` |
+| geometry | `…::test_qwen3_32b_galaxy_geometry_is_decoupled_8x4_qwen3_32b` |
+| decode bisection | `…::test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128` |
+| full model | `models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_full_model_prefill_and_first_decode_token` |
+| accuracy gate | `…::test_qwen3_32b_galaxy_teacher_forced_accuracy_batch1` |
+| demo batch 1 | `models/common/models/qwen3_32b_galaxy/demo.py::test_qwen3_32b_galaxy_direct_demo_batch1` |
+| demo batch 32 | `…::test_qwen3_32b_galaxy_direct_demo_batch32_has_no_cross_slot_contamination` |
+
+## Costs, measured on this machine
+
+| cost | measured |
+| --- | --- |
+| mesh open + `test_partition_wh_galaxy.py` | 13 s test, ~55 s cycle |
+| one-layer reference load (3 of 17 shards) | seconds |
+| one step-5 block cycle (test + reap + reset) | **~3 min**, test itself 108-115 s |
+| prefill 2048 cycle | ~3.5 min, test 178 s |
+| decode bisection cycle | ~2.5 min |
+| staging 64 layers to device, **first time in a tree** | one **10 min** run (108 GB written under `model_cache/Qwen`) |
+| the same staging, every process after | cache hit; full-model test 128 s |
+| accuracy gate, 511 eager decode steps, CCL trace **off** | **~13 min** |
+| Llama accuracy gate, same conditions | ~21.5 min |
+| demo batch 1 / batch 32 | 143 s / 169 s |
+
+Qwen is 32B against Llama's 70B and every cycle is roughly half. The whole Qwen
+gate set - block x3, prefill 2048 x3, bisection x3, full model x3, accuracy x3,
+both demos x3 - is about **two hours** once the device weight cache is warm.
+
+## Disk
+
+```text
+model_cache/Qwen        108 G
+model_cache/meta-llama  139 G
+/proj_sw free after both  196 G
+```
