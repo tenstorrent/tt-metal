@@ -124,8 +124,8 @@ struct KernelAdvancedOptions {
     //
     // To make use of this, the kernel then calls:
     //   /* create a tuple of TensorAccessor from the binding token tuple */
-    //   auto accessor_tuple =  make_tensor_accessors(my_binding_sequence);
-    //   /* create an array non-owning, type-erased TensorAccessor handles */
+    //   auto accessor_tuple =  make_tensor_accessors(tensor::my_binding_sequence);
+    //   /* create an array of non-owning, type-erased TensorAccessor handles */
     //   auto accessor_array = make_abstract_tensor_accessor_wrappers(accessor_tuple);
     //
     // Usage: A niche mechanism for a kernel that wishes to express a compile-time-variadic number of
@@ -141,7 +141,7 @@ struct KernelAdvancedOptions {
     // Constraints:
     //   - Every `members` entry is a TensorBinding::accessor_name on this kernel
     //   - No duplicate members within a sequence (one binding may appear in several sequences)
-    //   - `accessor_name` is a valid C++ identifier, unique in this kernel's `tensor::` namespace
+    //   - `sequence_name` is a valid C++ identifier, unique in this kernel's `tensor::` namespace
     //   - An empty members list is legal; this produces an empty std::tuple<>.
 
     struct TensorBindingSequence {
