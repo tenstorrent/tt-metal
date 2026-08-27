@@ -21,7 +21,7 @@ Numbers quoted below as *cost* come from the baseline profile
 | [3](#candidate-3--tile-padding-waste) | kill tile padding on degenerate dims | kernel, DRAM | **−177.3 ms, and 200×200 now runs** | M | low | **landed — [03](perf_reports/03-camera-fold.md), [04](perf_reports/04-flat-sampling-chain.md)** |
 | [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | **114 ms** (single op) | S | low | closed — deleted by 2 |
 | [5](#candidate-5--trace-capture) | trace capture the encoder | gap | all remaining gap | M | low | blocked on 1b |
-| [6](#candidate-6--the-fused-msda-op-itself) | the fused MSDA op itself | kernel | **167.6 ms**, 54% of kernel | L | — | upstream |
+| [6](#candidate-6--the-fused-msda-op-itself) | the fused MSDA op itself | kernel | **167.8 ms**, 64% of kernel | L | — | upstream |
 
 Ordering rationale is at the [bottom](#ordering).
 
@@ -268,9 +268,11 @@ lifts.
 4. ~~**3**~~ — landed in two parts, −177.3 ms kernel total, and `200×200` now runs. It was two
    independent defects, not one: a degenerate batch axis tiled in the wrong position (stage 03,
    −36.8 ms) and a trailing `(num_points, 2)` padding to 128× (stage 04, −140.5 ms).
-5. **the residual layout churn** — 89 ms still in `Permute` and `ReshapeView`, no longer one
-   identifiable defect. Should reach roughly 220 ms per layer.
-6. **6** — the fused op. 167.6 ms, 54% of kernel, and the only remaining order of magnitude. Not
+5. ~~**the residual layout churn**~~ — done, −46.5 ms
+   ([05](perf_reports/05-hoisted-layout-ops.md)). Two per-level ops hoisted out of the level loop.
+   What is left is ~52 ms with no common cause, and a profile read op by op found no further target
+   of that kind. The Python-side layout work is closed.
+6. **6** — the fused op. 167.8 ms, **64%** of kernel, and the only remaining order of magnitude. Not
    ours to write; raise it upstream with the roof estimate.
 7. **1c** — hoist the index derivation to the encoder: one sync per frame instead of six. Pure
    refactor, no op risk.
@@ -283,20 +285,20 @@ The baseline settled what was previously a guess: host round-trips dominated wal
 kernel time, and within kernel time it is layout churn, not arithmetic — matmul is 0.7%. Nothing in
 the matmul-tuning playbook applies here.
 
-Stages 02–04 settled the rest. Measured on Release, kernel is **89%** of wall clock and total gap is
-37.6 ms — so 1b, 1c and 1d together cannot recover more than that, and they sit below both the
-residual layout work and the op itself. Stage 01's 218.3 ms gap was a Debug-build artifact; see
+Stages 02–05 settled the rest. Measured on Release, kernel is **86%** of wall clock and total gap is
+41.8 ms — so 1b, 1c and 1d together cannot recover more than that, and they sit below the op itself.
+Stage 01's 218.3 ms gap was a Debug-build artifact; see
 [02](perf_reports/02-fused-msda.md) § *Baseline this is measured against*.
 
-After three device-time stages the layer is at **310.1 ms of kernel, down 54.5%**, and the shape of
+After four device-time stages the layer is at **263.6 ms of kernel, down 61.3%**, and the shape of
 the problem has changed again: it is now one op, not a hundred small ones.
 
 ---
 
 ## Candidate 6 — the fused MSDA op itself
 
-`ttnn.experimental.multi_scale_deformable_attn` is **167.6 ms across 5 calls, 54% of kernel time**,
-and it is the largest remaining item by a factor of three.
+`ttnn.experimental.multi_scale_deformable_attn` is **167.8 ms across 5 calls, 64% of kernel time**.
+Everything else in the layer put together is 96 ms.
 
 A bandwidth estimate for one SCA level call — `48 × 2496` queries × 4 points × 4 bilinear taps × 32
 channels × 2 B ≈ 123 MB, plus ~11 MB of grid, weights and output — puts the DRAM roof at **0.46 ms**

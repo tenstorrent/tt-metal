@@ -38,6 +38,7 @@ reported for that reason.
 | 2 | [MSDA through the fused ttnn op](perf_reports/02-fused-msda.md) | Release | 487.4 ms | 37.9 ms | **525.3 ms** | **−197.0 ms** |
 | 3 | [camera fold without tiling a batch-of-one](perf_reports/03-camera-fold.md) | Release | 450.6 ms | 33.2 ms | **483.8 ms** | **−41.5 ms** |
 | 4 | [flat, tile-clean sampling chain](perf_reports/04-flat-sampling-chain.md) | Release | 310.1 ms | 37.6 ms | **347.7 ms** | **−136.1 ms** |
+| 5 | [hoisted head permute, untilize before the head split](perf_reports/05-hoisted-layout-ops.md) | Release | 263.6 ms | 41.8 ms | **305.4 ms** | **−42.3 ms** |
 
 `kernel` = summed `DEVICE KERNEL DURATION`. `gap` = summed `OP TO OP LATENCY`, i.e. the time the
 device spent idle between ops waiting on host dispatch. `wall` = kernel + gap, per layer.
@@ -50,16 +51,20 @@ re-measurement, and stage 2 onwards is measured against it.
 
 **Stage 1: −70.7% of wall clock**, trading kernel for −2198.2 ms of host gap.
 
-**Stages 2–4: 681.5 → 310.1 ms of kernel, −54.5%**, at a PCC gate held at 0.999611 throughout. All
-of it is device time. Kernel is **89%** of wall clock, so what remains of the host-round-trip work
-is bounded by 37.6 ms.
+**Stages 2–5: 681.5 → 263.6 ms of kernel, −61.3%**, at a PCC gate held at 0.999611 throughout. All
+of it is device time. Kernel is **86%** of wall clock, so what remains of the host-round-trip work
+is bounded by 41.8 ms.
 
 `200×200` spatial cross attention runs as of stage 4; it had been failing on an allocation of 2.97
 GB for a 23.2 MB tensor. The full `tests/pcc/` suite is 33 passed with nothing deselected.
 
-**MSDAOperation is now 54% of kernel** — 167.6 ms in 5 calls of one experimental op, running at
+**MSDAOperation is now 64% of kernel** — 167.8 ms in 5 calls of one experimental op, running at
 roughly 1.3% of the DRAM roof. See [04](perf_reports/04-flat-sampling-chain.md) for the estimate.
-Nothing in Python reaches it.
+Nothing in Python reaches it, and everything else in the layer put together is 96 ms.
+
+The Python-side layout work is finished. What remains of it is ~52 ms spread across `Permute`,
+`ReshapeView`, `Slice` and `Untilize` with no common cause; stage 05 records the profile read that
+found no further target of that kind.
 
 ## Where the baseline time is
 
