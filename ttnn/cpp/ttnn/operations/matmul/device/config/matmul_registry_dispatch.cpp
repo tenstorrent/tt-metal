@@ -10,7 +10,6 @@
 
 #include <tt-metalium/experimental/inspector.hpp>
 
-#include "tt_metal/impl/context/metal_context.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 namespace ttnn::operations::matmul::registry {
@@ -65,15 +64,18 @@ RegistryRequestInspection inspect_registry_request(
 
     const auto* device_a = input_tensor_a.device();
     const auto* device_b = input_tensor_b.device();
-    const auto device_arch =
-        device_a == nullptr
-            ? tt::ARCH::Invalid
-            : tt::tt_metal::MetalContext::instance(device_a->impl().get_context_id()).get_cluster().arch();
     if (input_tensor_a.logical_shape().rank() != 2 || input_tensor_b.logical_shape().rank() != 2 ||
-        device_a == nullptr || device_a != device_b || device_a->num_devices() != 1 ||
-        device_arch != tt::ARCH::BLACKHOLE) {
+        device_a == nullptr || device_a != device_b || device_a->num_devices() != 1) {
         return inspection;
     }
+    // MeshDevice::arch() currently consults the default MetalContext. Use the
+    // mesh's physical device so non-default MetalEnv instances cannot be
+    // mistaken for the architecture that owns the checked-in evidence.
+    const auto devices = device_a->get_devices();
+    if (devices.size() != 1 || devices.front() == nullptr || devices.front()->arch() != tt::ARCH::BLACKHOLE) {
+        return inspection;
+    }
+    const auto device_arch = devices.front()->arch();
 
     const auto a_logical = utilities::get_matmul_tensor_logical_shape(input_tensor_a, parameters.transpose_a);
     const auto b_logical = utilities::get_matmul_tensor_logical_shape(input_tensor_b, parameters.transpose_b);

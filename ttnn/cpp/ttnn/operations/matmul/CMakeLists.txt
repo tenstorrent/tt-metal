@@ -55,7 +55,6 @@ target_include_directories(
     PRIVATE
         ${FixmeOpIncDirs}
         ${MATMUL_REGISTRY_GENERATED_DIR}
-        ${PROJECT_SOURCE_DIR}/tt_metal
 )
 target_link_libraries(ttnn_op_matmul PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
