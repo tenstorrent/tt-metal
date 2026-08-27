@@ -154,6 +154,42 @@ def validate_galaxy_mesh(name: str, mesh_device: Any) -> None:
         raise ValueError(f"{name} supports Wormhole only, got {mesh_device.arch()}")
 
 
+def lm_head_reduce_core_count(padded_local_vocab: int, available_cores: int) -> int:
+    """Return the core count the decode LM head all-reduce stages onto.
+
+    The reduction does not run on the matmul's 24-core ring.
+    ``all_reduce_async`` validates
+
+        buffer_shard_volume >= output_shard_volume * ring_size
+
+    so a 4-device axis-1 reduction on 24 cores needs a buffer shard four times a
+    24th of the logits, which is the largest single L1 allocation of the decode
+    step. Spreading over more cores makes both the output shard and the buffer
+    shard smaller. The production code does the same thing and says so:
+    ``num_cores_after_lm_head = 32``, commented "Use 32 cores instead of 16 to
+    reduce L1 memory usage per core", with `LM_HEAD_OUT_RING_RESHARD_MEMCFG` at
+    `(32, width // 32)`.
+
+    The count is **searched for, not named**, because a width-sharded L1 shard
+    must be a whole number of tiles wide:
+
+        TT_FATAL ... Physical shard shape (32, 504) must be tile {32, 32} sized!
+
+    The production 32 works there because its padded width is 16384 -- 512 tiles,
+    which 32 divides. Llama's ring-padded width here is 16128, or 504 tiles, and
+    32 does not divide 504. So this returns the largest core count that both fits
+    the worker envelope and divides the width evenly in tiles: 42 for Llama's 504
+    tiles, 50 for Qwen's 600. Because the buffer is exactly ``GALAXY_COLUMNS``
+    times the width, one divisibility condition covers both.
+    """
+
+    tiles = padded_local_vocab // TILE
+    for count in range(min(available_cores, tiles), 0, -1):
+        if tiles % count == 0:
+            return count
+    raise ValueError(f"no core count divides {tiles} tiles within {available_cores} cores")
+
+
 def pad_ring_width(value: int) -> int:
     """Pad a per-device width to the ring matmul's 24-core tile alignment."""
 
@@ -207,8 +243,16 @@ def dram_sharded_weight_memory_config(mesh_device: Any, local_k: int, local_n: i
     )
 
 
-def ring_matmul_program_config(local_k: int, padded_local_n: int) -> Any:
-    """Return the qualified 24-core gather-in0 ring matmul program config."""
+def ring_matmul_program_config(local_k: int, padded_local_n: int, *, global_cb_receivers: int = 2) -> Any:
+    """Return the qualified 24-core gather-in0 ring matmul program config.
+
+    ``global_cb_receivers`` is ``num_global_cb_receivers``, which describes how
+    many ring cores receive from each prefetch sender's global circular buffer.
+    The MLP projections are prefetched and the qualified value is 2; the LM head
+    is **not** prefetched - it streams its weight from a DRAM width-sharded
+    buffer, exactly as the production ``LM_HEAD_TG_RING_PROGCFG`` does - so it
+    passes 1 rather than describing a global CB that was never bound.
+    """
 
     out_block_w = padded_local_n // RING_CORE_COUNT // TILE
     out_subblock_w = min(8, out_block_w)
@@ -226,7 +270,7 @@ def ring_matmul_program_config(local_k: int, padded_local_n: int) -> Any:
         mcast_in0=False,
         gather_in0=True,
         hop_cores=ring_hop_cores(),
-        num_global_cb_receivers=2,
+        num_global_cb_receivers=global_cb_receivers,
         untilize_out=False,
     )
 
@@ -567,6 +611,14 @@ class GalaxyDecodePlacements:
     mlp_w2_program_config: Any
     mlp_reduce_scatter_memcfg: ttnn.MemoryConfig
     all_reduce_buffer_memcfg: ttnn.MemoryConfig
+    #: The decode LM head runs on the same 24-core gather-in0 ring as the MLP.
+    #: See `resolve_galaxy_decode_placements` for why it cannot use the dense
+    #: config the attention projections use.
+    lm_head_input_memcfg: ttnn.MemoryConfig
+    lm_head_output_memcfg: ttnn.MemoryConfig
+    lm_head_program_config: Any
+    lm_head_all_reduce_input_memcfg: ttnn.MemoryConfig
+    lm_head_all_reduce_buffer_memcfg: ttnn.MemoryConfig
     worker_cores: ttnn.CoreRangeSet
     ring_cores: ttnn.CoreRangeSet
 
@@ -665,6 +717,26 @@ def resolve_galaxy_decode_placements(geometry: GalaxyDenseGeometry, mesh_device:
 
     padded_local_dim = pad_ring_width(geometry.local_dim)
     padded_local_hidden = pad_ring_width(geometry.local_hidden_dim)
+    # The decode LM head must use the ring, not `dense_matmul_program_config`.
+    # Decode presents one row tile, so a 2D multicast matmul can only use
+    # `grid_y = 1` - three cores, the width of the worker envelope - and the
+    # local output is 501 tiles wide, giving `per_core_N = 167` and an in1
+    # circular buffer of roughly 240 kB per core *before* double buffering. It
+    # cannot fit beside the resident decode activations. The 24-core ring gives
+    # `per_core_N = 21` and a 42-tile in1 buffer instead.
+    #
+    # This is not a new mechanism: `_RING_CORE_COORDS` and
+    # `_RING_RECEIVER_COORDS` in this module are, coordinate for coordinate, the
+    # production `LM_HEAD_INPUT_GRID` and `LM_HEAD_OUTPUT_GRID` of
+    # `models/demos/llama3_70b_galaxy/tt/model_config.py`, whose LM head is a
+    # 24-core `gather_in0` ring at this exact geometry. The ring was always the
+    # LM head's ring; the Milestone B recipes simply had not wired it up, so the
+    # LM head still resolved `decode_program_configs` to `(None,)` and ttnn
+    # auto-selected the full seven-column compute grid.
+    padded_local_vocab = pad_ring_width(geometry.local_padded_vocab_size)
+    lm_head_reduce_cores = _subgrid_cores(
+        lm_head_reduce_core_count(padded_local_vocab, workers.num_cores()), row_wise=True
+    )
     # Placements carry the padded physical width; resource keys carry the
     # logical width TTNN reports for the same tensor.
     reduce_scatter_cores = _subgrid_cores(geometry.decode_reduce_scatter_padded_width // TILE, row_wise=True)
@@ -728,6 +800,29 @@ def resolve_galaxy_decode_placements(geometry: GalaxyDenseGeometry, mesh_device:
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(workers, (TILE, 1024), ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+        # The decode LM head. Its in0 is the final-norm output at `local_dim`,
+        # which is the *same* width the MLP feeds its ring, so it reuses the
+        # qualified `mlp_input_memcfg` placement exactly.
+        lm_head_input_memcfg=width_sharded_memory_config(padded_local_dim, ring),
+        # On `ring`, not `receivers`, and that is load-bearing. A `gather_in0`
+        # matmul whose in1 is DRAM *interleaved* requires in0 and the output to
+        # be sharded on the same cores:
+        #     TT_FATAL ... Input tensor A and output tensor must be sharded on
+        #                  the same cores when using gather_in0 and in1 is
+        #                  DRAM_INTERLEAVED
+        #     (input_tensor_a.shard_spec().grid == output_mem_config.shard_spec().grid)
+        # `ring` and `receivers` are the same 24 cores in a different order, and
+        # that is enough to fail the comparison. The MLP can use `receivers`
+        # because its in1 arrives through the prefetcher's global circular
+        # buffer, so it never takes this path; the LM head is not prefetched.
+        lm_head_output_memcfg=width_sharded_memory_config(padded_local_vocab, ring),
+        lm_head_program_config=ring_matmul_program_config(
+            geometry.local_dim, padded_local_vocab, global_cb_receivers=1
+        ),
+        lm_head_all_reduce_input_memcfg=width_sharded_memory_config(padded_local_vocab, lm_head_reduce_cores),
+        lm_head_all_reduce_buffer_memcfg=width_sharded_memory_config(
+            padded_local_vocab * GALAXY_COLUMNS, lm_head_reduce_cores
         ),
         worker_cores=workers,
         ring_cores=ring,

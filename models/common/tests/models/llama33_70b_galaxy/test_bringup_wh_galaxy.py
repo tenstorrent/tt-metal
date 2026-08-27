@@ -55,6 +55,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.auto_compose import to_torch_auto_compose
 from models.common.models.llama33_70b_galaxy.hf_adaptor import DEFAULT_HF_MODEL, convert_hf_model_weights
 from models.common.models.llama33_70b_galaxy.model import (
     LLAMA33_70B_GALAXY_ACCURACY,
@@ -285,7 +286,20 @@ def test_one_decode_step_executes(mesh_device, layer0_weights_and_params):
             with _stage("synchronize decode"):
                 model.synchronize("decode")
             assert output is not None
-            assert tuple(output.shape)[-1] == params.padded_vocab_size, tuple(output.shape)
+            # The vocabulary is sharded over the eight mesh rows, so the padded
+            # vocabulary is a property of the *composed* logits, not of one
+            # device's shard. Asserting it on `output.shape` -- which reports the
+            # per-device shard width -- was a hypothesis written without a mesh.
+            # Composing is the stronger check: it fails if any row shard is
+            # missing or mis-sized, which a local-width assertion cannot see.
+            with _stage("compose decode logits"):
+                composed = to_torch_auto_compose(output)
+            print(f"[shape] device shard {tuple(output.shape)}, composed {tuple(composed.shape)}", flush=True)
+            assert composed.shape[-1] == params.padded_vocab_size, (
+                f"composed logits are {tuple(composed.shape)}; "
+                f"expected a padded vocabulary of {params.padded_vocab_size}"
+            )
+            assert composed.reshape(-1, composed.shape[-1]).shape[0] >= GALAXY_PHYSICAL_BATCH
         finally:
             deallocate(output)
             deallocate(tt_positions)

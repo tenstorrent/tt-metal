@@ -64,17 +64,31 @@ def deallocate(tensor: Any) -> None:
 def load_reference_tokens(model_name: str) -> tuple[torch.Tensor, torch.Tensor]:
     """Return ``(reference_tokens, top5_tokens)`` for a checkpoint name.
 
-    ``reference_tokens`` is a real-text token sequence; ``top5_tokens[i]`` holds
-    the reference implementation's five most likely next tokens at position
-    ``i``. Neither the Galaxy model nor a Hugging Face model needs to be loaded
-    to score against them.
+    ``reference_tokens`` is a real-text token sequence, returned **one
+    dimensional**; ``top5_tokens[i]`` holds the reference implementation's five
+    most likely next tokens at position ``i``. Neither the Galaxy model nor a
+    Hugging Face model needs to be loaded to score against them.
+
+    The stored files hold ``reference_tokens`` with a leading batch axis --
+    ``generate_reference_outputs.py`` writes ``encoded_tokens_tensor[:, :n]``,
+    so ``Llama-3.3-70B-Instruct.refpt`` is ``(1, 1024)``. Every consumer here
+    and in the 1D demos treats the sequence as flat: ``len(reference_tokens)``
+    is the sequence length, and ``reference_tokens[i]`` is a token. Returning
+    the tensor raw made ``len()`` report **1**, so a caller asking for a
+    512-token prompt saw "reference sequence has 1 tokens" and *skipped* -- the
+    Milestone B accuracy gate could never run, and it failed open rather than
+    loud. ``models/common/tests/demos/llama33_70b/demo.py`` already squeezes at
+    its own call site; this does it once, here, for every caller.
     """
 
     path = _REFERENCE_ROOT / f"{model_name}.refpt"
     if not path.exists():
         pytest.skip(f"reference token file not found: {path}")
     data = torch.load(path, map_location="cpu", weights_only=False)
-    return data["reference_tokens"], data["top5_tokens"]
+    reference_tokens = data["reference_tokens"]
+    if reference_tokens.dim() > 1:
+        reference_tokens = reference_tokens.reshape(-1)
+    return reference_tokens, data["top5_tokens"]
 
 
 def align_top5(top5_tokens: torch.Tensor, reference_tokens: torch.Tensor, prompt_len: int) -> torch.Tensor:

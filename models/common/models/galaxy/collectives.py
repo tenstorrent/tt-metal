@@ -66,12 +66,52 @@ def _aliases_borrowed_buffer(tensor: Any, resource: Any) -> bool:
     return False
 
 
+def _relocate_sharded(tensor: Any, memory_config: Any) -> Any:
+    """Move a sharded tensor to another sharded placement, inside the partition.
+
+    The explicit pair, for the reason `llama33_70b_galaxy/model.py::_relocate`
+    documents at length: a direct `to_memory_config` between two shard specs that
+    differ in grid *and* width resolves to `reshard_program_factory_generic`,
+    which builds over the full compute grid and is illegal under a loaded
+    sub-device manager. `sharded_to_interleaved` runs on its input's
+    `shard_spec.grid` and `interleaved_to_sharded` on its output shard's cores,
+    and both of those are worker-confined here.
+
+    Returns `tensor` itself when it is already in the requested placement, so
+    callers must compare identity before deallocating.
+    """
+
+    if tensor.memory_config() == memory_config:
+        return tensor
+    staged = ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG)
+    try:
+        return ttnn.interleaved_to_sharded(staged, memory_config)
+    finally:
+        deallocate_if_allocated(staged)
+
+
 class GalaxyColumnAllReduce:
     """Column (axis-1) all-reduce satisfying the LMHead2D collective contract.
 
     The LM head reduces the hidden dimension over the four mesh columns. The
     collective borrows its input and returns a distinct owned output, which is
     exactly what ``LMHead2D`` validates before it will accept the callable.
+
+    ``subdevice_id`` is a *callable*, resolved at call time rather than at
+    construction. ``ttnn.all_reduce`` forwards straight to
+    ``ttnn::experimental::all_reduce_async`` (see
+    ``ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp``), which places its
+    workers on the named sub-device and, given none, on the whole compute grid.
+    Under the Galaxy decode partition that is illegal - the prefetcher's worker
+    sub-device owns 50 of the 70 compute cores - and the LM head reduction
+    aborts with
+
+        TT_FATAL ... Kernel group cores do not match sub device cores
+                     for programmable core type TENSIX
+
+    It is a callable and not a value because the sub-device id belongs to the
+    live operation-boundary context, which is created after this collective is
+    constructed and differs between prefill and decode.
     """
 
     cluster_axis = 1
@@ -85,20 +125,125 @@ class GalaxyColumnAllReduce:
         num_links: int = 1,
         topology: Any = ttnn.Topology.Linear,
         memory_config: Any = None,
+        subdevice_id: Any = None,
+        resources: Any = None,
+        placements: Any = None,
+        dtype: Any = None,
     ):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
         self.memory_config = memory_config
+        self.subdevice_id = subdevice_id
+        self.resources = resources
+        self.placements = placements
+        self.dtype = dtype
+
+    def _resolved_subdevice_id(self) -> Any:
+        return self.subdevice_id() if callable(self.subdevice_id) else self.subdevice_id
 
     def __call__(self, tensor: Any) -> Any:
+        if self.resources is not None and self.placements is not None:
+            return self._persistent_all_reduce(tensor)
         return ttnn.all_reduce(
             tensor,
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
             memory_config=self.memory_config or tensor.memory_config(),
+            subdevice_id=self._resolved_subdevice_id(),
         )
+
+    def _persistent_all_reduce(self, tensor: Any) -> Any:
+        """Reduce the decode logits against a keyed persistent buffer.
+
+        `ttnn.all_reduce` cannot be used here. It forwards to the
+        `all_reduce_async` overload that takes no persistent buffer and no
+        semaphores, which falls back to
+        `composite_common::composite_all_gather`; that calls `ttnn::concat` with
+        no `sub_core_grids`, so the concat builds over the full compute grid and
+        the decode sub-device manager rejects it:
+
+            TT_FATAL ... Kernel group cores do not match sub device cores
+                         for programmable core type TENSIX
+            (from ttnn::prim::concat, under ttnn::all_reduce)
+
+        The persistent-buffer overload takes the fused path, which honours
+        `subdevice_id`. This is what the production
+        `tt_ccl.line_all_reduce(..., lm_head=True, buffer_key="LM_HEAD")` does.
+
+        Three details are not free choices:
+
+        * **The staging to 32 cores.** `all_reduce_async` validates
+          `buffer_shard_volume >= output_shard_volume * ring_size`. The matmul
+          leaves the logits on the 24-core ring, where a 4-device reduction would
+          need a buffer shard a third larger than the 32-core layout needs. The
+          production code reshards for the same reason
+          (`LM_HEAD_OUT_RING_RESHARD_MEMCFG`, `num_cores_after_lm_head = 32`).
+        * **`fp32_dest_acc=True`.** The production comment on this line is worth
+          quoting: "fp32 dest accumulation for the LM-head all_reduce only: its
+          bf16 cross-device sum was order-dependent (ETH ring arrival order) ->
+          per-row logit non-determinism -> greedy flips". A bfloat16 cross-device
+          sum here is not reproducible across runs, which is exactly the class of
+          defect this project distrusts a single passing run for.
+        * **The result is placed back into the caller's placement.** `LMHead2D`
+          uses one `output_memcfg` for the matmul, the collective, the optional
+          concat and the mask add, so the tensor this returns must be laid out the
+          way the matmul's output was. The two DRAM round trips that costs are a
+          real decode-latency cost and belong on the performance follow-up list;
+          they are not the reason any of this is correct.
+        """
+
+        context = self.resources.context("decode")
+        staged = _relocate_sharded(tensor, self.placements.lm_head_all_reduce_input_memcfg)
+        resource = select_galaxy_resource(context, "all_reduce", self.cluster_axis, staged)
+        if not resource.persistent_output_buffers:
+            raise ValueError("decode LM head all-reduce requires a persistent output buffer")
+        key = resource.key
+        reduced = None
+        # The buffer is kept in DRAM between tokens and brought into L1 only for
+        # this call. `interleaved_to_sharded` runs on its output shard's cores, so
+        # it stays inside the partition, and freeing the L1 copy straight after
+        # keeps the largest allocation of the decode step off the worker cores for
+        # all but one op.
+        buffer_l1 = ttnn.interleaved_to_sharded(
+            resource.persistent_output_buffers[0], self.placements.lm_head_all_reduce_buffer_memcfg
+        )
+        try:
+            reduced = ttnn.experimental.all_reduce_async(
+                staged,
+                buffer_l1,
+                cluster_axis=self.cluster_axis,
+                mesh_device=self.mesh_device,
+                multi_device_global_semaphore=context.next_semaphore_handles(
+                    key.operation, key.cluster_axis, key.geometry, key.sequence_key
+                ),
+                num_links=resource.num_links,
+                memory_config=self.placements.lm_head_all_reduce_input_memcfg,
+                dtype=self.dtype,
+                topology=resource.topology,
+                subdevice_id=self._resolved_subdevice_id(),
+                fp32_dest_acc=True,
+            )
+            placed = _relocate_sharded(reduced, tensor.memory_config())
+            # `all_reduce_async` may hand back the L1 buffer view itself rather
+            # than a fresh tensor; that one is released once, below, in `finally`.
+            if placed is not reduced and reduced is not buffer_l1:
+                deallocate_if_allocated(reduced)
+            if placed is reduced:
+                raise RuntimeError(
+                    "decode LM head all-reduce returned its input placement; LMHead2D requires a distinct tensor"
+                )
+            return placed
+        except BaseException:
+            if reduced is not None and reduced is not buffer_l1:
+                deallocate_if_allocated(reduced)
+            raise
+        finally:
+            self.resources.synchronize("decode")
+            deallocate_if_allocated(buffer_l1)
+            if staged is not tensor:
+                deallocate_if_allocated(staged)
 
 
 class GalaxyColumnUserSelector:

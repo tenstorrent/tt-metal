@@ -590,3 +590,358 @@ needed to reach the step-3 gates.
 Qwen was not touched: no file under `models/common/models/qwen3_32b_galaxy/` or
 its tests appears in the diff. Everything learned that applies to both models is
 in `tttv2_milestone_b_briefs/job1_completion_handoff.md`, not in Qwen's code.
+
+---
+---
+
+# Attempt 2 — 2026-08-27, on a recovered mesh
+
+Attempt 1, everything above, ended `BLOCKED (infra)`: board 7 had dropped off the
+PCIe bus and `tt-smi -glx_reset` could not recover it because the node it needed
+was the missing one. **Between the two attempts the machine was power-cycled out
+of band.** Attempt 2's first act was to re-check rather than trust the handoff,
+and the mesh is healthy: `tt-smi -ls` exits 0 and enumerates all 32 Wormhole
+boards including board 7 at `0000:08:0x`, and
+`models/common/tests/models/galaxy/test_partition_wh_galaxy.py` passes 5/5 on
+device with a clean open and close of all 32 chips
+(`logs2/a2_00_partition.log`).
+
+Nothing above this line is retracted. Everything above was measured, and the
+partition numbers were re-measured on this attempt and are unchanged. What
+changed is that device work became possible again.
+
+The running account of attempt 2, run by run with every log named, is
+`ATTEMPT2.md` in this directory. This section carries the verdict, the results
+table, the defects and what is left open. Attempt 2's logs are in `logs2/`;
+attempt 1's `logs/` were not touched.
+
+## The single most useful sentence in this report
+
+Attempt 1's ranked risk list was right about the *kind* of failure and wrong
+about where it would stop. Every defect attempt 2 found is, again, the same
+mistake:
+
+> **A decode-mode program was placed on cores the loaded sub-device manager does
+> not own, or was not told which sub-device it was running under at all.**
+
+but attempt 2 found the second half of that sentence, which attempt 1 did not
+reach: **several ttnn ops do not default to "the whole grid" when they are not
+given a `sub_device_id` — they default to sub-device _zero_, which on this mesh
+is the prefetch sender set, the one group of cores a compute program must never
+use.** That is a strictly worse default than the whole grid, because the whole
+grid at least contains the right cores. See D-B13.
+
+## A2.1 What attempt 2 established on hardware
+
+### D-B9 is fixed, and the fix was attempt 1's untested hypothesis
+
+Attempt 1 left exactly one change in the tree that hardware had never seen:
+`in0_block_w` from `gcd(k_tiles, 8)` to `gcd(k_tiles, 4)` in
+`dense_matmul_program_config`, halving the in1 circular buffer of the
+three-column attention matmuls. It **works.** The first decode run of attempt 2
+(`logs2/a2_01_decode_step.log`) contains no `clash` at all — the
+
+```text
+TT_THROW ... Statically allocated circular buffers in program 320 clash with
+             L1 buffers on core range [1-0 - 3-0]
+```
+
+of D-B9 does not occur — and execution proceeded through both attention
+projections, the attention all-reduce, all three MLP ring matmuls, the MLP
+all-reduce and the final distributed norm.
+
+D-B9 is therefore **CLOSED**, and attempt 1's advice to "not trust the
+`in0_block_w` change until you have seen it run" is discharged: it has run, four
+times now, in four separate processes.
+
+### The decode graph now executes a whole Llama layer and the final norm
+
+From run 01's stage markers, which is the furthest any Milestone B decode had
+reached at that point:
+
+```text
+build / allocate kv / bind kv                                   runs
+activate("decode")  (persistent DRAM prefetch starts)           runs
+RotarySetup2D.decode_forward                                    runs
+Embedding2D.decode_forward                                      runs
+layer 0: distributed norm, QKV, RoPE on real Q/K, SDPA, wo      runs
+layer 0: attention all-reduce                                   runs
+layer 0: MLP ring w1/w3/w2 and the axis-0 all-reduce            runs
+final distributed norm                                          runs
+LM head                                                         <- the frontier
+```
+
+So attempt 1's row "final norm, LM head, logits — never reached" is now "final
+norm reached and executed; the LM head is where the remaining work is".
+
+## A2.2 Defects found and fixed in attempt 2
+
+Four, all in the LM head, all in the same family, each found by one device run
+and each failing later than the last. Full evidence and quoted aborts in
+`ATTEMPT2.md`.
+
+| ID | Site | What was wrong | Status |
+| --- | --- | --- | --- |
+| D-B10 | `llama33_70b_galaxy/model.py::_relocate` | An **interleaved, non-DRAM** target fell through to `to_memory_config`, i.e. `ttnn::prim::copy` on the full grid. Latent for prefill too. | fixed |
+| D-B11 | `llama33_70b_galaxy/model.py` LM head config | `decode_program_configs` resolved to `(None,)`, so ttnn auto-selected the full seven-column grid. Cannot use the dense config: decode has one row tile, so a 2D mcast matmul gets three cores and `per_core_N = 167`. | fixed — 24-core ring |
+| D-B12 | `galaxy/recipes.py` LM head output placement | `ring_cores()` and `ring_receiver_cores()` are the *same 24 cores in a different order*, and `gather_in0` with a DRAM-interleaved in1 requires in0 and output on the same cores. Also: `decode_weights_memcfgs` was **dead config**. | fixed |
+| D-B13 | `modules/lm_head/lm_head_2d.py` | `ttnn.linear` was never given a `sub_device_id`. The `gather_in0` factory intersects its ring with the named sub-device and **defaults to sub-device 0**, which here is the prefetch senders — disjoint from the ring, so the core set came out empty. | fixed |
+| D-B14 | `galaxy/collectives.py`, `galaxy/plans.py` | `ttnn.all_reduce` forwards to the *buffer-less* `all_reduce_async` overload, which falls back to `composite_common::composite_all_gather` → `ttnn::concat` with no `sub_core_grids`, i.e. the full grid. `subdevice_id` is honoured by the fused path and ignored by the composite fallback. | fixed — keyed persistent buffer |
+| D-B15 | `galaxy/plans.py` | That persistent buffer was allocated **resident in L1**. It is `GALAXY_COLUMNS` times the width of the logits — 129 kB per core at bfloat16 — and clashed with the decode activations' circular buffers. "Persistent" means the resource owns it across calls, not that it must sit in L1. | fixed — DRAM-resident, L1 view per call |
+| ~~D-B16~~ | `modules/lm_head/lm_head_2d.py` | **Not a defect — struck.** I reasoned from the MLP's `decode_reduce_scatter_width` that a ring output reports its *padded* width, and widened the mask to match. Hardware says a matmul output keeps its **logical** width (16032); only a reduce-scatter output takes the padded one. Reverted, with the distinction recorded in the code. | reverted |
+| D-B17 | `galaxy/recipes.py` | The reduce staging used the production's literal `num_cores_after_lm_head = 32`. A width-sharded L1 shard must be a whole number of tiles, and 32 does not divide Llama's 504. | fixed — core count derived |
+
+D-B14's fix carries the one finding of the night that no amount of device time
+would have produced: the production LM head all-reduce passes
+**`fp32_dest_acc=True`**, with this comment against it —
+
+> fp32 dest accumulation for the LM-head all_reduce only: its bf16 cross-device
+> sum was order-dependent (ETH ring arrival order) -> per-row logit
+> non-determinism -> greedy flips.
+
+A bfloat16 cross-device sum of the logits is **not reproducible across runs**.
+That is exactly the failure mode this project's three-runs-in-fresh-processes rule
+exists to catch, and it would have presented as intermittent greedy-decode
+disagreement rather than as a crash — the D1/D3 pattern again. It is set.
+
+Also fixed, found by reading rather than by a run:
+
+* **`galaxy_hardware.load_reference_tokens` returned a `(1, 1024)` tensor raw**
+  while every consumer treats the sequence as flat, so `len()` was **1**. A
+  caller asking for a 512-token prompt saw "reference sequence has 1 tokens" and
+  **skipped**. The Milestone B accuracy gate could not have run, and it would
+  have failed *open* — reported as a skip, not a failure. The 1D demo already
+  squeezes at its own call site; this now happens once, in the loader.
+* **`GalaxyColumnAllReduce` never passed `subdevice_id`** to `ttnn.all_reduce`,
+  which forwards straight to `all_reduce_async`.
+
+## A2.3 The decode LM head, as it now stands
+
+This is the design record, because it is the substantive engineering change of
+attempt 2 and `mb-qwen` will need to make the same one.
+
+**The decode LM head is a 24-core `gather_in0` ring matmul, on the same ring the
+MLP uses.** It was never anything else in production: `_RING_CORE_COORDS` and
+`_RING_RECEIVER_COORDS` in `models/common/models/galaxy/recipes.py` are,
+coordinate for coordinate, `LM_HEAD_INPUT_GRID` and `LM_HEAD_OUTPUT_GRID` from
+`models/demos/llama3_70b_galaxy/tt/model_config.py`, whose LM head is a 24-core
+`gather_in0` ring at exactly this geometry (`LM_HEAD_RING_SIZE = 24`,
+`LM_HEAD_TG_RING_PROGCFG`, `k = dim // 4`, `n = padded_vocab // 8`, and
+`prefetch=False`). The Milestone B recipes copied the ring coordinates and wired
+only the MLP to them.
+
+Measured geometry, `dim 8192` / `vocab 128256` on `(8, 4)`:
+
+```text
+                 local_k  local_n  padded_n  in0_block_w  per_core_N  in1 CB
+mlp w1/w3          2048     7168      7680        2           10       20 tiles
+mlp w2             7168     2048      2304        9            3       27 tiles
+lm_head            2048    16032     16128        2           21       42 tiles
+lm_head (dense)    2048    16032        -         4          167      668 tiles   <- rejected
+```
+
+`local_k = dim / 4` because `LMHead2D`'s mapper is
+`[PlacementShard(-1), PlacementShard(-2)]` over `(8, 4)`: mesh rows shard the
+vocabulary, mesh columns shard the reduced hidden dimension. `local_n = 16032` is
+`padded_vocab / 8`, and `pad_ring_width` takes it to 16128 so 24 cores divide it.
+
+The four things that had to be true at once, none of which was:
+
+1. **the program config** — `ring_matmul_program_config(local_dim, padded_local_vocab)`,
+   because the dense config gives three cores and a 668-tile in1 buffer (D-B11);
+2. **in0 and the output on the same cores, in the same order** — both
+   `ring_cores()`. Not `ring_receiver_cores()`: same 24 cores, different order,
+   and a `gather_in0` matmul with a DRAM-interleaved in1 compares those grids for
+   equality (D-B12);
+3. **`sub_device_id`** — the factory intersects the ring with the named
+   sub-device and defaults to sub-device *zero*, the prefetch senders (D-B13);
+4. **`num_global_cb_receivers = 1`** — the LM head is not prefetched, so it must
+   not describe a global circular buffer that was never bound. The MLP keeps the
+   qualified 2. This is now a parameter of `ring_matmul_program_config` rather
+   than a literal.
+
+Its in0 is the final-norm output at `local_dim`, which is the same width the MLP
+feeds its ring, so the input placement is `mlp_input_memcfg`'s, unchanged and
+already qualified on silicon. That is the one part of this that did not have to be
+invented.
+
+### Shared modules changed — declared, as the brief requires
+
+Two, both outside the forbidden sets (no `*_1d.py`, no `llm_runtime/**`; both
+greps are empty).
+
+**`models/common/modules/lm_head/lm_head_2d.py`.** Three additions:
+`decode_sub_device_id` / `prefill_sub_device_id` (callables, defaulting to a
+`_no_sub_device` returning `None`), `decode_stage_mask` / `prefill_stage_mask`
+(resolved bools), and the corresponding two lines in `_project`.
+
+*Why config alone could not express it.* `LMHead2DConfig` had **no field** for a
+sub-device id, and `_project` did not pass one to `ttnn.linear`. There was no
+value any model could have set to fix D-B13 — the parameter did not exist. This
+is the plan's first discipline step (config first) applied by *adding the config
+surface the module was missing*, not by special-casing a model: `MLP2D` already
+carries exactly this through `_prefetch_kwargs`, so the change makes the LM head
+consistent with a sibling module rather than exceptional. The defaults preserve
+present behaviour byte for byte for any caller that does not set them, which is
+every caller other than Llama.
+
+The mask staging is the same story one level down: the mask is one module-owned
+*interleaved* DRAM tensor shared by both modes, and decode's output is now
+sharded. The first attempt at this asked `output_memcfg.is_sharded()` inline and
+broke two of the module's own tests, which drive `_project` with opaque sentinels
+on purpose. The decision therefore moved to `_resolve_lm_head2d_config`, where
+the real memory configs are, and arrives as a bool. **No `lm_head_2d` test was
+modified; 20/20 pass** (`logs2/a2_08_lm_head_host.log`).
+
+**`models/common/models/galaxy/collectives.py`.** `GalaxyColumnAllReduce` gained
+an optional `subdevice_id`. Qwen constructs it without one and its behaviour is
+unchanged.
+
+`models/common/models/galaxy/recipes.py` also gained the four LM head decode
+placement fields and the `global_cb_receivers` parameter; that file is Galaxy
+topology, not a module, and Qwen picks the fields up without using them yet.
+
+## A2.4 Test coverage added in attempt 2
+
+All under `models/common/tests/models/llama33_70b_galaxy/`, all stating mesh,
+checkpoint, mode, batch and sequence in their IDs or bodies.
+
+**`test_model_wh_galaxy.py`** — the step-2 file. Three changes:
+
+* **KV-cache PCC**, which the gate requires and the file did not have. The
+  reference is HF's own cache: `hf(input_ids=..., use_cache=True)` and then
+  `past_key_values.layers[0].keys / .values`, shaped
+  `(1, n_kv_heads, sequence, head_dim)`. `K` is post-RoPE and `V` is the raw
+  value projection, which is exactly what the device writes, so this is an
+  independent reference rather than a hand-written re-implementation — the thing
+  Milestone A found hides errors on both sides. Asserted after the 128 prefill
+  **and** after the decode step, for all four prefilled user rows (0, 8, 16, 24),
+  so a mesh column that silently wrote nothing is caught.
+* **Prefill 2048**, as its own test rather than a parametrization, because the
+  recipe family is keyed by sequence length: 2048 resolves a different attention
+  program config, a different SDPA geometry and a different collective plan, and
+  exercising those is the point.
+* **`_one_layer_reference` now uses `load_layer_subset_causal_lm`** instead of
+  `from_pretrained`-then-truncate. It reads 3 of the checkpoint's 30 shards,
+  about 12 GB rather than 141 GB, so a fresh process costs seconds instead of
+  ten minutes. Without this the three-runs-in-fresh-processes rule is
+  unaffordable for the step-2 gate, which is precisely why attempt 1 wrote that
+  loader.
+
+Composing the KV cache needs care and the helper documents it:
+`ConcatMesh2dToTensor(dims=(1, 0))`. The cache is allocated
+`(32, n_local_kv_heads, max_seq, head_dim)` and mapped `dims=(None, 0)`, so mesh
+*columns* hold disjoint users and mesh *rows* are allocated as replicas — but the
+model writes a **different KV head** into each row. `to_torch_auto_compose` would
+honour the declared replication and hand back one row's heads, silently dropping
+seven eighths of the cache; the rows must be concatenated on the head axis.
+
+**`test_bringup_wh_galaxy.py`** — one assertion strengthened. It asserted
+`output.shape[-1] == padded_vocab_size` on the raw device tensor, whose shape is
+the *per-device shard* width; the vocabulary is sharded over the eight mesh rows,
+so the padded vocabulary is a property of the composed logits. It now composes
+and asserts there, which fails if any row shard is missing or mis-sized — a check
+a local-width assertion cannot make — and prints both shapes as evidence. This
+was one of the file's declared hypotheses, written without a mesh.
+
+## A2.5 Regression gates and boundaries
+
+```sh
+git diff --name-only 6a3e78a7227..HEAD | grep '_1d\.py'        # empty
+git diff --name-only 6a3e78a7227..HEAD | grep 'llm_runtime'    # empty
+```
+
+Both empty. Also verified empty: any change to
+`models/common/modules/MILESTONE_A_STATUS.md` or `tttv2_2d_modules_plan.md`
+(neither is this job's to edit), and any added import of a model-named package
+(`models.demos.*`, `models.common.models.llama33_70b`, `...qwen3_32b`).
+
+**No Qwen file was touched.** `models/common/models/qwen3_32b_galaxy/**` is
+absent from the changed-file list, as the brief requires. Qwen does pick up the
+shared changes — the new `recipes.py` fields and the new `LMHead2DConfig` fields
+— but every default is inert, so its behaviour is unchanged until `mb-qwen` wires
+them.
+
+Files changed against `6a3e78a7227`:
+
+```text
+models/common/models/galaxy/collectives.py
+models/common/models/galaxy/recipes.py
+models/common/models/llama33_70b_galaxy/model.py
+models/common/modules/lm_head/lm_head_2d.py                    [SHARED MODULE]
+models/common/tests/models/galaxy/galaxy_hardware.py
+models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py
+models/common/tests/models/llama33_70b_galaxy/test_model_wh_galaxy.py
+tttv2_2d_modules_milestone_b_work_log.md
+tttv2_milestone_b_evidence/llama/{REPORT,ENVIRONMENT}.md, after_device_run.sh
+```
+
+### Host gate
+
+`host_gate.sh`, the same selection attempt 1 used.
+
+| Log | Result | Reading |
+| --- | --- | --- |
+| `logs2/a2_02_host_gate.log` | 2 failed, 559 passed | **Real**: both `test_lm_head_2d.py`, caused by a first draft of the mask staging that interrogated `output_memcfg` inline. Fixed by changing the code, not the tests. |
+| `logs2/a2_03_lm_head_host.log` | 20 passed | `test_lm_head_2d.py` after that correction. |
+| `logs2/a2_04_host_gate.log` | 13 failed, 548 passed | **Not code**: every failure is `test_plans.py` failing to open the cluster with `Timed out waiting for ETH heartbeat ... ETH core e2-0`, the dirty-fabric symptom. Cleared by `tt-smi -glx_reset` (`logs2/a2_05_reset.log`). |
+| `logs2/a2_08_lm_head_host.log` | 20 passed | `test_lm_head_2d.py` after D-B13's fix. |
+
+No test was deleted, `xfail`ed, skipped or relaxed, and no threshold was
+touched. The one test *assertion* that changed —
+`test_bringup_wh_galaxy.py`'s padded-vocabulary check — was made **stronger**, not
+weaker: it now composes the mesh-sharded logits and checks the padded vocabulary
+there, instead of asserting a global property of a per-device shard shape. Both
+shapes are printed so the change is auditable from the log.
+
+## A2.6 Upstream findings — ops that are not sub-device aware
+
+Attempt 1 listed four. Attempt 2 adds two, both found on silicon, both with the
+exact source site:
+
+| Op | Site | What it does |
+| --- | --- | --- |
+| `ttnn.linear` with `gather_in0` | `matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp` | Intersects its ring with `device->worker_cores(TENSIX, sub_device_id)` and, given no `sub_device_id`, with `device->get_sub_device_ids().at(0)`. **The fallback is sub-device zero, not the whole grid.** |
+| `ttnn.all_reduce` | `ccl/all_reduce/all_reduce.cpp` → `composite_common::composite_all_gather` → `ttnn::concat` | Forwards the `subdevice_id` to `all_reduce_async`, but the *buffer-less* overload falls back to a composite whose `ttnn::concat` receives no `sub_core_grids`. The sub-device is honoured on the fused path and dropped on the fallback. |
+
+The first is the more dangerous of the two, and the reason is worth stating on its
+own. Every other op in this family defaults to "the whole compute grid", which is
+illegal on a partitioned mesh but at least *contains* the cores the program wants.
+`gather_in0` defaults to **sub-device zero**, which on WH Galaxy decode is the
+prefetch sender set — disjoint from any worker placement. The intersection is
+empty and the failure surfaces as
+
+```text
+TT_FATAL ... Expecting a non-empty CoreRangeSet!   (program.cpp:1858)
+  tt::tt_metal::CreateSemaphore(...)
+```
+
+which names neither sub-devices nor placement. Anyone debugging this from the
+message alone will look in the wrong place. A default of "no sub-device means the
+whole grid" would fail with the familiar `Kernel group cores do not match sub
+device cores` and be diagnosed in minutes.
+
+## A2.7 What the production reference was worth
+
+Three of attempt 2's fixes could not have been derived from the failures alone,
+and all three came from reading `models/demos/llama3_70b_galaxy/` — which the
+house rules permit reading and forbid importing. Recorded because the next job
+should read it *first*, not fifth:
+
+1. **The LM head's ring is the recipes' ring.** `_RING_CORE_COORDS` and
+   `_RING_RECEIVER_COORDS` are literally `LM_HEAD_INPUT_GRID` and
+   `LM_HEAD_OUTPUT_GRID`. That turned "invent a placement" into "wire up the one
+   that is already here".
+2. **`buffer_shard_volume >= output_shard_volume * ring_size`.** This validation
+   rule is written down nowhere except a comment in the reference's Qwen branch.
+   It is why the LM head reduction stages onto 32 cores rather than the 24 the
+   matmul used, and why `num_cores_after_lm_head = 32`.
+3. **`fp32_dest_acc=True`, and why.** Quoted in full in §A2.2. A bfloat16
+   cross-device sum of the logits is order-dependent on ETH ring arrival and
+   produces per-row logit non-determinism — *greedy decode flips between runs*.
+   No single passing run would have revealed it; three runs might have, at the
+   cost of a night spent chasing an "intermittent" accuracy number.
+
+Item 3 is the strongest argument in this report for the project's own
+three-runs-in-fresh-processes rule, and also for reading the qualified
+implementation before trusting a graph that merely executes.

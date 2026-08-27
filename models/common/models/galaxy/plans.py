@@ -34,6 +34,7 @@ from models.common.models.galaxy.recipes import (
     core_ranges,
     distributed_norm_stats_memory_config,
     galaxy_prefill_mode_plan_cores,
+    pad_ring_width,
     prefetch_sender_cores,
     validate_galaxy_mesh,
     worker_cores,
@@ -87,6 +88,7 @@ def build_galaxy_decode_collectives(
     placements: GalaxyDecodePlacements,
     *,
     residual_dtype: Any = ttnn.bfloat16,
+    lm_head_dtype: Any = ttnn.bfloat16,
 ) -> tuple[GalaxyCollectivePlan, ...]:
     """Return the decode collectives for attention, MLP, and distributed norm.
 
@@ -115,6 +117,20 @@ def build_galaxy_decode_collectives(
     scattered_shape = (1, 1, batch, geometry.decode_reduce_scatter_width)
     output_shape = (1, 1, batch, geometry.local_dim)
     stats_shape = (1, 1, batch, TILE)
+    # The key carries the width TTNN *reports* for the logits, which is the
+    # logical `local_padded_vocab_size`, not the ring-padded physical width. The
+    # ring matmul's output shard spec over-covers -- 24 cores x 672 = 16128 for a
+    # 16032-wide tensor -- and `select_galaxy_resource` keys on `tensor.shape`.
+    #
+    # Measured, not assumed. `GalaxyDenseGeometry.decode_reduce_scatter_width`
+    # records the opposite rule for the MLP's reduce-scatter output ("the
+    # collective scatters the padded width"), and applying it here gave
+    #     KeyError: no all_reduce resources for axis=1,
+    #               geometry=(1, 1, 32, 16032), sequence=32
+    # so a *matmul* output keeps its logical width where a *reduce-scatter*
+    # output does not. Do not generalise one to the other.
+    geometry_padded_local_vocab = pad_ring_width(geometry.local_padded_vocab_size)
+    logits_shape = (1, 1, batch, geometry.local_padded_vocab_size)
 
     fused_qkv = GalaxyCollectivePlan(
         key=GalaxyResourceKey("all_reduce_create_qkv_heads", 1, qkv_shape, _sequence_key(qkv_shape)),
@@ -175,6 +191,47 @@ def build_galaxy_decode_collectives(
             ),
         ),
     )
+    # The decode LM head reduces the hidden dimension over the four mesh columns.
+    # It needs its own keyed resource and its own persistent buffer, and it cannot
+    # borrow the axis-0 one: that buffer is sized for the `local_dim`-wide residual
+    # stream, and `all_reduce_async` validates
+    #     buffer_shard_volume >= output_shard_volume * ring_size
+    # against the *logits*, which are `padded_local_vocab` wide.
+    #
+    # Without a persistent buffer, `ttnn.all_reduce` falls back to
+    # `composite_common::composite_all_gather`, whose `ttnn::concat` is handed no
+    # `sub_core_grids` and builds over the full compute grid:
+    #     TT_FATAL ... Kernel group cores do not match sub device cores
+    #                  for programmable core type TENSIX
+    # from `ttnn::prim::concat`. The persistent-buffer overload takes the fused
+    # path instead, which honours `subdevice_id`. This mirrors the production
+    # `tt_ccl.line_all_reduce(..., lm_head=True, buffer_key="LM_HEAD")`, which
+    # keeps a dedicated LM-head buffer for exactly this reason.
+    lm_head_all_reduce = GalaxyCollectivePlan(
+        key=GalaxyResourceKey("all_reduce", 1, logits_shape, _sequence_key(logits_shape)),
+        topology=ttnn.Topology.Ring,
+        num_links=4,
+        persistent_output_specs=(
+            _spec(
+                (*GALAXY_MESH_SHAPE, TILE, geometry_padded_local_vocab * GALAXY_COLUMNS),
+                # DRAM, deliberately. This buffer is four times the width of the
+                # logits, which at bfloat16 is about 129 kB per core -- far too
+                # much to keep resident in L1 for the whole decode step, where it
+                # competes with 80 layers' worth of activations:
+                #     TT_THROW ... Statically allocated circular buffers in
+                #     program 250 clash with L1 buffers on core range [1-0 - 3-9]
+                # The collective brings it into L1 for the duration of the
+                # reduction and frees the L1 copy immediately after, which is what
+                # the production code does: `tt_lm_head_buffer` is created with
+                # `ttnn.DRAM_MEMORY_CONFIG`, `llama_model.py` materialises
+                # `tt_lm_head_buffer_l1` just before the LM head, and
+                # `line_all_reduce` ends with `persistent_buffer.deallocate(True)`.
+                ttnn.DRAM_MEMORY_CONFIG,
+                dtype=lm_head_dtype,
+                mesh_mapper=row_shard,
+            ),
+        ),
+    )
     norm_stats = GalaxyCollectivePlan(
         key=GalaxyResourceKey("all_gather", 1, stats_shape, _sequence_key(stats_shape)),
         topology=ttnn.Topology.Ring,
@@ -188,7 +245,15 @@ def build_galaxy_decode_collectives(
             ),
         ),
     )
-    return (fused_qkv, gather_users, mlp_reduce_scatter, mlp_all_gather, output_all_reduce, norm_stats)
+    return (
+        fused_qkv,
+        gather_users,
+        mlp_reduce_scatter,
+        mlp_all_gather,
+        output_all_reduce,
+        lm_head_all_reduce,
+        norm_stats,
+    )
 
 
 def build_galaxy_prefill_collectives(

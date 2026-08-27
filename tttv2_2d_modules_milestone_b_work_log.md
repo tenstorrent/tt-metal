@@ -855,3 +855,64 @@ Host-only, no device taken. Commit read: `9d3ec5799ef`. Evidence:
   Three known performance debts are listed against those thresholds up front.
 - No device work attempted. No test written, deleted, `xfail`ed, skipped or relaxed. No threshold
   touched. This job changed **no implementation file** — four markdown files only.
+
+## `mb-llama`, attempt 2 — 2026-08-27, WH Galaxy `(8, 4)`, recovered mesh
+
+Attempt 1 ended `BLOCKED (infra)` with board 7 off the PCIe bus. The machine was
+power-cycled out of band between the attempts, so attempt 2 could do device work.
+It re-verified the mesh first rather than trusting the handoff:
+`tt-smi -ls` enumerated 32 boards including board 7, and
+`test_partition_wh_galaxy.py` passed 5/5 on device with a clean 32-chip open and
+close (`tttv2_milestone_b_evidence/llama/logs2/a2_00_partition.log`). The
+partition numbers were re-measured and are identical to attempt 1's.
+
+- **`D-B9` is CLOSED, and the fix was attempt 1's own untested hypothesis.**
+  `in0_block_w` from `gcd(k_tiles, 8)` to `gcd(k_tiles, 4)` in
+  `dense_matmul_program_config` works on hardware: the
+  `Statically allocated circular buffers ... clash with L1 buffers on core range
+  [1-0 - 3-0]` abort does not recur, in four separate processes. Both attention
+  decode projections now execute inside the three-column worker rectangle.
+- **The decode graph reaches the LM head.** A whole Llama layer — distributed
+  norm, QKV, production RoPE on real Q/K, SDPA, `wo`, the attention all-reduce,
+  all three MLP ring matmuls and the axis-0 all-reduce — *and* the final
+  distributed norm now execute on silicon with real layer-0 weights. Attempt 1's
+  "final norm, LM head, logits: never reached" is superseded.
+- **Four new defects, all in the decode LM head, all found on device, all fixed**
+  (`D-B10`..`D-B13`): `_relocate` reaching `ttnn::prim::copy` for an interleaved
+  non-DRAM target; the LM head having no program config at all and needing the
+  24-core `gather_in0` ring rather than the dense three-column form; its output
+  placed on `ring_receiver_cores()` when `gather_in0` with a DRAM-interleaved in1
+  demands the *same* core set and order as in0; and `ttnn.linear` never being
+  given a `sub_device_id`.
+- **The generalisation that matters, and it is new.** Several ttnn ops do not
+  default to "the whole compute grid" when given no `sub_device_id` — they
+  default to **sub-device zero**, which on this mesh is the prefetch sender set,
+  the one group of cores a compute program must never touch. The symptom is
+  `TT_FATAL ... Expecting a non-empty CoreRangeSet!` from `CreateSemaphore`,
+  because the op intersects its cores with the sub-device's and gets nothing.
+  That is a worse default than the whole grid, which at least contains the right
+  cores.
+- **Two silent-failure traps found by reading, not running.**
+  `galaxy_hardware.load_reference_tokens` returned a `(1, 1024)` tensor where
+  every consumer treats the sequence as flat, so `len()` was 1 and **the
+  Milestone B accuracy gate could only ever have _skipped_** — failing open, for
+  both models. And every `*_weights_memcfgs` entry in `LMHead2DConfig` is inert,
+  because `resolve_lazy_weight` fills only `None` fields and `_lazy` always sets
+  a memory config.
+- **Test coverage added**: KV-cache PCC against HF's own `past_key_values` after
+  both prefill and decode, for all four prefilled user rows; a prefill-2048 case
+  with its own recipe family; and the step-2 reference switched to
+  `load_layer_subset_causal_lm`, which turns a ten-minute per-process setup into
+  seconds and makes the three-runs rule affordable at all.
+- **Two shared 2D modules changed, declared in the report**: `lm_head_2d.py`
+  (gained the sub-device and mask-placement config surface it was missing — there
+  was no value any model could have set) and `galaxy/collectives.py`
+  (`GalaxyColumnAllReduce` gained an optional `subdevice_id`). No `*_1d.py` and no
+  `llm_runtime` file changed; both greps empty. No test deleted, `xfail`ed or
+  relaxed; the two `test_lm_head_2d.py` failures a first draft caused were fixed
+  by changing the *code*, and 20/20 pass unmodified.
+- **The mesh broke again mid-session, differently.** The routine post-run
+  `tt-smi -glx_reset` after run 07 timed out inside `POST_RESET`, leaving a
+  chip's ARC firmware wedged: `ARC startup error at core 0-10 over NOC0 ...
+  Timed out after 300000 ms`. All 32 PCIe nodes stayed present, so this is not
+  attempt 1's fault. Recovery and the resulting verdict are in the report.

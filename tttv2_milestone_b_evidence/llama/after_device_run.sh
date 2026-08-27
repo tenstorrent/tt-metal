@@ -16,7 +16,13 @@ echo "$out"
 if echo "$out" | grep -q REAPED || [ "$RC" != "0" ]; then
     R="$(dirname "$0")/logs/reset_${TAG}.log"
     { date -u; echo "reset after reaping a hung teardown ($TAG)"; } > "$R"
-    timeout 600 tt-smi -glx_reset >> "$R" 2>&1
+    # 900, not 600. A glx_reset after a wedged ARC controller needs longer than
+    # ten minutes on this machine: attempt 2's reset after run 07 was killed at
+    # the 600 s cap inside `Issuing POST_RESET`, which left a chip's ARC firmware
+    # half-initialised (`ARC startup error at core 0-10 over NOC0 ... Timed out
+    # after 300000 ms`) and cost a full recovery cycle. The same reset with 900 s
+    # succeeded. The cap is most needed in exactly the case it was too tight for.
+    timeout 900 tt-smi -glx_reset >> "$R" 2>&1
     echo "reset exit=$?" >> "$R"
     grep -oE 'Re-initialized 32 boards after reset|Error in resetting[^ ]*' "$R" | tail -1
 fi

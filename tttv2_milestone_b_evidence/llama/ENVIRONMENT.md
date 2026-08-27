@@ -224,3 +224,112 @@ probe before spending a run that loads a checkpoint.
 
 Logs: `48_`, `52_`, `56_`, `61_glx_reset_eth*.log`, and the ETH failures in
 `47_`, `51_`, `55_`, `68_`, `70_`.
+
+---
+
+# Addendum — attempt 2 (2026-08-27)
+
+Attempt 1 ended `BLOCKED (infra)`. Attempt 2 ran on the same tree, on a mesh
+that had been recovered in the meantime.
+
+## Tree
+
+| | |
+| --- | --- |
+| Commit at attempt-2 start | `6a3e78a7227cbb22e8fa789adae2b91e3aeb0bdf` |
+| Branch | `apbernal/tttv2_wh_glx_2d_modules_milestone_b` (unchanged) |
+
+Note that `6a3e78a` is *after* `mb-qwen`, `mb-coverage` and `mb-signoff` ran, so
+this attempt inherits their test files
+(`test_full_model_wh_galaxy.py`, `test_step7_coverage_wh_galaxy.py`,
+`models/common/tests/models/galaxy/test_step7_*.py`) and their commits. None of
+those files had ever executed either.
+
+## Mesh, re-measured at attempt-2 start
+
+```text
+ls /dev/tenstorrent | wc -l   -> 32
+tt-smi -ls                    -> exit 0, 32 Wormhole tt-galaxy boards,
+                                 including board 7 at 0000:08:0x
+```
+
+Attempt 1 recorded `tt-smi -ls` aborting inside `tt_umd` and listing zero
+boards, because `/dev/tenstorrent/7` was unreadable. It now enumerates. The
+recovery was an out-of-band power cycle, not anything either attempt did.
+
+The partition is unchanged from attempt 1 — re-measured on device, not carried
+over (`logs2/a2_00_partition.log`):
+
+```text
+compute_with_storage_grid_size: x=7 y=10
+worker_cores:      {[1-0 - 3-9], [5-0 - 6-9]}  (50 cores)
+prefetch senders:  x=0 and x=4                 (12 cores)
+in no sub-device:  {[0-1 - 0-3], [0-6 - 0-8], [4-3], [4-8]}  (8 cores)
+
+decode-qkv  allowed_worker_cores {[1-0 - 3-0]}  blocks_x=3 blocks_y=1
+decode-wo   allowed_worker_cores {[1-0 - 3-0]}  blocks_x=3 blocks_y=1
+prefill-128-qkv  {[1-0 - 3-3]}  blocks_x=3 blocks_y=4
+prefill-2048-wo  {[1-0 - 3-3]}  blocks_x=3 blocks_y=4
+```
+
+## Host
+
+Unchanged from attempt 1, except:
+
+```text
+566 GB RAM total, ~402 GB available at attempt-2 start
+64 cores
+mesh_device.dram_grid_size().x = 12   (the LM head weight's DRAM shard count)
+```
+
+## Checkpoint resolution — read this before running anything
+
+`HF_HOME` was set in the inherited shell to
+`/localdev/ctr-apbernal/hf_data/hub/`, which is **wrong as an `HF_HOME`**:
+`transformers` looks for `$HF_HOME/hub`, so that path resolves to
+`/localdev/ctr-apbernal/hf_data/hub/hub`, which does not exist, and every
+checkpoint test *skips*. This is the same failure mode commit `0c1ccd8557c`
+recorded.
+
+Both of these work, and the first is what the harness scripts export:
+
+```sh
+export HF_HOME=/proj_sw/user_dev/hf_data          # 368 GB, holds the real blobs
+export HF_HOME=/localdev/ctr-apbernal/hf_data     # symlink farm into the above
+```
+
+`/localdev/ctr-apbernal/hf_data/hub/models--meta-llama--Llama-3.3-70B-Instruct`
+is 4 KB of symlinks whose blobs live under `/proj_sw/user_dev/hf_data`; either
+`HF_HOME` reaches the same 30 safetensors shards.
+
+## Exact invocations
+
+Device runs all go through the attempt-1 harness, unchanged:
+
+```sh
+export HF_HOME=/proj_sw/user_dev/hf_data
+MB_DEADLINE=<seconds> bash tttv2_milestone_b_evidence/llama/cycle.sh \
+    tttv2_milestone_b_evidence/llama/logs2/<name>.log <FILE-OR-NODEID>
+```
+
+which is `device_run.sh` (one un-piped `python -u -m pytest -v -rA --color=no
+-p no:cacheprovider --timeout=900`, reaped by PID) followed by
+`after_device_run.sh` (reap any device holder, then `tt-smi -glx_reset` after
+any non-clean exit).
+
+Host regression gate:
+
+```sh
+bash tttv2_milestone_b_evidence/llama/host_gate.sh <log>
+```
+
+**`host_gate.sh` takes the mesh.** It holds 64 `/dev/tenstorrent` file
+descriptors — `models/common/tests/models/galaxy/test_recipes.py` and
+`models/common/tests/modules/lm_head/test_lm_head_2d.py` both open a device — so
+it must never run concurrently with a device cycle. Attempt 1's report said this
+about `test_plans.py`; it is true of more of the "host" gate than that.
+
+Also: do not pass `models/common/tests/modules/lm_head` as a *directory*. That
+collects `test_lm_head_1d.py`, a real 8-device suite that walks a dozen
+checkpoints and runs for well over ten minutes. `host_gate.sh` names the
+`test_lm_head_2d.py` file for exactly this reason.

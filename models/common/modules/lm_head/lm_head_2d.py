@@ -17,6 +17,12 @@ _GALAXY_MESH_SHAPE = (8, 4)
 Collective = Callable[[ttnn.Tensor], ttnn.Tensor]
 
 
+def _no_sub_device() -> None:
+    """Name no sub-device, which is what ``ttnn.linear`` defaults to anyway."""
+
+    return None
+
+
 @dataclass(frozen=True)
 class LMHead2DConfig:
     """Static LM-head projection, placement, and collective policy.
@@ -49,6 +55,22 @@ class LMHead2DConfig:
     prefill_output_memcfg: ttnn.MemoryConfig | None = None
     decode_output_dtype: ttnn.DataType = ttnn.bfloat8_b
     prefill_output_dtype: ttnn.DataType = ttnn.bfloat8_b
+    #: Resolve the mode's worker sub-device at call time. A ``gather_in0``
+    #: matmul intersects its ring with ``device->worker_cores(TENSIX,
+    #: sub_device_id)`` and, given none, with sub-device **0** -- which under
+    #: the Galaxy decode manager is the *prefetch sender* set, disjoint from
+    #: the ring. The intersection is then empty and the op dies building its
+    #: semaphores:
+    #:     TT_FATAL ... Expecting a non-empty CoreRangeSet!
+    #: Callables, not values: the id belongs to the live operation-boundary
+    #: context, which is created after this config.
+    decode_sub_device_id: Callable[[], object] = _no_sub_device
+    prefill_sub_device_id: Callable[[], object] = _no_sub_device
+    #: Place the invalid-logits mask into the mode's output placement before
+    #: adding it. Resolved, never supplied: it is true exactly when that
+    #: placement is sharded, because the mask itself is interleaved DRAM.
+    decode_stage_mask: bool = False
+    prefill_stage_mask: bool = False
     _invalid_logits_mask: LazyWeight | None = None
 
     def is_resolved(self) -> bool:
@@ -105,6 +127,8 @@ class LMHead2D(LightweightModule):
                 self.config.decode_output_dtype,
                 self.config.decode_output_memcfg,
                 self.config.decode_collective,
+                self.config.decode_stage_mask,
+                self.config.decode_sub_device_id(),
             )
         finally:
             if owns_input:
@@ -121,6 +145,8 @@ class LMHead2D(LightweightModule):
                 self.config.prefill_output_dtype,
                 self.config.prefill_output_memcfg,
                 self.config.prefill_collective,
+                self.config.prefill_stage_mask,
+                self.config.prefill_sub_device_id(),
             )
         finally:
             if owns_input:
@@ -158,7 +184,9 @@ class LMHead2D(LightweightModule):
         if failures:
             raise failures[0]
 
-    def _project(self, x, weights, program_configs, dtype, output_memcfg, collective):
+    def _project(
+        self, x, weights, program_configs, dtype, output_memcfg, collective, stage_mask=False, sub_device_id=None
+    ):
         outputs = []
         try:
             for weight, program_config in zip(weights, program_configs):
@@ -169,6 +197,7 @@ class LMHead2D(LightweightModule):
                     compute_kernel_config=self.config.compute_kernel_config,
                     dtype=dtype,
                     memory_config=output_memcfg,
+                    sub_device_id=sub_device_id,
                 )
                 try:
                     reduced = collective(partial)
@@ -178,9 +207,32 @@ class LMHead2D(LightweightModule):
                     ttnn.deallocate(partial)
                 outputs.append(reduced)
             logits = outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=-1, memory_config=output_memcfg)
+            mask = self.invalid_logits_mask
+            staged_mask = mask
             try:
-                return ttnn.add(logits, self.invalid_logits_mask, memory_config=output_memcfg)
+                # The mask is one module-owned *interleaved* DRAM tensor shared by
+                # both modes, but a mode's `output_memcfg` may be sharded - the
+                # Galaxy decode LM head lands its logits width-sharded on a
+                # 24-core ring, because that is the only placement whose circular
+                # buffers fit beside the resident decode activations. Placing the
+                # mask into the output's placement first keeps the add on the
+                # logits' own cores: `interleaved_to_sharded` runs on its
+                # *output* shard's cores, so on a partitioned mesh it stays
+                # inside the sub-device the logits already live in, where a mixed
+                # sharded/interleaved binary add would not.
+                #
+                # Whether to do this is decided once, in
+                # `_resolve_lm_head2d_config`, and arrives here as a bool. This
+                # method must not interrogate `output_memcfg` itself: it is the
+                # module's one seam for injecting placements, and its unit tests
+                # drive it with opaque sentinels precisely so that the plumbing
+                # is testable without a mesh.
+                if stage_mask:
+                    staged_mask = ttnn.interleaved_to_sharded(mask, output_memcfg)
+                return ttnn.add(logits, staged_mask, memory_config=output_memcfg)
             finally:
+                if staged_mask is not mask:
+                    ttnn.deallocate(staged_mask)
                 if len(outputs) > 1:
                     ttnn.deallocate(logits)
         finally:
@@ -257,6 +309,17 @@ def _resolve_lm_head2d_config(config: LMHead2DConfig) -> LMHead2DConfig:
         else _resolve_weights(prefill_weights, mesh_device, mapper, prefill_memcfgs)
     )
 
+    # The mask is interleaved DRAM, so a sharded output placement needs it
+    # placed first; that decision belongs here, where the real memory configs
+    # are, not in `_project`, whose unit tests drive it with sentinels.
+    decode_output_memcfg = config.decode_output_memcfg or ttnn.L1_MEMORY_CONFIG
+    prefill_output_memcfg = config.prefill_output_memcfg or ttnn.DRAM_MEMORY_CONFIG
+    # `padded_vocab_size`, and *not* the width of the output placement. A ring
+    # matmul's output shard spec over-covers its tensor -- 24 cores x 672 = 16128
+    # columns of spec for a 16032-column tensor -- and the logits keep the logical
+    # width, so a mask sized to the placement would be wider than what it is added
+    # to. Measured on device: an attempt to widen it here failed the resource
+    # lookup at `(1, 1, 32, 16032)`, which is the width TTNN reports.
     mask_source = torch.zeros((1, 1, 1, padded_vocab_size), dtype=torch.float32)
     mask_source[..., config.vocab_size :] = float("-inf")
     mask = _LMHead2DMaskLazyWeight(
@@ -285,8 +348,10 @@ def _resolve_lm_head2d_config(config: LMHead2DConfig) -> LMHead2DConfig:
         prefill_weights_memcfgs=prefill_memcfgs,
         decode_input_memcfg=config.decode_input_memcfg or ttnn.L1_MEMORY_CONFIG,
         prefill_input_memcfg=config.prefill_input_memcfg or ttnn.DRAM_MEMORY_CONFIG,
-        decode_output_memcfg=config.decode_output_memcfg or ttnn.L1_MEMORY_CONFIG,
-        prefill_output_memcfg=config.prefill_output_memcfg or ttnn.DRAM_MEMORY_CONFIG,
+        decode_output_memcfg=decode_output_memcfg,
+        prefill_output_memcfg=prefill_output_memcfg,
+        decode_stage_mask=decode_output_memcfg.is_sharded(),
+        prefill_stage_mask=prefill_output_memcfg.is_sharded(),
         _invalid_logits_mask=mask,
     )
     if len(resolved.decode_program_configs) != len(decode_weights):
