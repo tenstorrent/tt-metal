@@ -6,6 +6,10 @@ name: "Test build-prebuilt-tests-image"
 
 on:
   pull_request:
+    # ready_for_review is not a default activity type, and the build below skips
+    # drafts. Without it a PR opened as a draft is never tested on the revision
+    # actually submitted for review. Same reason pr-gate.yaml lists it.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - ".github/workflows/build-prebuilt-tests-image.yaml"
       - ".github/workflows/test-build-prebuilt-tests-image.yaml"
@@ -60,6 +64,11 @@ jobs:
   verify:
     name: "Run a test from the image"
     needs: bake
+    # This runs freshly built native code from the PR on a hardware runner, and
+    # only needs to pull an image. Do not let it inherit packages: write.
+    permissions:
+      contents: read
+      packages: read
     # Empty ref means the producer was skipped (fork); nothing to verify.
     if: ${{ needs.bake.outputs.image != '' }}
     runs-on: tt-ubuntu-2204-N150-viommu-stable
