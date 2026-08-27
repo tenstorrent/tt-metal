@@ -372,7 +372,7 @@ WatcherDeviceReader::WatcherDeviceReader(
     uint32_t core_count = hal.get_programmable_core_type_count();
     for (uint32_t i = 0; i < core_count; i++) {
         auto core_type = hal.get_programmable_core_type(i);
-        symbols_info_cache_.emplace(core_type, get_enable_symbols_info(core_type));
+        symbols_info_cache_.emplace(core_type, get_enable_symbols_info(env.get_hal(), core_type));
     }
 }
 
@@ -933,7 +933,7 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
     const auto* ring_buf_data =
         reinterpret_cast<const debug_spsc_ring_buf_msg_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
 
-    EmitRingBuffer(FormatRingBuffer(*ring_buf_data, programmable_core_type_), to_stdout);
+    EmitRingBuffer(FormatRingBuffer(reader_.env.get_hal(), *ring_buf_data, programmable_core_type_), to_stdout);
 }
 
 // Either dumps to stdout or to the log file.
@@ -974,7 +974,7 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
         thread_indices.push_back(slot.write_id - 1);
     }
 
-    EmitRingBuffer(FormatRingBuffer(data, thread_indices, programmable_core_type_), to_stdout);
+    EmitRingBuffer(FormatRingBuffer(reader_.env.get_hal(), data, thread_indices, programmable_core_type_), to_stdout);
 }
 
 void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {

@@ -47,7 +47,7 @@ using CoreDescriptorSet = std::set<umd::CoreDescriptor, CoreDescriptorComparator
 
 // Helper function to get CoreDescriptors for all debug-relevant cores on device.
 inline static CoreDescriptorSet GetAllCores(
-    tt::Cluster& cluster, tt::tt_fabric::ControlPlane& control_plane, ChipId device_id) {
+    const Hal& hal, tt::Cluster& cluster, tt::tt_fabric::ControlPlane& control_plane, ChipId device_id) {
     CoreDescriptorSet all_cores;
     // The set of all printable cores is Tensix + Eth + DRAM (when supported)
     CoreCoord logical_grid_size = cluster.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
@@ -62,7 +62,6 @@ inline static CoreDescriptorSet GetAllCores(
     for (const auto& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
-    const auto& hal = MetalContext::instance().hal();
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         const auto& soc_desc = cluster.get_soc_desc(device_id);
         for (const auto& dram_core : soc_desc.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
@@ -94,8 +93,8 @@ inline static CoreDescriptorSet GetAllCores(
     return dispatch_cores;
 }
 
-inline uint64_t GetDevicePrintBufAddr(ChipId device_id, const CoreCoord& virtual_core) {
-    return tt::tt_metal::MetalContext::instance().hal().get_dev_noc_addr(
+inline uint64_t GetDevicePrintBufAddr(const Hal& hal, ChipId device_id, const CoreCoord& virtual_core) {
+    return hal.get_dev_noc_addr(
         llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
 }
 
@@ -309,8 +308,7 @@ struct EnableSymbolsInfo {
 };
 
 // This function gets enable/disable flags for watcher header/legend in the log file
-inline EnableSymbolsInfo get_enable_symbols_info(HalProgrammableCoreType core_type) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+inline EnableSymbolsInfo get_enable_symbols_info(const Hal& hal, HalProgrammableCoreType core_type) {
     const bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
     EnableSymbolsInfo info;
     info.main_processor = hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, 0, false);
@@ -436,13 +434,13 @@ inline int debug_server_finish_timeout_sec(const llrt::RunTimeOptions& rtoptions
 // Returns vector of lines like ["[0x00270028,...,", " 0x001f0020,...,", "]"]
 // or for MPSC: ["[[DM0]0x00270028,...,", " [DM0]0x001f0020,...,", "]"]
 inline std::vector<std::string> FormatRingBuffer(
+    const Hal& hal,
     std::span<const uint32_t> data,
     std::span<const uint32_t> thread_indices = {},
     HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX) {
     if (data.empty()) {
         return {};
     }
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const bool is_mpsc = hal.has_mpsc_ring_buffer();
     TT_ASSERT(
         !is_mpsc || thread_indices.size() == data.size(),
@@ -472,7 +470,9 @@ inline std::vector<std::string> FormatRingBuffer(
 
 // SPSC overload - extracts data in newest-first order and formats
 inline std::vector<std::string> FormatRingBuffer(
-    const debug_spsc_ring_buf_msg_t& buf, HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX) {
+    const Hal& hal,
+    const debug_spsc_ring_buf_msg_t& buf,
+    HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX) {
     if (buf.current_ptr == DEBUG_RING_BUFFER_STARTING_INDEX) {
         return {};
     }
@@ -487,7 +487,7 @@ inline std::vector<std::string> FormatRingBuffer(
             idx = DEBUG_RING_BUFFER_SPSC_ELEMENTS - 1;
         }
     }
-    return FormatRingBuffer(data, {}, core_type);
+    return FormatRingBuffer(hal, data, {}, core_type);
 }
 
 }  // namespace tt::tt_metal

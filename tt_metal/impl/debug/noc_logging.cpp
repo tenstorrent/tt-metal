@@ -55,7 +55,7 @@ void DumpCoreNocData(
     // The kernel-side log_noc_xfer (noc_logging.h) lays out NOC_DATA_SIZE uint32_t buckets per
     // RISC at the base of the device-print buffer. NOC logging is mutually exclusive with DPRINT,
     // so the buffer is fully available for histograms.
-    const uint64_t base_addr = GetDevicePrintBufAddr(device_id, virtual_core);
+    const uint64_t base_addr = GetDevicePrintBufAddr(env.get_hal(), device_id, virtual_core);
     const uint32_t bytes_per_risc = NOC_DATA_SIZE * sizeof(uint32_t);
     for (uint32_t risc_id = 0; risc_id < num_processors; risc_id++) {
         auto from_dev =
@@ -80,7 +80,7 @@ void DumpDeviceNocData(
     CoreDescriptorSet dispatch_cores = GetDispatchCores(env, device_id, num_hw_cqs, dispatch_core_config);
 
     // Now go through all cores on the device, and dump noc data for them.
-    CoreDescriptorSet all_cores = GetAllCores(cluster, control_plane, device_id);
+    CoreDescriptorSet all_cores = GetAllCores(env.get_hal(), cluster, control_plane, device_id);
     for (const umd::CoreDescriptor& logical_core : all_cores) {
         if (dispatch_cores.contains(logical_core)) {
             DumpCoreNocData(env, device_id, logical_core, dispatch_noc_data);
@@ -123,14 +123,15 @@ void ClearNocData(MetalEnvImpl& env, ChipId device_id) {
 
     auto& cluster = env.get_cluster();
     auto& control_plane = env.get_control_plane();
-    CoreDescriptorSet all_cores = GetAllCores(cluster, control_plane, device_id);
+    CoreDescriptorSet all_cores = GetAllCores(env.get_hal(), cluster, control_plane, device_id);
     for (const umd::CoreDescriptor& logical_core : all_cores) {
         CoreCoord virtual_core =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
         uint32_t num_processors = env.get_hal().get_num_risc_processors(llrt::get_core_type(device_id, virtual_core));
         // Zero out the entire NOC histogram region across all RISCs in one write.
         std::vector<uint32_t> initbuf(num_processors * NOC_DATA_SIZE, 0);
-        cluster.write_core(device_id, virtual_core, initbuf, GetDevicePrintBufAddr(device_id, virtual_core));
+        cluster.write_core(
+            device_id, virtual_core, initbuf, GetDevicePrintBufAddr(env.get_hal(), device_id, virtual_core));
     }
 }
 
