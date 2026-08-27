@@ -602,3 +602,116 @@ global CB at all; they only desynchronised it for the ones that did.
 
 D-B25b remains: **decode attention output PCC 0.737**, with an exact norm before
 it and exact tables beside it.
+| 28 | `logs3/a3_28_bisect_attn.log` | per-user attention + decode cache | attention out differs per user; **decode cache K 0.0002, V 0.9997** |
+| 29 | `logs3/a3_29_bisect_kwrite.log` | KV split into prefix / window / appended row | **the appended K row is `inf`**; the prefix is intact |
+| 30 | `logs3/a3_30_host_quick.log` | host after defaulting `use_qk_fused_rotary` on | 44 passed |
+| 31 | `logs3/a3_31_bisect_fusedqk.log` | decode bisection with the fused QK rotary | **1 passed** — decode logits **0.99975** |
+
+## Result 28-31 — D-B25b: the non-fused decode RoPE wrote an infinite K
+
+Two observations from `logs3/a3_28`, neither of which a single number would have
+given:
+
+```text
+[bisect] bisect decode attention out user 0:  0.7372848194843996
+[bisect] bisect decode attention out user 8:  0.6695424031325465
+[bisect] bisect decode attention out user 16: 0.6954387356505118
+[bisect] bisect decode attention out user 24: 0.5970376158004123
+[bisect] bisect decode cache K user 0: 0.000181252848628809
+[bisect] bisect decode cache V user 0: 0.999749334500399
+```
+
+Prefill filled local user 0 of every mesh column *identically*, so four different
+attention numbers mean the four columns saw four different inputs. And the cache
+says which: **K is uncorrelated while V is exact.**
+
+Splitting the window into prefix, full and appended row (`logs3/a3_29`) put it
+beyond doubt:
+
+```text
+decode cache K prefix (0..127)      0.99993     prefill's keys are intact
+decode cache K window (0..128)      0.00018
+decode cache K appended row (128)   0.00166     device |max| = inf
+                                                reference |max| = 4.438
+decode cache V prefix               0.99975
+decode cache V appended row         0.99973
+```
+
+`inf` on user 0 and `8.773e+37` on user 8 - **different garbage per column** - is
+uninitialised memory, not an arithmetic error. And V, which does not pass through
+RoPE, is exact. Q carries eight real head rows in its 32-row shard and K carries
+one; only K was corrupted.
+
+**The op was the wrong one for this mesh.** Production's Galaxy attention chooses
+between the two on exactly the condition `(8, 4)` satisfies:
+
+```python
+if self.use_prefetcher:
+    q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
+        q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1],
+        self.transformation_mats["decode"])
+else:
+    # No-prefetcher decode still requires HEIGHT_SHARDED cos/sin for RoPE.
+    # get_rot_mats returns [1, 1, local_batch, head_dim], which is the format
+    # expected by the non-fused decode rotary op. get_rm_rot_mats expands to
+    # [1, expanded_batch, heads, head_dim] for the fused path; ...
+    ... rotary_embedding_llama(q, ...); rotary_embedding_llama(k, ...)
+```
+
+On a prefetcher mesh the non-fused pair is the **Blackhole fallback**, and it wants
+a different cos/sin layout - production says so itself. `use_qk_fused_rotary` now
+defaults to True; it is one flag that switches `RotarySetup2D` to the expanded
+table layout and `GalaxyAttentionCollectives` to the fused call together.
+
+`logs3/a3_31_bisect_fusedqk.log`, **1 passed**:
+
+```text
+[bisect] bisect decode embedding user 0:            1.0
+[bisect] bisect decode attention norm user 0:       0.9999956953474292
+[bisect] bisect decode attention out user 0:        0.9997521295439139
+[bisect] bisect decode attention out user 8:        0.9997521295439139
+[bisect] bisect decode attention out user 16:       0.9997521295439139
+[bisect] bisect decode attention out user 24:       0.9997521295439139
+[bisect] bisect decode cache K appended row:        0.9999321818286975  (|max| 4.5)
+[bisect] bisect decode cache V appended row:        0.9997323200088775
+[bisect] bisect decode mlp out user 0:              0.9997991570968087
+[bisect] bisect decode after layer 0 user 0:        0.9792873560408584
+[bisect] bisect decode final norm user 0:           0.9896548517784418
+[pcc]    bisect decode logits user 0:               0.9997463458407887
+```
+
+All four users now agree exactly, which is the property the four-user check exists
+to test.
+
+**This closes `job1_llama.md`'s ranked-first risk.** "RoPE composed with
+`Attention2D` is the expected first failure... the pairing has never run." The risk
+was real, and it was in the *pairing*: the tables `RotarySetup2D` produces are
+exact (PCC 1.0) and `rotary_embedding_llama` is a correct op; the composition
+picked the variant meant for a mesh without a prefetcher.
+
+### One number to read carefully
+
+`after layer 0` is 0.9793 and `final norm` 0.9897, both below the 0.99 the *logits*
+clear at 0.99975. That is not a defect being hidden: the residual stream is
+bfloat16 and the comparison is against an fp32 Hugging Face reference on a single
+1x8192 row, while the LM head contracts those 8192 terms into each logit and
+averages the quantisation noise out. It is recorded because it is the kind of
+number that would look alarming in isolation, and because it sets the expectation
+for 80 layers: the residual's PCC against fp32 is the *floor*, not the gate.
+| 32 | `logs3/a3_32_step2_gate_run1.log` | **step-2 gate, run 1/3** | **1 passed** |
+| 33 | `logs3/a3_33_step2_gate_run2.log` | step-2 gate, run 2/3 | **1 passed**, bit-identical |
+| 34 | `logs3/a3_34_step2_gate_run3.log` | step-2 gate, run 3/3 | **1 passed**, bit-identical |
+
+## Result 32-34 — the step-2 gate, three times, identically
+
+```text
+[pcc] prefill 128:                            0.999584002863212
+[pcc] prefill 128 cache K user 0/8/16/24:     0.9999347766610057
+[pcc] prefill 128 cache V user 0/8/16/24:     0.9997498179150203
+[pcc] decode position 128 user 0/8/16/24:     0.9997463458407887
+[pcc] decode position 128 cache K u0/8/16/24: 0.9999342257320987
+[pcc] decode position 128 cache V u0/8/16/24: 0.9997493345003990
+```
+
+Identical across three fresh processes to the last digit. See `REPORT.md`
+§A3.1 for why that particular property is the one worth reporting.

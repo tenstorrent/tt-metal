@@ -1206,3 +1206,221 @@ But "one defect from a PCC number" has been the shape of this milestone at every
 stage, and the honest reading of ten runs is that each one revealed a constraint
 nobody had written down. **Nothing in this report should be read as predicting
 that D-B19 is the last one.**
+
+---
+
+# Attempt 3 — 2026-08-27
+
+Attempt 2 ended with the decode graph reaching the LM head's column all-reduce and
+hanging there (D-B19), with **no PCC number, no accuracy number and no demo text
+in existence for this model**. Attempt 3's run-by-run account is `ATTEMPT3.md`;
+its logs are in `logs3/`, and `logs/` and `logs2/` were not touched.
+
+Nothing above this line is retracted. Two things in it are *superseded* and both
+are named where they occur: attempt 2's `in0_block_w`-style reasoning about the LM
+head width (§A2.8 item 1 was right about the placement and silent about the
+tensor), and attempt 1's §4.2 note that `allowed_worker_cores` on the ring config
+"currently works" - it does, and the prefetcher registration around it did not.
+
+## Verdict up front
+
+**The step-2 gate is MET.** One Llama block is qualified in decode and prefill
+against an independent Hugging Face reference, with the KV cache checked on both
+sides, at PCC >= 0.99, three times in three fresh processes with bit-identical
+numbers.
+
+| `job1_llama.md` finish condition | Status |
+| --- | --- |
+| One Llama block qualified in **prefill** at PCC >= 0.99 | **MET** — 0.99958 at 128 |
+| One Llama block qualified in **decode** at PCC >= 0.99 | **MET** — 0.99975 at batch 32 |
+| **KV-cache** PCC >= 0.99 | **MET** — K 0.99993, V 0.99975, after prefill *and* after decode, on all four column-local users |
+| 80-layer model producing coherent demo output | *see §A3.6* |
+| Teacher-forced accuracy measured and recorded | *see §A3.6* |
+| Handoff written | **MET** — `job1_completion_handoff_attempt3.md` |
+
+## A3.1 The step-2 gate, measured
+
+Command, verbatim, run through `run3.sh` (which is `cycle.sh` plus the CCL trace,
+a settable pytest deadline, and `logs3/` reset logs):
+
+```sh
+MB_DEADLINE=1200 MB_PYTEST_TIMEOUT=1080 \
+  ./tttv2_milestone_b_evidence/llama/run3.sh <logname> \
+  'models/common/tests/models/llama33_70b_galaxy/test_model_wh_galaxy.py::test_llama33_70b_galaxy_one_layer_prefill_and_decode' \
+  -o faulthandler_timeout=600
+```
+
+Checkpoint: `meta-llama/Llama-3.3-70B-Instruct`, layer 0 only, read straight from
+the safetensors shards by `load_layer_subset_causal_lm` so the same module
+supplies both the TT weights and the reference logits. Mesh `(8, 4)`, 32 Wormhole
+boards, firmware 18.12.1.
+
+```text
+[pcc] prefill 128:                          0.999584002863212
+[pcc] prefill 128 cache K user 0/8/16/24:   0.9999347766610057   (each)
+[pcc] prefill 128 cache V user 0/8/16/24:   0.9997498179150203   (each)
+[pcc] decode position 128 user 0/8/16/24:   0.9997463458407887   (each)
+[pcc] decode position 128 cache K u0/8/16/24: 0.9999342257320987 (each)
+[pcc] decode position 128 cache V u0/8/16/24: 0.9997493345003990 (each)
+```
+
+All four column-local users report the *same* number to the last digit, which is
+the property the four-user check exists to test: prefill filled local user 0 of
+every mesh column, so a column that silently wrote nothing, or wrote something
+else, cannot hide.
+
+### Three runs in three fresh processes
+
+The house rule exists because three of Milestone A's four defects presented as
+intermittent *passes*. Here the three runs are not merely all green - they are
+**bit-identical**, which is a stronger statement than "passed three times":
+
+| Run | Log | Result | `prefill 128` | `decode 128 user 0` |
+| --- | --- | --- | --- | --- |
+| 1 | `logs3/a3_32_step2_gate_run1.log` | 1 passed, 147 s | 0.999584002863212 | 0.9997463458407887 |
+| 2 | `logs3/a3_33_step2_gate_run2.log` | 1 passed, 149 s | 0.999584002863212 | 0.9997463458407887 |
+| 3 | `logs3/a3_34_step2_gate_run3.log` | 1 passed, 151 s | 0.999584002863212 | 0.9997463458407887 |
+
+Determinism to the last digit matters here for a specific reason. Attempt 2 found
+that the production LM head all-reduce sets `fp32_dest_acc=True` against a comment
+recording that a bf16 cross-device sum was *order-dependent* on ETH ring arrival
+and produced per-row logit non-determinism. That flag is set in this tree, and
+three identical runs are the evidence that it is doing its job. A drifting
+low-order digit here would have been the D1/D3 pattern again.
+
+## A3.2 Defects found and fixed in attempt 3
+
+Seven, with a log behind each. Full evidence and quoted aborts in `ATTEMPT3.md`.
+
+| ID | Site | What was wrong | Status |
+| --- | --- | --- | --- |
+| **D-B19** | `galaxy/recipes.py::galaxy_padded_vocab_size` | Attempt 2's open hang. The reduced logits were 501 tiles per device in a 42-core x 12-tile spec, so the 42nd core's shard was never full and `all_reduce_async`'s reduction kernel - `cb_in.wait_front(ring_size * block_num_tiles)` on *every* output core - waited for tiles the fabric would never send. No abort, no traceback, mesh reset. | **fixed** — vocab padded to a ring-exact width |
+| **D-B20** | `modules/prefetcher/prefetcher_2d.py` | `seal()` allocated the global circular buffer at model build. 774 kB of unfreeable L1 per sender/receiver core made *every* prefill program that needs static CBs there unplaceable, starting with `ttnn.embedding`. Prefill never reads the buffer. | **fixed** — `defer_global_cb` |
+| **D-B21** | `modules/rope/rope_2d.py` | The prefill RoPE table copy inherited decode's **row-major** layout. `rotary_embedding_llama` requires TILE; `ttnn.embedding` requires row-major. One legal layout per consumer and they differ. | **fixed** — the copy tilizes |
+| **D-B22** | `modules/rope/rope_2d.py` | The prefill transformation matrix was `head_dim x head_dim`. The op applies it one tile at a time and validates `[-1] == TILE_WIDTH`; the helper's own docstring says "Must equal TILE_SIZE". A host assertion encoded the wrong shape. | **fixed** — `TILE_SIZE` |
+| **D-B23** | `galaxy/direct_runner.py`, the step-2 test | The logits composed along the **wrong mesh axis**, and silently. A matmul output carries its *activation's* topology, not its weight's, so `to_torch_auto_compose` concatenated the four columns along the vocabulary axis: four copies of mesh row 0's slice. The runner then sliced `[:, :vocab_size]`, which narrows without raising. | **fixed** — `compose_galaxy_logits` |
+| **D-B24** | the step-2 test | The KV reference was in the wrong RoPE convention. The device holds post-RoPE K in Meta interleaved order, HF in split order; the two cancel inside `Q.K^T`, so the logits agreed at 0.99958 while the caches scored 0.0386. | **fixed** — reference K permuted |
+| **D-B25a** | `llama33_70b_galaxy/model.py` | `wqkv` and `wo` were registered with the prefetcher but their confined matmuls never read the global CB, so two entries per layer went unconsumed and the MLP's `w1` read the entry meant for `wqkv`. MLP PCC 0.096, and 0.085 as a function of its own input. | **fixed** — only the MLP's three are registered |
+| **D-B25b** | `llama33_70b_galaxy/model.py` | The **non-fused** decode RoPE pair wrote a K of `|max| = inf` into the cache while V, which skips RoPE, was exact. Production selects the *fused* op whenever the prefetcher is active; the non-fused pair is the Blackhole fallback and wants a different cos/sin layout. | **fixed** — `use_qk_fused_rotary` defaults True |
+
+Three of these - D-B23, D-B24 and D-B20 - would each have been enough on their own
+to make the gate unmeasurable, and **two of the seven fail open**: D-B23 produced
+wrong logits with no error anywhere, and D-B25a produced wrong numbers with no
+error anywhere. Attempt 2 found the third of that family (`load_reference_tokens`
+returning a length-1 sequence, so the accuracy gate *skipped*). That is now three
+silent failures in this package in two nights, all in the measurement path rather
+than the model, which is worth naming as a pattern: **on this mesh the apparatus
+fails quietly more often than the graph does.**
+
+## A3.3 Two claims attempt 3 discharged that were ranked as risks
+
+`job1_llama.md` ranked four risks. Two are now closed as numerical questions, with
+logs:
+
+**Risk 1, "RoPE composed with `Attention2D` is the expected first failure".** It
+was the first failure, and it was in the *pairing* exactly as predicted - but in a
+way the prediction could not have named. The tables `RotarySetup2D` produces are
+exact (PCC 1.0 against the adaptor's Meta-layout tables, on every column-local
+user) and `rotary_embedding_llama` is a correct op. What was wrong was **which
+op**: the composition called the variant meant for a mesh without a prefetcher.
+See D-B25b.
+
+**Risk 4, "fused decode norm at real scale; job 0 fixed the placement defect on
+paper, this job runs it".** It runs, and it is right: the attention norm scores
+0.9999956953474292 on an exact input and the FF norm 0.9311 on a 0.9435 input.
+Job 0's C1 fix holds on silicon. This matters because C1 was described as making
+every decode fail.
+
+**Risk 3, L1/global-CB ownership**, is *half* closed and moved: the global CB is
+no longer resident during prefill at all (D-B20), which removes the failure mode
+attempt 1 predicted for a second construction in the same process during prefill.
+Two constructions in one process is still unmeasured - `test_two_models_in_one_process`
+has still never run - and the "prefill after a decode" case is a **new** instance
+of the same limitation, stated in D-B20's own docstring rather than absorbed.
+
+## A3.4 Shared modules changed — declared, as the brief requires
+
+> "If you changed a shared 2D module to make the Llama model work, that is a
+> significant event: name the module, the change, and why config alone could not
+> express it... config first, frozen config value second, mechanical delegation
+> third, and a written reduction before anything larger."
+
+Three shared modules changed. Neither forbidden set was touched: `git diff
+--name-only 45efb7c10e8..HEAD | grep '_1d\.py'` and `| grep 'llm_runtime'` are both
+empty.
+
+### 1. `models/common/modules/prefetcher/prefetcher_2d.py` — a new config value
+
+**Change.** A `defer_global_cb: bool = False` field on `Prefetcher2DConfig`.
+When set, `seal()` does not allocate the global circular buffer and the first
+`activate("decode")` allocates it instead, before the prefetch program that reads
+it is enqueued.
+
+**Why config alone could not express it.** It *is* a config value, which is the
+first rung of the extension discipline - but the value has to be able to change
+*when* an allocation happens, and no existing field could. The module already
+exposes a `create_global_cb` injection point, so the natural attempt is to inject a
+lazy proxy; that cannot work, because `ttnn.dram_prefetcher(global_cb=...)` is a
+nanobind boundary that needs the real object. The default is `False`, so the
+Milestone A qualification of this module is bit-for-bit unchanged; only
+`build_galaxy_prefetcher_config` opts in, and only because every Galaxy model here
+prefills before it decodes.
+
+**The one ugly part, named.** The buffer is bound onto the *sealed* decode context
+with `object.__setattr__` on a frozen dataclass. That is deliberate and it is
+documented at the call site: module configs capture the context *object* at
+construction (`MLP2DConfig.decode_prefetch_context`, read as
+`getattr(context, "global_cb", None)` at call time), so publishing a replacement
+context would leave every already-built module holding `global_cb=None`. The field
+is bound exactly once, `None` -> buffer, and never rebound. A host test covers all
+three properties.
+
+### 2. `models/common/modules/rope/rope_2d.py` — two corrections, not extensions
+
+Neither is a configuration choice; both are cases where the module disagreed with
+the op it feeds and the op is right.
+
+* `_materialize_table_copy` now writes the prefill table **tilized**. Decode reads
+  the table through `ttnn.embedding`, which requires row-major; prefill slices it
+  and hands the slice to `rotary_embedding_llama`, which requires TILE. One legal
+  layout per consumer, and they differ, so there is nothing to configure.
+* the prefill transformation matrix is now `TILE_SIZE x TILE_SIZE`, not
+  `head_dim x head_dim`. The op validates `trans_mat.logical_shape()[-1] ==
+  TILE_WIDTH`; `get_rot_transformation_mat`'s docstring says "Must equal
+  TILE_SIZE"; and the qualified 1D reference opens by discarding its argument
+  (`dhead = 32  # ROPE op uses a single tile`). The module and its host test
+  agreed with each other and both disagreed with the hardware.
+
+### 3. `models/common/modules/lm_head/lm_head_2d.py` — a validation loosened
+
+**Change.** `_resolve_lm_head2d_config` demanded the vocabulary be padded to
+*exactly* the minimal multiple of `GALAXY_ROWS * TILE`. It now requires a multiple
+of that, at least the minimum, and no more than one extra vocabulary shard per
+mesh row.
+
+**Why.** The old rule forbade the only width the decode chain can run.
+`all_reduce_async`'s reduction kernel waits for a full shard on every output core,
+so the reduced tensor's width must be an exact multiple of `cores * shard_width` -
+and Llama's minimal padding leaves 501 tiles per device, which no usable core count
+divides. This is a validation that rejected a legal geometry, not a threshold on a
+result, and it is loosened in the direction hardware requires rather than relaxed
+to make a failure green. The new upper bound is there so the check still fails
+closed on a nonsense width.
+
+### And one shared *test* helper, which the house rules explicitly permit
+
+`models/common/tests/modules/_hf_reference.py::reverse_permute_1d` is now used by
+the Llama Galaxy device test to put the reference K into the device's RoPE
+convention. Sharing a test helper across the 1D and 2D suites "is fine and has
+precedent" - that file *is* the precedent named in the README.
+
+## A3.5 Model-level changes `mb-qwen` inherits
+
+| Change | Why Qwen needs it |
+| --- | --- |
+| `galaxy_padded_vocab_size` pads to `GALAXY_ROWS * RING_ALIGNMENT` | Qwen's 151936 becomes 153600: 19200/device, 600 tiles, 50 reduce cores x 12. Without it Qwen hangs the way Llama did. |
+| `use_qk_fused_rotary` defaults True | Qwen's decode RoPE will write an infinite K otherwise. Its 64-head geometry makes the head-row asymmetry *larger*, not smaller. |
+| Only the MLP's projections are prefetched | Qwen's attention decode matmuls are confined for the same L3 reason, so it has the same unconsumed-entry problem. |
+| `compose_galaxy_logits` | Qwen's logits compose along the same wrong axis, and just as silently. |
+| `defer_global_cb=True` for Galaxy | Qwen prefills before it decodes too. |
+| `from_pretrained(load_hf_model=...)` | Qwen's checkpoint is smaller but the three-runs rule still costs three loads. |
