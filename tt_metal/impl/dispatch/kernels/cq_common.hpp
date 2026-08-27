@@ -791,5 +791,6 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
 // the field must be naturally aligned.
 template <typename T>
 FORCE_INLINE T load_aligned(const volatile void* ptr) {
+    ASSERT((reinterpret_cast<uintptr_t>(ptr) & (alignof(T) - 1)) == 0);
     return *reinterpret_cast<const volatile T*>(ptr);
 }
