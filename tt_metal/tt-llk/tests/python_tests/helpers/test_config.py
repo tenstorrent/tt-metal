@@ -186,7 +186,14 @@ class TestConfig:
     WORKER_ID: ClassVar[str] = "master"
     TENSIX_LOCATION: ClassVar[str] = "0,0"
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
-    SIMULATOR_TIMEOUT: ClassVar[int] = 600
+    # Wall-clock budget (seconds) for one simulated kernel run.  600 s covers
+    # every corr node with a wide margin, but PERF nodes execute their kernel
+    # loops in full, and at the simulator's ~60 kHz that can legitimately need
+    # tens of millions of device cycles — more than 600 s of wall time.
+    # LLK_SIMULATOR_TIMEOUT overrides the budget for such runs (lane HU,
+    # 2026-08-26: the pin-33 tanhderivlut perf node dies at ~37.6M cycles
+    # otherwise); the default is unchanged.
+    SIMULATOR_TIMEOUT: ClassVar[int] = int(os.environ.get("LLK_SIMULATOR_TIMEOUT", 600))
 
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.

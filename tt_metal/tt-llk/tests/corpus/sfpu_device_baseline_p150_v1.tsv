@@ -107,10 +107,17 @@
 #      830d903a9fedc5d553df2e801f7b3fcce7861b57ad475dfdb7882623fd2c5e29.  ON set UNCHANGED at 25; new flags (delivery-shape,
 #      record-hoist, prera, round-interleave, reassoc [licensed triple],
 #      store-fold, int-not) are Init(0) on-plus knob legs.
-# SIM PAIRING: from pin 7 onward the CRAQ oracle is the CORRECTED craq-sim 9f324140 pair —
-# bh 32489dda4fd6… (CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256), wh 8f0079a9a16c… (CURRENT
+# SIM PAIRING: from pin 7 through pin 34 the CRAQ oracle was the CORRECTED craq-sim 9f324140
+# pair — bh 32489dda4fd6… (superseded by 1d162f0adf67…; was CURRENT sweep_2x2.conf
+# PINNED_SIM_BH_SHA256), wh 8f0079a9a16c… (superseded by f22bc917a4ef…).  From the lane HU
+# sim re-pin (2026-08-27, at compiler pin 34) onward the oracle is the craq-sim
+# agent/simpin-debugregs 1c47e9cd pair — the GW ec15220f adoption (SFPARECIP EXP/COND_RECIP
+# per SFPARECIP.md) + the RISCV GDB/Debug-interface model (riscv_debug_regs 0x80-0x8C):
+# bh 1d162f0adf67… (CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256), wh f22bc917a4ef… (CURRENT
 # sweep_2x2.conf PINNED_SIM_WH_SHA256); conf_lint.sh R6 enforces the bh anchor and
-# sweep_2x2.py verifies both sims at preflight and every phase entry.  Cells at pins 1–6 were
+# sweep_2x2.py verifies both sims at preflight and every phase entry.  Re-pin validation:
+# full sweep-craq re-run verdict-identical on both sims; GW probe 4/4 cycle-identical;
+# HT/HS regression legs cycle-identical (laneHU-evidence-20260826).  Cells at pins 1–6 were
 # CRAQ-gated by the earlier f80a8d64 sim (recorded here, not silently rewritten).
 #
 # ERRATA (2026-08-17, Lane AW — the errata IS the repair; no measured value is changed here):
