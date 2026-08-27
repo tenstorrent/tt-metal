@@ -1424,3 +1424,158 @@ precedent" - that file *is* the precedent named in the README.
 | `compose_galaxy_logits` | Qwen's logits compose along the same wrong axis, and just as silently. |
 | `defer_global_cb=True` for Galaxy | Qwen prefills before it decodes too. |
 | `from_pretrained(load_hf_model=...)` | Qwen's checkpoint is smaller but the three-runs rule still costs three loads. |
+
+## A3.7 Harness — three changes, each paid for by a lost run
+
+`run3.sh` and `run3_sequence.sh` are new; `device_run.sh` and
+`after_device_run.sh` gained two backward-compatible knobs. Attempt 1's and
+attempt 2's harness lessons all held. Three additions:
+
+**1. A teardown grace, keyed on the per-test verdict.** Attempt 2 recorded that a
+`TT_FATAL` leaves the mesh un-drainable. **A plain `AssertionError` does too**, if
+it is raised after a decode step: the hang is in the `mesh_device` *fixture*
+teardown, so any decode-mode failure leaves a process holding all 64
+`/dev/tenstorrent` fds after its verdict is already in the log. Waiting out the
+full deadline costs ten minutes a run. `device_run.sh` now starts a 90 s grace
+when a verdict appears and then reaps.
+
+The first version of this keyed on pytest's *session summary* and never fired: the
+teardown hangs **before** the summary is written, so the log ends at a bare
+`FAILED`. That is worth knowing on its own - if you are parsing these logs, the
+summary line is not guaranteed to exist even for a test that ran to a verdict.
+
+**2. Never start a cycle before the previous one has exited.** Attempt 3 lost run
+20 entirely by launching it six minutes after run 19's verdict appeared, while run
+19 still held the mesh:
+
+```text
+warning | UMD | Waiting for lock 'CHIP_IN_USE_22_PCIe' which is currently held by
+                thread TID: 131554, PID: 131554
+```
+
+Worse, the recovery overlapped two `tt-smi -glx_reset` invocations, and the second
+reported `Error when re-initializing chips! It is not currently safe to communicate
+with ARC because, another message is queued (0x2c)`. The mesh survived - `tt-smi
+-ls` exited 0 with all 32 boards and two of the three resets in that window
+reported `Re-initialized 32 boards` - but **do not run two resets at once.**
+`run3_sequence.sh` exists so this cannot happen again: it runs a manifest of cycles
+strictly in series and waits for each `run3.sh` to exit.
+
+**3. `pytest --timeout` and pytest's faulthandler are better than `gdb`.**
+`-o faulthandler_timeout=600` dumps every thread's Python stack from a watchdog
+thread and lets the run continue. Attempt 2 needed `gdb -p` to locate a hang;
+this is free and needs no recovery attempt. It is diagnostic only - nothing
+committed depends on it.
+
+Two smaller notes:
+
+* **Do not pass `models/common/tests/modules` as a directory.** It collects the 1D
+  device suites, which take the mesh for ten minutes. Attempt 2 warned about
+  `test_lm_head_1d.py` specifically; the general rule is that the directory is not
+  host-only. Name files.
+* **`pgrep -f tt-smi` matches its own caller.** A shell command that contains the
+  string `tt-smi` is matched by `pgrep -f tt-smi`, so a "is a reset still running?"
+  check reports 2 forever. Use `pgrep -x tt-smi`. This is the same family of
+  mistake as the `pgrep -af pytest` self-kill the house rules warn about, and it
+  cost several minutes of confusion about whether the mesh was free.
+
+## A3.8 Regression gates and boundaries
+
+**Boundaries.** Both greps required by the brief are empty across the whole of
+attempt 3:
+
+```sh
+$ git diff --name-only 45efb7c10e8..HEAD | grep '_1d\.py'      # empty
+$ git diff --name-only 45efb7c10e8..HEAD | grep 'llm_runtime'  # empty
+```
+
+No import of a model-named package was added: `models/demos/llama3_70b_galaxy`,
+`models/common/models/llama33_70b` and `models/common/models/qwen3_32b` were read
+extensively - three of attempt 3's seven fixes came from reading the production
+implementation and could not have come from anywhere else - and imported nowhere.
+
+## A3.9 The L3 verdict, and proposed text for `MILESTONE_A_STATUS.md`
+
+`job1_llama.md` asked for a precise L3 verdict: "Milestone A recorded this as
+terminal... **You are the first job that can prove that.** If it works, say so
+precisely; it closes a Milestone A limitation."
+
+**It works, and attempt 3 can now price it.** Attempt 1 confined the attention
+decode matmuls to a three-column worker rectangle so they would not straddle the
+sender/worker sub-device split; attempt 2 closed D-B9 and showed both matmuls
+execute. Attempt 3 adds the numbers - decode attention output PCC 0.99975 - and one
+consequence nobody had seen:
+
+> **The confinement also costs the attention weights their prefetching.** The
+> global circular buffer is received by the 24 ring cores, so a matmul on the
+> confined rectangle cannot take its weight from it. Registering those weights
+> anyway is worse than not prefetching them: the entries are never consumed and
+> every later consumer reads the wrong one, which is how the MLP came to score PCC
+> 0.096 (D-B25a).
+
+So L3 is closed as an execution *and* a numerical question, at a cost that is now
+two things rather than one: three worker columns instead of seven, and the
+attention weights read from DRAM instead of from the prefetcher. Moving those
+matmuls to the 24-core `gather_in0` ring - attempt 1's report §4.1 - would recover
+both at once, and is now a smaller job than it was: the ring wiring exists, is
+exercised by three matmuls, and the LM head shows what a non-prefetched ring matmul
+looks like (`num_global_cb_receivers = 1`).
+
+**Proposed text**, for job 0 or job 4 to place - this report does not edit
+`MILESTONE_A_STATUS.md`:
+
+> **L3 — attention decode on the prefetch subdevice partition. CLOSED, with a
+> named cost.** Milestone A recorded the decode QKV `ttnn.linear` as terminal
+> because its `(7,1)` grid straddled the sender/worker sub-device split. Milestone
+> B confines both attention decode matmuls to the largest worker rectangle that
+> starts at the worker envelope's origin (`dense_matmul_worker_rectangle`, three
+> columns wide on `(8, 4)`), and with `in0_block_w = gcd(k_tiles, 4)` their
+> circular buffers fit (D-B9). Qualified on `(8, 4)` at batch 32 against a Hugging
+> Face reference: decode attention output PCC 0.99975, decode logits 0.99975,
+> KV cache K 0.99993 / V 0.99975
+> (`tttv2_milestone_b_evidence/llama/logs3/a3_31`, `a3_32..34`).
+>
+> Two costs, both recorded rather than absorbed: three worker columns instead of
+> seven, and - because the prefetcher's global circular buffer is received only by
+> the 24 ring cores - the attention weights cannot be prefetched and must be read
+> from DRAM. Registering them with the prefetcher anyway is a correctness defect,
+> not a performance one, because the unconsumed entries shift every later
+> consumer. Moving the two matmuls to the 24-core `gather_in0` ring recovers both.
+
+## A3.10 What is proven, and the boundary of it
+
+Proven, with a log for each:
+
+| Claim | Evidence |
+| --- | --- |
+| The Llama adaptor is numerically correct on host | attempt 1 §1.1, unchanged |
+| A one-layer model constructs, seals, resolves, binds and tears down | attempt 1 §1.2, unchanged |
+| D-B9 is closed on silicon | attempt 2, and every attempt-3 run |
+| **The whole one-layer prefill graph is numerically correct at 128 and 2048** | `logs3/a3_32..37`, three fresh processes each |
+| **The whole one-layer decode graph is numerically correct at batch 32** | `logs3/a3_32..34`, three fresh processes |
+| **The K and V caches are correct after prefill and after decode**, on all four column-local users | same logs |
+| **D-B19 is closed on silicon** | `logs3/a3_19` (the hang), `a3_31` onward (`-- completed on device`) |
+| The fused decode norm is correct at real scale | `logs3/a3_31`, attention norm 0.99999 |
+| The decode RoPE tables are exact | `logs3/a3_27`, PCC 1.0 on four users |
+| **Paged decode works on this partition** | `logs3/a3_42`, the one-layer runner smoke |
+| The whole runner path runs: `from_pretrained` -> paged KV -> prefill -> decode -> sampling -> detokenize | `logs3/a3_42` |
+| Host regression gate green on the changed modules | `logs3/a3_41` (77 passed), `a3_26` (127 passed) |
+
+**The boundary, stated as plainly as attempt 2 stated its own.** Everything above
+is *one layer*. The step-2 gate is a one-block gate and that is what it measures.
+Where 80 layers stand - and therefore where the demo text and the teacher-forced
+accuracy number stand - is §A3.6, and nothing in this section should be read as
+covering it.
+
+## A3.11 Results table
+
+Every row is a device run in a fresh process. Gate rows are marked; the rest are
+diagnostics that earned a fix.
+
+| What | Node | Runs | Result |
+| --- | --- | --- | --- |
+| **Step-2 gate** — one block, prefill 128 + decode batch 32, logits and both caches | `test_model_wh_galaxy.py::test_llama33_70b_galaxy_one_layer_prefill_and_decode` | **3** fresh | **PASS**, bit-identical. logits 0.99958 / 0.99975; K 0.99993; V 0.99975 |
+| **Step-2 gate** — single-row prefill 2048, logits and cache | `..._one_layer_prefill_2048` | **3** fresh | **PASS**, bit-identical. logits 0.99962; K 0.99993; V 0.99976 |
+| Sub-module bisection of one decode step | `..._decode_bisection` | 1 | **PASS**. embedding 1.0, attn norm 0.99999, attn out 0.99975, MLP 0.99980, logits 0.99975 |
+| Runner + paged KV, one layer | `demo.py::..._direct_demo_batch1` (1 layer) | 1 | **PASS**. Real text emitted; paged decode works |
+| Mesh partition health | `test_partition_wh_galaxy.py` | (attempt 2) | 5 passed; re-verified by every mesh open here |

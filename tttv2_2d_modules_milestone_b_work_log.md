@@ -916,3 +916,50 @@ partition numbers were re-measured and are identical to attempt 1's.
   chip's ARC firmware wedged: `ARC startup error at core 0-10 over NOC0 ...
   Timed out after 300000 ms`. All 32 PCIe nodes stayed present, so this is not
   attempt 1's fault. Recovery and the resulting verdict are in the report.
+
+## 2026-08-27 — `mb-llama` attempt 3: the step-2 gate is met, on silicon
+
+Evidence: `tttv2_milestone_b_evidence/llama/REPORT.md` §"Attempt 3", run-by-run in
+`ATTEMPT3.md`, logs in `logs3/`. Commits `361245c08eb..` on
+`apbernal/tttv2_wh_glx_2d_modules_milestone_b`.
+
+- **The first PCC numbers this model has ever produced.** One Llama block, real
+  `meta-llama/Llama-3.3-70B-Instruct` layer-0 weights on WH Galaxy `(8, 4)`,
+  against an independent Hugging Face reference, **three runs in three fresh
+  processes with bit-identical results**: prefill 128 logits 0.99958, prefill 2048
+  logits 0.99962, decode at batch 32 logits 0.99975, and the K/V cache after both
+  prefill and decode at 0.99993 / 0.99975 — on all four column-local users. The
+  step-2 gate of `job1_llama.md` is **MET**.
+- **D-B19 closed, and it was a width.** Attempt 2's LM head all-reduce hang was
+  the reduced logits being 501 tiles per device inside a 42-core x 12-tile spec:
+  `all_reduce_async`'s reduction kernel does
+  `cb_in.wait_front(ring_size * block_num_tiles)` on *every* output core, so the
+  42nd core waited forever for a shard that was never full. 501 has no divisor
+  between 4 and 50, so no core count could have fixed it. `galaxy_padded_vocab_size`
+  now pads to a ring-exact width (Llama 129024, Qwen 153600), which is what
+  production does by a different route.
+- **Six more defects, two of which fail open.** The prefetcher's global CB made
+  prefill unplaceable (D-B20); the prefill RoPE tables were row-major (D-B21) and
+  its transformation matrix the wrong size (D-B22); the logits composed along the
+  wrong mesh axis **silently**, and `GalaxyDirectRunner` did the same and then
+  narrowed without raising, so every step-3 number would have been wrong with no
+  symptom (D-B23); the KV reference was in the wrong RoPE convention (D-B24); the
+  MLP read the attention's prefetched weights, again silently (D-B25a); and the
+  non-fused decode RoPE wrote a K of `|max| = inf` into the cache (D-B25b).
+- **Two of the brief's four ranked risks are discharged.** RoPE composed with
+  `Attention2D` was indeed the first failure, and the fault was *which op*: on a
+  prefetcher mesh production uses `rotary_embedding_llama_fused_qk` and the
+  non-fused pair is the Blackhole fallback. And the fused decode norm is right —
+  0.99999 on an exact input — so job 0's C1 fix holds on hardware.
+- **Paged decode works on this partition**, measured by a one-layer runner smoke.
+  That closes the step-3/step-7 dependency attempt 2 recorded: `from_pretrained`
+  has no contiguous option, so every 80-layer path is paged whether it wants to be
+  or not.
+- **Four shared modules changed, all declared in the report** with the reduction
+  the extension discipline asks for: `prefetcher_2d.py` (a new config value,
+  defaulting to the old behaviour), `rope_2d.py` (two corrections where the module
+  disagreed with the op), `lm_head_2d.py` and `sampling_2d.py` (a validation that
+  forbade a legal geometry, loosened in the direction hardware requires). No
+  `*_1d.py`, no `llm_runtime`; both greps empty. No test deleted, `xfail`ed or
+  weakened — three host assertions were *corrected*, each with the device abort
+  that refuted it quoted against it.

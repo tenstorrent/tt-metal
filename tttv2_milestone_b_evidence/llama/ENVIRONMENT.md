@@ -378,3 +378,68 @@ depends on it. Attempt 2 needed `gdb -p` to find out where a hang was, because a
 device-side CCL hang leaves no Python traceback. pytest's own faulthandler plugin
 dumps every thread's Python stack from a watchdog thread after 600 s and then
 lets the run continue, which names the hanging Python line for free.
+
+## Attempt 3 — the exact invocations behind every number
+
+Every device run went through `run3.sh`, or `run3_sequence.sh` for a serial batch.
+`HF_HOME=/proj_sw/user_dev/hf_data` and `TTTV2_GALAXY_CCL_TRACE=1` are exported by
+`run3.sh` itself.
+
+```sh
+# the step-2 gate: prefill 128 + decode at batch 32, logits and both caches
+MB_DEADLINE=1200 MB_PYTEST_TIMEOUT=1080 \
+  ./tttv2_milestone_b_evidence/llama/run3.sh a3_32_step2_gate_run1 \
+  'models/common/tests/models/llama33_70b_galaxy/test_model_wh_galaxy.py::test_llama33_70b_galaxy_one_layer_prefill_and_decode' \
+  -o faulthandler_timeout=600
+# ... repeated as a3_33_step2_gate_run2 and a3_34_step2_gate_run3
+
+# single-row prefill at the full 2048 recipe
+MB_DEADLINE=1800 MB_PYTEST_TIMEOUT=1680 \
+  ./tttv2_milestone_b_evidence/llama/run3.sh a3_35_prefill2048_run1 \
+  'models/common/tests/models/llama33_70b_galaxy/test_model_wh_galaxy.py::test_llama33_70b_galaxy_one_layer_prefill_2048' \
+  -o faulthandler_timeout=600
+# ... repeated as a3_36 and a3_37
+
+# the sub-module bisection (diagnostic; reports each boundary, asserts on logits)
+MB_DEADLINE=900 MB_PYTEST_TIMEOUT=780 \
+  ./tttv2_milestone_b_evidence/llama/run3.sh a3_31_bisect_fusedqk \
+  'models/common/tests/models/llama33_70b_galaxy/test_model_wh_galaxy.py::test_llama33_70b_galaxy_decode_bisection' \
+  -o faulthandler_timeout=600
+
+# the one-layer runner/paged-KV smoke
+LLAMA33_70B_GALAXY_DEMO_LAYERS=1 LLAMA33_70B_GALAXY_DEMO_TOKENS=8 \
+MB_DEADLINE=900 MB_PYTEST_TIMEOUT=780 \
+  ./tttv2_milestone_b_evidence/llama/run3.sh a3_42_demo_1layer_smoke \
+  'models/common/models/llama33_70b_galaxy/demo.py::test_llama33_70b_galaxy_direct_demo_batch1' \
+  -o faulthandler_timeout=600
+
+# step 3, as a serial manifest (see logs3/a3_seq_step3_driver.out)
+./tttv2_milestone_b_evidence/llama/run3_sequence.sh /tmp/mb_seq_step3.txt
+#   3600 3400 a3_43_full_prefill_first_token  ...::test_llama33_70b_galaxy_full_model_prefill_and_first_decode_token
+#   5400 5200 a3_44_accuracy_gate_run1        ...::test_llama33_70b_galaxy_teacher_forced_accuracy_batch1
+#   3600 3400 a3_45_demo_batch1_80layer       demo.py::test_llama33_70b_galaxy_direct_demo_batch1
+#   5400 5200 a3_46_batch32_isolation         ...::test_llama33_70b_galaxy_batch32_slots_are_isolated
+```
+
+Host gates:
+
+```sh
+python -m pytest -q -rN --color=no -p no:cacheprovider \
+  models/common/tests/modules/sampling/test_sampling_2d.py \
+  models/common/tests/modules/lm_head/test_lm_head_2d.py \
+  models/common/tests/models/llama33_70b_galaxy/test_model_host.py     # 77 passed
+```
+
+### Two measured costs, for whoever plans the next night
+
+| Cost | Measured |
+| --- | --- |
+| `AutoModelForCausalLM.from_pretrained` on the 141 GB 80-layer checkpoint | **~60 s** (723 tensors, safetensors) |
+| Staging 80 layers of weights to device, **first time in a tree** | ~2.3 s per tensor of `LazyWeight` cache generation, ~400 tensors, **~15 min** |
+| The same staging, **second process onward** | `[cache hit]` at ~0.05 s per tensor, well under a minute |
+| One step-2 gate cycle (test + reap + `glx_reset`) | ~7 min, of which the test is ~2.5 min |
+| One prefill-2048 cycle | ~9 min, of which the test is 2.7-4.1 min |
+
+Attempt 2 expected the checkpoint load to dominate a step-3 night. It does not -
+the **first** device staging does, and it is a one-off. Order the runs so the
+cheapest 80-layer test pays for the cache.

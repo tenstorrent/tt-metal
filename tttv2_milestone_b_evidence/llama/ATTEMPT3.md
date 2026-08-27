@@ -727,3 +727,109 @@ resolved and all three are correct, three times, identically.
 **Step 2 is complete**: decode at batch 32, single-row prefill at 128 and at 2048,
 and the K and V cache contents after each - all at PCC >= 0.99 against an
 independent Hugging Face reference, three runs in fresh processes.
+| 38 | `logs3/a3_38_demo_1layer_smoke.log` | 1-layer demo smoke | **FAILED** — `Sampling2D` carried the same minimal-vocab check `LMHead2D` did |
+| 39-41 | `logs3/a3_39..41_host_quick.log` | host, loosening it | **77 passed** |
+| 42 | `logs3/a3_42_demo_1layer_smoke.log` | 1-layer demo smoke | **1 passed** — the whole runner path, on a **paged** cache |
+
+## Result 38-42 — the runner path runs, and paged decode works
+
+`Sampling2D` validated the padded vocabulary exactly as `LMHead2D` used to, so
+D-B19's ring-exact padding aborted it at construction:
+
+```text
+ValueError: padded_vocab_size must be the minimal Galaxy-aligned width 128256,
+            got 129024
+```
+
+The step-2 gate never saw this because it builds with
+`enable_device_sampling=False`; the demo goes through `from_pretrained`, which
+enables it. Loosened identically, and the host test that pinned the old rule now
+pins the new bound - including the case that matters next: **Qwen3-32B's ring-exact
+153600, which the old rule rejected outright.**
+
+`logs3/a3_42`, one layer, 8 tokens:
+
+```text
+[demo] slot 0 prompt: 'Explain what a tensor is to a software engineer in two sentences.'
+[demo] slot 0 text  : ' RekALAR ZahirtyohaTL Succ体系'
+[demo] slot 0 tokens: [125709, 73865, 97955, 16938, 66183, 13778, 89279, 124957]
+```
+
+Meaningless text from a one-layer model, exactly as the demo's docstring promises -
+and **the entire runner path executed**: `from_pretrained`, a paged KV pool,
+`prefill_row`, eight eager decode steps, device sampling, detokenization.
+
+**Paged decode works on this partition.** That is the dependency attempt 2 recorded
+between steps 3 and 7 - `from_pretrained` has no contiguous option, so every
+80-layer path is paged whether step 3 wants it or not - and it was the largest
+unknown left. It is now measured rather than feared. `Attention2D`'s paged decode
+page table is validated against `users = range(max_batch_size)`, which attempt 1
+flagged as a possible 32-vs-8 mismatch; on this mesh the cache is column-sharded so
+each device holds 8 rows and the check is satisfied.
+
+The 1-layer path is cheap only because `from_pretrained` now takes a
+`load_hf_model` seam: the default materialises all 141 GB of the checkpoint per
+process, and the tests inject `load_layer_subset_causal_lm` when they ask for a
+subset (about 12 GB). Every gate ignores the knob and runs all 80 layers.
+| 43 | `logs3/a3_43_full_prefill_first_token.log` | **80-layer prefill 128 + first decode token** | **1 passed** in 1757 s |
+
+## Result 43 — the full 80-layer model, on real reference tokens
+
+`test_llama33_70b_galaxy_full_model_prefill_and_first_decode_token`, all 80 layers,
+paged KV, real `meta-llama/Llama-3.3-70B-Instruct` weights. **1 passed.**
+
+The test is not a smoke: it prefills 128 tokens of the
+`tt_transformers` reference sequence, asserts the prefill's predicted token is
+inside the reference model's **top-5** at that position, then decodes one token at
+position 128 and asserts *that* is inside the reference's top-5 at position 129.
+Its own docstring says why the pair matters: "a decode step that silently reads the
+wrong KV blocks shows up as a top-5 miss even though the prefill passed."
+
+Both assertions hold, on a paged cache, at 80 layers.
+
+### Where the 29 minutes went, because it changes how to plan a night
+
+```text
+AutoModelForCausalLM.from_pretrained, 141 GB, 723 tensors     ~60 s
+LazyWeight cache generation, 948 [cache miss] entries         ~24 min
+the actual prefill + decode + comparison                      the rest
+```
+
+948, not the ~400 I first estimated: **every projection is staged twice**, once in
+the decode ring placement and once interleaved for prefill, plus two norms per
+layer and the embedding, RoPE tables, final norm and LM head. At ~1.5 s each that
+is the whole cost of the run.
+
+It is a **one-off**. The next process in this tree gets `[cache hit]` at ~0.05 s
+per tensor. Attempt 2 predicted that "`from_pretrained` loads the whole 141 GB
+checkpoint eagerly... that cost dominates the night"; the measurement says the load
+is a minute and **the first device staging** is what dominates, once.
+| 44 | `logs3/a3_44_accuracy_gate_run1.log` | **the Milestone B accuracy gate, run 1** | **1 passed** in 1356 s — top-1 **501/511 = 0.9804**, top-5 **511/511 = 1.0000** |
+
+## Result 44 — the accuracy gate, measured
+
+```text
+[accuracy] reference=Llama-3.3-70B-Instruct prompt=512 decode=511
+[accuracy] top-1 501/511 = 0.9804 (gate >= 0.91)
+[accuracy] top-5 511/511 = 1.0000 (gate >= 0.99)
+```
+
+Teacher-forced, batch 1, prefill 512 / decode 511, all 80 layers, paged KV, greedy
+argmax over the composed logits, scored against
+`models/tt_transformers/tests/reference_outputs/Llama-3.3-70B-Instruct.refpt` via
+`galaxy_hardware.teacher_forcing_accuracy`. **Both gates pass**, top-1 by seven
+points and top-5 exactly.
+
+The number is 511 eager decode steps with the CCL trace's per-op synchronize
+*enabled* (`run3.sh` exports `TTTV2_GALAXY_CCL_TRACE=1`), which adds three device
+synchronizes per token. That costs wall-clock and cannot change numerics; the
+22 minutes is not a decode-latency figure and must not be read as one.
+
+Worth recording next to it: **this gate could not have run at all two attempts
+ago.** Attempt 2 found `load_reference_tokens` returning a length-1 sequence, so
+`_reference_prompt(512)` raised `pytest.skip("reference sequence has 1 tokens")` -
+the gate failed *open*. And attempt 3 found that the logits it scores were being
+composed along the wrong mesh axis and silently narrowed (D-B23), so even after the
+skip was fixed the number would have been computed from four copies of one mesh
+row's vocabulary slice. Two independent silent failures stood between this
+measurement and a plausible-looking wrong answer.

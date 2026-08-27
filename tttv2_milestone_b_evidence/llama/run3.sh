@@ -5,7 +5,11 @@
 set -u
 D="$(cd "$(dirname "$0")" && pwd)"
 export HF_HOME=/proj_sw/user_dev/hf_data
-export TTTV2_GALAXY_CCL_TRACE=1
+# The CCL trace also *synchronizes* after each LM head collective op, which is
+# what named D-B19 - and three extra device syncs per token is a real wall-clock
+# cost on a 511-step decode. Respect a value the caller already set so a long run
+# can turn it off.
+export TTTV2_GALAXY_CCL_TRACE=${TTTV2_GALAXY_CCL_TRACE-1}
 export MB_RESET_DIR="$D/logs3"
 REPO="$(cd "$D/../.." && pwd)"
 cd "$REPO" || exit 1
