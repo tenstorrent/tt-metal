@@ -68,30 +68,19 @@ class BgeM3AttentionConfig:
 
     max_seq_len: int | None = None
     max_batch_size: int | None = None
-    # Sequence-parallel: mesh axis over which the sequence dim is sharded. When
-    # set, each chip holds S/tp local query rows; K/V are all-gathered to full S
-    # so local queries cross-attend to every key. Everything else in the encoder
-    # is token-local (zero comm). None disables (single-chip path).
+    # Mesh axis that shards the sequence dim. Each chip keeps S/tp query rows
+    # and all-gathers K/V to the full S. None selects the single-chip path.
     sequence_parallel_axis: int | None = None
-    # Data-parallel (DP=2): each chip runs an independent full-sequence B/2
-    # replica with no collectives. Enables the query head-fold SDPA trick and
-    # the DP-tuned SDPA chunk/dtype config.
+    # DP=2: every chip runs an independent B/2 full-sequence replica, no collectives.
     data_parallel: bool = False
-    # True when the attention scale was folded into the Q projection weight at
-    # build time, so SDPA must run with scale=1.0 regardless of mask presence.
+    # The build folds the attention scale into the Q weight, so SDPA uses scale=1.0.
     qkv_scale_prefolded: bool = False
-    # Opt-in: use the model-local JIT encoder-SDPA descriptor (custom_ops/
-    # encoder_sdpa) instead of stock ttnn SDPA. Only valid on the DP S8192
-    # head-folded path (Q[6,32,4096,64] bf8 / K bf4 / V bf8, no mask, scale 1).
-    # Stock SDPA is the default/fallback. Parity-verified (PCC 1.0, wall==stock).
+    # Use the model-local encoder-SDPA descriptor instead of the stock ttnn SDPA.
     use_experimental_encoder_sdpa: bool = False
     encoder_sdpa_q256_vbf4: bool = False
-    # Exact B6/S8192 DP path: fuse QKV MinimalMatmul, head scatter, and K/V
-    # BF4 conversion into one model-local ProgramDescriptor.
+    # Fuse the QKV matmul, the head scatter, and the K/V BF4 conversion.
     use_qkv_scatter_matmul: bool = False
-    # When True, compact-valid-length (masked) requests use the high-precision
-    # attention kernels instead of the BF4 serving path. Serving default False
-    # so masked requests keep the sub-second BF4 kernels + runtime-length mask.
+    # Route masked requests to the high-precision kernels instead of BF4.
     mask_hifi: bool = False
 
     @property
@@ -289,364 +278,151 @@ class BgeM3Attention(LightweightModule):
 
 
 class BgeM3AttentionJit(BgeM3Attention):
-    """DP S8192 serving attention: QKV scatter, encoder SDPA, query head-fold,
-    BF4 K/V, and compact valid-length masking."""
+    """Attention for the B12/S8192 data-parallel serving shape.
+
+    ModelArgs sets use_jit only for that shape, so this path assumes a local
+    batch of 6, sequence length 8192, 16 heads, and head dim 64. It runs the
+    QKV scatter, the model-local encoder SDPA with the query head-fold, and
+    BF4 K/V. It accepts no mask, or compact [B, 1] valid lengths.
+    """
 
     def forward(self, hidden_states: ttnn.Tensor, attention_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
         self.load_device_weights()
 
         batch_size, _, seq_len, _ = hidden_states.shape
-        has_compact_valid_lengths = (
-            attention_mask is not None and len(attention_mask.shape) == 2 and attention_mask.shape[1] == 1
-        )
-        # The BF4 serving kernels (direct scatter, BF4 K/V, q256/k2048 direct
-        # concat) run for unmasked requests and for compact-valid-length
-        # (masked) requests unless high-precision masked attention is requested.
-        # The compact runtime-length mask is applied on top of the BF4 kernels.
-        fast_eligible = attention_mask is None or (has_compact_valid_lengths and not self.config.mask_hifi)
+        # The caller supplies compact [B, 1] valid lengths, or no mask at all.
+        # A dense mask never reaches this path.
+        valid_lengths = attention_mask
+        # mask_hifi routes masked requests to the high-precision kernels.
+        use_bf4_serving = valid_lengths is None or not self.config.mask_hifi
 
-        assert seq_len > 0, "seq_len must be positive"
-        assert seq_len % 32 == 0, "seq_len must be divisible by 32 (tile height)"
-        if seq_len > 128:
-            assert seq_len % 128 == 0, "seq_len must be divisible by 128 when seq_len > 128"
+        q, k, v = self._project_qkv(hidden_states, use_bf4_serving)
+        context = self._attend(q, k, v, valid_lengths, use_bf4_serving)
+        return self._project_out(context)
 
-        qkv_core_grid = None if self.config.qkv_prg_config is not None else self.config.core_grid
-        output_core_grid = None if self.config.output_prg_config is not None else self.config.core_grid
-
-        # QKV chunking for very long sequences
-        if seq_len > _MAX_QKV_MM_CHUNK_SEQ_LEN:
-            if seq_len % _MAX_QKV_MM_CHUNK_SEQ_LEN != 0:
-                raise ValueError(f"seq_len {seq_len} must be divisible by {_MAX_QKV_MM_CHUNK_SEQ_LEN}")
-            hidden_states = ttnn.reshape(
-                hidden_states,
-                [batch_size, seq_len // _MAX_QKV_MM_CHUNK_SEQ_LEN, _MAX_QKV_MM_CHUNK_SEQ_LEN, -1],
-            )
-
-        # Direct scatter emits BF4 Q for the BF4 serving path (unmasked or
-        # compact-mask serving). High-precision masked attention takes the
-        # projection path instead.
-        use_qkv_scatter = self.config.use_qkv_scatter_matmul and fast_eligible
-        if use_qkv_scatter:
-            if not (
-                self.config.data_parallel
-                and fast_eligible
-                and seq_len == 8192
-                and batch_size == 6
-                and self.config.num_heads == 16
-                and self.config.head_dim == 64
-                and self.config.qkv_minimal_config is not None
-                and self.config.qkv_prg_config is None
-                and self.config.qkv_dtype == ttnn.bfloat8_b
-                and self.config.encoder_sdpa_q256_vbf4
-            ):
-                raise ValueError("use_qkv_scatter_matmul requires the exact B6/S8192 DP q256/V-BF4 path")
+    def _project_qkv(self, hidden_states: ttnn.Tensor, use_bf4_serving: bool):
+        """Return Q, K, V heads. The scatter fuses the projection, the head
+        split, and the BF4 conversion into one program."""
+        if use_bf4_serving and self.config.use_qkv_scatter_matmul:
             from models.demos.wormhole.bge_m3.tt.custom_ops.qkv_scatter_matmul import bge_qkv_scatter_matmul
 
-            q, k, v = bge_qkv_scatter_matmul(
+            # Q is BF4 to halve the scatter write. SDPA consumes BF4 directly.
+            return bge_qkv_scatter_matmul(
                 hidden_states,
                 self.wqkv,
                 bias_tensor=self.bqkv,
                 memory_config=self.config.create_heads_memcfg,
-                # Emit Q as BF4 to halve the QKV-scatter write.
                 dtype=ttnn.bfloat4_b,
             )
-        else:
-            # Stage 1: fused QKV projection
-            if self.config.qkv_minimal_config is not None and self.config.qkv_prg_config is None:
-                qkv_fused = ttnn.experimental.minimal_matmul(
-                    input_tensor=hidden_states,
-                    weight_tensor=self.wqkv,
-                    bias_tensor=self.bqkv,
-                    fused_activation=None,
-                    config=self.config.qkv_minimal_config,
-                    memory_config=self.config.qkv_memcfg,
-                    dtype=self.config.qkv_dtype,
-                    compute_kernel_config=self.config.qkv_compute_kernel_cfg,
-                )
-            else:
-                qkv_fused = ttnn.linear(
-                    hidden_states,
-                    self.wqkv,
-                    memory_config=self.config.qkv_memcfg,
-                    dtype=self.config.qkv_dtype,
-                    bias=self.bqkv,
-                    program_config=self.config.qkv_prg_config,
-                    compute_kernel_config=self.config.qkv_compute_kernel_cfg,
-                    core_grid=qkv_core_grid,
-                )
-            if seq_len > _MAX_QKV_MM_CHUNK_SEQ_LEN:
-                qkv_fused = ttnn.reshape(qkv_fused, [batch_size, 1, seq_len, -1])
 
-            # Stage 2: split Q/K/V heads.
-            if (self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512) or (
-                self.config.max_seq_len == 8192
-            ):
-                from models.demos.wormhole.bge_m3.tt.custom_ops.fused_qkv_heads.op import bge_qkv_heads_headsplit
+        from models.demos.wormhole.bge_m3.tt.custom_ops.fused_qkv_heads.op import bge_qkv_heads_headsplit
 
-                head_groups = (
-                    4
-                    if self.config.max_batch_size in (8, 16, 32) or self.config.max_seq_len == 8192
-                    else self.config.num_heads
-                )
-                fuse_kbf4 = self.config.data_parallel and fast_eligible and seq_len == 8192
-                q, k, v = bge_qkv_heads_headsplit(
-                    qkv_fused,
-                    num_heads=self.config.num_heads,
-                    head_groups=head_groups,
-                    out_memcfg=self.config.create_heads_memcfg,
-                    k_out_dtype=ttnn.bfloat4_b if fuse_kbf4 else None,
-                    v_out_dtype=(ttnn.bfloat4_b if self.config.encoder_sdpa_q256_vbf4 and fast_eligible else None),
-                )
-            else:
-                q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-                    qkv_fused,
-                    num_heads=self.config.num_heads,
-                    num_kv_heads=self.config.num_heads,
-                    transpose_k_heads=False,
-                    memory_config=self.config.create_heads_memcfg,
-                )
-            ttnn.deallocate(qkv_fused)
-
-        # Preserve direct BF4 Q on the exact DP q256 path. Casting it to BF8
-        # cannot restore precision and costs one full-tensor program per layer.
-        preserve_bf4_q = (
-            self.config.data_parallel
-            and self.config.encoder_sdpa_q256_vbf4
-            and fast_eligible
-            and seq_len == 8192
-            and q.dtype == ttnn.bfloat4_b
+        qkv_fused = ttnn.experimental.minimal_matmul(
+            input_tensor=hidden_states,
+            weight_tensor=self.wqkv,
+            bias_tensor=self.bqkv,
+            fused_activation=None,
+            config=self.config.qkv_minimal_config,
+            memory_config=self.config.qkv_memcfg,
+            dtype=self.config.qkv_dtype,
+            compute_kernel_config=self.config.qkv_compute_kernel_cfg,
         )
-        if self.config.score_dtype is not None and q.dtype != self.config.score_dtype and not preserve_bf4_q:
-            q_cast = ttnn.typecast(q, dtype=self.config.score_dtype)
-            ttnn.deallocate(q)
-            q = q_cast
-        # Skip the K score-dtype cast when K was already emitted as bfloat4_b by
-        # the fused head-split (its dtype intentionally differs from score_dtype).
-        if self.config.score_dtype is not None and k.dtype != self.config.score_dtype and k.dtype != ttnn.bfloat4_b:
-            k_cast = ttnn.typecast(k, dtype=self.config.score_dtype)
-            ttnn.deallocate(k)
-            k = k_cast
-        if self.config.score_dtype is not None and v.dtype != self.config.score_dtype and v.dtype != ttnn.bfloat4_b:
-            v_cast = ttnn.typecast(v, dtype=self.config.score_dtype)
-            ttnn.deallocate(v)
-            v = v_cast
-
-        # Stage 3c: sequence-parallel K/V all-gather. Each chip produced K/V for
-        # its local S/tp query rows; gather across the sequence mesh axis so the
-        # local queries attend to the full sequence. Q stays sharded (local rows).
-        if self.config.sequence_parallel_axis is not None:
-            k_full = ttnn.all_gather(
-                k, dim=2, cluster_axis=self.config.sequence_parallel_axis, num_links=1, topology=ttnn.Topology.Linear
-            )
-            ttnn.deallocate(k)
-            k = k_full
-            v_full = ttnn.all_gather(
-                v, dim=2, cluster_axis=self.config.sequence_parallel_axis, num_links=1, topology=ttnn.Topology.Linear
-            )
-            ttnn.deallocate(v)
-            v = v_full
-
-        # Stage 3b: mask preparation. DP S8192 accepts compact uint32 [B, 1]
-        # valid lengths; the custom SDPA synthesizes only the boundary mask tiles.
-        compact_valid_lengths = None
-        if has_compact_valid_lengths:
-            compact_valid_lengths = attention_mask
-            sdpa_mask = None
-        else:
-            sdpa_mask = attention_mask
-        if sdpa_mask is not None:
-            if len(sdpa_mask.shape) != 4:
-                raise ValueError(f"attention_mask must have rank 4 [B, 1, S, S], got shape={sdpa_mask.shape}")
-            if (
-                sdpa_mask.shape[0] != batch_size
-                or sdpa_mask.shape[1] != 1
-                or sdpa_mask.shape[2] != seq_len
-                or sdpa_mask.shape[3] != seq_len
-            ):
-                raise ValueError(
-                    f"attention_mask shape must be [{batch_size}, 1, {seq_len}, {seq_len}], got {sdpa_mask.shape}"
-                )
-            if self.config.score_dtype is not None and sdpa_mask.dtype != self.config.score_dtype:
-                sdpa_mask = ttnn.typecast(sdpa_mask, dtype=self.config.score_dtype)
-            if sdpa_mask.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
-                sdpa_mask = ttnn.to_memory_config(sdpa_mask, ttnn.DRAM_MEMORY_CONFIG)
-
-        # Stage 4: encoder SDPA (chunk sizes depend on runtime seq_len)
-        # N300 B12/S8192: when both scale and an explicit dense [B,1,S,S] mask are
-        # passed, ttnn SDPA pre-scales the mask by 1/scale as a separate op on the
-        # full 12x8192x8192 mask EVERY layer (~7% of runtime). We avoid it by
-        # passing scale=1.0. The attention scale is folded into the Q projection
-        # WEIGHT at build time (encoder.py q_scale, weight_adapter.build_attention_
-        # weights) so no per-layer q*scale multiply is needed either. Numerically
-        # identical: softmax(Q@K^T*s + m) == softmax(((Q*s)@K^T) + m), and folding
-        # into the fp32 weight before bf8 quant is at least as accurate.
-        sdpa_scale = self.config.attention_scale
-        if self.config.qkv_scale_prefolded:
-            sdpa_scale = 1.0
-        elif seq_len == 8192 and sdpa_mask is not None and sdpa_scale is not None:
-            sdpa_scale = 1.0
-        # SDPA chunk sizing keys off the full (key) sequence length. In
-        # sequence-parallel mode queries are local (S/tp) but keys span full S.
-        sdpa_seq_len = k.shape[2]
-        # DP query head-fold: SDPA throughput is set by query length, so fold
-        # _DP_HEAD_FOLD query-chunks into the head dim (Sq/G queries per head).
-        # K/V are unchanged; GQA head-broadcast keeps each query head attending
-        # to the full sequence. Exact: q [B,H,S,DH] -> [B, H*G, S/G, DH].
-        head_fold = self.config.data_parallel and sdpa_mask is None and seq_len == 8192
-        if head_fold:
-            b0, h0, s0, dh0 = q.shape
-            q = ttnn.reshape(q, [b0, h0 * _DP_HEAD_FOLD, s0 // _DP_HEAD_FOLD, dh0])
-            # K is emitted as BF4 by the fused head-split; convert as a fallback.
-            if fast_eligible and k.dtype != ttnn.bfloat4_b:
-                k_bf4 = ttnn.typecast(k, dtype=ttnn.bfloat4_b)
-                ttnn.deallocate(k)
-                k = k_bf4
-        if self.config.encoder_sdpa_q256_vbf4 and fast_eligible:
-            assert v.dtype == ttnn.bfloat4_b, f"expected fused BF4 V, got {v.dtype}"
-        sdpa_program_config = _sdpa_program_config(
-            sdpa_seq_len,
-            self.config.mesh_device,
-            batch_size=batch_size,
-            sequence_parallel=self.config.sequence_parallel_axis is not None,
-            data_parallel=self.config.data_parallel,
+        bf4_kv = ttnn.bfloat4_b if use_bf4_serving else None
+        q, k, v = bge_qkv_heads_headsplit(
+            qkv_fused,
+            num_heads=self.config.num_heads,
+            head_groups=4,
+            out_memcfg=self.config.create_heads_memcfg,
+            k_out_dtype=bf4_kv,
+            v_out_dtype=bf4_kv,
         )
-        # Opt-in model-local JIT encoder SDPA: only on the exact DP S8192 head-
-        # folded contract it was built for (Q[6,32,4096,64] bf8, K bf4, V bf8,
-        # no mask, scale 1). Any deviation falls back to stock SDPA.
-        use_encoder_sdpa = (
-            self.config.use_experimental_encoder_sdpa
-            and head_fold
-            and sdpa_mask is None
-            and sdpa_scale == 1.0
-            and tuple(q.shape)[1:] == (32, 4096, 64)
-            and tuple(k.shape)[1:] == (16, 8192, 64)
-            and tuple(v.shape)[1:] == (16, 8192, 64)
-            and tuple(q.shape)[0] == tuple(k.shape)[0] == tuple(v.shape)[0]
-            and q.dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
-            and k.dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
-            and v.dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
-        )
-        sdpa_direct_concat = False
-        if use_encoder_sdpa:
-            from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import (
-                EncoderSDPAConfig,
-                bge_encoder_sdpa_experimental,
-            )
+        ttnn.deallocate(qkv_fused)
+        return q, k, v
 
-            # Serving config: q256/k2048 with direct concat-heads and BF4 K/V.
-            # High-precision masked config: q128/k512, FP32 dest.
-            # batch = runtime local batch (q.shape[0]); work-split is batch-general
-            # so the JIT SDPA fires for any DP batch (e.g. B3/chip in 4-chip DP),
-            # not just B6. Fixes the stock B3 chunking anomaly (804->~565ms).
-            if self.config.encoder_sdpa_q256_vbf4 and fast_eligible:
-                _ecfg = EncoderSDPAConfig(
-                    batch=int(q.shape[0]),
-                    q_chunk_size=256,
-                    k_chunk_size=2048,
-                    q_buffer_depth=2,
-                    k_buffer_depth=1,
-                    v_buffer_depth=1,
-                    fp32_dest_acc_en=False,
-                    direct_concat_heads=True,
-                    reuse_prev_max_for_exp=True,
-                    use_runtime_lengths=compact_valid_lengths is not None,
-                )
-            else:
-                _ecfg = EncoderSDPAConfig(
-                    batch=int(q.shape[0]),
-                    q_chunk_size=128,
-                    k_chunk_size=512,
-                    q_buffer_depth=2,
-                    k_buffer_depth=2,
-                    v_buffer_depth=2,
-                    fp32_dest_acc_en=True,
-                    use_runtime_lengths=compact_valid_lengths is not None,
-                )
-            sdpa_direct_concat = _ecfg.direct_concat_heads
-            context = bge_encoder_sdpa_experimental(
-                q,
-                k,
-                v,
-                valid_lengths=compact_valid_lengths,
-                output_mem_config=self.config.score_memcfg,
-                config=_ecfg,
+    def _attend(self, q, k, v, valid_lengths, use_bf4_serving: bool) -> ttnn.Tensor:
+        """Run the encoder SDPA and return context as [B, 1, S, H*D]."""
+        from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import (
+            EncoderSDPAConfig,
+            bge_encoder_sdpa_experimental,
+        )
+
+        # Cast Q and K only when a previous stage left them off the BF4 contract.
+        if not use_bf4_serving and q.dtype != self.config.score_dtype:
+            q = _retype(q, self.config.score_dtype)
+        if use_bf4_serving and k.dtype != ttnn.bfloat4_b:
+            k = _retype(k, ttnn.bfloat4_b)
+
+        # Query head-fold: SDPA throughput follows the query length, so fold
+        # _DP_HEAD_FOLD query chunks into the head dim. GQA head-broadcast keeps
+        # every query head attending to the full sequence, so this is exact.
+        b, h, s, dh = q.shape
+        q = ttnn.reshape(q, [b, h * _DP_HEAD_FOLD, s // _DP_HEAD_FOLD, dh])
+
+        if use_bf4_serving:
+            config = EncoderSDPAConfig(
+                batch=int(q.shape[0]),
+                q_chunk_size=256,
+                k_chunk_size=2048,
+                q_buffer_depth=2,
+                k_buffer_depth=1,
+                v_buffer_depth=1,
+                fp32_dest_acc_en=False,
+                direct_concat_heads=True,
+                reuse_prev_max_for_exp=True,
+                use_runtime_lengths=valid_lengths is not None,
             )
         else:
-            context = ttnn.transformer.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                is_causal=False,
-                attn_mask=sdpa_mask,
-                scale=sdpa_scale,
-                program_config=sdpa_program_config,
-                compute_kernel_config=self.config.score_compute_kernel_cfg,
-                memory_config=self.config.score_memcfg,
+            config = EncoderSDPAConfig(
+                batch=int(q.shape[0]),
+                q_chunk_size=128,
+                k_chunk_size=512,
+                q_buffer_depth=2,
+                k_buffer_depth=2,
+                v_buffer_depth=2,
+                fp32_dest_acc_en=True,
+                use_runtime_lengths=valid_lengths is not None,
             )
-        if head_fold and not sdpa_direct_concat:
-            # [B, H*G, S/G, DH] -> [B, H, S, DH]
-            b0, hg, sg, dh0 = context.shape
-            context = ttnn.reshape(context, [b0, hg // _DP_HEAD_FOLD, sg * _DP_HEAD_FOLD, dh0])
+
+        context = bge_encoder_sdpa_experimental(
+            q,
+            k,
+            v,
+            valid_lengths=valid_lengths,
+            output_mem_config=self.config.score_memcfg,
+            config=config,
+        )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Stage 5: concat heads. B1/B8/B32 S512 + S8192: fused head-split kernel
-        # (higher core utilization than stock nlp_concat_heads).
-        if sdpa_direct_concat:
-            # The SDPA writer already emitted [B,1,S,H*D] in concat-head order.
-            pass
-        elif (self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512) or (
-            self.config.max_seq_len == 8192
-        ):
+        if not config.direct_concat_heads:
+            # Undo the head-fold, then concat the heads.
+            b, hg, sg, dh = context.shape
+            context = ttnn.reshape(context, [b, hg // _DP_HEAD_FOLD, sg * _DP_HEAD_FOLD, dh])
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_concat_heads.op import bge_concat_heads_headsplit
 
-            # B8 swept concat head_groups {1,2,4,8,16}: 16 is marginally best.
-            # S8192 B6 swept {1,2,4,8,16}: 16 is best (0.598 vs stock 0.812ms/call).
-            concat_head_groups = 16 if self.config.max_batch_size in (8, 16) or self.config.max_seq_len == 8192 else 4
-            context = bge_concat_heads_headsplit(
-                context, head_groups=concat_head_groups, out_memcfg=self.config.output_memcfg
-            )
-        else:
-            context = ttnn.experimental.nlp_concat_heads(context, memory_config=self.config.output_memcfg)
+            context = bge_concat_heads_headsplit(context, head_groups=16, out_memcfg=self.config.output_memcfg)
+        return context
 
-        # WO chunking for very long sequences
-        if seq_len > _MAX_WO_MM_CHUNK_SEQ_LEN:
-            if seq_len % _MAX_WO_MM_CHUNK_SEQ_LEN != 0:
-                raise ValueError(f"seq_len {seq_len} must be divisible by {_MAX_WO_MM_CHUNK_SEQ_LEN}")
-            context = ttnn.reshape(
-                context, [batch_size, seq_len // _MAX_WO_MM_CHUNK_SEQ_LEN, _MAX_WO_MM_CHUNK_SEQ_LEN, -1]
-            )
-
-        # Stage 6: output projection
-        if self.config.output_minimal_config is not None and self.config.output_prg_config is None:
-            output = ttnn.experimental.minimal_matmul(
-                input_tensor=context,
-                weight_tensor=self.wo_weight,
-                bias_tensor=self.wo_bias,
-                fused_activation=None,
-                config=self.config.output_minimal_config,
-                memory_config=self.config.output_memcfg,
-                dtype=self.config.output_dtype,
-                compute_kernel_config=self.config.output_compute_kernel_cfg,
-            )
-        else:
-            output = ttnn.linear(
-                context,
-                self.wo_weight,
-                memory_config=self.config.output_memcfg,
-                dtype=self.config.output_dtype,
-                bias=self.wo_bias,
-                program_config=self.config.output_prg_config,
-                compute_kernel_config=self.config.output_compute_kernel_cfg,
-                core_grid=output_core_grid,
-            )
+    def _project_out(self, context: ttnn.Tensor) -> ttnn.Tensor:
+        output = ttnn.experimental.minimal_matmul(
+            input_tensor=context,
+            weight_tensor=self.wo_weight,
+            bias_tensor=self.wo_bias,
+            fused_activation=None,
+            config=self.config.output_minimal_config,
+            memory_config=self.config.output_memcfg,
+            dtype=self.config.output_dtype,
+            compute_kernel_config=self.config.output_compute_kernel_cfg,
+        )
         ttnn.deallocate(context)
-
-        if seq_len > _MAX_WO_MM_CHUNK_SEQ_LEN:
-            output = ttnn.reshape(output, [batch_size, 1, seq_len, -1])
-
         return output
+
+
+def _retype(tensor: ttnn.Tensor, dtype: ttnn.DataType) -> ttnn.Tensor:
+    converted = ttnn.typecast(tensor, dtype=dtype)
+    ttnn.deallocate(tensor)
+    return converted
 
 
 # ──────────────────────────────────────────────────────────────────────────────
