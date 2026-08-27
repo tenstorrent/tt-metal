@@ -549,14 +549,15 @@ struct fabric_aligned_connection_info_t {
     uint32_t worker_flow_control_semaphore;
     uint32_t padding_0[3];
 
-    // EXPERIMENT A: the teardown semaphore itself, not a pointer to one. The EDM writes
-    // its ack here over NoC after the worker publishes this address in open_start().
+    // The teardown semaphore itself, not a pointer to one. The EDM writes its ack here over
+    // NoC after the worker publishes this address in open_start(). Holding it here rather
+    // than in a program-semaphore slot is what keeps fabric off the 16-slot per-core budget.
     uint32_t worker_teardown_semaphore;
     uint32_t padding_1[3];
 
-    // EXPERIMENT A: landing zone for the SenderChannelProducerCursor block read issued in
-    // open_start(). That type is asserted to be exactly 16 B (fabric_edm_types.hpp), so this
-    // must own the whole slot -- a whole-block read here must not disturb a neighbour.
+    // Landing zone for the SenderChannelProducerCursor block read issued in open_start().
+    // That type is asserted to be exactly 16 B (fabric_edm_types.hpp), so this must own the
+    // whole slot -- a whole-block read here must not disturb a neighbour.
     uint32_t worker_producer_cursor[4];
 };
 

@@ -685,24 +685,15 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
 }
 
 // Compute fabric connection RT args without any PD mutation.
-// Caller provides pre-allocated semaphore IDs (2 per connection: teardown + buffer_index).
+// Emits 2 args per connection: [direction, eth_channel]. The worker teardown flag and
+// producer-cursor landing zone are storage in the per-channel fabric connection table
+// (fabric_aligned_connection_info_t), addressed directly by the kernel, so no semaphore
+// is allocated or passed for them.
 // Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
-    const std::vector<uint32_t>& connection_link_indices,
-    const std::vector<uint32_t>& teardown_sem_ids,
-    const std::vector<uint32_t>& buffer_index_sem_ids) {
-    TT_FATAL(
-        teardown_sem_ids.size() == dst_nodes.size(),
-        "teardown_sem_ids size ({}) must match dst_nodes size ({})",
-        teardown_sem_ids.size(),
-        dst_nodes.size());
-    TT_FATAL(
-        buffer_index_sem_ids.size() == dst_nodes.size(),
-        "buffer_index_sem_ids size ({}) must match dst_nodes size ({})",
-        buffer_index_sem_ids.size(),
-        dst_nodes.size());
+    const std::vector<uint32_t>& connection_link_indices) {
     TT_FATAL(
         connection_link_indices.empty() ||
             (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
@@ -712,7 +703,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<uint32_t> worker_args;
-    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 3 + dst_nodes.size() * 2 : 0));
+    worker_args.reserve(dst_nodes.size() * 2 + (fabric_context.is_2D_routing_enabled() ? 3 + dst_nodes.size() * 2 : 0));
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
@@ -742,10 +733,8 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
         TT_FATAL(link_idx < candidate_eth_chans.size(), "Link index {} out of bounds", link_idx);
         const auto fabric_router_channel = candidate_eth_chans[link_idx];
 
-        // Per-connection RT args: [eth_channel, teardown_sem, buffer_idx_sem]
+        // Per-connection RT args: [eth_channel]
         worker_args.push_back(fabric_router_channel);
-        worker_args.push_back(teardown_sem_ids[i]);
-        worker_args.push_back(buffer_index_sem_ids[i]);
     }
 
     // 2D metadata

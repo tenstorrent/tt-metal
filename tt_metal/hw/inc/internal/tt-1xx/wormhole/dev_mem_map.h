@@ -141,7 +141,7 @@
 // Tensix fabric connection metadata for workers
 #define MEM_TENSIX_FABRIC_CONNECTIONS_BASE \
     (MEM_TENSIX_EXIT_NODE_TABLE_BASE + MEM_EXIT_NODE_TABLE_SIZE + MEM_ROUTING_TABLE_PADDING)
-// EXPERIMENT A: 656 -> 1168. tensix_fabric_connections_l1_info_t is shared across all
+// 656 -> 1168. tensix_fabric_connections_l1_info_t is shared across all
 // architectures, so growing read_write[] to hold the teardown semaphore and producer cursor
 // costs +512 B here too, used or not. Pinned by a static_assert in fabric_common.h.
 #define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 1168       // sizeof(tensix_fabric_connections_l1_info_t)

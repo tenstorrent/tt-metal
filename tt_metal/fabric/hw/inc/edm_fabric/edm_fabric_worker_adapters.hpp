@@ -4,22 +4,6 @@
 
 #pragma once
 
-// EXPERIMENT B flag. 0 = worker teardown / buffer-index rt args are program-semaphore ids
-// resolved via get_semaphore() (upstream behaviour). 1 = they are already L1 addresses,
-// allocated host-side as global semaphores. Injected by blaze setup_fabric() via add_define().
-#ifndef FABRIC_SEM_ARGS_ARE_ADDRESSES
-#define FABRIC_SEM_ARGS_ARE_ADDRESSES 0
-#endif
-
-// EXPERIMENT A flag. 1 = worker teardown and producer cursor are storage inside
-// tensix_fabric_connections_l1_info_t::read_write[eth_channel], addressed directly like
-// worker_flow_control_semaphore already is. Neither an id nor an address is passed at all.
-// Requires the 48 B read_write entry in fabric_common.h and a matching
-// MEM_TENSIX_FABRIC_CONNECTIONS_SIZE, so it needs a tt-metal rebuild, not just a JIT pass.
-#ifndef FABRIC_SEMS_IN_TABLE
-#define FABRIC_SEMS_IN_TABLE 0
-#endif
-
 #include "api/dataflow/dataflow_api.h"
 
 #include "internal/tt-1xx/risc_common.h"
@@ -119,12 +103,11 @@ struct WorkerToFabricEdmSenderBase {
         volatile uint32_t* writer_send_sem_addr;
         uint32_t worker_free_slots_stream_id;  // used to update the available buffer slot on the receiving router
                                                // (decrement by 1 from the sending side for each packet)
-#if FABRIC_SEMS_IN_TABLE
-        // EXPERIMENT A: filled from the conn table in the VC0 branch, consumed after it.
-        // Only VC0 has a connection table, so this mode requires that path.
-        uintptr_t table_teardown_addr = 0;
-        uintptr_t table_cursor_addr = 0;
-#endif
+        // Worker teardown flag and producer-cursor landing zone. On VC0 these are storage in
+        // the per-channel connection table; on VC2 they arrive as program-semaphore ids in
+        // rt args. Assigned in the branch below, validated and used after it.
+        uintptr_t worker_teardown_raw = 0;
+        uintptr_t worker_buffer_index_semaphore_addr = 0;
 
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24959
         // remove redundant nested constructor to avoid copy
@@ -148,14 +131,13 @@ struct WorkerToFabricEdmSenderBase {
             writer_send_sem_addr = reinterpret_cast<volatile uint32_t*>(
                 reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
             worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
-#if FABRIC_SEMS_IN_TABLE
-            // EXPERIMENT A: teardown and the producer cursor are storage in the same
-            // per-channel entry as worker_flow_control_semaphore above, so their addresses
-            // are derived here rather than allocated host-side and passed in. Nothing is
-            // published or plumbed -- the field IS the semaphore.
-            table_teardown_addr = reinterpret_cast<uintptr_t>(&aligned_conn->worker_teardown_semaphore);
-            table_cursor_addr = reinterpret_cast<uintptr_t>(&aligned_conn->worker_producer_cursor[0]);
-#endif
+            // Teardown and the producer cursor are storage in the same per-channel entry as
+            // worker_flow_control_semaphore above, so their addresses are derived here rather
+            // than allocated host-side and passed in. Nothing is published or plumbed -- the
+            // field IS the semaphore, which is why this path consumes no semaphore rt args.
+            worker_teardown_raw = reinterpret_cast<uintptr_t>(&aligned_conn->worker_teardown_semaphore);
+            worker_buffer_index_semaphore_addr =
+                reinterpret_cast<uintptr_t>(&aligned_conn->worker_producer_cursor[0]);
         } else {
             // VC2 (TENSIX or ETH): addresses are passed directly as runtime args — no L1 conn table.
             // TODO: will be deprecated. currently for ethernet dispatch case
@@ -175,6 +157,10 @@ struct WorkerToFabricEdmSenderBase {
             writer_send_sem_addr =
                 reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
             worker_free_slots_stream_id = STREAM_ID;
+            // No connection table on this path, so these two remain program-semaphore ids
+            // passed in rt args and resolved here.
+            worker_teardown_raw = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
+            worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
         }
 
         // DEAD CODE
@@ -182,28 +168,6 @@ struct WorkerToFabricEdmSenderBase {
         // codepaths are split
         const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
 
-        // Three ways these two values can be obtained, selected at compile time:
-        //   default            rt arg is a program-semaphore id, resolved via get_semaphore()
-        //   EXPERIMENT B       rt arg is already an L1 address (host allocated a global sem)
-        //   EXPERIMENT A       ignore the rt arg entirely; the semaphore lives in the conn table
-        // Host and kernel must agree: nothing in the type system distinguishes an id from an
-        // address, so a one-sided change silently dereferences a small integer. blaze injects
-        // the matching define in setup_fabric().
-        // The args are consumed in every mode so the rt-arg layout stays identical; under
-        // EXPERIMENT A blaze passes zeros. A non-experimental version would drop them.
-        const uint32_t worker_teardown_arg = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t worker_buffer_index_arg = get_arg_val<uint32_t>(arg_idx++);
-#if FABRIC_SEMS_IN_TABLE
-        const auto worker_teardown_raw = table_teardown_addr;
-        const auto worker_buffer_index_semaphore_addr = table_cursor_addr;
-#else
-        const auto worker_teardown_raw = FABRIC_SEM_ARGS_ARE_ADDRESSES
-                                             ? static_cast<uintptr_t>(worker_teardown_arg)
-                                             : get_semaphore<my_core_type>(worker_teardown_arg);
-        const auto worker_buffer_index_semaphore_addr =
-            FABRIC_SEM_ARGS_ARE_ADDRESSES ? static_cast<uintptr_t>(worker_buffer_index_arg)
-                                          : get_semaphore<my_core_type>(worker_buffer_index_arg);
-#endif
         // is_l1_address() is an UPPER bound only, so a stale id (0..15) passes it and would be
         // dereferenced inside the mailbox region. Bound below as well: every real address here
         // is >= MEM_MAP_END, and the two ranges are disjoint by orders of magnitude.
