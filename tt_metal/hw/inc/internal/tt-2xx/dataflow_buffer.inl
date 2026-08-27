@@ -588,6 +588,10 @@ Noc::async_read(
     DataflowBuffer& dst,
     const typename noc_traits_t<Src>::src_args_type& src_args,
     const DataflowBufferArgs& dst_args) const {
+    // Implicit sync always issues one full-entry read at get_noc_write_addr() and advances wr_ptr by
+    // stride_size in commit_implicit_read(); offset_bytes is ignored, so a non-zero offset would
+    // land data in the wrong place while still posting a full entry's credit.
+    ASSERT(dst_args.offset_bytes == 0);
     uint32_t txn_id = dst.prepare_implicit_read();
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
@@ -609,6 +613,9 @@ Noc::async_write(
     const Dst& dst,
     const DataflowBufferArgs& src_args,
     const typename noc_traits_t<Dst>::dst_args_type& dst_args) const {
+    // Same contract as async_read above: implicit sync always transfers get_entry_size() bytes from
+    // get_noc_read_addr() and ignores offset_bytes.
+    ASSERT(src_args.offset_bytes == 0);
     uint32_t txn_id = src.prepare_implicit_write();
     // Use cached addresses for NOC APIs
     auto src_addr = src.get_noc_read_addr();
