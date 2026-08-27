@@ -98,13 +98,13 @@ def gather_batched_prefill_samples(
 DECODE_PAGE_TABLE_INPUT_IDX = 3
 
 
-def _acknowledge_trace_buffers_corruptible(owner, value):
+def _maybe_acknowledge_trace_buffers_corruptible(owner, value):
     """Acknowledge opt-in trace I/O that another live trace may overwrite."""
     if not getattr(owner, "_tt_allow_decode_trace_buffer_reuse", False) or value is None:
         return
     if isinstance(value, (list, tuple)):
         for item in value:
-            _acknowledge_trace_buffers_corruptible(owner, item)
+            _maybe_acknowledge_trace_buffers_corruptible(owner, item)
         return
     trace_allocation_tracker.acknowledge_corruptible(value)
 
@@ -1824,7 +1824,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 tokens[i], current_pos[i], page_table=user_page_table
             )
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
-            _acknowledge_trace_buffers_corruptible(self, device_inputs_i)
+            _maybe_acknowledge_trace_buffers_corruptible(self, device_inputs_i)
             device_inputs.append(device_inputs_i)
 
         # SamplingGenerator normally pre-compiles just before capturing, which would allocate with the
@@ -1885,7 +1885,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
-            _acknowledge_trace_buffers_corruptible(self, tt_out_trace[-1])
+            _maybe_acknowledge_trace_buffers_corruptible(self, tt_out_trace[-1])
 
             if sampling_trace_enabled:
                 # NOTE: sampling trace can be keyed depending on sampling params,

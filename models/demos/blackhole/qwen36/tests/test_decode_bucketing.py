@@ -84,12 +84,12 @@ def test_unsupported_device_sampling_fails_at_startup(expect_error):
 
 
 def test_trace_buffer_reuse_is_opt_in(monkeypatch):
-    from models.tt_transformers.tt.generator import _acknowledge_trace_buffers_corruptible
+    from models.tt_transformers.tt.generator import _maybe_acknowledge_trace_buffers_corruptible
 
     marked = []
     monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", marked.append)
-    _acknowledge_trace_buffers_corruptible(SimpleNamespace(), ["default"])
-    _acknowledge_trace_buffers_corruptible(
+    _maybe_acknowledge_trace_buffers_corruptible(SimpleNamespace(), ["default"])
+    _maybe_acknowledge_trace_buffers_corruptible(
         SimpleNamespace(_tt_allow_decode_trace_buffer_reuse=True),
         ["input", None, ("output",)],
     )
