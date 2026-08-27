@@ -1,0 +1,690 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""BGE-M3 exact-shape encoder SDPA parity scaffold.
+
+The experimental path mirrors the production ``SDPAProgramFactory`` for the
+retained N300 DP=2 shape, while dispatching through ``ttnn.generic_op`` and
+model-local JIT entrypoints.  It is intentionally not wired into attention.py;
+the next owner must validate it on silicon before enabling it in the model.
+
+No code in this directory requires rebuilding ``_ttnn.so``.  The C++ kernel
+entrypoints are compiled by the normal device-kernel JIT on first use.
+"""
+
+from __future__ import annotations
+
+import struct
+from dataclasses import dataclass
+
+import ttnn
+
+from .config import INACTIVE_CB, EncoderSDPAConfig, EncoderSDPAPlan, validate_encoder_sdpa_inputs
+
+KERNEL_ROOT = "models/demos/wormhole/bge_m3/tt/custom_ops/encoder_sdpa/kernels"
+READER_KERNEL = f"{KERNEL_ROOT}/reader.cpp"
+WRITER_KERNEL = f"{KERNEL_ROOT}/writer.cpp"
+COMPUTE_KERNEL = f"{KERNEL_ROOT}/compute.cpp"
+
+# The locally-copied kernel bodies keep the production relative includes
+# (dataflow_common.hpp, windowed_mask_gen.hpp, compute_common.hpp,
+# compute_streaming.hpp). Point the JIT compiler at the production kernel dirs
+# so those headers resolve from the model-local copies.
+_SDPA_KERNEL_DIR = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels"
+DATAFLOW_INCLUDE_PATHS = [f"{_SDPA_KERNEL_DIR}/dataflow"]
+# KERNEL_ROOT is prepended so the LOCAL compute_common.hpp / compute_streaming.hpp
+# copies (which carry the F4 aliased-K/V handshake hooks) win over the production
+# headers of the same name. Falls back to production for all other includes.
+COMPUTE_INCLUDE_PATHS = [
+    "models/demos/wormhole/bge_m3/tt/custom_ops/encoder_sdpa/kernels",
+    f"{_SDPA_KERNEL_DIR}/compute",
+]
+
+# Exact contiguous CB assignment for the unmasked, non-causal, FP32-dest path.
+CB_Q = 0
+CB_K = 1
+CB_V = 2
+CB_IDENTITY = 3
+CB_COL_IDENTITY = 4
+CB_QK = 5
+CB_OUT_A = 6
+CB_OUT_B = 7
+CB_MAX_A = 8
+CB_MAX_B = 9
+CB_SUM_A = 10
+CB_SUM_B = 11
+CB_EXP_MAX_DIFF = 12
+CB_OUT = 13
+CB_RECIP_SCRATCH = 14  # streaming-only: 1-tile recip scratch for normalize_row_streaming
+
+# F4 (kv_alias) compute->reader handshake token CB. TRISC cannot use NOC
+# semaphores, but it CAN push tokens on a small sync CB that the reader waits on
+# (precedent: tests/.../11_remote_cb_sync_matmul_single_core — compute does
+# cb_reserve_back/cb_push_back(sync_cb); dataflow does wait_front/pop_front).
+# Compute pushes one token after popping K and one after popping V; the reader
+# pops one before writing V (into the shared bytes) and one before writing the
+# next K. 32-byte allocation (one token page).
+CB_KV_SYNC = 15
+CB_VALID_LENGTHS = 16
+CB_RUNTIME_MASK = 17
+KV_SYNC_BYTES = 32
+
+
+@dataclass(frozen=True)
+class EncoderSDPABuild:
+    descriptor: ttnn.ProgramDescriptor
+    output: ttnn.Tensor
+    io_tensors: list[ttnn.Tensor]
+    plan: EncoderSDPAPlan
+
+
+def _u32_from_float(value: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _tile_size_bytes(dtype: ttnn.DataType) -> int:
+    return {
+        ttnn.bfloat16: 2048,
+        ttnn.bfloat8_b: 1088,
+        ttnn.bfloat4_b: 576,
+        ttnn.float32: 4096,
+    }[dtype]
+
+
+def _accessor_args(tensor: ttnn.Tensor) -> list[int]:
+    return list(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+
+
+def _cb_descriptor(
+    cb_id: int,
+    num_tiles: int,
+    dtype: ttnn.DataType,
+    core_grid: ttnn.CoreRangeSet,
+) -> ttnn.CBDescriptor:
+    page_size = _tile_size_bytes(dtype)
+    return ttnn.CBDescriptor(
+        total_size=num_tiles * page_size,
+        core_ranges=core_grid,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=cb_id,
+                data_format=dtype,
+                page_size=page_size,
+            )
+        ],
+    )
+
+
+def _aliased_kv_cb_descriptor(
+    total_size: int,
+    core_grid: ttnn.CoreRangeSet,
+) -> ttnn.CBDescriptor:
+    """F4: ONE L1 allocation backing BOTH CB_K (bf4) and CB_V (bf8).
+
+    Two format_descriptors on a single CBDescriptor => two buffer indices sharing
+    the SAME base address (the standard multi-index shared-CB pattern; see
+    CircularBufferConfig(const CBDescriptor&) in circular_buffer_config.cpp). The
+    ctor requires total_size divisible by EACH page_size, hence total_size must be
+    a multiple of LCM(576,1088). Safety against K/V mutual clobber is NOT provided
+    by the CB machinery here — it is enforced entirely by the kernel-side
+    K_CONSUMED/V_CONSUMED handshakes.
+    """
+    return ttnn.CBDescriptor(
+        total_size=total_size,
+        core_ranges=core_grid,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=CB_K,
+                data_format=ttnn.bfloat4_b,
+                page_size=_tile_size_bytes(ttnn.bfloat4_b),
+            ),
+            ttnn.CBFormatDescriptor(
+                buffer_index=CB_V,
+                data_format=ttnn.bfloat8_b,
+                page_size=_tile_size_bytes(ttnn.bfloat8_b),
+            ),
+        ],
+    )
+
+
+def _compile_defines(plan: EncoderSDPAPlan) -> list[tuple[str, str]]:
+    # Fully plan-derived from SDPAProgramFactory formulas (granularities scale
+    # with q_chunk/k_chunk). At q128/k2048 this yields the parity-verified set
+    # STATS=4 SUB_EXP=4 MUL_BCAST=4 DHT=2 REDUCE=2. exp_approx_mode=true.
+    # KernelDescriptor(defines=...) expects a Sequence[tuple[str, str]], not a dict.
+    defs = [
+        ("STATS_GRANULARITY", str(plan.stats_granularity)),
+        ("SUB_EXP_GRANULARITY", str(plan.sub_exp_granularity)),
+        ("MUL_BCAST_GRANULARITY", str(plan.mul_bcast_granularity)),
+        ("DHT_GRANULARITY", str(plan.dht_granularity)),
+        ("REDUCE_GRANULARITY", str(plan.reduce_granularity)),
+        ("EXP_APPROX_MODE", "1"),
+        ("DIRECT_CONCAT_HEADS", "1" if plan.config.direct_concat_heads else "0"),
+        ("REUSE_PREV_MAX_FOR_EXP", "1" if plan.config.reuse_prev_max_for_exp else "0"),
+    ]
+    return defs
+
+
+def _reader_compile_args(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    valid_lengths: ttnn.Tensor | None,
+    plan: EncoderSDPAPlan,
+) -> list[int]:
+    c = plan.config
+    args = [
+        c.batch,
+        c.num_q_heads,
+        c.num_kv_heads,
+        c.num_kv_heads,  # NVH
+        plan.sq_tiles,
+        plan.sk_tiles,
+        plan.sq_tiles,  # valid_Sqt
+        plan.sk_tiles,  # valid_Skt
+        plan.head_dim_tiles,
+        plan.head_dim_tiles,  # vDHt
+        plan.q_chunk_tiles,
+        plan.q_num_chunks,
+        plan.k_chunk_tiles,
+        plan.k_num_chunks,
+        plan.num_cores,
+        0,  # is_causal
+        0,  # use_provided_mask
+        0,  # broadcast_provided_mask_batch
+        0,  # broadcast_provided_mask_heads
+        0,  # use_padded_mask
+        0,  # is_chunked
+        0,  # block_size_t
+        0,  # page_table_stick_size
+        0,  # use_attention_sink
+        0,  # use_mla
+        0,  # mla_kv_overlap
+        plan.qk_out_subblock[0],  # qk_subblock_h (plan-derived)
+        0,  # sliding_window_size
+        int(plan.config.use_streaming),  # use_streaming_compute
+        0,  # sender semaphore id; forwarding is inactive for this work split
+        1,  # receiver semaphore id
+        2,  # valid semaphore id
+        0,  # mcast_enabled
+        0,  # use_zigzag_balancing
+    ]
+    args.extend(_accessor_args(q))
+    args.extend(_accessor_args(k))
+    args.extend(_accessor_args(v))
+    # Reuse the optional mask accessor for compact runtime lengths. Other
+    # optional accessors remain inactive placeholders.
+    args.extend(_accessor_args(valid_lengths if valid_lengths is not None else q))
+    for _ in range(3):  # page table, attention sink, chunk-start tensor
+        args.extend(_accessor_args(q))
+    args.extend([CB_Q, CB_K, CB_V, INACTIVE_CB, INACTIVE_CB, INACTIVE_CB, INACTIVE_CB, INACTIVE_CB])
+    # F4 handshake followed by compact-length metadata.
+    args.extend(
+        [
+            int(plan.config.kv_alias),
+            CB_KV_SYNC if plan.config.kv_alias else INACTIVE_CB,
+            int(plan.config.use_runtime_lengths),
+            CB_VALID_LENGTHS if plan.config.use_runtime_lengths else INACTIVE_CB,
+        ]
+    )
+    return args
+
+
+def _writer_compile_args(output: ttnn.Tensor, plan: EncoderSDPAPlan) -> list[int]:
+    c = plan.config
+    packed_bf16_one = 0x3F803F80
+    args = [
+        c.batch,
+        c.num_q_heads,
+        c.num_kv_heads,
+        plan.sq_tiles,
+        plan.sq_tiles,  # valid_Sqt
+        c.kv_seq_len,  # unpadded Sk in elements
+        plan.head_dim_tiles,
+        plan.head_dim_tiles,
+        plan.q_chunk_tiles,
+        plan.q_num_chunks,
+        plan.k_chunk_tiles,
+        plan.k_num_chunks,
+        packed_bf16_one,
+        _u32_from_float(c.scale),
+        plan.num_cores,
+        0,  # is_causal
+        0,  # use_provided_mask
+        0,  # use_padded_mask
+        0,  # is_chunked
+        0,  # sliding_window_size
+        0,  # use_lightweight_mask
+        int(plan.config.use_streaming),  # use_streaming_compute
+        plan.out_out_subblock[0],  # out_subblock_h (plan-derived)
+        0,  # k_partial_col
+        0,  # use_zigzag_balancing
+        0,  # use_windowed_mask
+        int(plan.config.use_runtime_lengths),
+    ]
+    args.extend(_accessor_args(output))
+    args.extend(_accessor_args(output))  # inactive cu_window accessor placeholder
+    args.extend(
+        [
+            CB_RUNTIME_MASK if plan.config.use_runtime_lengths else INACTIVE_CB,
+            CB_IDENTITY,
+            CB_COL_IDENTITY,
+            INACTIVE_CB,
+            CB_OUT,
+            CB_Q,
+            CB_VALID_LENGTHS if plan.config.use_runtime_lengths else INACTIVE_CB,
+        ]
+    )
+    return args
+
+
+def _compute_compile_args(output: ttnn.Tensor, plan: EncoderSDPAPlan) -> list[int]:
+    c = plan.config
+    args = [
+        c.batch,
+        c.num_q_heads,
+        c.num_kv_heads,
+        plan.sk_tiles,
+        plan.head_dim_tiles,
+        plan.head_dim_tiles,
+        plan.q_chunk_tiles,
+        plan.q_num_chunks,
+        plan.k_chunk_tiles,
+        plan.k_num_chunks,
+        plan.head_dim_tiles,  # qk_in0_block_w
+        plan.qk_out_subblock[1],  # qk_out_subblock_w (plan returns (h, w))
+        plan.qk_out_subblock[0],  # qk_out_subblock_h
+        plan.qk_in0_num_subblocks,  # = q_chunk_tiles / qk_out_subblock_h
+        plan.qk_in1_num_subblocks,  # = k_chunk_tiles / qk_out_subblock_w
+        1,  # qk_num_blocks (DHt / qk_in0_block_w = 2/2)
+        plan.k_chunk_tiles,  # out_in0_block_w
+        plan.out_out_subblock[1],  # out_out_subblock_w
+        plan.out_out_subblock[0],  # out_out_subblock_h
+        plan.out_in0_num_subblocks,  # = q_chunk_tiles / out_out_subblock_h
+        plan.out_in1_num_subblocks,  # = vDHt / out_out_subblock_w
+        1,  # out_num_blocks (Sk_chunk_t / out_in0_block_w)
+        plan.num_cores,
+        0,  # is_causal
+        0,  # use_provided_mask
+        0,  # use_padded_mask
+        0,  # is_chunked
+        _u32_from_float(c.scale),
+        0,  # sliding_window_size
+        0,  # use_attention_sink
+        int(plan.config.use_streaming),  # use_streaming_compute
+        plan.sk_tiles,  # valid_Skt
+        0,  # k_partial_col
+        0,  # use_zigzag_balancing
+        CB_Q,
+        CB_K,
+        CB_V,
+        INACTIVE_CB,
+        INACTIVE_CB,
+        CB_IDENTITY,
+        CB_COL_IDENTITY,
+        INACTIVE_CB,
+        CB_RECIP_SCRATCH if plan.config.use_streaming else INACTIVE_CB,  # cb_recip_scratch (offset+8)
+        CB_OUT,
+        CB_QK,
+        CB_OUT_A,
+        CB_OUT_B,
+        CB_MAX_A,
+        CB_MAX_B,
+        CB_SUM_A,
+        CB_SUM_B,
+        CB_EXP_MAX_DIFF,
+        # F4 handshake (constexpr-off unless kv_alias): flag + sync-token CB id.
+        int(plan.config.kv_alias),
+        CB_KV_SYNC if plan.config.kv_alias else INACTIVE_CB,
+        int(plan.config.use_runtime_lengths),
+        CB_VALID_LENGTHS if plan.config.use_runtime_lengths else INACTIVE_CB,
+        CB_RUNTIME_MASK if plan.config.use_runtime_lengths else INACTIVE_CB,
+    ]
+    args.extend(_accessor_args(output))
+    return args
+
+
+def _runtime_args(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    valid_lengths: ttnn.Tensor | None,
+    output: ttnn.Tensor,
+    plan: EncoderSDPAPlan,
+) -> tuple[list, list, list]:
+    reader_args = []
+    writer_args = []
+    compute_args = []
+
+    for core_id in range(plan.num_cores):
+        x = core_id % plan.config.grid_x
+        y = core_id // plan.config.grid_x
+        global_q_start, global_q_count = plan.global_q_range(core_id)
+        coord = (x, y)
+
+        # Flat per-core Q range (decompose_global_q_index decodes each work item
+        # independently), so KV forwarding chains are never used: every KV chain
+        # field stays zero regardless of batch (B1/B3 have partial heads/core).
+        chain_metadata = [0] * 14
+        reader_args.append(
+            (
+                coord,
+                [
+                    q.buffer_address(),
+                    k.buffer_address(),
+                    v.buffer_address(),
+                    valid_lengths.buffer_address() if valid_lengths is not None else 0,
+                    0,  # page table
+                    0,  # attention sink
+                    0,  # chunk-start tensor
+                    core_id,
+                    1,  # num_phases
+                    0,  # chunked_q_chunk_offset
+                    0,  # read_offset
+                    *chain_metadata,
+                    global_q_start,
+                    global_q_count,
+                ],
+            )
+        )
+        writer_args.append(
+            (
+                coord,
+                [
+                    output.buffer_address(),
+                    core_id,
+                    1,  # num_phases
+                    0,  # use_chunk_start_idx_tensor
+                    0,  # phase-1 chunk offset
+                    0,  # phase-1 write offset
+                    0,  # phase-2 chunk offset (reserved slot)
+                    0,  # phase-2 write offset (reserved slot)
+                    global_q_start,
+                    global_q_count,
+                    0,  # cu_window_seqlens address
+                    0,  # cu_window_seqlens elements
+                ],
+            )
+        )
+        compute_args.append(
+            (
+                coord,
+                [
+                    core_id,
+                    1,  # num_phases
+                    0,  # use_chunk_start_idx_tensor
+                    0,  # phase-1 chunk offset
+                    0,  # phase-2 chunk offset (reserved slot)
+                    global_q_start,
+                    global_q_count,
+                ],
+            )
+        )
+    return reader_args, writer_args, compute_args
+
+
+def build_encoder_sdpa_descriptor(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    *,
+    valid_lengths: ttnn.Tensor | None = None,
+    config: EncoderSDPAConfig = EncoderSDPAConfig(),
+    output_mem_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> EncoderSDPABuild:
+    """Build the unverified parity descriptor without launching it.
+
+    The descriptor intentionally omits production's three KV-forwarding
+    semaphores: exact BGE work partitioning gives each core three complete heads,
+    so every runtime ``is_chain_participant`` flag is zero and no semaphore path
+    executes.  The first silicon test must verify this assumption before model
+    integration.
+    """
+    plan = validate_encoder_sdpa_inputs(q, k, v, config)
+    if config.use_runtime_lengths:
+        if valid_lengths is None:
+            raise ValueError("use_runtime_lengths requires a valid_lengths tensor")
+        if valid_lengths.dtype != ttnn.uint32 or valid_lengths.layout != ttnn.ROW_MAJOR_LAYOUT:
+            raise ValueError("valid_lengths must be uint32 row-major")
+        # The reader loads all B lengths as ONE interleaved page (page 0) and the
+        # compute kernel indexes element nb within it. A [B, 1] tensor is B
+        # separate 1-element pages (only page 0 readable); flatten to a single
+        # [1, B] stick so every batch row's length is in page 0.
+        valid_lengths = ttnn.reshape(valid_lengths, [1, config.batch])
+    elif valid_lengths is not None:
+        raise ValueError("valid_lengths requires use_runtime_lengths=True")
+    device = q.device()
+    # Keep the established BF8 output contract even when Q arrives packed as
+    # BF4; only the redundant input typecast is being removed.
+    output = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(config.output_shape),
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        device,
+        output_mem_config,
+    )
+
+    core_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(config.grid_x - 1, config.grid_y - 1),
+            )
+        ]
+    )
+
+    cbs = [
+        # CB depths derive from the plan so q_chunk/k_chunk can be swept.
+        # Defaults (q128/k2048): Q=16, K=V=256, QK=256 — identical to the
+        # parity-verified sizes. K/V are double-buffered (x2), Q holds 2 chunks.
+        _cb_descriptor(CB_Q, plan.config.q_buffer_depth * plan.q_chunk_tiles * plan.head_dim_tiles, q.dtype, core_grid),
+        # K/V: either two separate CBs (default) or ONE shared aliased allocation
+        # (F4). The aliased path is appended after this list to keep the common
+        # ordering intact; see below.
+        *(
+            [
+                _cb_descriptor(
+                    CB_K,
+                    plan.config.k_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles,
+                    k.dtype,
+                    core_grid,
+                ),
+                _cb_descriptor(
+                    CB_V,
+                    plan.config.v_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles,
+                    v.dtype,
+                    core_grid,
+                ),
+            ]
+            if not plan.config.kv_alias
+            else [_aliased_kv_cb_descriptor(plan.kv_alias_total_bytes, core_grid)]
+        ),
+        _cb_descriptor(CB_IDENTITY, 1, ttnn.bfloat16, core_grid),
+        _cb_descriptor(CB_COL_IDENTITY, 1, ttnn.bfloat16, core_grid),
+        _cb_descriptor(
+            CB_QK,
+            plan.q_chunk_tiles * plan.k_chunk_tiles,
+            ttnn.bfloat8_b if plan.config.score_cb_bf8 else ttnn.bfloat16,
+            core_grid,
+        ),
+        # out_im/out = Sq_chunk_t*vDHt; max/sum/exp_max_diff = statistics_tiles
+        # (=Sq_chunk_t). All plan-derived; q128 defaults = 8/8/4/4/4/4/4/8.
+        _cb_descriptor(CB_OUT_A, plan.out_im_tiles, ttnn.bfloat16, core_grid),
+        _cb_descriptor(CB_OUT_B, plan.out_im_tiles, ttnn.bfloat16, core_grid),
+        _cb_descriptor(CB_MAX_A, plan.statistics_tiles, ttnn.bfloat16, core_grid),
+        _cb_descriptor(CB_MAX_B, plan.statistics_tiles, ttnn.bfloat16, core_grid),
+        _cb_descriptor(CB_SUM_A, plan.statistics_tiles, ttnn.bfloat16, core_grid),
+        _cb_descriptor(CB_SUM_B, plan.statistics_tiles, ttnn.bfloat16, core_grid),
+        *(
+            []
+            if plan.config.reuse_prev_max_for_exp
+            else [_cb_descriptor(CB_EXP_MAX_DIFF, plan.statistics_tiles, ttnn.bfloat16, core_grid)]
+        ),
+        _cb_descriptor(
+            CB_OUT,
+            plan.streaming_cb_out_tiles if plan.config.use_streaming else plan.out_im_tiles,
+            ttnn.bfloat8_b,
+            core_grid,
+        ),
+    ]
+    if plan.config.use_streaming:
+        # Streaming-only 1-tile recip scratch (im_df = Float16_b in the factory).
+        cbs.append(_cb_descriptor(CB_RECIP_SCRATCH, 1, ttnn.bfloat16, core_grid))
+    if plan.config.use_runtime_lengths:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=KV_SYNC_BYTES,
+                core_ranges=core_grid,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_VALID_LENGTHS,
+                        data_format=ttnn.uint32,
+                        page_size=KV_SYNC_BYTES,
+                    )
+                ],
+            )
+        )
+        # A contiguous per-core work range touches at most two batch rows:
+        # one -inf template plus two partial-column templates.
+        cbs.append(_cb_descriptor(CB_RUNTIME_MASK, 3, ttnn.bfloat16, core_grid))
+    if plan.config.kv_alias:
+        # F4 compute->reader token CB (32B). Depth 2 so compute can push both the
+        # post-K and post-V tokens without blocking on the reader draining the
+        # first; the reader pops each exactly once per phase.
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=2 * KV_SYNC_BYTES,
+                core_ranges=core_grid,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_KV_SYNC,
+                        data_format=ttnn.uint32,
+                        page_size=KV_SYNC_BYTES,
+                    )
+                ],
+            )
+        )
+
+    reader_rt, writer_rt, compute_rt = _runtime_args(q, k, v, valid_lengths, output, plan)
+    defines = _compile_defines(plan)
+
+    reader = ttnn.KernelDescriptor(
+        kernel_source=READER_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=_reader_compile_args(q, k, v, valid_lengths, plan),
+        runtime_args=reader_rt,
+        defines=defines,
+        config=ttnn.ReaderConfigDescriptor(),
+        compiler_include_paths=DATAFLOW_INCLUDE_PATHS,
+    )
+    writer = ttnn.KernelDescriptor(
+        kernel_source=WRITER_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=_writer_compile_args(output, plan),
+        runtime_args=writer_rt,
+        defines=defines,
+        config=ttnn.WriterConfigDescriptor(),
+        compiler_include_paths=DATAFLOW_INCLUDE_PATHS,
+    )
+    compute = ttnn.KernelDescriptor(
+        kernel_source=COMPUTE_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=_compute_compile_args(output, plan),
+        runtime_args=compute_rt,
+        defines=defines,
+        config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=plan.config.fp32_dest_acc_en,
+            dst_full_sync_en=plan.config.dst_full_sync_en,
+        ),
+        compiler_include_paths=COMPUTE_INCLUDE_PATHS,
+    )
+
+    descriptor = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=cbs)
+    return EncoderSDPABuild(
+        descriptor=descriptor,
+        output=output,
+        io_tensors=[q, k, v, output] + ([valid_lengths] if valid_lengths is not None else []),
+        plan=plan,
+    )
+
+
+def bge_encoder_sdpa_experimental(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    *,
+    valid_lengths: ttnn.Tensor | None = None,
+    config: EncoderSDPAConfig = EncoderSDPAConfig(),
+    output_mem_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """Launch the unverified model-local descriptor.
+
+    This function is intentionally not imported or called by ``attention.py``.
+    Use only from a dedicated parity probe until PCC, device time, repeat-cache,
+    and trace replay all match production SDPA.
+    """
+    if config.kv_alias:
+        # Safety gate (reviewer point #5/#6): the kv_alias CB-token ring IS
+        # implemented (compute pushes sync tokens on CB_KV_SYNC; reader waits/
+        # pops before overwriting shared bytes), but it is UNVALIDATED on silicon
+        # and margin-fragile (~11.8KB). A handshake/cadence bug clobbers the
+        # shared L1 and wedges cores. Launching stays hard-BLOCKED: validate the
+        # descriptor's per-core L1 allocation and secure coordinated board access
+        # before removing this guard in a dedicated, reviewed change.
+        raise NotImplementedError(
+            "kv_alias (F4) launch is gated: the CB-token handshake kernels are "
+            "implemented but UNVALIDATED on silicon and board-hazardous."
+        )
+    build = build_encoder_sdpa_descriptor(
+        q,
+        k,
+        v,
+        valid_lengths=valid_lengths,
+        config=config,
+        output_mem_config=output_mem_config,
+    )
+    ttnn.generic_op(build.io_tensors, build.descriptor)
+    return build.output
+
+
+def bge_encoder_sdpa_stock(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    *,
+    compute_kernel_config,
+    output_mem_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    config: EncoderSDPAConfig = EncoderSDPAConfig(),
+) -> ttnn.Tensor:
+    """Stock baseline with the same exact encoder contract."""
+    validate_encoder_sdpa_inputs(q, k, v, config)
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(config.grid_x, config.grid_y),
+        q_chunk_size=config.q_chunk_size,
+        k_chunk_size=config.k_chunk_size,
+    )
+    return ttnn.transformer.scaled_dot_product_attention(
+        q,
+        k,
+        v,
+        is_causal=False,
+        attn_mask=None,
+        scale=config.scale,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=output_mem_config,
+    )
+
+
+__all__ = [
+    "EncoderSDPABuild",
+    "EncoderSDPAConfig",
+    "bge_encoder_sdpa_experimental",
+    "bge_encoder_sdpa_stock",
+    "build_encoder_sdpa_descriptor",
+]
