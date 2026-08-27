@@ -94,7 +94,9 @@ def test_each_part_is_run_through_the_standard_pipeline(tmp_path, monkeypatch) -
     monkeypatch.setattr(cli, "cmd_up", fake_cmd_up)
     rc = cli._fan_out_composite(_args(root))
     assert rc == 0
-    assert sorted(seen) == ["partA", "partB"]
+    # basenames are parent-qualified aliases, so assert each part ran exactly once
+    assert len(seen) == 2
+    assert sorted(b.lower().endswith(("parta", "partb")) for b in seen) == [True, True]
 
 
 def test_one_failing_part_does_not_hide_the_others(tmp_path, monkeypatch) -> None:
@@ -103,13 +105,13 @@ def test_one_failing_part_does_not_hide_the_others(tmp_path, monkeypatch) -> Non
 
     def fake_cmd_up(a):
         seen.append(os.path.basename(a.model_id))
-        if a.model_id.endswith("partA"):
+        if a.model_id.lower().endswith("parta"):
             raise RuntimeError("boom")
         return 0
 
     monkeypatch.setattr(cli, "cmd_up", fake_cmd_up)
     rc = cli._fan_out_composite(_args(root))
-    assert sorted(seen) == ["partA", "partB"], "a failure must not abort the remaining parts"
+    assert len(seen) == 2, "a failure must not abort the remaining parts"
     assert rc != 0, "the run must report failure"
 
 
@@ -134,3 +136,41 @@ def test_parts_inherit_the_parent_run_settings(tmp_path, monkeypatch) -> None:
     cli._fan_out_composite(_args(root))
     assert captured["box"] == "T3K", "component runs must keep the parent's target box"
     assert captured["depth"] == 1
+
+
+# ─── component naming must carry the parent's identity ───────────
+
+
+def test_component_alias_keeps_the_parent_identity(tmp_path, monkeypatch) -> None:
+    """Downstream naming (demo folder, overlays) derives from the target's
+    basename. A part is named after its ROLE, so two models each contributing a
+    part with the same role would otherwise share one demo folder."""
+    monkeypatch.setenv("TT_HW_PLANNER_COMPONENT_BASE", str(tmp_path / "aliases"))
+    root = _make_composite(tmp_path, {"partA": {"_class_name": "A"}})
+    ((name, path),) = component_targets(root, ["partA"])
+    base = os.path.basename(path)
+    assert "partA".lower() in base.lower()
+    assert os.path.basename(root).lower() in base.lower()
+    assert os.path.isfile(os.path.join(path, "config.json")), "alias must still be a usable model dir"
+
+
+def test_same_part_name_in_two_models_does_not_collide(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("TT_HW_PLANNER_COMPONENT_BASE", str(tmp_path / "aliases"))
+    one = tmp_path / "one"
+    two = tmp_path / "two"
+    one.mkdir()
+    two.mkdir()
+    paths = []
+    for parent in (one, two):
+        repo = parent / "repo"
+        repo.mkdir()
+        (repo / "model_index.json").write_text(json.dumps({"_class_name": "P"}))
+        part = repo / "shared_name"
+        part.mkdir()
+        (part / "config.json").write_text(json.dumps({"_class_name": "C"}))
+        # distinct parent directory names -> distinct aliases
+        renamed = parent / f"model_{parent.name}"
+        os.rename(repo, renamed)
+        ((_, p),) = component_targets(str(renamed), ["shared_name"])
+        paths.append(os.path.basename(p))
+    assert paths[0] != paths[1], f"aliases collided: {paths}"

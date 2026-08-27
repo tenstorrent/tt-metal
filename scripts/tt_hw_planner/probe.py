@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import re
 import sys
 from dataclasses import dataclass, field
@@ -934,6 +935,36 @@ def _surrogate_pipeline_class(cfg: Optional[dict]) -> Optional[str]:
     return cls if isinstance(cls, str) and cls else None
 
 
+def _component_alias(parent_id: str, name: str, target: str) -> str:
+    """A stable, uniquely-named path pointing at a component directory.
+
+    Downstream naming (demo folder, overlays, worktrees) derives from the target's
+    basename. A component directory is named after its role inside the repo, so
+    two different models both contribute a part with the same role and would land
+    in the same demo folder. Aliasing under ``<parent>__<part>`` keeps the parent's
+    identity attached without copying any weights.
+
+    Falls back to the real directory if the alias cannot be created, so a
+    read-only or unusual filesystem degrades to today's behaviour."""
+    from .scaffold_demo_folder import _slug
+
+    base = os.environ.get("TT_HW_PLANNER_COMPONENT_BASE") or os.path.join(
+        tempfile.gettempdir(), "tt_hw_planner_components"
+    )
+    alias_name = f"{_slug(os.path.basename(parent_id.rstrip('/')))}__{_slug(name)}"
+    alias = os.path.join(base, alias_name)
+    try:
+        os.makedirs(base, exist_ok=True)
+        if os.path.islink(alias) or os.path.exists(alias):
+            if os.path.realpath(alias) == os.path.realpath(target):
+                return alias
+            os.unlink(alias)
+        os.symlink(os.path.abspath(target), alias)
+        return alias
+    except OSError:
+        return target
+
+
 def component_targets(model_id: str, submodels: Sequence[str], *, with_weights: bool = False) -> List[Tuple[str, str]]:
     """``[(component_name, local_path)]`` for a composite's parts.
 
@@ -969,7 +1000,7 @@ def component_targets(model_id: str, submodels: Sequence[str], *, with_weights: 
     for name in names:
         path = os.path.join(root, name)
         if _is_local_model_dir(path):
-            out.append((name, path))
+            out.append((name, _component_alias(model_id, name, path)))
     return out
 
 
