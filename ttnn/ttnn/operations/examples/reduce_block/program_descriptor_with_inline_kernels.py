@@ -294,7 +294,7 @@ ALWI void do_reduce_block(
     [[maybe_unused]] uint32_t iter,
     compute_kernel_lib::ReduceInputBlockShape shape,
     compute_kernel_lib::ReduceInputMemoryLayout ml,
-    compute_kernel_lib::ReducePartialScaler ps,
+    compute_kernel_lib::ReduceScaler ps,
     [[maybe_unused]] uint32_t n_reduced,
     [[maybe_unused]] uint32_t recfg) {
     using namespace compute_kernel_lib;
@@ -362,8 +362,8 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     // AccumulateViaAdd partial: one 0/1 mask tile at scaler-CB index 0.
-    const ReducePartialScaler PS =
-        (partial_elems > 0u) ? ReducePartialScaler::only_partial() : ReducePartialScaler::none();
+    const ReduceScaler PS =
+        (partial_elems > 0u) ? ReduceScaler::only_partial() : ReduceScaler::none();
     const auto SHAPE = ReduceInputBlockShape::of(Ht, Wt, NC);
     const auto ML = (row_stride > 0u) ? ReduceInputMemoryLayout::with_row_stride(row_stride)
                                       : ReduceInputMemoryLayout::contiguous();
@@ -429,7 +429,7 @@ ALWI void do_accum_chunk(
     uint32_t c, bool is_last,
     compute_kernel_lib::ReduceInputBlockShape shape,
     compute_kernel_lib::ReduceInputMemoryLayout ml,
-    compute_kernel_lib::ReducePartialScaler ps,
+    compute_kernel_lib::ReduceScaler ps,
     compute_kernel_lib::AccumulateReloadMode reload) {
     using namespace compute_kernel_lib;
     using ckernel::PoolType;
@@ -475,8 +475,8 @@ void kernel_main() {
                                             : (reload_id == 3u) ? AccumulateReloadMode::CopySeedSfpuAdd
                                             : (reload_id == 4u) ? AccumulateReloadMode::CopySeedZeroPair
                                                                 : AccumulateReloadMode::CopySeedPairs;
-    const ReducePartialScaler PS =
-        (partial_elems > 0u) ? ReducePartialScaler::only_partial() : ReducePartialScaler::none();
+    const ReduceScaler PS =
+        (partial_elems > 0u) ? ReduceScaler::only_partial() : ReduceScaler::none();
     const auto SHAPE = ReduceInputBlockShape::of(Ht, Wt, NC);
     const auto ML = (row_stride > 0u) ? ReduceInputMemoryLayout::with_row_stride(row_stride)
                                       : ReduceInputMemoryLayout::contiguous();

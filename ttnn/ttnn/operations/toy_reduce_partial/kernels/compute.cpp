@@ -28,8 +28,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
 
-    constexpr auto partial_scaler = has_partial ? compute_kernel_lib::ReducePartialScaler::with_partial()
-                                                : compute_kernel_lib::ReducePartialScaler::none();
+    constexpr auto partial_scaler =
+        has_partial ? compute_kernel_lib::ReduceScaler::with_partial() : compute_kernel_lib::ReduceScaler::none();
 
     constexpr auto block_shape = compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC);
 
