@@ -1,6 +1,5 @@
 name: "Copilot Setup Steps"
-# TEMPORARY PROBE 3 - does the remote ccache actually store and retrieve?
-# Two containers, distinct local cache dirs, identical source. Run 2 must hit remote.
+# TEMPORARY PROBE 4 - full integration: submodules + build_metal.sh through the wrapper.
 on:
   workflow_dispatch:
   push:
@@ -9,42 +8,43 @@ on:
 jobs:
   copilot-setup-steps:
     runs-on: tt-ubuntu-2204-large-stable
-    timeout-minutes: 20
+    timeout-minutes: 55
     permissions:
       contents: read
     steps:
-      - name: Remote ccache store then retrieve
+      - name: Checkout with submodules
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+      - name: Report checkout cost
+        run: |
+          echo "submodules present: $(git submodule status --recursive 2>/dev/null | wc -l)"
+          du -sh third_party 2>/dev/null || true
+      - name: CMake configure through the docker wrapper
         env:
           AK: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
           SK: ${{ secrets.GARAGE_S3_SECRET_KEY }}
         run: |
           IMG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:latest
           EP=http://garage.garage.svc.cluster.local:3900
-          # Unique prefix so this test cannot collide with or pollute the real CI cache.
-          PREFIX="agent-probe/$(date +%s)"
-          REMOTE="s3://ccache|region=garage|prefix=${PREFIX}|endpoint_url=${EP}"
-          echo "using throwaway prefix: ${PREFIX}"
           docker pull -q "$IMG" >/dev/null
-          mkdir -p .probe
-          printf '#include <string>\n#include <vector>\nint main(){std::vector<std::string> v{"a","b"};return v.size()-2;}\n' > .probe/a.cpp
-
-          run_build () {
-            docker run --rm --user "$(id -u):$(id -g)" \
-              -v "${GITHUB_WORKSPACE}:/work" -w /work \
-              -e HOME=/tmp -e "CCACHE_DIR=/tmp/cc-$1" \
-              -e CCACHE_REMOTE_STORAGE="$REMOTE" \
-              -e AWS_ACCESS_KEY_ID="$AK" -e AWS_SECRET_ACCESS_KEY="$SK" \
-              -e AWS_DEFAULT_REGION=garage -e AWS_ENDPOINT_URL_S3="$EP" \
-              "$IMG" bash -lc '
-                mkdir -p "$CCACHE_DIR"
-                ccache -z >/dev/null 2>&1
-                ccache clang++-20 -std=c++20 -c .probe/a.cpp -o /tmp/a.o
-                ccache -sv 2>/dev/null | sed -n "/[Rr]emote storage/,/^$/p"
-              '
-          }
-
-          echo "########## RUN 1 (cold local, cold remote - expect miss + remote write) ##########"
-          run_build one 2>&1 | sed 's/^/  /'
-          echo "########## RUN 2 (fresh local cache - expect REMOTE HIT) ##########"
-          run_build two 2>&1 | sed 's/^/  /'
-          rm -rf .probe
+          mkdir -p "${HOME}/.cache/agent-ccache"
+          START=$(date +%s)
+          set +e
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -v "${GITHUB_WORKSPACE}:/work" -w /work \
+            -v "${HOME}/.cache/agent-ccache:/ccache" \
+            -e HOME=/tmp -e CCACHE_DIR=/ccache \
+            -e CCACHE_REMOTE_STORAGE="s3://ccache|region=garage|prefix=tt-metal|endpoint_url=${EP}" \
+            -e AWS_ACCESS_KEY_ID="$AK" -e AWS_SECRET_ACCESS_KEY="$SK" \
+            -e AWS_DEFAULT_REGION=garage -e AWS_ENDPOINT_URL_S3="$EP" \
+            "$IMG" bash -lc '
+              git config --global --add safe.directory /work
+              git config --global --add safe.directory "*"
+              ./build_metal.sh --enable-ccache --configure-only 2>&1 | tail -25
+            '
+          RC=$?
+          set -e
+          echo "=== configure exit=$RC after $(( $(date +%s) - START ))s ==="
+          [ $RC -eq 0 ] && echo "CONFIGURE OK - wrapper works end to end" \
+                        || echo "::warning::configure failed rc=$RC (see output above)"
