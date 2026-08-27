@@ -951,6 +951,21 @@ def refresh_or_invalidate_global_goldens(inplace_tensors, global_golden_output):
             TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR.pop(tensor_id, None)
 
 
+def _merge_local_golden_metadata_into_global_inputs(local_inputs, global_inputs):
+    """Copy operation-specific preprocessing metadata into cached global inputs.
+    Also normalizes keyword aliases before the global golden is evaluated.
+    """
+
+    _, local_kwargs = local_inputs
+    _, global_kwargs = global_inputs
+    argument_aliases = local_kwargs.get("_ttnn_golden_argument_aliases", {})
+    for alias, canonical_name in argument_aliases.items():
+        if alias in global_kwargs and canonical_name not in global_kwargs:
+            global_kwargs[canonical_name] = global_kwargs.pop(alias)
+    global_kwargs.update({key: value for key, value in local_kwargs.items() if key.startswith("_ttnn_")})
+    return global_inputs
+
+
 @dataclasses.dataclass
 class FastOperation:
     python_fully_qualified_name: str
@@ -1217,21 +1232,9 @@ class Operation:
                         local_golden_function_args_and_kwargs is not None
                         and global_golden_function_args_and_kwargs is not None
                     ):
-                        _, local_golden_function_kwargs = local_golden_function_args_and_kwargs
-                        _, global_golden_function_kwargs = global_golden_function_args_and_kwargs
-                        argument_aliases = local_golden_function_kwargs.get("_ttnn_golden_argument_aliases", {})
-                        for alias, canonical_name in argument_aliases.items():
-                            if (
-                                alias in global_golden_function_kwargs
-                                and canonical_name not in global_golden_function_kwargs
-                            ):
-                                global_golden_function_kwargs[canonical_name] = global_golden_function_kwargs.pop(alias)
-                        global_golden_function_kwargs.update(
-                            {
-                                key: value
-                                for key, value in local_golden_function_kwargs.items()
-                                if key.startswith("_ttnn_")
-                            }
+                        global_golden_function_args_and_kwargs = _merge_local_golden_metadata_into_global_inputs(
+                            local_golden_function_args_and_kwargs,
+                            global_golden_function_args_and_kwargs,
                         )
 
                 function_return_value = function(*function_args, **function_kwargs)

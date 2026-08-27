@@ -49,6 +49,15 @@ def test_allclose_comparison_policy_for_degenerate_output():
     assert comparison_records[0]["matches"]
 
 
+def test_degenerate_comparison_rejects_shape_mismatch():
+    golden = torch.ones(1)
+    output = torch.ones(1, 1)
+
+    comparison_records = _compare_torch_tensors(golden, output, fail_on_bad_comparison=False)
+
+    assert not comparison_records[0]["matches"]
+
+
 def test_skip_comparison_policy_for_all_outputs():
     golden = torch.zeros(2)
     output = torch.ones(2)
@@ -86,6 +95,19 @@ def test_comparison_policy_masks_matching_nonfinite_positions(expect_error):
     assert comparison_records[0]["matches"]
     with expect_error(RuntimeError):
         _compare_torch_tensors(golden, torch.tensor([1.0, float("inf")]))
+
+
+def test_prepare_backward_golden_inputs_clears_accumulated_gradients():
+    input_tensor = torch.tensor([2.0], requires_grad=True)
+    prepared_args, _ = ttnn.decorators.prepare_backward_golden_inputs(((input_tensor,), {}))
+    (prepared_args[0] * 2).sum().backward()
+    assert torch.equal(input_tensor.grad, torch.tensor([2.0]))
+
+    prepared_args, _ = ttnn.decorators.prepare_backward_golden_inputs(((input_tensor,), {}))
+    assert input_tensor.grad is None
+    (prepared_args[0] * 3).sum().backward()
+
+    assert torch.equal(input_tensor.grad, torch.tensor([3.0]))
 
 
 def test_scalar_output_comparison(monkeypatch, expect_error):
@@ -138,6 +160,25 @@ def test_stored_global_golden_preserves_mesh_index():
         ttnn.decorators.TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR.pop(output.tensor_id, None)
 
 
+def test_mesh_index_selects_requested_device_shard(monkeypatch):
+    class FakeTensor:
+        def __init__(self, value=None):
+            self.dtype = ttnn.bfloat16
+            self.value = value
+
+    runtime_output = FakeTensor()
+    device_tensors = [FakeTensor(torch.tensor([0.0])), FakeTensor(torch.tensor([1.0]))]
+    golden = torch.tensor([1.0])
+    golden._ttnn_mesh_index = 1
+    monkeypatch.setattr(ttnn, "Tensor", FakeTensor)
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda _: device_tensors)
+    monkeypatch.setattr(ttnn, "to_torch", lambda tensor, **_: tensor.value)
+
+    selected_output = ttnn.decorators.to_torch_for_comparison(runtime_output, golden)
+
+    assert torch.equal(selected_output, golden)
+
+
 def test_typecast_golden_prefers_explicit_bfloat16_metadata():
     input_tensor = torch.tensor([1.7], dtype=torch.bfloat16)
 
@@ -158,6 +199,27 @@ def test_typecast_golden_prefers_explicit_bfloat16_metadata():
 
     assert captured_dtype_result.item() == 2
     assert explicit_dtype_result.item() == 2
+
+
+def test_global_typecast_inputs_receive_local_host_metadata():
+    local_inputs = (
+        (),
+        {
+            "_ttnn_input_dtype": ttnn.bfloat16,
+            "_ttnn_is_host": True,
+            "_ttnn_arch_name": "wormhole_b0",
+        },
+    )
+    global_inputs = ([torch.tensor([-1.0], dtype=torch.bfloat16)], {"output_dtype": ttnn.uint8})
+
+    global_args, global_kwargs = ttnn.decorators._merge_local_golden_metadata_into_global_inputs(
+        local_inputs, global_inputs
+    )
+    result = _typecast_golden_function(*global_args, **global_kwargs)
+
+    assert global_kwargs["_ttnn_input_dtype"] == ttnn.bfloat16
+    assert global_kwargs["_ttnn_is_host"]
+    assert result.item() == 0
 
 
 @pytest.mark.parametrize("batch_size", [1])

@@ -883,12 +883,9 @@ ttnn.attach_golden_function(ttnn.softcap, golden_function=_golden_function_softc
 
 
 def torch_reglu(input_tensor, *args, **kwargs):
-    import torch
-
-    split_size = input_tensor.size(-1) // 2
-    split_tensors = torch.split(input_tensor, split_size_or_sections=[split_size, split_size], dim=-1)
-    tensA, tensB = split_tensors[0], split_tensors[1]
-    return tensA * torch.nn.functional.relu(tensB)
+    # Keep the legacy registration helper aligned with the active golden, including
+    # UInt16/UInt32 widening and device-width wraparound.
+    return _golden_function_reglu(input_tensor, *args, **kwargs)
 
 
 def torch_swiglu(input_tensor, *args, **kwargs):
