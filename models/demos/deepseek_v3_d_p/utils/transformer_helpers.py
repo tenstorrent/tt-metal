@@ -458,7 +458,10 @@ def extract_routed_experts(full_sd, n_routed=None, prefix="", hf_layer=None):
 def extract_layer_state_dict(variant, full_sd, layer_idx, hf_layer):
     """Extract one layer's weights from HF state_dict into TtPrefillBlock format."""
     prefix = f"layers.{layer_idx}."
-    is_moe = isinstance(hf_layer.mlp, variant.reference_moe_cls)
+    # reference_moe_cls is optional -- left None to skip the MoE reference comparison -- so fall back
+    # to the structural test: a MoE FFN has .experts, a dense one does not.
+    moe_cls = variant.reference_moe_cls
+    is_moe = isinstance(hf_layer.mlp, moe_cls) if moe_cls is not None else hasattr(hf_layer.mlp, "experts")
 
     layer_sd = {
         "attn_norm_weight": full_sd[f"{prefix}input_layernorm.weight"],

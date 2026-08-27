@@ -470,8 +470,8 @@ def test_ds_mla(
 # every axis that test sweeps is pinned here to ONE value unless it changes the number being measured.
 #   mesh_device        (8, 4) only. Production SP-axis shape for this box; a (2, 4) PCC is not a
 #                      production-shape result, and the TTNN weight cache is keyed on device count.
-#   device_params      line (FABRIC_1D) only. ring / fabric2d are transport topologies; they do not
-#                      change the MLA math, so they cannot earn their runtime before a first number.
+#   device_params      fabric2d only. FABRIC_1D is not in CI_ALLOWED_FABRICS for BH galaxy (8,4), so
+#                      pinning it skips the row; TorusXY needs a certified cabling descriptor.
 #   use_pretrained     random only. This row measures the MLA math, which the random-weight path
 #                      exercises identically; the pretrained checkpoint is covered by the chunked
 #                      rows below and by the transformer row.
@@ -493,11 +493,11 @@ def test_ds_mla(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "worker_l1_size": _WORKER_L1_SIZE,
         },
     ],
-    ids=["line"],
+    ids=["fabric2d"],
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False], ids=["random"])

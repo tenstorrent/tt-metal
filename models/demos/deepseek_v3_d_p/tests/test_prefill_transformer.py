@@ -29,7 +29,6 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
-from transformers import PreTrainedConfig
 
 import ttnn
 from conftest import is_galaxy
@@ -38,14 +37,13 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -1303,21 +1301,18 @@ MISTRAL4_THRESHOLDS = PrefillTransformerThresholds(
 )
 @pytest.mark.parametrize("determinism_check", [False], ids=["no_determinism"])
 @pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
+# FABRIC_1D is not in CI_ALLOWED_FABRICS for BLACKHOLE_GALAXY (8,4), so pinning it here skips the
+# whole row on this hardware. fabric2d is the allowed non-torus option; TorusXY needs a certified
+# cabling descriptor.
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
+            fabric2d_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="fabric2d-mesh-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1336,7 +1331,6 @@ def test_mistral4_prefill_transformer(
     n_routed_experts,
     gate_fallback_mode,
     num_links,
-    topology,
     pcc_validation,
     determinism_check,
     num_iterations,
@@ -1350,18 +1344,12 @@ def test_mistral4_prefill_transformer(
     tokenizer,
     request,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     # The random path holds every layer at once (~6.5 GB per MoE layer here, plus the state-dict
     # copy), so a deep random model would peak near this shared box's RAM. Depth is covered by the
     # pretrained rows, which load and free one layer at a time.
     if not use_pretrained and num_layers > 2:
         pytest.skip(f"random weights at {num_layers} layers would need ~{num_layers * 6.5:.0f} GB of host RAM")
-
-    # Random weights mean building the reference model from the config, and transformers refuses a
-    # config that is not a PreTrainedConfig. A variant whose config_builder hand-builds a namespace
-    # (config_builder_overrides_checkpoint) has no random-weight path at all as a result; the
-    # pretrained rows cover the same ground, so skip rather than fail inside transformers.
-    if not use_pretrained and not isinstance(config_only, PreTrainedConfig):
-        pytest.skip(f"{variant.name}: config_builder returns {type(config_only).__name__}, not a PreTrainedConfig")
 
     run_model(
         variant,
