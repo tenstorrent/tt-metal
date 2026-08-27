@@ -3,3 +3,4 @@ overlays/
 learned_bringups.json
 learned_chained_templates.json
 agentic/learned_fixes.json
+.bringup_mcp_config_*.json

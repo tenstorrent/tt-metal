@@ -552,6 +552,7 @@ def _demote_reuse_to_adapt(component: str) -> bool:
     return flipped
 
 
+@mcp.tool()
 def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str = "", mode: str = "single") -> dict:
     """Persist the outcome of working `component`: bump attempts, advance the consecutive-same-class
     counter using the DETERMINISTIC class from run_component (your `failure_class` arg is only a
