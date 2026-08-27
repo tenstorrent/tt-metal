@@ -492,7 +492,9 @@ prefill 2048 cache V (users 0,8,16,24)    0.9998937907368274
 ```
 
 All twenty-one `[pcc]` lines of the 128 gate are **bit-identical** across the
-three runs (`md5sum` of the `[pcc]` lines: `7c751ada099943bbc51df1d4c1b3efc8`).
+three runs (`md5sum` of the `[pcc]` lines: `7c751ada099943bbc51df1d4c1b3efc8`),
+and identical again in three further runs at this attempt's final commit
+(`a2_73/74/75_block`), so nothing between the two moved a number.
 That is a property worth testing rather than assuming on this mesh: a bfloat16
 cross-device logit sum is order-dependent on ETH ring arrival, and
 `fp32_dest_acc=True` on the LM head all-reduce is what buys the determinism.
@@ -963,6 +965,8 @@ For `tttv2_2d_modules_plan.md`, in the Milestone B exit-gate table:
 | demo batch 1 x3 | `a2_21/29/30_demo_b1` |
 | demo batch 32 x3 | `a2_22/31/32_demo_b32` |
 | Llama regression | `a2_40..47_llama_*` |
+| step-5 gate and Q/K norm re-qualified at the final commit | `a2_70..75` |
+| host gates | `a2_60_host_gate`, `a2_61_qwen_host` |
 
 ## 13. Host regression gates
 

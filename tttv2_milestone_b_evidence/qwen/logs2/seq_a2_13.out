@@ -1,0 +1,118 @@
+=== 22:51:17 start a2_70_qknorm deadline=900s node=models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill
+mesh free: no device-holding pytest, 32 devices
+Re-initialized 32 boards after reset
+devices=32
+=== 22:56:14 end a2_70_qknorm rc=124
+
+[stage] prefill q_norm shape=(1, 8, 128, 128) enter
+[stage] prefill q_norm returned (1, 8, 128, 128) MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+[stage] prefill k_norm shape=(1, 1, 128, 128) enter
+[stage] prefill k_norm returned (1, 1, 128, 128) MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+[stage] decode q_norm shape=(1, 8, 32, 128) enter
+[stage] decode q_norm returned (1, 8, 32, 128) MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":1,"y":0},"end":{"x":1,"y":0}, {"start":{"x":1,"y":1},"end":{"x":1,"y":1}, {"start":{"x":1,"y":2},"end":{"x":1,"y":2}, {"start":{"x":2,"y":0},"end":{"x":2,"y":0}, {"start":{"x":2,"y":1},"end":{"x":2,"y":1}, {"start":{"x":2,"y":2},"end":{"x":2,"y":2}, {"start":{"x":3,"y":0},"end":{"x":3,"y":0}, {"start":{"x":3,"y":1},"end":{"x":3,"y":1}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 128],"grid":[{"start":{"x":1,"y":0},"end":{"x":1,"y":0}}, {"start":{"x":1,"y":1},"end":{"x":1,"y":1}}, {"start":{"x":1,"y":2},"end":{"x":1,"y":2}}, {"start":{"x":2,"y":0},"end":{"x":2,"y":0}}, {"start":{"x":2,"y":1},"end":{"x":2,"y":1}}, {"start":{"x":2,"y":2},"end":{"x":2,"y":2}}, {"start":{"x":3,"y":0},"end":{"x":3,"y":0}}, {"start":{"x":3,"y":1},"end":{"x":3,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0)
+[stage] decode k_norm shape=(1, 8, 32, 128) enter
+[stage] decode k_norm returned (1, 8, 32, 128) MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":1,"y":3},"end":{"x":1,"y":3}, {"start":{"x":1,"y":4},"end":{"x":1,"y":4}, {"start":{"x":1,"y":5},"end":{"x":1,"y":5}, {"start":{"x":2,"y":3},"end":{"x":2,"y":3}, {"start":{"x":2,"y":4},"end":{"x":2,"y":4}, {"start":{"x":3,"y":2},"end":{"x":3,"y":2}, {"start":{"x":3,"y":3},"end":{"x":3,"y":3}, {"start":{"x":3,"y":4},"end":{"x":3,"y":4}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 128],"grid":[{"start":{"x":1,"y":3},"end":{"x":1,"y":3}}, {"start":{"x":1,"y":4},"end":{"x":1,"y":4}}, {"start":{"x":1,"y":5},"end":{"x":1,"y":5}}, {"start":{"x":2,"y":3},"end":{"x":2,"y":3}}, {"start":{"x":2,"y":4},"end":{"x":2,"y":4}}, {"start":{"x":3,"y":2},"end":{"x":3,"y":2}}, {"start":{"x":3,"y":3},"end":{"x":3,"y":3}}, {"start":{"x":3,"y":4},"end":{"x":3,"y":4}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0)
+--- a2_70_qknorm rc=124
+=== 22:56:14 start a2_71_qknorm deadline=900s node=models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill
+mesh free: no device-holding pytest, 32 devices
+Re-initialized 32 boards after reset
+devices=32
+=== 23:01:11 end a2_71_qknorm rc=124
+
+[stage] prefill q_norm shape=(1, 8, 128, 128) enter
+[stage] prefill q_norm returned (1, 8, 128, 128) MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+[stage] prefill k_norm shape=(1, 1, 128, 128) enter
+[stage] prefill k_norm returned (1, 1, 128, 128) MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+[stage] decode q_norm shape=(1, 8, 32, 128) enter
+[stage] decode q_norm returned (1, 8, 32, 128) MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":1,"y":0},"end":{"x":1,"y":0}, {"start":{"x":1,"y":1},"end":{"x":1,"y":1}, {"start":{"x":1,"y":2},"end":{"x":1,"y":2}, {"start":{"x":2,"y":0},"end":{"x":2,"y":0}, {"start":{"x":2,"y":1},"end":{"x":2,"y":1}, {"start":{"x":2,"y":2},"end":{"x":2,"y":2}, {"start":{"x":3,"y":0},"end":{"x":3,"y":0}, {"start":{"x":3,"y":1},"end":{"x":3,"y":1}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 128],"grid":[{"start":{"x":1,"y":0},"end":{"x":1,"y":0}}, {"start":{"x":1,"y":1},"end":{"x":1,"y":1}}, {"start":{"x":1,"y":2},"end":{"x":1,"y":2}}, {"start":{"x":2,"y":0},"end":{"x":2,"y":0}}, {"start":{"x":2,"y":1},"end":{"x":2,"y":1}}, {"start":{"x":2,"y":2},"end":{"x":2,"y":2}}, {"start":{"x":3,"y":0},"end":{"x":3,"y":0}}, {"start":{"x":3,"y":1},"end":{"x":3,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0)
+[stage] decode k_norm shape=(1, 8, 32, 128) enter
+[stage] decode k_norm returned (1, 8, 32, 128) MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":1,"y":3},"end":{"x":1,"y":3}, {"start":{"x":1,"y":4},"end":{"x":1,"y":4}, {"start":{"x":1,"y":5},"end":{"x":1,"y":5}, {"start":{"x":2,"y":3},"end":{"x":2,"y":3}, {"start":{"x":2,"y":4},"end":{"x":2,"y":4}, {"start":{"x":3,"y":2},"end":{"x":3,"y":2}, {"start":{"x":3,"y":3},"end":{"x":3,"y":3}, {"start":{"x":3,"y":4},"end":{"x":3,"y":4}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 128],"grid":[{"start":{"x":1,"y":3},"end":{"x":1,"y":3}}, {"start":{"x":1,"y":4},"end":{"x":1,"y":4}}, {"start":{"x":1,"y":5},"end":{"x":1,"y":5}}, {"start":{"x":2,"y":3},"end":{"x":2,"y":3}}, {"start":{"x":2,"y":4},"end":{"x":2,"y":4}}, {"start":{"x":3,"y":2},"end":{"x":3,"y":2}}, {"start":{"x":3,"y":3},"end":{"x":3,"y":3}}, {"start":{"x":3,"y":4},"end":{"x":3,"y":4}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0)
+--- a2_71_qknorm rc=124
+=== 23:01:11 start a2_72_qknorm deadline=900s node=models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill
+mesh free: no device-holding pytest, 32 devices
+Re-initialized 32 boards after reset
+devices=32
+=== 23:06:13 end a2_72_qknorm rc=124
+
+[stage] prefill q_norm shape=(1, 8, 128, 128) enter
+[stage] prefill q_norm returned (1, 8, 128, 128) MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+[stage] prefill k_norm shape=(1, 1, 128, 128) enter
+[stage] prefill k_norm returned (1, 1, 128, 128) MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+[stage] decode q_norm shape=(1, 8, 32, 128) enter
+[stage] decode q_norm returned (1, 8, 32, 128) MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":1,"y":0},"end":{"x":1,"y":0}, {"start":{"x":1,"y":1},"end":{"x":1,"y":1}, {"start":{"x":1,"y":2},"end":{"x":1,"y":2}, {"start":{"x":2,"y":0},"end":{"x":2,"y":0}, {"start":{"x":2,"y":1},"end":{"x":2,"y":1}, {"start":{"x":2,"y":2},"end":{"x":2,"y":2}, {"start":{"x":3,"y":0},"end":{"x":3,"y":0}, {"start":{"x":3,"y":1},"end":{"x":3,"y":1}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 128],"grid":[{"start":{"x":1,"y":0},"end":{"x":1,"y":0}}, {"start":{"x":1,"y":1},"end":{"x":1,"y":1}}, {"start":{"x":1,"y":2},"end":{"x":1,"y":2}}, {"start":{"x":2,"y":0},"end":{"x":2,"y":0}}, {"start":{"x":2,"y":1},"end":{"x":2,"y":1}}, {"start":{"x":2,"y":2},"end":{"x":2,"y":2}}, {"start":{"x":3,"y":0},"end":{"x":3,"y":0}}, {"start":{"x":3,"y":1},"end":{"x":3,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0)
+[stage] decode k_norm shape=(1, 8, 32, 128) enter
+[stage] decode k_norm returned (1, 8, 32, 128) MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":1,"y":3},"end":{"x":1,"y":3}, {"start":{"x":1,"y":4},"end":{"x":1,"y":4}, {"start":{"x":1,"y":5},"end":{"x":1,"y":5}, {"start":{"x":2,"y":3},"end":{"x":2,"y":3}, {"start":{"x":2,"y":4},"end":{"x":2,"y":4}, {"start":{"x":3,"y":2},"end":{"x":3,"y":2}, {"start":{"x":3,"y":3},"end":{"x":3,"y":3}, {"start":{"x":3,"y":4},"end":{"x":3,"y":4}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 128],"grid":[{"start":{"x":1,"y":3},"end":{"x":1,"y":3}}, {"start":{"x":1,"y":4},"end":{"x":1,"y":4}}, {"start":{"x":1,"y":5},"end":{"x":1,"y":5}}, {"start":{"x":2,"y":3},"end":{"x":2,"y":3}}, {"start":{"x":2,"y":4},"end":{"x":2,"y":4}}, {"start":{"x":3,"y":2},"end":{"x":3,"y":2}}, {"start":{"x":3,"y":3},"end":{"x":3,"y":3}}, {"start":{"x":3,"y":4},"end":{"x":3,"y":4}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0)
+--- a2_72_qknorm rc=124
+=== 23:06:13 start a2_73_block deadline=900s node=models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_one_layer_prefill_and_decode_8x4_qwen3_32b_b32_s128
+mesh free: no device-holding pytest, 32 devices
+devices=32
+=== 23:08:43 end a2_73_block rc=0
+1 passed 
+[stage] prefill 128 enter
+[stage] decode 128 enter
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head in: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 800) cores=24 spec_tiles=600
+[ccl] lm_head staged, shape=(1, 1, 32, 19200)
+[ccl] lm_head staged, shape=(1, 1, 32, 19200) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 480) cores=40 spec_tiles=600
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 76800)
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 76800) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 76800) tiles=2400 shard=(32, 1920) cores=40 spec_tiles=2400
+[ccl] lm_head reduced: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 480) cores=40 spec_tiles=600
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 19200)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 19200) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+--- a2_73_block rc=0
+=== 23:08:43 start a2_74_block deadline=900s node=models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_one_layer_prefill_and_decode_8x4_qwen3_32b_b32_s128
+mesh free: no device-holding pytest, 32 devices
+devices=32
+=== 23:11:13 end a2_74_block rc=0
+1 passed 
+[stage] prefill 128 enter
+[stage] decode 128 enter
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head in: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 800) cores=24 spec_tiles=600
+[ccl] lm_head staged, shape=(1, 1, 32, 19200)
+[ccl] lm_head staged, shape=(1, 1, 32, 19200) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 480) cores=40 spec_tiles=600
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 76800)
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 76800) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 76800) tiles=2400 shard=(32, 1920) cores=40 spec_tiles=2400
+[ccl] lm_head reduced: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 480) cores=40 spec_tiles=600
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 19200)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 19200) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+--- a2_74_block rc=0
+=== 23:11:13 start a2_75_block deadline=900s node=models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_one_layer_prefill_and_decode_8x4_qwen3_32b_b32_s128
+mesh free: no device-holding pytest, 32 devices
+devices=32
+=== 23:13:43 end a2_75_block rc=0
+1 passed 
+[stage] prefill 128 enter
+[stage] decode 128 enter
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head in: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 800) cores=24 spec_tiles=600
+[ccl] lm_head staged, shape=(1, 1, 32, 19200)
+[ccl] lm_head staged, shape=(1, 1, 32, 19200) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 480) cores=40 spec_tiles=600
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 76800)
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 76800) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 76800) tiles=2400 shard=(32, 1920) cores=40 spec_tiles=2400
+[ccl] lm_head reduced: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 480) cores=40 spec_tiles=600
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 19200)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 19200) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+--- a2_75_block rc=0
+=== sequence complete

@@ -1,0 +1,212 @@
+=== 21:26:48 start a2_35_bisection deadline=1200s node=models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128
+mesh free: no device-holding pytest, 32 devices
+devices=32
+=== 21:29:13 end a2_35_bisection rc=0
+1 passed 
+[stage] bisect prefill enter
+[stage] bisect decode enter
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head in: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 800) cores=24 spec_tiles=600
+[ccl] lm_head staged, shape=(1, 1, 32, 19200)
+[ccl] lm_head staged, shape=(1, 1, 32, 19200) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 480) cores=40 spec_tiles=600
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 76800)
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 76800) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 76800) tiles=2400 shard=(32, 1920) cores=40 spec_tiles=2400
+[ccl] lm_head reduced: logical=(1, 1, 32, 19200) tiles=600 shard=(32, 480) cores=40 spec_tiles=600
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 19200)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 19200) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+--- a2_35_bisection rc=0
+=== 21:29:13 start a2_40_llama_step2 deadline=1800s node=models/common/tests/models/llama33_70b_galaxy/test_model_wh_galaxy.py::test_llama33_70b_galaxy_one_layer_prefill_and_decode
+mesh free: no device-holding pytest, 32 devices
+devices=32
+=== 21:32:54 end a2_40_llama_step2 rc=0
+1 passed 
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head in: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 672) cores=24 spec_tiles=504
+[ccl] lm_head staged, shape=(1, 1, 32, 16128)
+[ccl] lm_head staged, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512)
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 64512) tiles=2016 shard=(32, 1536) cores=42 spec_tiles=2016
+[ccl] lm_head reduced: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+--- a2_40_llama_step2 rc=0
+=== 21:32:54 start a2_41_llama_step2 deadline=1800s node=models/common/tests/models/llama33_70b_galaxy/test_model_wh_galaxy.py::test_llama33_70b_galaxy_one_layer_prefill_and_decode
+mesh free: no device-holding pytest, 32 devices
+devices=32
+=== 21:36:04 end a2_41_llama_step2 rc=0
+1 passed 
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head in: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 672) cores=24 spec_tiles=504
+[ccl] lm_head staged, shape=(1, 1, 32, 16128)
+[ccl] lm_head staged, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512)
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 64512) tiles=2016 shard=(32, 1536) cores=42 spec_tiles=2016
+[ccl] lm_head reduced: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+--- a2_41_llama_step2 rc=0
+=== 21:36:04 start a2_42_llama_step2 deadline=1800s node=models/common/tests/models/llama33_70b_galaxy/test_model_wh_galaxy.py::test_llama33_70b_galaxy_one_layer_prefill_and_decode
+mesh free: no device-holding pytest, 32 devices
+devices=32
+=== 21:39:14 end a2_42_llama_step2 rc=0
+1 passed 
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head in: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 672) cores=24 spec_tiles=504
+[ccl] lm_head staged, shape=(1, 1, 32, 16128)
+[ccl] lm_head staged, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512)
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 64512) tiles=2016 shard=(32, 1536) cores=42 spec_tiles=2016
+[ccl] lm_head reduced: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+--- a2_42_llama_step2 rc=0
+=== 21:39:14 start a2_43_llama_prefill2048 deadline=1800s node=models/common/tests/models/llama33_70b_galaxy/test_model_wh_galaxy.py::test_llama33_70b_galaxy_one_layer_prefill_2048
+mesh free: no device-holding pytest, 32 devices
+devices=32
+=== 21:42:45 end a2_43_llama_prefill2048 rc=0
+1 passed 
+--- a2_43_llama_prefill2048 rc=0
+=== 21:42:45 start a2_44_llama_fullmodel deadline=3600s node=models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_full_model_prefill_and_first_decode_token
+mesh free: no device-holding pytest, 32 devices
+devices=32
+=== 21:57:23 end a2_44_llama_fullmodel rc=0
+1 passed 
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head in: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 672) cores=24 spec_tiles=504
+[ccl] lm_head staged, shape=(1, 1, 32, 16128)
+[ccl] lm_head staged, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512)
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 64512) tiles=2016 shard=(32, 1536) cores=42 spec_tiles=2016
+[ccl] lm_head reduced: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+--- a2_44_llama_fullmodel rc=0
+=== 21:57:23 start a2_45_llama_accuracy deadline=3600s node=models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_teacher_forced_accuracy_batch1
+mesh free: no device-holding pytest, 32 devices
+devices=32
+=== 22:19:56 end a2_45_llama_accuracy rc=0
+1 passed 
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 64512) tiles=2016 shard=(32, 1536) cores=42 spec_tiles=2016
+[ccl] lm_head reduced: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head in: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 672) cores=24 spec_tiles=504
+[ccl] lm_head staged, shape=(1, 1, 32, 16128)
+[ccl] lm_head staged, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512)
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 64512) tiles=2016 shard=(32, 1536) cores=42 spec_tiles=2016
+[ccl] lm_head reduced: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+--- a2_45_llama_accuracy rc=0
+=== 22:19:56 start a2_46_llama_demo_b1 deadline=1800s node=models/common/models/llama33_70b_galaxy/demo.py::test_llama33_70b_galaxy_direct_demo_batch1
+mesh free: no device-holding pytest, 32 devices
+devices=32
+=== 22:27:27 end a2_46_llama_demo_b1 rc=0
+1 passed 
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 64512) tiles=2016 shard=(32, 1536) cores=42 spec_tiles=2016
+[ccl] lm_head reduced: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head in: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 672) cores=24 spec_tiles=504
+[ccl] lm_head staged, shape=(1, 1, 32, 16128)
+[ccl] lm_head staged, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512)
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 64512) tiles=2016 shard=(32, 1536) cores=42 spec_tiles=2016
+[ccl] lm_head reduced: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+--- a2_46_llama_demo_b1 rc=0
+=== 22:27:27 start a2_47_llama_demo_b32 deadline=1800s node=models/common/models/llama33_70b_galaxy/demo.py::test_llama33_70b_galaxy_direct_demo_batch32_has_no_cross_slot_contamination
+mesh free: no device-holding pytest, 32 devices
+devices=32
+=== 22:33:33 end a2_47_llama_demo_b32 rc=0
+1 passed 
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 64512) tiles=2016 shard=(32, 1536) cores=42 spec_tiles=2016
+[ccl] lm_head reduced: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head in: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 672) cores=24 spec_tiles=504
+[ccl] lm_head staged, shape=(1, 1, 32, 16128)
+[ccl] lm_head staged, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512)
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 64512) tiles=2016 shard=(32, 1536) cores=42 spec_tiles=2016
+[ccl] lm_head reduced: logical=(1, 1, 32, 16128) tiles=504 shard=(32, 384) cores=42 spec_tiles=504
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head reduced placed back
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+--- a2_47_llama_demo_b32 rc=0
+=== sequence complete

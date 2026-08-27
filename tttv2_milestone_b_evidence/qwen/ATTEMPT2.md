@@ -213,3 +213,27 @@ nowhere else. `a2_03` and `a2_05` also carry the harness note in
 teardown *before* pytest writes any per-test verdict, so the wrapper's
 verdict-keyed grace timer never arms and only its full deadline reaps the
 process.
+
+
+## 11. Re-qualification at the final commit
+
+The step-5 gate and the Q/K norm were each run three more times at the tip of
+this attempt's work, after the last test-side change, so that the three-run
+evidence is unambiguously at one commit rather than spread over the night:
+
+| runs | verdict | `md5sum` of the `[pcc]` lines |
+| --- | --- | --- |
+| `a2_70/71/72_qknorm` | PASSED x3, 128 `[pcc]` lines each | `c911648c291d8091caef85a2f34db9df` |
+| `a2_73/74/75_block` | 1 passed x3, 21 `[pcc]` lines each | `7c751ada099943bbc51df1d4c1b3efc8` |
+
+The block gate's hash is the same one `a2_13/15/16` produced hours earlier, so
+nothing between the two moved a number.
+
+`a2_70/71/72` exit **124**, and that is the harness, not the test: pytest writes
+`PASSED` and then the `mesh_device` fixture teardown holds the mesh past the
+90-second grace, so `device_run.sh` reaps it and resets. The Q/K norm test does
+this consistently and the block gate never does; it builds a model, activates
+both modes and runs no full graph, so something it allocates is not drained on
+close. Cosmetic for the evidence - the verdict and all 128 numbers are already in
+the log when the reap happens - and worth knowing before you read `rc=124` as a
+failure.
