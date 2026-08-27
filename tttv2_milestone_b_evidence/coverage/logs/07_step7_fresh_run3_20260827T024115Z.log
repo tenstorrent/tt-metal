@@ -1,0 +1,354 @@
+2026-08-27 02:41:38.477 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 150 items
+
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len128] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len256] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len512] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len1024] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len2048] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active16] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active31] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active32] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active16] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active31] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active32] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_an_empty_row_is_caught_by_the_generation_entry_point_not_by_the_prefill PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len128] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len256] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len512] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len1024] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len2048] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_each_concatenated_source_row_touches_exactly_one_page_table_row PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_a_row_count_between_one_and_thirty_two_has_no_prefill_recipe PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_a_single_row_prefill_still_indexes_the_table_by_user PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_concatenated_prefill_requires_the_whole_physical_batch PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_a_short_row_count_is_refused PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len128] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len256] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len512] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len1024] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len2048] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_a_prompt_past_the_longest_batched_recipe_fails_closed PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len128] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len256] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len512] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len1024] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len2048] PASSED
+models/common/tests/models/galaxy/test_step7_concat32.py::test_a_batched_length_beyond_the_served_context_is_refused PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_each_long_context_geometry_resolves[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_each_long_context_geometry_resolves[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_each_long_context_geometry_resolves[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_block_pool_covers_the_served_context_and_every_idle_sink[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_block_pool_covers_the_served_context_and_every_idle_sink[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_block_pool_covers_the_served_context_and_every_idle_sink[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_runner_accepts_the_batch_one_long_context_allocation[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_runner_accepts_the_batch_one_long_context_allocation[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_runner_accepts_the_batch_one_long_context_allocation[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_page_table_stays_small_even_at_the_longest_context[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_page_table_stays_small_even_at_the_longest_context[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_page_table_stays_small_even_at_the_longest_context[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_rope_tables_grow_linearly_with_the_served_context[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_rope_tables_grow_linearly_with_the_served_context[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_rope_tables_grow_linearly_with_the_served_context[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[128k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_capacity_grows_linearly_in_context_and_is_reported_for_all_three PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunked_prefill_plan_walks_the_context_without_revisiting_a_block[4k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunked_prefill_plan_walks_the_context_without_revisiting_a_block[32k] PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_a_decode_after_a_full_prefill_still_has_a_block_to_write_into PASSED
+models/common/tests/models/galaxy/test_step7_long_context.py::test_the_served_context_must_stay_a_multiple_of_the_chunk_alignment PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[1] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[8] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[16] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[31] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[32] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_an_idle_slots_sink_never_lands_in_an_active_slots_run[1] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_an_idle_slots_sink_never_lands_in_an_active_slots_run[16] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_an_idle_slots_sink_never_lands_in_an_active_slots_run[31] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[1] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[8] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[16] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[31] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[32] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_each_active_slot_owns_enough_blocks_for_the_whole_served_context PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_prefill_and_decode_stage_two_different_tables_two_different_ways PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_padding_the_prefill_table_cannot_invent_a_block_a_slot_does_not_own PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_paged_capacity_resolved_after_construction_reaches_every_layer[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_paged_capacity_resolved_after_construction_reaches_every_layer[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_paged_capacity_cannot_be_resolved_while_a_cache_is_bound[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_paged_capacity_cannot_be_resolved_while_a_cache_is_bound[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_binding_every_layer_is_all_or_nothing[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_binding_every_layer_is_all_or_nothing[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_malformed_layer_entry_also_unwinds_every_earlier_layer[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_malformed_layer_entry_also_unwinds_every_earlier_layer[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_unbind_is_transactional_and_repeatable[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_unbind_is_transactional_and_repeatable[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_rebinding_replaces_the_previous_binding_rather_than_stacking[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_rebinding_replaces_the_previous_binding_rather_than_stacking[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_layer_count_mismatch_is_refused_before_anything_is_bound[llama] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_layer_count_mismatch_is_refused_before_anything_is_bound[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_only_the_binding_owner_may_unbind PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_the_kv_contract_presents_one_layer_view_per_spec_and_forwards_binding PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_the_kv_contract_refuses_a_model_with_no_resolved_mesh PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_contiguous_spec_has_no_paged_shape_and_no_binding_metadata PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_decode_rejects_a_table_that_cannot_carry_one_mesh_columns_users PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_prefill_rejects_a_decode_shaped_table_that_cannot_reach_the_addressed_user PASSED
+models/common/tests/models/galaxy/test_step7_paged_kv.py::test_decode_cannot_tell_the_prefill_layout_from_a_four_core_l1_repeat PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[1] PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[2] PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[7] PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_never_reaches_another_slots_blocks PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_an_unaligned_chunk_start_is_refused PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_past_a_slots_allocation_is_refused PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_chunked_prefill_needs_a_paged_cache PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_the_first_chunk_is_an_ordinary_prefill_and_later_chunks_are_prefix_cached PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_every_chunk_table_is_released_before_the_next_chunk_is_staged PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_prefix_cached_request_leaves_the_next_plain_request_unchanged PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_prefix_cached_and_plain_requests_mix_across_slots_without_sharing_state PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_chunked_prefill_needs_a_positive_chunk_and_at_least_one_token PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_single_row_chunked_sdpa_reads_one_row_and_it_is_the_prefix_users PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_prefix_user_outside_the_addressed_users_is_refused PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_the_sliced_row_follows_prefix_user_id_when_it_differs_from_the_filled_user PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_an_already_single_row_table_is_passed_straight_through PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_concatenated_prefill_keeps_the_full_table_because_q_carries_every_row PASSED
+models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_page_table_alone_selects_the_prefix_chunked_recipe PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_same_seed_in_the_same_slot_gives_the_same_token_across_runs PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_a_requests_row_position_in_the_call_does_not_change_its_stream PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_moving_a_seeded_request_to_another_slot_does_change_its_stream PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_one_seed_across_every_slot_does_not_collapse_the_batch PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_greedy_selects_exactly_the_host_argmax[llama] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_greedy_selects_exactly_the_host_argmax[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_forced_argmax_and_zero_temperature_agree[llama] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_forced_argmax_and_zero_temperature_agree[qwen] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_llama_has_no_vocabulary_padding_at_all PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_qwen_pads_by_exactly_one_hundred_and_twenty_eight_masked_entries PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[greedy] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t0.7] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t1.0] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t2.0] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_device_path_masks_padding_additively_below_every_real_logit PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_each_slot_carries_its_own_top_k_top_p_and_temperature PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_heterogeneous_controls_change_the_tokens_they_are_supposed_to_change PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_top_k_stays_inside_the_configured_capacity PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.25] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.5] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.8] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[2.0] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[4.0] PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_runners_host_reference_divides_by_t_rather_than_multiplying PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_a_greedy_policy_is_temperature_zero_or_top_one PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_runner_forces_argmax_for_a_greedy_policy PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_column_selector_gathers_rows_eight_c_through_eight_c_plus_seven PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_sampler_the_selector_and_the_runner_agree_on_every_slots_column PASSED
+models/common/tests/models/galaxy/test_step7_sampling.py::test_the_selector_refuses_a_tensor_that_is_not_the_physical_batch PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.19s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_the_sampler_the_selector_and_the_runner_agree_on_every_slots_column
+0.19s setup    models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[4k]
+0.19s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_the_selector_refuses_a_tensor_that_is_not_the_physical_batch
+0.18s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active32]
+0.18s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len128]
+0.18s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active16]
+0.18s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[2.0]
+0.18s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len256]
+0.18s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_a_requests_row_position_in_the_call_does_not_change_its_stream
+0.18s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len2048]
+0.18s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.8]
+0.18s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.5]
+0.18s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_the_runners_host_reference_divides_by_t_rather_than_multiplying
+0.18s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len1024]
+0.18s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[4.0]
+0.18s setup    models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_prefix_cached_request_leaves_the_next_plain_request_unchanged
+0.18s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len1024]
+0.18s setup    models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_every_chunk_table_is_released_before_the_next_chunk_is_staged
+0.18s setup    models/common/tests/models/galaxy/test_step7_sampling.py::test_the_column_selector_gathers_rows_eight_c_through_eight_c_plus_seven
+0.18s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len2048]
+0.18s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_each_concatenated_source_row_touches_exactly_one_page_table_row
+0.18s setup    models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_prefix_cached_and_plain_requests_mix_across_slots_without_sharing_state
+0.18s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len512]
+0.18s setup    models/common/tests/models/galaxy/test_step7_concat32.py::test_an_empty_row_is_caught_by_the_generation_entry_point_not_by_the_prefill
+0.18s setup    models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_never_reaches_another_slots_blocks
+=========================== short test summary info ============================
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len128]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len256]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len512]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len1024]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_flat_token_stream_gives_each_row_its_own_span[len2048]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active16]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active31]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active32]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active16]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active31]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_only_each_rows_real_last_token_is_projected[active32]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_an_empty_row_is_caught_by_the_generation_entry_point_not_by_the_prefill
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len128]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len256]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len512]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len1024]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len2048]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_each_concatenated_source_row_touches_exactly_one_page_table_row
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_a_row_count_between_one_and_thirty_two_has_no_prefill_recipe
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_a_single_row_prefill_still_indexes_the_table_by_user
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_concatenated_prefill_requires_the_whole_physical_batch
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_a_short_row_count_is_refused
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len128]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len256]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len512]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len1024]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_the_batched_recipe_family_is_selected_in_ascending_order[len2048]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_a_prompt_past_the_longest_batched_recipe_fails_closed
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len128]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len256]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len512]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len1024]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len2048]
+PASSED models/common/tests/models/galaxy/test_step7_concat32.py::test_a_batched_length_beyond_the_served_context_is_refused
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_each_long_context_geometry_resolves[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_each_long_context_geometry_resolves[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_each_long_context_geometry_resolves[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_block_pool_covers_the_served_context_and_every_idle_sink[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_block_pool_covers_the_served_context_and_every_idle_sink[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_block_pool_covers_the_served_context_and_every_idle_sink[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_runner_accepts_the_batch_one_long_context_allocation[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_runner_accepts_the_batch_one_long_context_allocation[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_runner_accepts_the_batch_one_long_context_allocation[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_a_pool_one_block_short_of_the_context_fails_closed[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_page_table_stays_small_even_at_the_longest_context[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_page_table_stays_small_even_at_the_longest_context[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_page_table_stays_small_even_at_the_longest_context[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_rope_tables_grow_linearly_with_the_served_context[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_rope_tables_grow_linearly_with_the_served_context[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_rope_tables_grow_linearly_with_the_served_context[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[128k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_capacity_grows_linearly_in_context_and_is_reported_for_all_three
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunked_prefill_plan_walks_the_context_without_revisiting_a_block[4k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_chunked_prefill_plan_walks_the_context_without_revisiting_a_block[32k]
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_a_decode_after_a_full_prefill_still_has_a_block_to_write_into
+PASSED models/common/tests/models/galaxy/test_step7_long_context.py::test_the_served_context_must_stay_a_multiple_of_the_chunk_alignment
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[1]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[8]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[16]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[31]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_no_two_slots_can_address_the_same_block[32]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_an_idle_slots_sink_never_lands_in_an_active_slots_run[1]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_an_idle_slots_sink_never_lands_in_an_active_slots_run[16]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_an_idle_slots_sink_never_lands_in_an_active_slots_run[31]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[1]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[8]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[16]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[31]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_every_addressed_block_is_inside_the_allocated_pool[32]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_each_active_slot_owns_enough_blocks_for_the_whole_served_context
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_prefill_and_decode_stage_two_different_tables_two_different_ways
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_padding_the_prefill_table_cannot_invent_a_block_a_slot_does_not_own
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_paged_capacity_resolved_after_construction_reaches_every_layer[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_paged_capacity_resolved_after_construction_reaches_every_layer[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_paged_capacity_cannot_be_resolved_while_a_cache_is_bound[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_paged_capacity_cannot_be_resolved_while_a_cache_is_bound[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_binding_every_layer_is_all_or_nothing[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_binding_every_layer_is_all_or_nothing[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_malformed_layer_entry_also_unwinds_every_earlier_layer[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_malformed_layer_entry_also_unwinds_every_earlier_layer[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_unbind_is_transactional_and_repeatable[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_unbind_is_transactional_and_repeatable[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_rebinding_replaces_the_previous_binding_rather_than_stacking[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_rebinding_replaces_the_previous_binding_rather_than_stacking[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_layer_count_mismatch_is_refused_before_anything_is_bound[llama]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_layer_count_mismatch_is_refused_before_anything_is_bound[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_only_the_binding_owner_may_unbind
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_the_kv_contract_presents_one_layer_view_per_spec_and_forwards_binding
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_the_kv_contract_refuses_a_model_with_no_resolved_mesh
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_a_contiguous_spec_has_no_paged_shape_and_no_binding_metadata
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_decode_rejects_a_table_that_cannot_carry_one_mesh_columns_users
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_prefill_rejects_a_decode_shaped_table_that_cannot_reach_the_addressed_user
+PASSED models/common/tests/models/galaxy/test_step7_paged_kv.py::test_decode_cannot_tell_the_prefill_layout_from_a_four_core_l1_repeat
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[1]
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[2]
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[7]
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_table_never_reaches_another_slots_blocks
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_an_unaligned_chunk_start_is_refused
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_past_a_slots_allocation_is_refused
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_chunked_prefill_needs_a_paged_cache
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_the_first_chunk_is_an_ordinary_prefill_and_later_chunks_are_prefix_cached
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_every_chunk_table_is_released_before_the_next_chunk_is_staged
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_prefix_cached_request_leaves_the_next_plain_request_unchanged
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_prefix_cached_and_plain_requests_mix_across_slots_without_sharing_state
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_chunked_prefill_needs_a_positive_chunk_and_at_least_one_token
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_single_row_chunked_sdpa_reads_one_row_and_it_is_the_prefix_users
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_prefix_user_outside_the_addressed_users_is_refused
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_the_sliced_row_follows_prefix_user_id_when_it_differs_from_the_filled_user
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_an_already_single_row_table_is_passed_straight_through
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_concatenated_prefill_keeps_the_full_table_because_q_carries_every_row
+PASSED models/common/tests/models/galaxy/test_step7_prefix_cache.py::test_a_chunk_page_table_alone_selects_the_prefix_chunked_recipe
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_same_seed_in_the_same_slot_gives_the_same_token_across_runs
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_a_requests_row_position_in_the_call_does_not_change_its_stream
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_moving_a_seeded_request_to_another_slot_does_change_its_stream
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_one_seed_across_every_slot_does_not_collapse_the_batch
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_greedy_selects_exactly_the_host_argmax[llama]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_greedy_selects_exactly_the_host_argmax[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_forced_argmax_and_zero_temperature_agree[llama]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_forced_argmax_and_zero_temperature_agree[qwen]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_llama_has_no_vocabulary_padding_at_all
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_qwen_pads_by_exactly_one_hundred_and_twenty_eight_masked_entries
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[greedy]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t0.7]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t1.0]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t2.0]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_device_path_masks_padding_additively_below_every_real_logit
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_each_slot_carries_its_own_top_k_top_p_and_temperature
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_heterogeneous_controls_change_the_tokens_they_are_supposed_to_change
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_top_k_stays_inside_the_configured_capacity
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.25]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.5]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.8]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[2.0]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[4.0]
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_runners_host_reference_divides_by_t_rather_than_multiplying
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_a_greedy_policy_is_temperature_zero_or_top_one
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_runner_forces_argmax_for_a_greedy_policy
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_column_selector_gathers_rows_eight_c_through_eight_c_plus_seven
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_sampler_the_selector_and_the_runner_agree_on_every_slots_column
+PASSED models/common/tests/models/galaxy/test_step7_sampling.py::test_the_selector_refuses_a_tensor_that_is_not_the_physical_batch
+======================= 150 passed, 2 warnings in 35.24s =======================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+exit=0

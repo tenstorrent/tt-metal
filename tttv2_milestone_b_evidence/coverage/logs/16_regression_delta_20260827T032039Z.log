@@ -1,0 +1,14 @@
+BEFORE log: tttv2_milestone_b_evidence/coverage/logs/03_baseline_full_gate_BEFORE_20260827T020908Z.log
+AFTER  log: tttv2_milestone_b_evidence/coverage/logs/14_full_gate_AFTER_20260827T025719Z.log
+
+BEFORE: = 18 failed, 1959 passed, 2059 skipped, 3276 deselected, 10 warnings, 318 errors in 987.13s (0:16:27) =
+AFTER : = 18 failed, 2121 passed, 2059 skipped, 3276 deselected, 10 warnings, 351 errors in 1048.36s (0:17:28) =
+
+=== diff of FAILED sets (empty == identical) ===
+(exit=0)
+
+=== new ERROR files in AFTER ===
+5a6
+> models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py
+7a9
+> models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py

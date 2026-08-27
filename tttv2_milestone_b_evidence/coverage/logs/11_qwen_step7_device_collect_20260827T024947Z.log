@@ -1,0 +1,96 @@
+2026-08-27 02:50:10.856 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 16 items
+
+<Dir tt-metal>
+  <Dir models>
+    <Dir common>
+      <Dir tests>
+        <Dir models>
+          <Dir qwen3_32b_galaxy>
+            <Module test_step7_coverage_wh_galaxy.py>
+              Milestone B step-7 device coverage for Galaxy Qwen3-32B: the gaps.
+
+              The Llama counterpart is
+              ``models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py``
+              and it carries the reasoning for each case. This file covers the same gaps for
+              Qwen plus the one claim that is Qwen-only:
+
+              * **the padded vocabulary can never be sampled.** Qwen's 151936 is not a
+                multiple of ``8 vocab shards * 32``, so ``padded_vocab_size`` is 152064 and
+                128 ids are invalid. Llama's 128256 already is a multiple, so Llama has no
+                padding and its version of this gate is vacuous - the reason the case lives
+                here and not there.
+
+              **Blocked upstream, and never executed.** As of 2026-08-27:
+
+              * Qwen3-32B's weights are not on this machine. Only ``config.json`` is cached,
+                so ``hf_config_or_skip`` passes and ``from_pretrained`` then fails on the
+                safetensors. Roughly 65 GB has to be fetched into ``/proj_sw/user_dev/hf_data``
+                before any of this can run;
+              * eleven of the mesh's 32 boards were off the PCIe bus, so ``ttnn`` could not
+                open a cluster at all.
+
+              No Qwen result from silicon exists in this tree, of any kind. Treat every
+              threshold here as the plan's, and a first run as bringup.
+
+              Run::
+
+                  pytest models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py -v
+              <Function test_qwen_paged_and_contiguous_caches_agree[wormhole_b0-8x4-device_params0]>
+              <Function test_qwen_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]>
+              <Function test_qwen_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0]>
+              <Function test_qwen_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0]>
+              <Function test_qwen_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active16-8x4-device_params0]>
+              <Function test_qwen_chunked_prefill_matches_a_single_uncached_prefill[wormhole_b0-8x4-device_params0]>
+              <Function test_qwen_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0]>
+              <Function test_qwen_device_greedy_sampling_equals_host_argmax[wormhole_b0-8x4-device_params0]>
+              <Function test_qwen_no_padded_vocabulary_id_is_ever_sampled[wormhole_b0-greedy-8x4-device_params0]>
+                Qwen pads 151936 up to 152064; those 128 ids are not tokens.
+
+                An invalid id winning is a correctness bug, not a rounding issue, so this
+                runs at three policies: greedy, and two temperatures either side of 1.0.
+                ``T == 1.0`` is skipped on purpose - it is its own reciprocal and would hide
+                a temperature inversion (defect D4).
+              <Function test_qwen_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0]>
+                Slot stability, first sense only; see the Llama file and REPORT.md D-C2.
+              <Function test_qwen_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len256-8x4-device_params0]>
+              <Function test_qwen_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active31-8x4-device_params0]>
+              <Function test_qwen_no_padded_vocabulary_id_is_ever_sampled[wormhole_b0-t1.5-8x4-device_params0]>
+                Qwen pads 151936 up to 152064; those 128 ids are not tokens.
+
+                An invalid id winning is a correctness bug, not a rounding issue, so this
+                runs at three policies: greedy, and two temperatures either side of 1.0.
+                ``T == 1.0`` is skipped on purpose - it is its own reciprocal and would hide
+                a temperature inversion (defect D4).
+              <Function test_qwen_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len512-8x4-device_params0]>
+              <Function test_qwen_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active32-8x4-device_params0]>
+              <Function test_qwen_no_padded_vocabulary_id_is_ever_sampled[wormhole_b0-t0.5-8x4-device_params0]>
+                Qwen pads 151936 up to 152064; those 128 ids are not tokens.
+
+                An invalid id winning is a correctness bug, not a rounding issue, so this
+                runs at three policies: greedy, and two temperatures either side of 1.0.
+                ``T == 1.0`` is skipped on purpose - it is its own reciprocal and would hide
+                a temperature inversion (defect D4).
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+========================= 16 tests collected in 7.48s ==========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+exit=0

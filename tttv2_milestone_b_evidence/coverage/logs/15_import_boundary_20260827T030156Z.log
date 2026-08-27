@@ -1,0 +1,13 @@
+=== model-named implementation imports inside the Galaxy packages ===
+(exit=1 ; empty output above == no matches)
+
+=== llm_runtime imports anywhere in the Galaxy packages or 2D modules ===
+(exit=1 ; empty output above == no matches)
+
+=== git boundary greps, base bc6ad03bfc2 ===
+-- _1d.py --
+(exit=1)
+-- llm_runtime --
+(exit=1)
+-- total changed paths --
+190

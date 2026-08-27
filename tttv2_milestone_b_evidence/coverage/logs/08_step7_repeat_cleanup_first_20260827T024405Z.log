@@ -1,0 +1,175 @@
+2026-08-27 02:44:27.972 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 12 items
+
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_two_identical_requests_stage_identical_tokens_positions_and_tables PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_repeated_request_reuses_the_bound_cache_and_tables_rather_than_restaging PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_the_same_slot_addresses_the_same_blocks_on_every_repeat PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_close_unbinds_the_cache_releases_the_tables_and_is_idempotent PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_closed_runner_refuses_further_graph_calls PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_failed_open_leaves_nothing_bound PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_reopening_after_a_close_allocates_a_fresh_cache PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_open_is_idempotent_while_already_open PASSED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_cleanup_reports_no_owned_resources_while_never_freeing_the_global_cb FAILED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_second_owner_on_the_same_mesh_reallocates_a_second_global_cb FAILED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_cleanup_is_terminal_and_a_sealed_owner_cannot_be_resealed FAILED
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_the_galaxy_global_cb_size_is_a_topology_constant_not_a_model_choice PASSED
+
+=================================== FAILURES ===================================
+__ test_cleanup_reports_no_owned_resources_while_never_freeing_the_global_cb ___
+
+    def test_cleanup_reports_no_owned_resources_while_never_freeing_the_global_cb():
+        """Milestone A limitation L1, pinned on the host.
+
+        ``cleanup()`` clears ``self._global_cb`` without adding it to the resources
+        it deallocates, because ttnn exposes no free for a global circular buffer.
+        The owner then reports ``owned_resources == ()`` - truthfully, by its own
+        definition - while roughly 55 MB of L1 is still resident on the mesh. That
+        is why the *next* owner's ``seal()`` OOMs, and why the honest reading of a
+        clean ``cleanup()`` is "nothing this object still owns", not "nothing is
+        left on the device".
+
+        The OOM itself needs L1 and is not reproduced here.
+        """
+
+        resources = ResourceHarness()
+        owner = initialized_owner(resources)
+>       seal_one(owner)
+
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py:226:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py:163: in seal_one
+    owner.seal()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <models.common.modules.prefetcher.prefetcher_2d.Prefetcher2D object at 0x79c4eca6ab90>
+
+    def seal(self) -> tuple[Prefetcher2DContext, Prefetcher2DContext]:
+        self._ensure_open()
+        if not self._initialized:
+            raise RuntimeError("Prefetcher2D must be initialized before sealing")
+        if self._sealed:
+            return self.context("prefill"), self.context("decode")
+        if len(self._registered_weights) != self.config.expected_weight_count:
+>           raise RuntimeError(
+                f"expected {self.config.expected_weight_count} registered weights, "
+                f"got {len(self._registered_weights)}"
+            )
+E           RuntimeError: expected 2 registered weights, got 1
+
+models/common/modules/prefetcher/prefetcher_2d.py:271: RuntimeError
+_____ test_a_second_owner_on_the_same_mesh_reallocates_a_second_global_cb ______
+
+    def test_a_second_owner_on_the_same_mesh_reallocates_a_second_global_cb():
+        """Two constructions in one process allocate two CBs; only one can be freed.
+
+        On the host both seals succeed, because nothing tracks L1. On a mesh the
+        second ``seal()`` is the one that fails. Recording the host behaviour makes
+        the difference between the two explicit rather than a surprise.
+        """
+
+        resources = ResourceHarness()
+        first = initialized_owner(resources)
+>       seal_one(first)
+
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py:251:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py:163: in seal_one
+    owner.seal()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <models.common.modules.prefetcher.prefetcher_2d.Prefetcher2D object at 0x79c4ec867a60>
+
+    def seal(self) -> tuple[Prefetcher2DContext, Prefetcher2DContext]:
+        self._ensure_open()
+        if not self._initialized:
+            raise RuntimeError("Prefetcher2D must be initialized before sealing")
+        if self._sealed:
+            return self.context("prefill"), self.context("decode")
+        if len(self._registered_weights) != self.config.expected_weight_count:
+>           raise RuntimeError(
+                f"expected {self.config.expected_weight_count} registered weights, "
+                f"got {len(self._registered_weights)}"
+            )
+E           RuntimeError: expected 2 registered weights, got 1
+
+models/common/modules/prefetcher/prefetcher_2d.py:271: RuntimeError
+________ test_cleanup_is_terminal_and_a_sealed_owner_cannot_be_resealed ________
+
+    def test_cleanup_is_terminal_and_a_sealed_owner_cannot_be_resealed():
+        resources = ResourceHarness()
+        owner = initialized_owner(resources)
+>       seal_one(owner)
+
+models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py:267:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/common/tests/modules/prefetcher/test_prefetcher_2d.py:163: in seal_one
+    owner.seal()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <models.common.modules.prefetcher.prefetcher_2d.Prefetcher2D object at 0x79c4ec9aca30>
+
+    def seal(self) -> tuple[Prefetcher2DContext, Prefetcher2DContext]:
+        self._ensure_open()
+        if not self._initialized:
+            raise RuntimeError("Prefetcher2D must be initialized before sealing")
+        if self._sealed:
+            return self.context("prefill"), self.context("decode")
+        if len(self._registered_weights) != self.config.expected_weight_count:
+>           raise RuntimeError(
+                f"expected {self.config.expected_weight_count} registered weights, "
+                f"got {len(self._registered_weights)}"
+            )
+E           RuntimeError: expected 2 registered weights, got 1
+
+models/common/modules/prefetcher/prefetcher_2d.py:271: RuntimeError
+==================================== PASSES ====================================
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.16s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_reopening_after_a_close_allocates_a_fresh_cache
+0.16s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_open_is_idempotent_while_already_open
+0.16s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_two_identical_requests_stage_identical_tokens_positions_and_tables
+0.16s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_second_owner_on_the_same_mesh_reallocates_a_second_global_cb
+0.16s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_repeated_request_reuses_the_bound_cache_and_tables_rather_than_restaging
+0.16s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_the_same_slot_addresses_the_same_blocks_on_every_repeat
+0.15s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_close_unbinds_the_cache_releases_the_tables_and_is_idempotent
+0.15s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_cleanup_reports_no_owned_resources_while_never_freeing_the_global_cb
+0.15s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_failed_open_leaves_nothing_bound
+0.15s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_closed_runner_refuses_further_graph_calls
+0.15s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_cleanup_is_terminal_and_a_sealed_owner_cannot_be_resealed
+0.15s setup    models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_the_galaxy_global_cb_size_is_a_topology_constant_not_a_model_choice
+0.01s call     models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_two_identical_requests_stage_identical_tokens_positions_and_tables
+0.01s teardown models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_open_is_idempotent_while_already_open
+0.01s teardown models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_repeated_request_reuses_the_bound_cache_and_tables_rather_than_restaging
+0.01s call     models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_reopening_after_a_close_allocates_a_fresh_cache
+0.01s teardown models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_two_identical_requests_stage_identical_tokens_positions_and_tables
+0.01s teardown models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_the_same_slot_addresses_the_same_blocks_on_every_repeat
+0.01s call     models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_the_same_slot_addresses_the_same_blocks_on_every_repeat
+0.01s call     models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_repeated_request_reuses_the_bound_cache_and_tables_rather_than_restaging
+0.01s teardown models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_reopening_after_a_close_allocates_a_fresh_cache
+
+(4 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_two_identical_requests_stage_identical_tokens_positions_and_tables
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_repeated_request_reuses_the_bound_cache_and_tables_rather_than_restaging
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_the_same_slot_addresses_the_same_blocks_on_every_repeat
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_close_unbinds_the_cache_releases_the_tables_and_is_idempotent
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_closed_runner_refuses_further_graph_calls
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_failed_open_leaves_nothing_bound
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_reopening_after_a_close_allocates_a_fresh_cache
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_open_is_idempotent_while_already_open
+PASSED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_the_galaxy_global_cb_size_is_a_topology_constant_not_a_model_choice
+FAILED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_cleanup_reports_no_owned_resources_while_never_freeing_the_global_cb
+FAILED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_a_second_owner_on_the_same_mesh_reallocates_a_second_global_cb
+FAILED models/common/tests/models/galaxy/test_step7_repeat_and_cleanup.py::test_cleanup_is_terminal_and_a_sealed_owner_cannot_be_resealed
+========================= 3 failed, 9 passed in 2.78s ==========================
+exit=1

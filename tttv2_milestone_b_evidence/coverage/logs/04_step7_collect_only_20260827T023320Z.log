@@ -1,0 +1,539 @@
+2026-08-27 02:33:42.768 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 148 items
+
+<Dir tt-metal>
+  <Dir models>
+    <Dir common>
+      <Dir tests>
+        <Dir models>
+          <Dir galaxy>
+            <Module test_step7_concat32.py>
+              Milestone B step 7, area 2: concat-32 physical prefill.
+
+              The plan's risk for this area is precise: *padding inactive rows must not write
+              KV or return logits for inactive slots*. Whether that holds is decided by three
+              host-side artefacts, and this suite inspects all three directly:
+
+              1. **the planned tokens** - the flat token stream ``prefill_batched`` builds,
+                 which row occupies which span of it, and what fills the padding;
+              2. **the page table** - which table is handed to the fill, and which row of it
+                 each source row is allowed to touch;
+              3. **the source rows** - the mapping ``Attention2D`` makes from concatenated
+                 row *r* to user ``user_ids[r]`` when it slices the KV heads.
+
+              Sequence lengths are qualified in ascending order, 128 first, then out to 2048,
+              because each length is a separate resolved recipe and a separate set of
+              collective resources.
+
+              Not claimed here: that the device produces the same logits through the batched
+              and the sequential path. That is
+              ``test_..._direct_demo_concat32_prefill_matches_sequential`` in each model's
+              demo, and it has never run.
+              <Function test_the_flat_token_stream_gives_each_row_its_own_span[len128]>
+                Row *r* occupies ``[r * length, (r + 1) * length)`` and nothing else.
+              <Function test_the_flat_token_stream_gives_each_row_its_own_span[len256]>
+                Row *r* occupies ``[r * length, (r + 1) * length)`` and nothing else.
+              <Function test_the_flat_token_stream_gives_each_row_its_own_span[len512]>
+                Row *r* occupies ``[r * length, (r + 1) * length)`` and nothing else.
+              <Function test_the_flat_token_stream_gives_each_row_its_own_span[len1024]>
+                Row *r* occupies ``[r * length, (r + 1) * length)`` and nothing else.
+              <Function test_the_flat_token_stream_gives_each_row_its_own_span[len2048]>
+                Row *r* occupies ``[r * length, (r + 1) * length)`` and nothing else.
+              <Function test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active16]>
+                Inactive rows are padding, and padding is token id 0 - never a neighbour's token.
+              <Function test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active31]>
+                Inactive rows are padding, and padding is token id 0 - never a neighbour's token.
+              <Function test_padding_a_row_writes_only_zero_tokens_into_that_rows_span[active32]>
+                Inactive rows are padding, and padding is token id 0 - never a neighbour's token.
+              <Function test_only_each_rows_real_last_token_is_projected[active16]>
+                Logit isolation: a row's logits come from its own final real token.
+
+                ``token_indices`` addresses the last *real* token of each row, which is not
+                ``sequence_length - 1`` for any row that was padded. Reading the padded tail
+                instead would return a logit computed from a zero token.
+              <Function test_only_each_rows_real_last_token_is_projected[active31]>
+                Logit isolation: a row's logits come from its own final real token.
+
+                ``token_indices`` addresses the last *real* token of each row, which is not
+                ``sequence_length - 1`` for any row that was padded. Reading the padded tail
+                instead would return a logit computed from a zero token.
+              <Function test_only_each_rows_real_last_token_is_projected[active32]>
+                Logit isolation: a row's logits come from its own final real token.
+
+                ``token_indices`` addresses the last *real* token of each row, which is not
+                ``sequence_length - 1`` for any row that was padded. Reading the padded tail
+                instead would return a logit computed from a zero token.
+              <Function test_an_empty_row_is_caught_by_the_generation_entry_point_not_by_the_prefill>
+                Recorded gap - see REPORT.md area 2, G-C2.
+
+                ``generate`` refuses an empty prompt outright. ``prefill_batched`` called
+                directly does not: it plans ``token_indices[r] == -1`` for an empty row and
+                leaves the rejection to ``project_prefill_logits``, one call further down.
+                The rejection does happen, so no padded logit can be returned - but it
+                happens after the whole concatenated prefill graph has run, which on a
+                128-row-equivalent stream is the expensive way to find out.
+              <Function test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len128]>
+              <Function test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len256]>
+              <Function test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len512]>
+              <Function test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len1024]>
+              <Function test_the_concatenated_prefill_uses_the_replicated_table_and_names_every_user[len2048]>
+              <Function test_each_concatenated_source_row_touches_exactly_one_page_table_row>
+                Source row *r* fills user ``user_ids[r]`` and reads only that user's row.
+
+                ``paged_fill_cache`` is called once per row with ``batch_idx=0`` against a
+                one-row table slice, so a row cannot address a user it was not assigned. A
+                deliberately non-identity user order makes the pairing observable.
+              <Function test_a_single_row_prefill_still_indexes_the_table_by_user>
+                The one-row path keeps ``batch_idx=user``; only the concat path slices.
+              <Function test_concatenated_prefill_requires_the_whole_physical_batch>
+                Recorded limitation - see REPORT.md area 2.
+
+                ``prefill_batched`` refuses any runner whose ``active_slots`` is below 32,
+                so "active batch 16" and "active batch 31" cannot be expressed as a smaller
+                *paged allocation*. They are expressible only as 32 physical rows of which
+                16 or 31 carry real prompts, which is what the tests above measure. The two
+                isolation mechanisms - sink blocks for idle slots, and concatenated prefill -
+                do not compose.
+              <Function test_a_short_row_count_is_refused>
+              <Function test_the_batched_recipe_family_is_selected_in_ascending_order[len128]>
+                A prompt picks the smallest batched recipe that covers it, not 2048.
+              <Function test_the_batched_recipe_family_is_selected_in_ascending_order[len256]>
+                A prompt picks the smallest batched recipe that covers it, not 2048.
+              <Function test_the_batched_recipe_family_is_selected_in_ascending_order[len512]>
+                A prompt picks the smallest batched recipe that covers it, not 2048.
+              <Function test_the_batched_recipe_family_is_selected_in_ascending_order[len1024]>
+                A prompt picks the smallest batched recipe that covers it, not 2048.
+              <Function test_the_batched_recipe_family_is_selected_in_ascending_order[len2048]>
+                A prompt picks the smallest batched recipe that covers it, not 2048.
+              <Function test_a_prompt_past_the_longest_batched_recipe_fails_closed>
+              <Function test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len128]>
+                A concatenated prefill's collectives have single-row 32*L geometry.
+              <Function test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len256]>
+                A concatenated prefill's collectives have single-row 32*L geometry.
+              <Function test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len512]>
+                A concatenated prefill's collectives have single-row 32*L geometry.
+              <Function test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len1024]>
+                A concatenated prefill's collectives have single-row 32*L geometry.
+              <Function test_each_batched_length_costs_one_collective_recipe_at_32x_its_tokens[len2048]>
+                A concatenated prefill's collectives have single-row 32*L geometry.
+              <Function test_a_batched_length_beyond_the_served_context_is_refused>
+            <Module test_step7_long_context.py>
+              Milestone B step 7, area 5: long-context capacity accounting.
+
+              The 4K / 32K / 128K smokes are functional, not numerical, and the brief expects
+              memory and paging - not numerics - to be the limiting factor. It also asks for a
+              record of *where each one actually spends its capacity*. That record is
+              arithmetic over the resolved geometry, so it can be produced and checked without
+              a mesh, and it is what tells the next run whether a failure was a bug or a
+              capacity wall.
+
+              Everything here mirrors the configuration
+              ``test_llama33_70b_galaxy_long_context_smoke`` builds: batch 1, one served slot,
+              2048-token chunks, one chunk of headroom past the prompt, one sink block per
+              idle slot.
+
+              The smoke itself has never run. Nothing here claims it passes; these tests say
+              what it will cost if it does.
+              <Function test_each_long_context_geometry_resolves[4k]>
+              <Function test_each_long_context_geometry_resolves[32k]>
+              <Function test_each_long_context_geometry_resolves[128k]>
+              <Function test_the_block_pool_covers_the_served_context_and_every_idle_sink[4k]>
+              <Function test_the_block_pool_covers_the_served_context_and_every_idle_sink[32k]>
+              <Function test_the_block_pool_covers_the_served_context_and_every_idle_sink[128k]>
+              <Function test_the_runner_accepts_the_batch_one_long_context_allocation[4k]>
+              <Function test_the_runner_accepts_the_batch_one_long_context_allocation[32k]>
+              <Function test_the_runner_accepts_the_batch_one_long_context_allocation[128k]>
+              <Function test_a_pool_one_block_short_of_the_context_fails_closed[4k]>
+              <Function test_a_pool_one_block_short_of_the_context_fails_closed[32k]>
+              <Function test_a_pool_one_block_short_of_the_context_fails_closed[128k]>
+              <Function test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-4k]>
+                Recorded numbers, not a gate. See REPORT.md area 5 for the table.
+
+                A Wormhole device has 12 GB of DRAM. Both models' weights are roughly
+                ``params / 32`` devices at bfloat8_b; the KV pool is on top of that and is
+                *replicated*, so it does not shrink with the mesh.
+              <Function test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-32k]>
+                Recorded numbers, not a gate. See REPORT.md area 5 for the table.
+
+                A Wormhole device has 12 GB of DRAM. Both models' weights are roughly
+                ``params / 32`` devices at bfloat8_b; the KV pool is on top of that and is
+                *replicated*, so it does not shrink with the mesh.
+              <Function test_the_paged_kv_pool_is_the_dominant_per_device_cost[llama-128k]>
+                Recorded numbers, not a gate. See REPORT.md area 5 for the table.
+
+                A Wormhole device has 12 GB of DRAM. Both models' weights are roughly
+                ``params / 32`` devices at bfloat8_b; the KV pool is on top of that and is
+                *replicated*, so it does not shrink with the mesh.
+              <Function test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-4k]>
+                Recorded numbers, not a gate. See REPORT.md area 5 for the table.
+
+                A Wormhole device has 12 GB of DRAM. Both models' weights are roughly
+                ``params / 32`` devices at bfloat8_b; the KV pool is on top of that and is
+                *replicated*, so it does not shrink with the mesh.
+              <Function test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-32k]>
+                Recorded numbers, not a gate. See REPORT.md area 5 for the table.
+
+                A Wormhole device has 12 GB of DRAM. Both models' weights are roughly
+                ``params / 32`` devices at bfloat8_b; the KV pool is on top of that and is
+                *replicated*, so it does not shrink with the mesh.
+              <Function test_the_paged_kv_pool_is_the_dominant_per_device_cost[qwen-128k]>
+                Recorded numbers, not a gate. See REPORT.md area 5 for the table.
+
+                A Wormhole device has 12 GB of DRAM. Both models' weights are roughly
+                ``params / 32`` devices at bfloat8_b; the KV pool is on top of that and is
+                *replicated*, so it does not shrink with the mesh.
+              <Function test_the_page_table_stays_small_even_at_the_longest_context[4k]>
+                The tables are int32 ``[32, blocks_per_user]``; 128K is still sub-megabyte.
+              <Function test_the_page_table_stays_small_even_at_the_longest_context[32k]>
+                The tables are int32 ``[32, blocks_per_user]``; 128K is still sub-megabyte.
+              <Function test_the_page_table_stays_small_even_at_the_longest_context[128k]>
+                The tables are int32 ``[32, blocks_per_user]``; 128K is still sub-megabyte.
+              <Function test_the_rope_tables_grow_linearly_with_the_served_context[4k]>
+                Replicated bf16 ``[1, 1, table_len, head_dim]`` cos and sin, per device.
+              <Function test_the_rope_tables_grow_linearly_with_the_served_context[32k]>
+                Replicated bf16 ``[1, 1, table_len, head_dim]`` cos and sin, per device.
+              <Function test_the_rope_tables_grow_linearly_with_the_served_context[128k]>
+                Replicated bf16 ``[1, 1, table_len, head_dim]`` cos and sin, per device.
+              <Function test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[4k]>
+                A 128K prefill is 64 chunked prefill graphs, not one.
+              <Function test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[32k]>
+                A 128K prefill is 64 chunked prefill graphs, not one.
+              <Function test_the_chunk_count_is_what_decides_how_long_a_smoke_takes[128k]>
+                A 128K prefill is 64 chunked prefill graphs, not one.
+              <Function test_capacity_grows_linearly_in_context_and_is_reported_for_all_three>
+                One assertion that pins the whole recorded table at once.
+              <Function test_the_chunked_prefill_plan_walks_the_context_without_revisiting_a_block[4k]>
+                Every chunk addresses its own block range; none overlaps another.
+
+                128K is left out on purpose: its plan is 64 chunks of identical shape, and
+                running it here would only re-measure the same arithmetic 64 times.
+              <Function test_the_chunked_prefill_plan_walks_the_context_without_revisiting_a_block[32k]>
+                Every chunk addresses its own block range; none overlaps another.
+
+                128K is left out on purpose: its plan is 64 chunks of identical shape, and
+                running it here would only re-measure the same arithmetic 64 times.
+              <Function test_a_decode_after_a_full_prefill_still_has_a_block_to_write_into>
+                The headroom chunk is why ``served = context + chunk``.
+              <Function test_the_served_context_must_stay_a_multiple_of_the_chunk_alignment>
+            <Module test_step7_paged_kv.py>
+              Milestone B step 7, area 1: paged KV.
+
+              Host-decidable half of the paged-KV gate. What is proved here, without a mesh:
+
+              * every active slot owns a pairwise-disjoint, contiguous run of blocks, and no
+                inactive slot's sink block ever lands inside an active slot's run - this is
+                the *mechanism* behind the "no cross-slot contamination" gate;
+              * the two page-table layouts really are two layouts, mapped two ways, and the
+                decode one is deliberately unpadded;
+              * a paged capacity resolved *after* the model is constructed reaches every
+                layer, and is refused while a cache is bound;
+              * binding is transactional: a bind that fails part-way leaves no layer bound,
+                and only the owner may unbind.
+
+              What still needs silicon, and is therefore *not* claimed here: the PCC of a
+              paged fill/read against the contiguous path. That comparison lives in
+              ``test_full_model_wh_galaxy.py`` for each model and has never been run.
+
+              The ``Attention2D`` host fakes are imported from the module suite rather than
+              copied; that suite is the single source of truth for what a legal 2D attention
+              config looks like, and duplicating it is how the two drift apart.
+              <Function test_no_two_slots_can_address_the_same_block[1]>
+                The cross-slot contamination gate, reduced to its host-decidable core.
+
+                A write for user *i* can only reach user *j*'s cache if some block appears
+                in both rows of the page table. Block ownership is static, so that is a
+                property of the table alone.
+              <Function test_no_two_slots_can_address_the_same_block[8]>
+                The cross-slot contamination gate, reduced to its host-decidable core.
+
+                A write for user *i* can only reach user *j*'s cache if some block appears
+                in both rows of the page table. Block ownership is static, so that is a
+                property of the table alone.
+              <Function test_no_two_slots_can_address_the_same_block[16]>
+                The cross-slot contamination gate, reduced to its host-decidable core.
+
+                A write for user *i* can only reach user *j*'s cache if some block appears
+                in both rows of the page table. Block ownership is static, so that is a
+                property of the table alone.
+              <Function test_no_two_slots_can_address_the_same_block[31]>
+                The cross-slot contamination gate, reduced to its host-decidable core.
+
+                A write for user *i* can only reach user *j*'s cache if some block appears
+                in both rows of the page table. Block ownership is static, so that is a
+                property of the table alone.
+              <Function test_no_two_slots_can_address_the_same_block[32]>
+                The cross-slot contamination gate, reduced to its host-decidable core.
+
+                A write for user *i* can only reach user *j*'s cache if some block appears
+                in both rows of the page table. Block ownership is static, so that is a
+                property of the table alone.
+              <Function test_an_idle_slots_sink_never_lands_in_an_active_slots_run[1]>
+                Padding rows still write KV; their blocks must be nobody else's.
+              <Function test_an_idle_slots_sink_never_lands_in_an_active_slots_run[16]>
+                Padding rows still write KV; their blocks must be nobody else's.
+              <Function test_an_idle_slots_sink_never_lands_in_an_active_slots_run[31]>
+                Padding rows still write KV; their blocks must be nobody else's.
+              <Function test_every_addressed_block_is_inside_the_allocated_pool[1]>
+              <Function test_every_addressed_block_is_inside_the_allocated_pool[8]>
+              <Function test_every_addressed_block_is_inside_the_allocated_pool[16]>
+              <Function test_every_addressed_block_is_inside_the_allocated_pool[31]>
+              <Function test_every_addressed_block_is_inside_the_allocated_pool[32]>
+              <Function test_each_active_slot_owns_enough_blocks_for_the_whole_served_context>
+              <Function test_prefill_and_decode_stage_two_different_tables_two_different_ways>
+                Prefill replicates a padded table; decode shards an unpadded one.
+
+                ``paged_fill_cache`` indexes by ``batch_idx`` so every device needs every
+                user's row; the paged decode SDPA derives its KV length from the row width,
+                so padding it would claim context a slot does not own.
+              <Function test_padding_the_prefill_table_cannot_invent_a_block_a_slot_does_not_own>
+                Stick alignment must pad with zeros only beyond every real entry.
+              <Function test_a_paged_capacity_resolved_after_construction_reaches_every_layer[llama]>
+                Late capacity resolution: the cache is sized after the model exists.
+              <Function test_a_paged_capacity_resolved_after_construction_reaches_every_layer[qwen]>
+                Late capacity resolution: the cache is sized after the model exists.
+              <Function test_paged_capacity_cannot_be_resolved_while_a_cache_is_bound[llama]>
+              <Function test_paged_capacity_cannot_be_resolved_while_a_cache_is_bound[qwen]>
+              <Function test_binding_every_layer_is_all_or_nothing[llama]>
+                A bind that fails part-way must leave no layer bound.
+
+                The third layer's cache carries the wrong dtype, which ``Attention2D``
+                rejects. Layers 0 and 1 have already been bound when that happens.
+              <Function test_binding_every_layer_is_all_or_nothing[qwen]>
+                A bind that fails part-way must leave no layer bound.
+
+                The third layer's cache carries the wrong dtype, which ``Attention2D``
+                rejects. Layers 0 and 1 have already been bound when that happens.
+              <Function test_a_malformed_layer_entry_also_unwinds_every_earlier_layer[llama]>
+              <Function test_a_malformed_layer_entry_also_unwinds_every_earlier_layer[qwen]>
+              <Function test_unbind_is_transactional_and_repeatable[llama]>
+              <Function test_unbind_is_transactional_and_repeatable[qwen]>
+              <Function test_rebinding_replaces_the_previous_binding_rather_than_stacking[llama]>
+              <Function test_rebinding_replaces_the_previous_binding_rather_than_stacking[qwen]>
+              <Function test_a_layer_count_mismatch_is_refused_before_anything_is_bound[llama]>
+              <Function test_a_layer_count_mismatch_is_refused_before_anything_is_bound[qwen]>
+              <Function test_only_the_binding_owner_may_unbind>
+                A second owner cannot steal a bound cache.
+              <Function test_the_kv_contract_presents_one_layer_view_per_spec_and_forwards_binding>
+              <Function test_the_kv_contract_refuses_a_model_with_no_resolved_mesh>
+              <Function test_a_contiguous_spec_has_no_paged_shape_and_no_binding_metadata>
+              <Function test_decode_rejects_a_table_that_cannot_carry_one_mesh_columns_users>
+                A row count that is not a whole number of device-local batches.
+              <Function test_prefill_rejects_a_decode_shaped_table_that_cannot_reach_the_addressed_user>
+                The decode table's device-local view is eight rows; prefill fills 32.
+
+                This is the *reverse* of the adversarial case below, and it does fail
+                closed: ``paged_fill_cache`` indexes by ``batch_idx``, so a table that stops
+                at row 7 cannot address user 8.
+              <Function test_decode_cannot_tell_the_prefill_layout_from_a_four_core_l1_repeat>
+                KNOWN GAP - Milestone B defect D-C1. Recorded, not worked around.
+
+                The step-7 gate asks that a prefill-shaped page table fed to decode be
+                *rejected*. It is not. ``_validate_decode_page_table`` discriminates on row
+                count alone, and accepts any positive multiple of ``users_per_column``
+                because an L1-sharded table legitimately repeats the device-local batch once
+                per core. The replicated prefill table's device-local view is 32 rows, and
+                ``32 == 4 * 8``, so it passes every check and reaches ``paged_update_cache``.
+
+                Shape cannot separate the two. The distinguishing fact is placement: the
+                prefill table is DRAM-interleaved and replicated, whereas a legitimate
+                repeat is L1 height-sharded over exactly ``rows / users_per_column`` cores.
+                The validator never reads ``memory_config()``.
+
+                This test pins the behaviour that exists so the gap cannot silently close or
+                silently widen. It is deliberately *not* an assertion that the behaviour is
+                correct; see ``tttv2_milestone_b_evidence/coverage/REPORT.md`` area 1.
+            <Module test_step7_prefix_cache.py>
+              Milestone B step 7, area 3: prefix-cached and chunked prefill.
+
+              The gate itself - *prefix-cached output matches uncached execution* - is a
+              numerical claim and needs silicon. What this suite proves on the host is the
+              addressing underneath it, which is where the two known traps are:
+
+              * ``paged_fill_cache`` walks the chunk table from entry zero, so a chunk that
+                starts at token ``c`` must be handed the slice of the slot's blocks that
+                begins at block ``c / block_size`` - not the slot's whole row;
+              * chunked SDPA requires the page table's leading dimension to equal Q's batch,
+                which is **1** for a single-row prefill. ``Attention2D`` slices the addressed
+                user's row out for exactly this reason, and the row it picks must be the
+                *prefix* user, not ``user_ids[0]``, whenever the two differ.
+
+              The interaction cases the brief asks for - a prefix-cached request followed by a
+              normal one, and a mix of both across slots - are exercised as *plans*: which
+              metadata each call carries, and whether one call leaves state that changes the
+              next. State that leaks between requests is host-visible; numerics are not.
+              <Function test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[1]>
+                ``paged_fill_cache`` reads the chunk table from entry zero.
+              <Function test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[2]>
+                ``paged_fill_cache`` reads the chunk table from entry zero.
+              <Function test_a_chunk_table_starts_at_that_chunks_first_block_for_every_slot[7]>
+                ``paged_fill_cache`` reads the chunk table from entry zero.
+              <Function test_a_chunk_table_never_reaches_another_slots_blocks>
+              <Function test_an_unaligned_chunk_start_is_refused>
+              <Function test_a_chunk_past_a_slots_allocation_is_refused>
+              <Function test_chunked_prefill_needs_a_paged_cache>
+              <Function test_the_first_chunk_is_an_ordinary_prefill_and_later_chunks_are_prefix_cached>
+              <Function test_every_chunk_table_is_released_before_the_next_chunk_is_staged>
+                A chunk table that outlives its chunk is a leak across a long context.
+              <Function test_a_prefix_cached_request_leaves_the_next_plain_request_unchanged>
+                Interaction: prefix-cached, then normal.
+              <Function test_prefix_cached_and_plain_requests_mix_across_slots_without_sharing_state>
+                Interaction: a mix of both in the same batch of requests.
+              <Function test_chunked_prefill_needs_a_positive_chunk_and_at_least_one_token>
+              <Function test_single_row_chunked_sdpa_reads_one_row_and_it_is_the_prefix_users>
+                Q's batch is 1, so the table handed to chunked SDPA must have one row.
+              <Function test_the_sliced_row_follows_prefix_user_id_when_it_differs_from_the_filled_user>
+                ``prefix_user_id`` wins over ``user_ids[0]``; they differ when a request resumes.
+              <Function test_an_already_single_row_table_is_passed_straight_through>
+              <Function test_a_concatenated_prefill_keeps_the_full_table_because_q_carries_every_row>
+              <Function test_a_chunk_page_table_without_a_chunked_recipe_is_refused>
+            <Module test_step7_sampling.py>
+              Milestone B step 7, area 4: device sampling.
+
+              ``Sampling2D`` already has a host suite of its own
+              (``models/common/tests/modules/sampling/test_sampling_2d.py``). This suite covers
+              what step 7 adds on top of it: the *composition* of the sampler with the Galaxy
+              column user selector and the direct runner, at the two real model vocabularies.
+
+              Four claims, and what this file can and cannot say about each:
+
+              1. **Slot stability.** Two different claims hide under that word. "The same
+                 seed in the same slot gives the same token across runs" holds and is proved
+                 here. "Moving a request to a different slot does not change its stream" does
+                 **not** hold - the device and host seeds are both derived from
+                 ``blake2b("sampling2d:{seed}:{slot}")`` - and the test that measures it says
+                 so rather than asserting the gate. See REPORT.md area 4, D-C2.
+              2. **Greedy matches host argmax.** Proved here on host, at both vocabularies,
+                 including when a padded entry carries the largest logit.
+              3. **Padded vocabulary can never be sampled.** Proved here for Qwen. For Llama
+                 it is *vacuous*: 128256 is already a multiple of ``8 * 32``, so there is no
+                 padding and no mask. That is asserted explicitly because the step-7 brief
+                 assumes both models pad.
+              4. **Per-slot heterogeneous controls.** Proved here by reading back exactly the
+                 buffers that would be shipped to the mesh.
+
+              Plus one composition property that no single module can check: the sampler's
+              slot->column map, the column selector's row gather, and the runner's decode
+              position sharding must all place global slot *s* on mesh column ``s // 8``. If
+              any two disagree, a user samples from another user's logits - which is a
+              cross-slot contamination bug that no per-module test can see.
+
+              The device half of every claim is unproven; there is no Galaxy result in this
+              tree for any of it.
+              <Function test_the_same_seed_in_the_same_slot_gives_the_same_token_across_runs>
+                Fresh sampler objects, identical result: nothing is carried in module state.
+              <Function test_a_requests_row_position_in_the_call_does_not_change_its_stream>
+                The stream follows the *slot*, not the row index within one call.
+              <Function test_moving_a_seeded_request_to_another_slot_does_change_its_stream>
+                MEASURED, NOT A GATE - Milestone B finding D-C2.
+
+                Step 7 asks that "moving a request to a different slot does not change its
+                stream". It does. Both the device seed and the host seed are
+                ``blake2b("sampling2d:{seed}:{slot}")``, so slot is part of the key.
+
+                This is a deliberate decorrelation: without it, 32 slots given one seed by a
+                serving front end would all emit the same token. The step-7 requirement and
+                the module's design are in direct conflict, and resolving it is a decision,
+                not a bug fix - so this test records the behaviour that exists instead of
+                asserting the one the brief asks for.
+              <Function test_one_seed_across_every_slot_does_not_collapse_the_batch>
+                The property the slot mixing exists to protect.
+              <Function test_greedy_selects_exactly_the_host_argmax[llama]>
+              <Function test_greedy_selects_exactly_the_host_argmax[qwen]>
+              <Function test_forced_argmax_and_zero_temperature_agree[llama]>
+              <Function test_forced_argmax_and_zero_temperature_agree[qwen]>
+              <Function test_llama_has_no_vocabulary_padding_at_all>
+                The step-7 brief assumes Llama pads. On this tree it does not.
+
+                128256 = 501 * 256, and the Galaxy alignment is ``8 vocab shards * 32``.
+                ``padded_vocab_size == vocab_size``, ``build_invalid_vocab_mask`` returns
+                ``None``, and ``Sampling2D`` builds no mask buffer. The padded-vocabulary
+                gate is therefore *vacuous* for Llama - there is nothing to mask and nothing
+                that can be sampled. Recorded so nobody reads a Llama pass as evidence that
+                masking works.
+              <Function test_qwen_pads_by_exactly_one_hundred_and_twenty_eight_masked_entries>
+              <Function test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[greedy]>
+                Qwen geometry, every padded id set far above every real one.
+              <Function test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t0.7]>
+                Qwen geometry, every padded id set far above every real one.
+              <Function test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t1.0]>
+                Qwen geometry, every padded id set far above every real one.
+              <Function test_a_padded_entry_cannot_win_even_when_it_carries_the_largest_logit[t2.0]>
+                Qwen geometry, every padded id set far above every real one.
+              <Function test_the_device_path_masks_padding_additively_below_every_real_logit>
+                The device adds the mask before top-k; bf16's minimum is the floor.
+              <Function test_each_slot_carries_its_own_top_k_top_p_and_temperature>
+                Serving mixes them, so the buffers must be per-slot, not broadcast.
+              <Function test_heterogeneous_controls_change_the_tokens_they_are_supposed_to_change>
+              <Function test_top_k_stays_inside_the_configured_capacity>
+                ``max_top_k`` is 32 and the config contract does not go past it.
+              <Function test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.25]>
+                The pairing the brief asks to verify, on the host half.
+
+                ``GalaxyDirectRunner`` divides by ``T`` in its own host reference and hands
+                the module the *raw* ``T``; ``Sampling2D`` then writes ``1/T`` into the
+                buffer, because ``ttnn.sampling``'s ``temp`` argument is the reciprocal.
+                Both halves have to be checked at ``T != 1.0``: 1.0 is its own reciprocal,
+                which is what hid defect D4.
+              <Function test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.5]>
+                The pairing the brief asks to verify, on the host half.
+
+                ``GalaxyDirectRunner`` divides by ``T`` in its own host reference and hands
+                the module the *raw* ``T``; ``Sampling2D`` then writes ``1/T`` into the
+                buffer, because ``ttnn.sampling``'s ``temp`` argument is the reciprocal.
+                Both halves have to be checked at ``T != 1.0``: 1.0 is its own reciprocal,
+                which is what hid defect D4.
+              <Function test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[0.8]>
+                The pairing the brief asks to verify, on the host half.
+
+                ``GalaxyDirectRunner`` divides by ``T`` in its own host reference and hands
+                the module the *raw* ``T``; ``Sampling2D`` then writes ``1/T`` into the
+                buffer, because ``ttnn.sampling``'s ``temp`` argument is the reciprocal.
+                Both halves have to be checked at ``T != 1.0``: 1.0 is its own reciprocal,
+                which is what hid defect D4.
+              <Function test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[2.0]>
+                The pairing the brief asks to verify, on the host half.
+
+                ``GalaxyDirectRunner`` divides by ``T`` in its own host reference and hands
+                the module the *raw* ``T``; ``Sampling2D`` then writes ``1/T`` into the
+                buffer, because ``ttnn.sampling``'s ``temp`` argument is the reciprocal.
+                Both halves have to be checked at ``T != 1.0``: 1.0 is its own reciprocal,
+                which is what hid defect D4.
+              <Function test_the_module_writes_one_over_t_while_the_runner_passes_raw_t[4.0]>
+                The pairing the brief asks to verify, on the host half.
+
+                ``GalaxyDirectRunner`` divides by ``T`` in its own host reference and hands
+                the module the *raw* ``T``; ``Sampling2D`` then writes ``1/T`` into the
+                buffer, because ``ttnn.sampling``'s ``temp`` argument is the reciprocal.
+                Both halves have to be checked at ``T != 1.0``: 1.0 is its own reciprocal,
+                which is what hid defect D4.
+              <Function test_the_runners_host_reference_divides_by_t_rather_than_multiplying>
+                A raw-T/reciprocal-T confusion reverses which token a low T favours.
+              <Function test_a_greedy_policy_is_temperature_zero_or_top_one>
+              <Function test_the_runner_forces_argmax_for_a_greedy_policy>
+              <Function test_the_column_selector_gathers_rows_eight_c_through_eight_c_plus_seven>
+              <Function test_the_sampler_the_selector_and_the_runner_agree_on_every_slots_column>
+                A disagreement here is a cross-slot contamination bug by construction.
+              <Function test_the_selector_refuses_a_tensor_that_is_not_the_physical_batch>
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+========================= 148 tests collected in 7.07s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+exit=0

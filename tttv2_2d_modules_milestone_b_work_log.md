@@ -732,3 +732,67 @@ Plan steps 1-3 for Llama-3.3-70B on WH Galaxy `(8, 4)`. Full account:
   them. Unrun device code would invite `mb-coverage` to trust it. Recorded as a decision, not an
   oversight.
 - No test was deleted, `xfail`ed, skipped or relaxed. No threshold was tuned.
+
+## 2026-08-27 — `mb-coverage` (plan step 7): mesh still dead, step 7 taken as far as the host allows
+
+Full account: `tttv2_milestone_b_evidence/coverage/REPORT.md`.
+Handoff: `tttv2_milestone_b_briefs/job3_completion_handoff.md`.
+
+- **The mesh never came back.** Same eleven boards off the PCIe bus as `mb-qwen`
+  (`0 1 2 3 4 5 6 7 10 11 14`), same `Read 0xffffffff over PCIe ID 17`, `ttnn` cannot open a
+  cluster at all. **No recovery attempt was spent** — two jobs had already used all four and proved
+  neither reset path can recover a board that is not on the bus. Logged at the `tt-smi` level and
+  at the pytest level.
+- **Three consecutive device jobs, zero numerical results from silicon.** No PCC, no accuracy
+  number, no demo output, no functional smoke, for either model. The two accuracy gates the brief
+  asked to *re-measure* had never been measured by anyone, at any tree — there was nothing to
+  compare against.
+- **Qwen stays `BLOCKED (upstream)`**: weights still absent (~65 GB), so even a healthy mesh does
+  not unblock it. Scope was not halved — the Qwen device coverage was written alongside Llama's.
+- **All five areas were attacked at the level that is decidable without a mesh** — block ownership,
+  the two page-table layouts and their mappers, the planned tokens/tables/source rows of a
+  concatenated prefill, the chunk-table arithmetic, and the exact values `Sampling2D` ships to its
+  per-slot buffers. **162 new host tests, identical across three fresh processes.**
+- **D-C1 (correctness).** A prefill-shaped page table fed to decode is **accepted**, not rejected.
+  `_validate_decode_page_table` discriminates on row count alone and allows any multiple of
+  `users_per_column`, because an L1-sharded table repeats the batch per core; the replicated prefill
+  table's device-local view is 32 rows and `32 == 4 * 8`. Shape cannot separate the two — placement
+  can, and is never read. The step-7 gate asking for rejection **cannot be met by the current
+  contract**. Not fixed: an existing 2D module test asserts the 32-row acceptance, and changing that
+  expectation is the boundary violation both briefs say to report instead.
+- **D-C2 (contract conflict).** "Moving a request to a different slot does not change its stream" is
+  **false**: `_seed_digest` is `blake2b("sampling2d:{seed}:{slot}")`. That is deliberate — it stops
+  32 slots sharing one seed from collapsing onto one token, which is also now pinned by a test — so
+  it is a serving-contract decision, not a bug, and it was measured rather than "fixed".
+- **F-C1 (premise correction).** **Llama has no vocabulary padding.** 128256 is already a multiple
+  of `8 vocab shards * 32`, so `padded_vocab_size == vocab_size` and `invalid_vocab_mask is None`.
+  The padded-vocab gate is *vacuous* for Llama; only Qwen pads (128 ids, masked to bf16 min, proved
+  unsampleable at four temperatures on host).
+- **G-C1 / G-C2 / G-C3.** Concat-32 needs all 32 slots and does not compose with the `active_slots
+  < 32` sink-block mechanism; an empty row is rejected one call too late; and the
+  `"chunk_page_table requires a prefix/chunked recipe"` guard is unreachable because a chunk table
+  alone already selects the chunked recipe.
+- **F-C2 (test infra).** `tests/models/galaxy/test_plans.py` looks host-only but needs a cluster:
+  `ttnn.SubDevice` constructs the `MetalContext`. 13 of the 18 baseline host failures are this.
+- **The other 5 baseline host failures are `reconcile`'s O2**, re-measured here and proved
+  mechanically independent of Milestone B — nothing under `llm_runtime` or any 1D package has
+  changed since `bc6ad03bfc2`. The exit-gate line is FAIL as written; the owner is not Milestone B.
+- **Long context: capacity accounted rather than smoked.** Per device, replicated pool: 4K 0.14 GiB,
+  32K 0.73 GiB, 128K **2.72 GiB** of KV for Llama (2.17 for Qwen), plus 130 MiB of RoPE tables and
+  64 chunked-prefill graphs at 128K. Against ~2.3 GiB of weights on a 12 GB device that should fit;
+  the risk is fragmentation, not the total.
+- **L1 confirmed on the host.** `Prefetcher2D.cleanup()` clears `_global_cb` without handing it to
+  `deallocate`, so `owned_resources == ()` is true while the CB is still resident; two owners
+  allocate two and free neither. The OOM itself needs real L1. Whether the ordering contract is
+  workable at model scale is still unmeasured — the 80-layer model has never been built.
+- **No implementation file was changed.** Only tests and evidence. Every finding either needs a mesh
+  to validate a fix or needs a product decision first. Both boundary greps stay empty across all 190
+  changed paths.
+- **Device tests were committed despite never running** (17 Llama, 16 Qwen), against `mb-qwen`'s
+  advice, because the gaps are now specific enough that prose would have to be re-derived. Both
+  files say "This file has never been executed" in their docstring, with the date and the reason;
+  both were verified to collect and nothing more.
+- **One host assumption a mesh must check:** `step7_harness.py` models a distributed tensor's
+  `.shape` as the *shard* shape, read out of `TensorToMesh::Impl::create_tensor`, not measured.
+  D-C1 rests on it; the one-line check is in the handoff.
+- No test was deleted, `xfail`ed, skipped or relaxed. No threshold was tuned.

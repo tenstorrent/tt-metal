@@ -1,0 +1,2944 @@
+2026-08-27 02:51:56.905 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 17 items
+
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_and_contiguous_caches_agree[wormhole_b0-8x4-device_params0] 2026-08-27 02:52:17.174 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:17.174 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:17.266 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:17.266 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0] 2026-08-27 02:52:17.563 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:17.563 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:17.656 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:17.656 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0] 2026-08-27 02:52:17.937 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:17.937 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:18.030 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:18.030 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0] 2026-08-27 02:52:18.320 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:18.320 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:18.412 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:18.412 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active16-8x4-device_params0] 2026-08-27 02:52:18.702 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:18.702 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:18.793 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:18.794 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0] 2026-08-27 02:52:19.076 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:19.077 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:19.168 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:19.168 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0] 2026-08-27 02:52:19.451 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:19.451 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:19.544 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:19.544 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill[wormhole_b0-8x4-device_params0] 2026-08-27 02:52:19.837 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:19.837 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:19.929 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:19.929 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_greedy_sampling_equals_host_argmax[wormhole_b0-8x4-device_params0] 2026-08-27 02:52:20.210 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:20.210 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:20.302 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:20.302 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0] 2026-08-27 02:52:20.588 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:20.588 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:20.680 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:20.680 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_per_slot_heterogeneous_sampling_controls[wormhole_b0-8x4-device_params0] 2026-08-27 02:52:20.970 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:20.970 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:21.062 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:21.062 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len256-8x4-device_params0] 2026-08-27 02:52:21.346 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:21.346 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:21.438 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:21.438 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active31-8x4-device_params0] 2026-08-27 02:52:21.728 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:21.728 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:21.821 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:21.821 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len512-8x4-device_params0] 2026-08-27 02:52:22.112 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:22.112 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:22.205 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:22.205 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active32-8x4-device_params0] 2026-08-27 02:52:22.489 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:22.489 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:22.582 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:22.582 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len1024-8x4-device_params0] 2026-08-27 02:52:22.866 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:22.866 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:22.959 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:22.959 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len2048-8x4-device_params0] 2026-08-27 02:52:23.249 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-27 02:52:23.250 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-27 02:52:23.342 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-27 02:52:23.342 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+ERROR
+
+==================================== ERRORS ====================================
+_ ERROR at setup of test_llama_paged_and_contiguous_caches_agree[wormhole_b0-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_paged_and_contiguous_caches_agree[wormhole_b0-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active16-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active16-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_chunked_prefill_matches_a_single_uncached_prefill[wormhole_b0-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_chunked_prefill_matches_a_single_uncached_prefill[wormhole_b0-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_device_greedy_sampling_equals_host_argmax[wormhole_b0-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_device_greedy_sampling_equals_host_argmax[wormhole_b0-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_per_slot_heterogeneous_sampling_controls[wormhole_b0-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_per_slot_heterogeneous_sampling_controls[wormhole_b0-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len256-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len256-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active31-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active31-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len512-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len512-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active32-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active32-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len1024-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len1024-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+_ ERROR at setup of test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len2048-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len2048-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+E        1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+E        2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+E        4. tt::umd::TopologyDiscovery::get_connected_devices()
+E        5. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        8. tt::Cluster::open_driver(bool const&)
+E        9. tt::Cluster::initialize_device_drivers()
+E       10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E       11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       17. tt::tt_metal::GetNumPCIeDevices()
+E       18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+E       19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+E       20. _PyEval_EvalFrameDefault
+E       21. _PyFunction_Vectorcall
+E       22. python(+0x30011c) [0x63dfd162a11c]
+E       23. _PyEval_EvalFrameDefault
+E       24. _PyFunction_Vectorcall
+E       25. _PyEval_EvalFrameDefault
+E       26. python(+0x2774bd) [0x63dfd15a14bd]
+E       27. python(+0x2c8c28) [0x63dfd15f2c28]
+E       28. python(+0x293ea2) [0x63dfd15bdea2]
+E       29. python(+0x30011c) [0x63dfd162a11c]
+E       30. _PyEval_EvalFrameDefault
+E       31. _PyFunction_Vectorcall
+E       32. python(+0x30011c) [0x63dfd162a11c]
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. _PyEval_EvalFrameDefault
+E       38. _PyFunction_Vectorcall
+E       39. python(+0x2734d9) [0x63dfd159d4d9]
+E       40. _PyEval_EvalFrameDefault
+E       41. _PyFunction_Vectorcall
+E       42. _PyObject_Call_Prepend
+E       43. python(+0x3b866e) [0x63dfd16e266e]
+E       44. python(+0x300318) [0x63dfd162a318]
+E       45. _PyEval_EvalFrameDefault
+E       46. _PyFunction_Vectorcall
+E       47. python(+0x2734d9) [0x63dfd159d4d9]
+E       48. python(+0x30011c) [0x63dfd162a11c]
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.33s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_and_contiguous_caches_agree[wormhole_b0-8x4-device_params0]
+0.33s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]
+0.33s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active31-8x4-device_params0]
+0.33s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len2048-8x4-device_params0]
+0.33s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_per_slot_heterogeneous_sampling_controls[wormhole_b0-8x4-device_params0]
+0.33s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0]
+0.33s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len256-8x4-device_params0]
+0.33s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len512-8x4-device_params0]
+0.33s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active32-8x4-device_params0]
+0.32s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0]
+0.32s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len1024-8x4-device_params0]
+0.32s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_greedy_sampling_equals_host_argmax[wormhole_b0-8x4-device_params0]
+0.32s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0]
+0.32s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active16-8x4-device_params0]
+0.32s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill[wormhole_b0-8x4-device_params0]
+0.32s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0]
+0.32s setup    models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0]
+0.00s teardown models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len2048-8x4-device_params0]
+0.00s teardown models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_greedy_sampling_equals_host_argmax[wormhole_b0-8x4-device_params0]
+0.00s teardown models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active16-8x4-device_params0]
+0.00s teardown models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len512-8x4-device_params0]
+0.00s teardown models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0]
+0.00s teardown models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_and_contiguous_caches_agree[wormhole_b0-8x4-device_params0]
+0.00s teardown models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0]
+0.00s teardown models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0]
+=========================== short test summary info ============================
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_and_contiguous_caches_agree[wormhole_b0-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active16-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_chunked_prefill_matches_a_single_uncached_prefill[wormhole_b0-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_greedy_sampling_equals_host_argmax[wormhole_b0-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_per_slot_heterogeneous_sampling_controls[wormhole_b0-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len256-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active31-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len512-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active32-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len1024-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+ERROR models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len2048-8x4-device_params0] - RuntimeError: Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/tt_device/tt_device.cpp:398
+ 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration<long, std::ratio<1l, 1000l> >)
+ 4. tt::umd::TopologyDiscovery::get_connected_devices()
+ 5. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 6. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 7. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 8. tt::Cluster::open_driver(bool const&)
+ 9. tt::Cluster::initialize_device_drivers()
+10. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+11. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+12. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+13. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+14. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+16. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+17. tt::tt_metal::GetNumPCIeDevices()
+18. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x7317cb8262be]
+19. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x7317cb5ea1ef]
+20. _PyEval_EvalFrameDefault
+21. _PyFunction_Vectorcall
+22. python(+0x30011c) [0x63dfd162a11c]
+23. _PyEval_EvalFrameDefault
+24. _PyFunction_Vectorcall
+25. _PyEval_EvalFrameDefault
+26. python(+0x2774bd) [0x63dfd15a14bd]
+27. python(+0x2c8c28) [0x63dfd15f2c28]
+28. python(+0x293ea2) [0x63dfd15bdea2]
+29. python(+0x30011c) [0x63dfd162a11c]
+30. _PyEval_EvalFrameDefault
+31. _PyFunction_Vectorcall
+32. python(+0x30011c) [0x63dfd162a11c]
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. _PyEval_EvalFrameDefault
+38. _PyFunction_Vectorcall
+39. python(+0x2734d9) [0x63dfd159d4d9]
+40. _PyEval_EvalFrameDefault
+41. _PyFunction_Vectorcall
+42. _PyObject_Call_Prepend
+43. python(+0x3b866e) [0x63dfd16e266e]
+44. python(+0x300318) [0x63dfd162a318]
+45. _PyEval_EvalFrameDefault
+46. _PyFunction_Vectorcall
+47. python(+0x2734d9) [0x63dfd159d4d9]
+48. python(+0x30011c) [0x63dfd162a11c]
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+======================= 2 warnings, 17 errors in 13.76s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+exit=1

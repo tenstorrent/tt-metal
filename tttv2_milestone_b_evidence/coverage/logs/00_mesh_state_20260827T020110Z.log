@@ -1,0 +1,34 @@
+=== date -u ===
+Thu Aug 27 02:01:10 UTC 2026
+=== hostname ===
+wh-glx6u-05-special-ctr-apbernal-for-reservation-117587
+=== ls /dev/tenstorrent (house-rules check; known to LIE - stale nodes) ===
+0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+count=32
+=== ls /sys/class/tenstorrent (the real count, per job2) ===
+tenstorrent!8 tenstorrent!9 tenstorrent!12 tenstorrent!13 tenstorrent!15 tenstorrent!16 tenstorrent!17 tenstorrent!18 tenstorrent!19 tenstorrent!20 tenstorrent!21 tenstorrent!22 tenstorrent!23 tenstorrent!24 tenstorrent!25 tenstorrent!26 tenstorrent!27 tenstorrent!28 tenstorrent!29 tenstorrent!30 tenstorrent!31
+count=21
+=== derived missing set ===
+0 1 2 3 4 5 6 7 10 11 14
+=== pgrep -af 'pytest|ttnn' ===
+(empty above == no competing device process)
+[91m Error in detecting devices!
+Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /project/device/tt_device/tt_device.cpp:242
+ 1. /tmp/_MEItjQ2kQ/tt_umd/tt_umd.cpython-310-x86_64-linux-gnu.so(+0xedeb5) [0x79e544648eb5]
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 3. tt::umd::TopologyDiscovery::get_connected_devices()
+ 4. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 5. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 6. /tmp/_MEItjQ2kQ/tt_umd/tt_umd.cpython-310-x86_64-linux-gnu.so(+0x186951) [0x79e5446e1951]
+ 7. /tmp/_MEItjQ2kQ/tt_umd/tt_umd.cpython-310-x86_64-linux-gnu.so(+0x1a0833) [0x79e5446fb833]
+ 8. _PyEval_EvalFrameDefault
+ 9. /tmp/_MEItjQ2kQ/libpython3.10.so.1.0(+0x1b2026) [0x79e546277026]
+10. _PyEval_EvalFrameDefault
+11. /tmp/_MEItjQ2kQ/libpython3.10.so.1.0(+0x1b2026) [0x79e546277026]
+12. PyEval_EvalCode
+13. /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x79e54649dd90]
+14. __libc_start_main
+
+ Exiting... [0m
+tt-smi -ls exit=1

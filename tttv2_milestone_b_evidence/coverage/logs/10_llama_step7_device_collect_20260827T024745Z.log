@@ -1,0 +1,159 @@
+2026-08-27 02:48:08.590 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 17 items
+
+<Dir tt-metal>
+  <Dir models>
+    <Dir common>
+      <Dir tests>
+        <Dir models>
+          <Dir llama33_70b_galaxy>
+            <Module test_step7_coverage_wh_galaxy.py>
+              Milestone B step-7 device coverage for Galaxy Llama-3.3-70B: the gaps.
+
+              ``test_full_model_wh_galaxy.py`` already covers full-model prefill/decode,
+              teacher-forced accuracy, batch-32 slot isolation, prefix-cached prefill, the
+              4K/32K/128K smokes and repeated requests. ``demo.py`` covers the batch-1 and
+              batch-32 demos, concat-32 at 128 and greedy device sampling.
+
+              This file covers what neither of them reaches, and what the step-7 brief asks
+              for by name:
+
+              * **paged versus contiguous** - the same prompt through both cache layouts, at
+                PCC >= 0.99. Nothing in this tree has ever compared them;
+              * **late capacity resolution** - a paged geometry installed after the model was
+                constructed, then bound and used;
+              * **concat-32 at active batches 16, 31 and 32**, and at sequence lengths 128
+                through 2048 in ascending order, checking that a padded row neither changes
+                an active row's KV nor contributes a logit;
+              * **prefix-cached then normal, and a mix across slots** - the interaction, not
+                just the feature;
+              * **device sampling** - slot stability, greedy against host argmax, and per-slot
+                heterogeneous top-k/top-p/temperature.
+
+              The padded-vocabulary claim is **not** here: Llama's 128256 is already a
+              multiple of ``8 vocab shards * 32``, so ``padded_vocab_size == vocab_size`` and
+              there is nothing to mask. See the Qwen file, and
+              ``models/common/tests/models/galaxy/test_step7_sampling.py``.
+
+              **This file has never been executed.** It was written on 2026-08-27 with eleven
+              of the mesh's 32 boards off the PCIe bus, so ``ttnn`` could not open a cluster
+              at all. Every threshold is the plan's; every staging decision is a hypothesis.
+              Treat a first run as bringup, not as a regression.
+
+              Run::
+
+                  pytest models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py -v
+              <Function test_llama_paged_and_contiguous_caches_agree[wormhole_b0-8x4-device_params0]>
+                Same prompt, same weights, two cache layouts: PCC >= 0.99 after a decode.
+
+                Prefill fills the cache and decode reads back what prefill wrote, so a decode
+                step is the only comparison that exercises the paged addressing on both
+                sides. A prefill-only comparison would pass with a completely broken page
+                table.
+              <Function test_llama_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]>
+                Late capacity resolution, end to end.
+
+                The model is built with no paged geometry at all; the block pool is chosen
+                afterwards, installed with ``configure_paged_attention``, and only then does
+                the runner allocate and bind. Reconfiguring while bound must be refused.
+              <Function test_llama_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0]>
+                Cross-slot contamination, measured rather than argued.
+
+                Slot 0 is prefilled with prompt A while every other slot holds prompt B.
+                The run is repeated with slot 0 holding prompt B as well. If any slot's
+                decode logits move between the two runs because of what slot 0 held, some
+                slot read slot 0's blocks.
+              <Function test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0]>
+                Qualify 128 first; only then the longer recipes.
+
+                Each length is a separate resolved recipe and a separate set of collective
+                resources, so a pass at 128 says nothing about 2048.
+              <Function test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active16-8x4-device_params0]>
+                Padding inactive rows must not write KV or return logits for them.
+
+                The concatenated prefill always runs 32 physical rows. Rows ``active..31``
+                carry a one-token filler. Changing that filler must not move any of the
+                first ``active`` rows' logits.
+              <Function test_llama_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0]>
+                The interaction, not just the feature.
+
+                Slot 0 is chunk-prefilled; slot 1 is then prefilled normally and must agree
+                with the same request run on a runner that never did a chunked prefill.
+              <Function test_llama_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0]>
+                A mix of both in one batch, then one decode over all of them.
+              <Function test_llama_chunked_prefill_matches_a_single_uncached_prefill[wormhole_b0-8x4-device_params0]>
+                The gate: prefix-cached output matches uncached execution.
+
+                A 256-token prompt as two 128-token chunks, against the same 256 tokens as
+                one prefill. This differs from ``test_full_model_wh_galaxy``'s version in
+                that it also decodes afterwards, so the cache the chunks *wrote* is read.
+              <Function test_llama_device_greedy_sampling_equals_host_argmax[wormhole_b0-8x4-device_params0]>
+                Every slot, not just slot 0: the column selector must gather correctly.
+              <Function test_llama_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0]>
+                Slot stability, first sense: same seed, same slot, same token every time.
+
+                The second sense - that moving a request to another slot keeps its stream -
+                is **not** asserted: the seed digest mixes the slot in on purpose. See
+                ``models/common/tests/models/galaxy/test_step7_sampling.py`` and REPORT.md
+                finding D-C2.
+              <Function test_llama_per_slot_heterogeneous_sampling_controls[wormhole_b0-8x4-device_params0]>
+                Serving mixes top-k, top-p and temperature; the greedy slots must stay greedy.
+
+                Slots 0, 8, 16 and 24 - one per mesh column - are forced greedy while their
+                neighbours sample. A greedy slot whose token is not the host argmax means
+                the per-slot buffers did not land on the slots they were written for.
+              <Function test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len256-8x4-device_params0]>
+                Qualify 128 first; only then the longer recipes.
+
+                Each length is a separate resolved recipe and a separate set of collective
+                resources, so a pass at 128 says nothing about 2048.
+              <Function test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active31-8x4-device_params0]>
+                Padding inactive rows must not write KV or return logits for them.
+
+                The concatenated prefill always runs 32 physical rows. Rows ``active..31``
+                carry a one-token filler. Changing that filler must not move any of the
+                first ``active`` rows' logits.
+              <Function test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len512-8x4-device_params0]>
+                Qualify 128 first; only then the longer recipes.
+
+                Each length is a separate resolved recipe and a separate set of collective
+                resources, so a pass at 128 says nothing about 2048.
+              <Function test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active32-8x4-device_params0]>
+                Padding inactive rows must not write KV or return logits for them.
+
+                The concatenated prefill always runs 32 physical rows. Rows ``active..31``
+                carry a one-token filler. Changing that filler must not move any of the
+                first ``active`` rows' logits.
+              <Function test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len1024-8x4-device_params0]>
+                Qualify 128 first; only then the longer recipes.
+
+                Each length is a separate resolved recipe and a separate set of collective
+                resources, so a pass at 128 says nothing about 2048.
+              <Function test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len2048-8x4-device_params0]>
+                Qualify 128 first; only then the longer recipes.
+
+                Each length is a separate resolved recipe and a separate set of collective
+                resources, so a pass at 128 says nothing about 2048.
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+========================= 17 tests collected in 7.50s ==========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+exit=0
