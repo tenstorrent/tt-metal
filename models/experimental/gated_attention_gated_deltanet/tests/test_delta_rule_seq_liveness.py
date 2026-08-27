@@ -111,3 +111,23 @@ def test_normalize_chunk_matrix_reuses_full_matrix_storage(monkeypatch):
         ("multiply", inverse_row, matrix, memory_config, matrix),
         ("add", eye, matrix, memory_config, matrix),
     ]
+
+
+def test_multiply_into_dead_rhs_uses_rhs_as_output(monkeypatch):
+    from models.experimental.gated_attention_gated_deltanet.tt import ttnn_delta_rule_seq as seq
+
+    calls = []
+
+    class FakeTTNN:
+        @staticmethod
+        def multiply(lhs, rhs, memory_config=None, output_tensor=None):
+            calls.append((lhs, rhs, memory_config, output_tensor))
+            return output_tensor
+
+    monkeypatch.setattr(seq, "ttnn", FakeTTNN)
+    lhs, rhs, memory_config = object(), object(), object()
+
+    result = seq._multiply_into_dead_rhs(lhs, rhs, memory_config=memory_config)
+
+    assert result is rhs
+    assert calls == [(lhs, rhs, memory_config, rhs)]

@@ -341,6 +341,11 @@ def _normalize_chunk_matrix(L_mat, identity, *, batch, chunk_size, memory_config
     return L_unit, D_inv_row
 
 
+def _multiply_into_dead_rhs(lhs, rhs, *, memory_config):
+    """Multiply into ``rhs`` when its unscaled value has no later consumers."""
+    return ttnn.multiply(lhs, rhs, memory_config=memory_config, output_tensor=rhs)
+
+
 def chunk_gated_delta_rule_seq(
     q,  # [BH, T, K] float32 on mesh
     k,  # [BH, T, K] float32 on mesh
@@ -519,8 +524,7 @@ def chunk_gated_delta_rule_seq(
     v_beta_sc = ttnn.multiply(D_inv_row, v_beta_c, memory_config=_cmc)
     del v_beta_c
     k_beta_decay = ttnn.multiply(k_beta_c, decay_exp, memory_config=_cmc)
-    k_bd_sc = ttnn.multiply(D_inv_row, k_beta_decay, memory_config=_cmc)
-    ttnn.deallocate(k_beta_decay)
+    k_bd_sc = _multiply_into_dead_rhs(D_inv_row, k_beta_decay, memory_config=_cmc)
     ttnn.deallocate(D_inv_row)
 
     # ---- intra_attn = (q_decay @ k.T) * L_mask * lower_causal ----
