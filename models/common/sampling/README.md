@@ -147,6 +147,14 @@ are non-idempotent. An
 authoritative rebuild may replace the remap for that subsystem; inactivity may
 not. Version-0 adapters retain their historical remap behavior unchanged.
 
+For a merged lane-DP call the remap uses global lane-major slots, while each
+model replica's seed manager owns a rank-local padded array. The shared
+generator splits by the actual scheduler lane stride, subtracts the lane base,
+and pads the untouched tail with a local identity mapping. Splitting by the
+sampler's padded width instead is incorrect whenever scheduler capacity is
+smaller than that width, and passing absolute lane-1+ indices to a local seed
+manager is out of bounds.
+
 State that is not addressable by vLLM slot cannot be remapped. Unseeded
 on-device RNG is the known exception: its state lives in per-core hardware PRNG
 registers with no slot-to-slot move primitive. A commanded
@@ -164,7 +172,19 @@ path. This lets vLLM land first and adapters opt in as they are refactored. The
 marker is negotiation metadata on vLLM-facing adapters only; all refactored
 generator APIs require direct callers, including demos and warmup code, to
 provide all four commands. No model-side fallback heuristics are restored. Any
-demo-side decision to retain traced inputs is made at the call site.
+demo-side decision to retain traced inputs is made at the call site. Warmup
+reloads each device-sampling parameter configuration but does not request a
+sampling-state reset because it has no request-owned prompt/output history.
+The SGLang bridge explicitly uses host sampling and reloads its authoritative
+token, position, and page table every step.
+
+Stable-slot adapters must also preserve unscheduled rows when admitting a
+prefill. DeepSeek starts from its cached full-batch sampling parameters and
+scatters only the incoming requests into their assigned slots; filling every
+other row from an incoming request silently changes live decodes. Reset-only
+sampling commands still need slot-indexed seeds: Galaxy formats/pads the
+request-ordered parameters whenever either `reload_sampling_params` or
+`reset_sampling_state` needs their seed values.
 
 `model_capabilities["supports_async_decode"]` is separate from contract
 versioning. It certifies that a vLLM wrapper supports split async readback and

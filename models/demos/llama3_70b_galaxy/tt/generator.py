@@ -1648,25 +1648,27 @@ class Generator(WarmupForwardMixin):
         if active_seed_slots is not None:
             seed_manager.deactivate_slots_except(active_seed_slots)
 
-        if reload_sampling_params and sampling_params is not None:
-            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+        formatted_sampling_params = sampling_params
+        if sampling_params is not None and (reload_sampling_params or reset_sampling_state):
+            formatted_sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
             if active_seed_slots is not None:
-                seed_values = _as_list(getattr(sampling_params, "seed", None))
+                seed_values = _as_list(getattr(formatted_sampling_params, "seed", None))
                 has_active_seed = any(
                     slot < len(seed_values) and seed_values[slot] is not None for slot in active_seed_slots
                 )
                 if has_active_seed:
-                    sampling_params = _fill_inactive_params_from_active(
-                        sampling_params, active_seed_slots, self.model_args.max_batch_size
+                    formatted_sampling_params = _fill_inactive_params_from_active(
+                        formatted_sampling_params, active_seed_slots, self.model_args.max_batch_size
                     )
-            sampling_module.reset_sampling_params(sampling_params)
-            self._remember_slot_params(sampling_params)
+        if reload_sampling_params and formatted_sampling_params is not None:
+            sampling_module.reset_sampling_params(formatted_sampling_params)
+            self._remember_slot_params(formatted_sampling_params)
         if reset_sampling_state:
             sampling_module.reset_prompt_tokens(prompt_tokens)
             sampling_module.reset_output_state(output_tokens)
 
-        if sampling_params is not None and (active_seed_slots is None or active_seed_slots):
-            seed_values = getattr(sampling_params, "seed", None)
+        if formatted_sampling_params is not None and (active_seed_slots is None or active_seed_slots):
+            seed_values = getattr(formatted_sampling_params, "seed", None)
             if reset_sampling_state:
                 # Reset unconditionally, including seed=None, so decode-only
                 # sampling uploads fresh device seeds for the new state.

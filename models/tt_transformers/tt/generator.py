@@ -1919,12 +1919,31 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     def _apply_sampling_slot_remap(self, slot_remap) -> None:
         if slot_remap is None:
             return
+        global_remap = torch.as_tensor(slot_remap, dtype=torch.long).reshape(-1)
+        if global_remap.numel() % self.data_parallel != 0:
+            raise ValueError(
+                f"slot_remap has {global_remap.numel()} entries, which cannot be "
+                f"split across {self.data_parallel} data-parallel lanes"
+            )
+        lane_stride = global_remap.numel() // self.data_parallel
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
             if sampling_module is None:
                 continue
             sm_bs = sampling_module.seed_manager.max_batch_size
-            rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
+            if lane_stride > sm_bs:
+                raise ValueError(
+                    f"slot_remap lane width {lane_stride} exceeds sampling state " f"width {sm_bs} for lane {i}"
+                )
+            lane_base = i * lane_stride
+            lane_remap = global_remap[lane_base : lane_base + lane_stride] - lane_base
+            if torch.any(lane_remap < 0) or torch.any(lane_remap >= lane_stride):
+                raise ValueError(
+                    f"slot_remap lane {i} references a slot outside its global "
+                    f"range [{lane_base}, {lane_base + lane_stride})"
+                )
+            rank_remap = torch.arange(sm_bs, dtype=torch.long)
+            rank_remap[:lane_stride] = lane_remap
             sampling_module.seed_manager.apply_slot_remap(rank_remap)
 
     def sample_decode_on_device(

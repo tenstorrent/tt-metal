@@ -102,6 +102,30 @@ def initialize_sglang_text_transformer(
     return tt_model, model_args
 
 
+def _decode_forward_sglang_host_sampling(generator: Generator, *args, **kwargs):
+    """Bridge SGLang's host-sampled decode contract to explicit TT commands.
+
+    SGLang supplies the authoritative token, position, and page table every
+    step and samples returned logits on the host. It therefore requests a full
+    input reload and no device-sampling updates on every decode.
+    """
+    if kwargs.get("sampling_params") is not None:
+        raise ValueError("The TT SGLang bridge supports host sampling only")
+    commands = {
+        "reload_inputs": True,
+        "reload_page_table": False,
+        "reload_sampling_params": False,
+        "reset_sampling_state": False,
+    }
+    already_supplied = commands.keys() & kwargs.keys()
+    if already_supplied:
+        raise TypeError(
+            "The TT SGLang bridge owns decode update commands; remove "
+            f"caller-supplied values for {sorted(already_supplied)}"
+        )
+    return Generator.decode_forward(generator, *args, **kwargs, **commands)
+
+
 class LlamaForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -152,7 +176,7 @@ class LlamaForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward(*args, **kwargs)
+        return _decode_forward_sglang_host_sampling(self, *args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -195,7 +219,7 @@ class QwenForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward(*args, **kwargs)
+        return _decode_forward_sglang_host_sampling(self, *args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -238,7 +262,7 @@ class MistralForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward(*args, **kwargs)
+        return _decode_forward_sglang_host_sampling(self, *args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -302,7 +326,7 @@ class GptOssForCausalLM(Generator):
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        return super().decode_forward(*args, **kwargs)
+        return _decode_forward_sglang_host_sampling(self, *args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)

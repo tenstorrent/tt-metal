@@ -115,6 +115,8 @@ def _fake_deepseek_generator(*, batch_size_per_row=8, sampling_dp=2):
         _sampling_device_slot_remap = DeepseekGenerator._sampling_device_slot_remap
         _apply_sampling_slot_remap = DeepseekGenerator._apply_sampling_slot_remap
         _sampling_device_seed_slots = DeepseekGenerator._sampling_device_seed_slots
+        _to_local_sampling_params = DeepseekGenerator._to_local_sampling_params
+        _normalize_sampling_params_for_batch = DeepseekGenerator._normalize_sampling_params_for_batch
 
         def __init__(self):
             self.batch_size_per_row = batch_size_per_row
@@ -272,6 +274,12 @@ def test_deepseek_sampling_histories_use_row_padded_device_layout():
 
 def test_deepseek_prefill_sampling_state_uses_nonidentity_stable_slots():
     generator = _fake_deepseek_generator(batch_size_per_row=16, sampling_dp=2)
+    generator.sampling_params = SamplingParams(
+        temperature=[1.0] * generator.batch_size,
+        top_k=[1] * generator.batch_size,
+        top_p=[1.0] * generator.batch_size,
+        seed=[None] * generator.batch_size,
+    )
     sampling_params = SamplingParams(
         temperature=[0.6, 0.8],
         top_k=[16, 32],
@@ -309,6 +317,44 @@ def test_deepseek_prefill_sampling_state_uses_nonidentity_stable_slots():
     [(_, commands)] = generator.sampling_generator.decode_state_calls
     assert commands["prompt_tokens"][33].tolist() == [10, 11]
     assert commands["prompt_tokens"][0].tolist() == [20, -1]
+
+
+def test_deepseek_prefill_preserves_live_slots_when_admitting_new_request():
+    generator = _fake_deepseek_generator(batch_size_per_row=4, sampling_dp=2)
+    generator.sampling_params = SamplingParams(
+        temperature=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+        top_k=[1, 2, 3, 4, 5, 6, 7, 8],
+        top_p=[0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58],
+        presence_penalty=[0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08],
+        frequency_penalty=[0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18],
+        repetition_penalty=[1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8],
+        seed=list(range(100, 108)),
+        enable_log_probs=[False, True, False, True, False, True, False, True],
+        num_logprobs=list(range(8)),
+    )
+    incoming = SamplingParams(
+        temperature=[0.95],
+        top_k=[42],
+        top_p=[0.99],
+        presence_penalty=[0.25],
+        frequency_penalty=[0.35],
+        repetition_penalty=[1.95],
+        seed=[999],
+        enable_log_probs=[False],
+        num_logprobs=[9],
+    )
+
+    stable = DeepseekGenerator._sampling_params_for_user_slots(generator, incoming, [5])
+
+    assert stable.temperature == [0.1, 0.2, 0.3, 0.4, 0.5, 0.95, 0.7, 0.8]
+    assert stable.top_k == [1, 2, 3, 4, 5, 42, 7, 8]
+    assert stable.top_p == [0.51, 0.52, 0.53, 0.54, 0.55, 0.99, 0.57, 0.58]
+    assert stable.presence_penalty == [0.01, 0.02, 0.03, 0.04, 0.05, 0.25, 0.07, 0.08]
+    assert stable.frequency_penalty == [0.11, 0.12, 0.13, 0.14, 0.15, 0.35, 0.17, 0.18]
+    assert stable.repetition_penalty == [1.1, 1.2, 1.3, 1.4, 1.5, 1.95, 1.7, 1.8]
+    assert stable.seed == [100, 101, 102, 103, 104, 999, 106, 107]
+    assert stable.enable_log_probs == [False, True, False, True, False, False, False, True]
+    assert stable.num_logprobs == [0, 1, 2, 3, 4, 9, 6, 7]
 
 
 def test_deepseek_prompt_history_excludes_padding_tokens():

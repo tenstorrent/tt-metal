@@ -130,7 +130,10 @@ class WarmupForwardMixin:
                 reload_inputs=True,
                 reload_page_table=False,
                 reload_sampling_params=param is not None,
-                reset_sampling_state=param is not None,
+                # Warmup has no request-owned prompt/output history. The old
+                # reset_batch=False path compiled each sampling configuration
+                # without rebuilding penalty state; preserve that behavior.
+                reset_sampling_state=False,
             )
             if skip_trace_precompile:
                 decode_kwargs["skip_trace_precompile"] = True

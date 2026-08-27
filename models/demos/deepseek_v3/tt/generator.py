@@ -1061,10 +1061,26 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self._to_local_sampling_params(sampling_params),
             len(user_slots),
         )
+        cached = getattr(self, "sampling_params", None)
+        if cached is None:
+            if len(user_slots) != self.batch_size:
+                raise ValueError(
+                    "DeepSeek cannot update a subset of stable sampling slots "
+                    "before full-batch sampling parameters are initialized"
+                )
+            cached = self._normalize_sampling_params_for_batch(
+                self._to_local_sampling_params(sampling_params),
+                self.batch_size,
+            )
+        else:
+            cached = self._normalize_sampling_params_for_batch(
+                self._to_local_sampling_params(cached),
+                self.batch_size,
+            )
         stable_fields = {}
         for field_name in SAMPLING_PARAM_FIELDS:
             compact_values = list(getattr(compact, field_name))
-            stable_values = [compact_values[-1]] * self.batch_size
+            stable_values = list(getattr(cached, field_name))
             for request_index, stable_slot in enumerate(user_slots):
                 stable_values[stable_slot] = compact_values[request_index]
             stable_fields[field_name] = stable_values
