@@ -360,7 +360,8 @@ models:
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
     wh_n150: 105
-    wh_n300: 60
+    # +25 for Qwen3.5-9B e2e tests (wh_n300). Prior sum was 50/60; 60 would fail load-test-matrix.
+    wh_n300: 75
     bh_p150: 33
     bh_p300: 8
     bh_quietbox_2: 42
@@ -388,7 +389,8 @@ models:
     wh_llmbox_perf: 58
     wh_n150: 75
     wh_n150_civ2: 12
-    wh_n300: 33
+    # +33 for Qwen3.5-9B unit tests (wh_n300). Prior sum was 23/33; 33 would fail load-test-matrix.
+    wh_n300: 56
     bh_p150: 30
     bh_p300: 30
     bh_quietbox_2: 21
