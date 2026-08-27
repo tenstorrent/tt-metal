@@ -262,14 +262,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
             for (const auto& sequence : tensor_binding_sequence_entries) {
-                content << "constexpr auto " << sequence.name << " = std::make_tuple(";
-                for (size_t i = 0; i < sequence.members.size(); ++i) {
-                    if (i > 0) {
-                        content << ", ";
-                    }
-                    content << sequence.members[i];
-                }
-                content << ");\n";
+                content << fmt::format(
+                    "constexpr auto {} = std::make_tuple({});\n", sequence.name, fmt::join(sequence.members, ", "));
             }
             content << "}  // namespace tensor\n";
         }
