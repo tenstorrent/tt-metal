@@ -112,7 +112,8 @@ void kernel_main() {
     uint32_t runtime_lengths_storage[B] = {};
     const uint32_t* runtime_lengths = nullptr;
     if constexpr (use_runtime_lengths) {
-        ckernel::cb_wait_front(cb_valid_lengths, 1);
+        CircularBuffer cb_valid_lengths_obj(cb_valid_lengths);
+        cb_valid_lengths_obj.wait_front(1);
         for (uint32_t nb = 0; nb < B; ++nb) {
             runtime_lengths_storage[nb] = ckernel::read_tile_value(cb_valid_lengths, 0, nb);
         }

@@ -1762,12 +1762,13 @@ void sdpa_inner_loop(
             // F4: QK's matmul_blocks popped k_chunk_tiles(=128) from the aliased
             // CB_K. Pop the residual so the single-slot ring wraps back to base,
             // then push one sync token telling the reader K is fully consumed and
-            // it may write V into the shared bytes. (cb_reserve_back/push_back is
-            // the stock compute->dataflow token idiom; TRISC cannot use NOC sems.)
+            // it may write V into the shared bytes. (reserve_back/push_back is the
+            // stock compute->dataflow token idiom; TRISC cannot use NOC sems.)
             if constexpr (kv_alias) {
+                CircularBuffer kv_sync_cb(kv_cb_sync);
                 cb_k_in_obj.pop_front(kv_k_capacity_tiles - k_chunk_tiles);
-                cb_reserve_back(kv_cb_sync, 1);
-                cb_push_back(kv_cb_sync, 1);
+                kv_sync_cb.reserve_back(1);
+                kv_sync_cb.push_back(1);
             }
 
             /**
@@ -1952,9 +1953,10 @@ void sdpa_inner_loop(
             // then push one sync token telling the reader V is fully consumed and
             // it may write the NEXT K into the shared bytes.
             if constexpr (kv_alias) {
+                CircularBuffer kv_sync_cb(kv_cb_sync);
                 cb_v_in_obj.pop_front(kv_v_capacity_tiles - v_chunk_tiles);
-                cb_reserve_back(kv_cb_sync, 1);
-                cb_push_back(kv_cb_sync, 1);
+                kv_sync_cb.reserve_back(1);
+                kv_sync_cb.push_back(1);
             }
 
             cb_qk_im_obj.pop_front(qk_chunk_tiles);
