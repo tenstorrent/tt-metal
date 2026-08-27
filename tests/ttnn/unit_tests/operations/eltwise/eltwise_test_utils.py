@@ -154,3 +154,30 @@ def bf16_value_order_index_daz(bits: int) -> int:
         return 0x7F7F - magnitude
     else:
         return 32640 + bits - 0x007F
+
+
+def ulp_distance_bf16_daz(a: float, b: float) -> int:
+    """Calculate ULP distance with DAZ+FTZ model."""
+    a_bits = bf16_daz_normalize(float_to_bf16_bits(a))
+    b_bits = bf16_daz_normalize(float_to_bf16_bits(b))
+
+    a_exp = (a_bits >> 7) & 0xFF
+    b_exp = (b_bits >> 7) & 0xFF
+    if (a_exp == 0xFF and (a_bits & 0x7F) != 0) or (b_exp == 0xFF and (b_bits & 0x7F) != 0):
+        return -1
+
+    idx_a = bf16_value_order_index_daz(a_bits)
+    idx_b = bf16_value_order_index_daz(b_bits)
+
+    if idx_a < 0 or idx_b < 0:
+        return -1
+
+    return abs(idx_a - idx_b)
+
+
+def bf16_quantize_rne(x: float) -> float:
+    """RNE-quantize a float to BF16 (matches torch's BFloat16 conversion).
+    Required because the bit-level helpers above truncate, but torch — and therefore
+    the device input — uses round-to-nearest-even. For test points that are not
+    exact BF16 values (e.g., 2.9, 3.01), truncation and RNE diverge."""
+    return float(torch.tensor([x], dtype=torch.bfloat16).item())
