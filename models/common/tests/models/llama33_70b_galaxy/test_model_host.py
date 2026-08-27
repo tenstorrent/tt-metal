@@ -120,7 +120,14 @@ def test_parameters_resolve_the_galaxy_geometry():
     assert (params.dim, params.n_heads, params.n_kv_heads, params.head_dim) == (8192, 64, 8, 128)
     assert (params.hidden_dim, params.vocab_size, params.n_layers) == (28672, 128256, 80)
     assert (params.rope_theta, params.rope_scaling_factor, params.original_context_len) == (500000.0, 8.0, 8192)
-    assert params.padded_vocab_size == 128256
+    # 129024, not 128256. Llama's vocabulary is already a multiple of the
+    # 8-shard tile, so the old minimal rule left it unpadded - and 16032 columns
+    # per device is 501 tiles, a width no usable core count divides, which hung
+    # the decode LM head's column all-reduce forever (D-B19). The padding is
+    # masked to -inf by LMHead2D, and it is what makes that mask load-bearing for
+    # Llama for the first time. See `galaxy_padded_vocab_size`.
+    assert params.padded_vocab_size == 129024
+    assert params.padded_vocab_size % (8 * 32 * 24) == 0
     assert (geometry.local_dim, geometry.local_hidden_dim) == (2048, 3584)
     assert geometry.attention_dim == geometry.dim
     assert geometry.prefill_sequence_lengths == (128, 2048)

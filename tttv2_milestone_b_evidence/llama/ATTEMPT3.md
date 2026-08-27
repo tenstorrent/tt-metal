@@ -287,3 +287,98 @@ The process was reaped deliberately rather than left to its 1800 s deadline: the
 trace had already extracted everything that run could give, and 20 minutes of
 wall clock is worth more than a tidier exit code. PID confirmed `comm=python`
 with 64 `/dev/tenstorrent` fds open before signalling, per the house rules.
+| 15 | `logs3/a3_15_dbb19_trace.log` | D-B19 diagnostic, decode only | **D-B19 NAMED**: `all_reduce_async` is the op that never completes |
+| 16 | `logs3/a3_16_host_quick.log` | lm_head + llama host after the padding change | 1 failed — a host assertion encoded the unpadded vocabulary |
+| 17 | `logs3/a3_17_host_gate.log` | (abandoned) `models/common/tests/modules` as a directory | pulled in the 1D device suites and took the mesh; killed |
+| 18 | `logs3/a3_18_host_quick.log` | targeted 2D host set after the padding change | **116 passed**, 2 skipped |
+
+## Result 15 — D-B19 named, with its mechanism, and it is a width
+
+`logs3/a3_15_dbb19_trace.log`. With a synchronize after each enqueued op:
+
+```text
+[ccl] lm_head in:     logical=(1, 1, 32, 16032) shard=(32, 672)  cores=24
+[ccl] lm_head staged, shape=(1, 1, 32, 16032) -- completed on device
+[ccl] lm_head staged: logical=(1, 1, 32, 16032) shard=(32, 384)  cores=42
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512) -- completed on device
+[ccl] lm_head buffer: logical=(1, 1, 32, 64512) shard=(32, 1536) cores=42
+[ccl] lm_head reduced: logical=(1, 1, 32, 16032) shard=(32, 384) cores=42
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16032)
+                                       <- no "completed on device"
+```
+
+The DRAM->L1 buffer materialisation and the ring->42-core relocation both
+**completed on device**. `all_reduce_async` did not. So D-B19 is
+`ttnn.experimental.all_reduce_async`, and attempt 2's three candidates are down to
+one.
+
+The same trace lines carry the cause. Read the widths:
+
+```text
+buffer   64512 = 42 cores x 1536 = 42 x 48 tiles = 2016   exact
+staged   16032 = 501 tiles, in a 42 x 12 = 504-tile spec  three tiles short
+```
+
+The buffer's page arithmetic is exact; the reduced tensor's is not. 501 tiles over
+42 cores at 12 tiles per shard fills 41 cores and leaves the 42nd holding **9 of
+12**.
+
+The reduction compute kernel does not tolerate that. From
+`.../all_reduce_async/device/kernels/compute/reduction.cpp`:
+
+```cpp
+const uint32_t num_blocks      = get_arg_val<uint32_t>(rt_args_idx++);  // ring_size = 4
+const uint32_t block_num_tiles = get_arg_val<uint32_t>(rt_args_idx++);  // 12
+...
+cb_in.wait_front(num_blocks * block_num_tiles);                         // 48
+```
+
+and the host hands *every* output core the same `block_num_tiles`:
+
+```cpp
+SetRuntimeArgs(program, reduction_kernel_id, output_tensor_cores,
+               {1, ring_size, output_tensor_shard_num_pages});
+```
+
+So the 42nd core waits for 48 tiles, receives 36, and waits forever. The program
+never signals completion, the completion-queue reader spins, and the host blocks
+in `FDMeshCommandQueue::wait_for_outstanding_reads` — which is exactly the stack
+attempt 2's `gdb` dump captured. **No abort, no traceback, mesh reset required.**
+
+### Why no core count could have fixed it
+
+`lm_head_reduce_core_count` searched for a divisor of the *ring-padded* 504 tiles
+and found 42. The tensor has 501. And 501 = 3 x 167, so its only divisors below 50
+are 1 and 3 — a 3-core staging would put 167 tiles (~182 kB) per core in L1 and
+four times that in the buffer, which is D-B15 and D-B18 all over again. **There is
+no usable width-sharded placement of a 501-tile tensor on this mesh.** The tensor
+itself has to change.
+
+### The fix: pad the vocabulary to a ring-exact width
+
+`galaxy_padded_vocab_size` now pads to a multiple of `GALAXY_ROWS *
+RING_ALIGNMENT` (8 x 768) instead of `GALAXY_ROWS * TILE` (8 x 32):
+
+```text
+Llama-3.3-70B  128256 -> 129024   16128/device, 504 tiles, 42 cores x 12
+Qwen3-32B      151936 -> 153600   19200/device, 600 tiles, 50 cores x 12
+```
+
+Every placement is unchanged — `pad_ring_width(16128) == 16128`, the ring's
+`per_core_N` is still 21 and the reduce staging is still 42 x 12 — but the tensor
+now *fills* them.
+
+This is what production does, by a different route: it pads to `16 * 1024` per
+device (131072 total) and hard-codes `num_cores_after_lm_head = 32`, which divides
+512 tiles exactly. Padding is how that geometry is made to work either.
+
+`LMHead2D`'s validation demanded the *minimal* padding and had to be loosened to
+"a multiple of the vocabulary-shard tile, at least the minimum, and not more than
+one extra shard per mesh row". That is a shared-module change and it is declared
+as one; it is a validation that forbade a legal width, not a threshold.
+
+**A consequence worth naming: Llama's invalid-logits mask is no longer
+identically zero.** Under the old rule `padded_vocab_size == vocab_size` and the
+mask was vacuous, which is why attempt 2 could not qualify the mask placement for
+Qwen. It is now load-bearing for Llama too — 768 columns of `-inf`, all of them in
+mesh row 7's shard.

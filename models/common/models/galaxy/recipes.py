@@ -201,9 +201,51 @@ def pad_tiles(value: int) -> int:
 
 
 def galaxy_padded_vocab_size(vocab_size: int) -> int:
-    """Return the minimal vocabulary width LMHead2D and Sampling2D both accept."""
+    """Return the vocabulary width the whole decode LM head chain accepts.
 
-    multiple = GALAXY_ROWS * TILE
+    The minimal width `LMHead2D` and `Sampling2D` need is a multiple of
+    ``GALAXY_ROWS * TILE`` - 8 vocabulary shards, each a whole tile. That is not
+    enough, and the extra condition is not cosmetic: it is what D-B19 was.
+
+    The decode LM head's column all-reduce is `all_reduce_async`, whose reduction
+    compute kernel is handed one uniform shard size for **every** output core and
+    opens with
+
+        cb_in.wait_front(num_blocks * block_num_tiles);   // ring_size * shard
+
+    (`.../all_reduce_async/device/kernels/compute/reduction.cpp`). If the tensor's
+    width is not an exact multiple of ``cores * shard_width``, the last core's
+    shard is only partially filled, its reduction kernel waits for tiles that the
+    fabric will never send, and the program **never signals completion**. The host
+    then blocks in `FDMeshCommandQueue::wait_for_outstanding_reads` with no
+    traceback and no abort - the mesh has to be reset.
+
+    Measured on `(8, 4)`. Llama-3.3-70B's 128256 is already a multiple of 256, so
+    the old rule left it at 128256, i.e. 16032 columns per device = **501 tiles**.
+    501 has no divisor between 4 and 50, so *no* usable core count divides it: the
+    staging necessarily became 42 cores x 12 tiles = 504, and the 42nd core waited
+    forever.
+
+    So the width must additionally be a multiple of ``GALAXY_ROWS *
+    RING_ALIGNMENT``: that makes the per-device width a whole number of 24-core
+    ring rows, `pad_ring_width` a no-op, and `lm_head_reduce_core_count`'s divisor
+    search exact by construction.
+
+        Llama-3.3-70B  128256 -> 129024   (16128/device, 504 tiles, 42 cores x 12)
+        Qwen3-32B      151936 -> 153600   (19200/device, 600 tiles, 50 cores x 12)
+
+    This is what the production Galaxy model does, by a different route: it pads
+    to `16 * 1024` per device (131072 total) and hard-codes
+    `num_cores_after_lm_head = 32`, which divides 512 tiles exactly. Padding is
+    how that geometry is made to work; it was not a free choice there either.
+
+    The padding is masked, not summed into anything: `LMHead2D` adds an
+    invalid-logits mask of `-inf` over `[vocab_size:]`. **For Llama this makes the
+    mask load-bearing for the first time** - under the old rule
+    `padded_vocab_size == vocab_size` and the mask was identically zero.
+    """
+
+    multiple = GALAXY_ROWS * RING_ALIGNMENT
     return math.ceil(vocab_size / multiple) * multiple
 
 

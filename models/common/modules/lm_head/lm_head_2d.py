@@ -273,11 +273,26 @@ def _resolve_lm_head2d_config(config: LMHead2DConfig) -> LMHead2DConfig:
     if sum(shape[1] for shape in prefill_padded_shapes) != padded_vocab_size:
         raise ValueError("LMHead2D decode and prefill weights must cover the same padded vocabulary")
     required_multiple = _GALAXY_MESH_SHAPE[0] * TILE_SIZE
-    expected_padded = ((config.vocab_size + required_multiple - 1) // required_multiple) * required_multiple
-    if padded_vocab_size != expected_padded:
+    minimum_padded = ((config.vocab_size + required_multiple - 1) // required_multiple) * required_multiple
+    # A *multiple* of the vocabulary-shard tile, not the *minimal* one. This used
+    # to demand exactly `minimum_padded`, and that forbade the only padding the
+    # decode chain can actually run: `all_reduce_async`'s reduction kernel waits
+    # for a full shard on every output core, so the width must be an exact
+    # multiple of `cores * shard_width`, and Llama's minimal 128256 gives 501
+    # tiles per device - a width no usable core count divides. See D-B19 and
+    # `galaxy_padded_vocab_size`, which now pads to a ring-exact width.
+    #
+    # The bound below still fails closed on a nonsense width: padding may not add
+    # a whole extra vocabulary shard per mesh row.
+    if padded_vocab_size % required_multiple or padded_vocab_size < minimum_padded:
         raise ValueError(
-            f"LMHead2D weights cover padded vocab {padded_vocab_size}; expected {expected_padded} "
-            f"for logical vocab {config.vocab_size}"
+            f"LMHead2D weights cover padded vocab {padded_vocab_size}; expected a multiple of "
+            f"{required_multiple} at least {minimum_padded} for logical vocab {config.vocab_size}"
+        )
+    if padded_vocab_size >= minimum_padded + required_multiple * _GALAXY_MESH_SHAPE[0]:
+        raise ValueError(
+            f"LMHead2D padded vocab {padded_vocab_size} pads logical vocab {config.vocab_size} by more than "
+            f"one vocabulary shard per mesh row; that is a geometry mistake, not a padding choice"
         )
     _validate_vocab_coverage("decode", decode_shapes, config.vocab_size, padded_vocab_size)
     _validate_vocab_coverage("prefill", prefill_shapes, config.vocab_size, padded_vocab_size)
