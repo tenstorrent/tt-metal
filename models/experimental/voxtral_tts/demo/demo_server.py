@@ -37,8 +37,9 @@ def main(argv=None):
     device = open_device()
     try:
         pipe = TtVoxtralPipeline(device)
-        print("warming up (program compiles) ...", flush=True)
-        pipe.warmup()
+        print("warming up: every prefill shape, every codec bucket, one trace "
+              "capture (~74 s) ...", flush=True)
+        pipe.warmup(verbose=True)
         voice, seed, out, n = a.voice, a.seed, "out.wav", 0
         print(f"ready. voice={voice} seed={seed}. \\quit to exit.", flush=True)
         while True:
