@@ -193,6 +193,27 @@ bool env_flag(const char* name) {
 // bringup outright, so a downgraded roster that drops trailing entries sheds the historically fragile
 // views first. Both boot clean on the current UMD/soc-descriptor state, and the duplicate-core TT_FATAL
 // in boot_device still checks every roster -- nothing in pick_unused_dram_logical_core() would.
+const std::vector<uint32_t>& filler_vcs() {
+    static const std::vector<uint32_t> v = [] {
+        std::vector<uint32_t> out;
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FILLER_VCS");
+        if (s != nullptr && *s != '\0') {
+            const char* p = s;
+            while (*p != '\0') {
+                out.push_back(static_cast<uint32_t>(std::strtoul(p, nullptr, 10)) & 3u);
+                while (*p != '\0' && *p != ',') {
+                    p++;
+                }
+                if (*p == ',') {
+                    p++;
+                }
+            }
+        }
+        return out;
+    }();
+    return v;
+}
+
 const std::vector<uint32_t>& role_filler_banks() {
     static const std::vector<uint32_t> v = [] {
         std::vector<uint32_t> out;
@@ -1789,9 +1810,11 @@ bool PerfDebugProfiler::boot_device(
                 0u,  // retired: FILL_PCT (the fill-driven pace controller CV-first replaced)
                 0u,  // retired: GAP_MAX (its ceiling)
                 0u,  // retired: READ_SPLIT
-                // Arg 20: write VC. With the egress NoC alternating on d&1, d&2 splits each NoC's three
-                // pushers across the two unicast request VCs. Args 21..31 retired.
-                (d & 2u) ? 0u : 1u,
+                // Arg 20: write VC. With the egress NoC alternating on d&1, d&2 splits each NoC's
+                // pushers across two of the four unicast request VCs; TT_METAL_PERF_DEBUG_FILLER_VCS
+                // (comma-separated, one entry per filler) overrides the whole assignment for arbitration
+                // experiments at the shared PCIe tile. Args 21..31 retired.
+                d < filler_vcs().size() ? filler_vcs()[d] : ((d & 2u) ? 0u : 1u),
                 0u,
                 0u,
                 0u,
@@ -1819,7 +1842,11 @@ bool PerfDebugProfiler::boot_device(
                 // and the kernel static_asserts that pairing -- passing 1 with zones off would not build.
                 (sync_event_count() != 0 && self_frames_base != 0) ? 1u : 0u,
                 // arg 39: ship threshold (percent of live span capacity).
-                ship_min_pct()};
+                ship_min_pct(),
+                // arg 40: per-core service-interval instrumentation (two wall-clock reads and a histogram
+                // update per shipped core). The svc lines it feeds found the rotation and staleness knees,
+                // but at the knee it is measurable sweep time, so it is opt-in.
+                perf_debug::env_flag("TT_METAL_PERF_DEBUG_DRISC_SVC") ? 1u : 0u};
             TT_FATAL(
                 my_cores * 32u <= 4u * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
                 "CV-first tails staging ({} cores x 32 B) does not fit the self slot's dead ring space",
@@ -2371,22 +2398,22 @@ void PerfDebugProfiler::stop() {
                     static_cast<double>(scan_cyc) / kCycPerUs * 1000.0 / static_cast<double>(res[63]),
                     res[63]);
             }
-            // read sub-split: the CV pass and the gather issue are DRISC-serial whatever the NoC does;
-            // only the residual wait shrinks with overlap. Which of the three dominates picks the next
-            // lever (kill the CV pass vs cheaper issue vs more overlap).
-            {
-                const uint64_t c_cv = (static_cast<uint64_t>(res[177]) << 32) | res[176];
-                const uint64_t c_issue = (static_cast<uint64_t>(res[173]) << 32) | res[172];
-                const uint64_t c_rd = c_read > c_cv + c_issue ? c_read - c_cv - c_issue : 0;
+            // read sub-split, WORKLOAD-WINDOW scoped (the lifetime counters are dominated by idle CV
+            // polling): the CV pass and the gather issue are DRISC-serial whatever the NoC does; only
+            // the residual wait shrinks with overlap. Which dominates picks the next lever (kill the
+            // CV pass vs cheaper issue vs more overlap).
+            if (res[191] != 0 && res[190] != 0) {
+                const double sweeps_w = static_cast<double>(res[190]);
+                const uint64_t w_cv = (static_cast<uint64_t>(res[203]) << 32) | res[202];
+                const uint64_t w_issue = (static_cast<uint64_t>(res[205]) << 32) | res[204];
+                const uint64_t w_busy = (static_cast<uint64_t>(res[184]) << 32) | res[183];
                 log_info(
                     tt::LogMetal,
-                    "[perf-debug profiler] DRISC read split: cv-pass {:.1f}% of busy | gather-issue {:.1f}% | "
-                    "read-wait {:.1f}% ({} cv reads, {} gather reads)",
-                    pct(c_cv),
-                    pct(c_issue),
-                    pct(c_rd),
-                    res[175],
-                    res[174]);
+                    "[perf-debug profiler] DRISC read split (workload window): cv-pass {:.2f} us/sweep | "
+                    "gather-issue {:.2f} us/sweep | busy {:.2f} us/sweep",
+                    w_cv / kCycPerUs / sweeps_w,
+                    w_issue / kCycPerUs / sweeps_w,
+                    w_busy / kCycPerUs / sweeps_w);
             }
             // proc sub-split. `proc` is the biggest busy-sweep phase, and it is two unrelated things:
             // a LOCAL scan of the staged control vectors, and a per-live-core 20 B NoC head write-back
