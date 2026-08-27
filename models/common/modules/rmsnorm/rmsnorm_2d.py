@@ -735,11 +735,12 @@ def _head_local_compute_memory_config(x: ttnn.Tensor, cores: ttnn.CoreRangeSet) 
     num_cores = cores.num_cores()
     if num_cores != box.end.y - box.start.y + 1:
         raise ValueError("a head-local compute grid must be a rectangle")
+    # `ttnn.Shape` indexes by position but does not slice, so this walks it.
     shape = x.padded_shape
     height = 1
-    for extent in shape[:-1]:
-        height *= int(extent)
-    width = int(shape[-1])
+    for axis in range(len(shape) - 1):
+        height *= int(shape[axis])
+    width = int(shape[len(shape) - 1])
     if height % num_cores or (height // num_cores) % TILE_SIZE:
         raise ValueError(f"{height} rows do not divide over {num_cores} cores in whole tiles")
     return ttnn.MemoryConfig(
