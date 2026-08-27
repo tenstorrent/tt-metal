@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "internal/tt-2xx/quasar/noc/att/att.h"
+#include "internal/tt-2xx/quasar/noc/att/att_address.h"
 
 /**
  * @file
@@ -22,7 +23,8 @@ namespace grendel_qsr1_att_config {
 // The worker frame below is the coordinate frame kernels receive today: the
 // soc descriptor's physical functional_workers positions (quasar_32_arch.yaml,
 // workers 2-2..9-5), passed through unchanged because Quasar NOC translation
-// is the identity placeholder (tenstorrent/tt-umd#2494). Revisit together with tenstorrent/tt-umd#2494 if the
+// is the identity placeholder (tenstorrent/tt-umd#2494). Revisit together with
+// that issue if the
 // finalized translated scheme moves the worker frame.
 constexpr std::uint32_t ATT_WORKER_API_ORIGIN_X = 2;
 constexpr std::uint32_t ATT_WORKER_API_ORIGIN_Y = 2;
@@ -121,5 +123,22 @@ constexpr noc_att::Window LOCAL_WINDOW = TILE_WINDOW;
 // constant so the two cannot drift apart.
 constexpr std::uint64_t LOCAL_WINDOW_BASE = LOCAL_WINDOW.make_address(/*selector*/ 0, /*local_address*/ 0);
 static_assert(LOCAL_WINDOW_BASE == 0x1800000000ull);
+
+// The declarative map: everything the shared resolver needs, as data.
+// Windows are indexed by WindowClass (LoopbackScratch, Worker, Dram, FullTile). No logical DRAM or dispatch binding
+// exists in the checked-in descriptor, so those identities resolve invalid until descriptor-owned rows exist.
+inline constexpr noc_att::MapData MAP{
+    .windows = {{LOOPBACK_SCRATCH_WINDOW, WORKER_WINDOW, DRAM_WINDOW, TILE_WINDOW}},
+    .local_window_class = noc_att::WindowClass::FullTile,  // boot-patched ep256 = self at selector 0
+    .worker_origin_x = ATT_WORKER_API_ORIGIN_X,
+    .worker_origin_y = ATT_WORKER_API_ORIGIN_Y,
+    .worker_grid_x = ATT_WORKER_GRID_X,
+    .worker_grid_y = ATT_WORKER_GRID_Y,
+    .worker_selectors = {ATT_WORKER_SELECTORS},
+    .worker_endpoint_words = {ATT_WORKER_ENDPOINT_WORDS},
+    .full_tile_endpoint_words = {ATT_FULL_TILE_ENDPOINT_WORDS},
+    .dram_selectors = {},
+    .dispatch_entries = {},
+};
 
 }  // namespace grendel_qsr1_att_config
