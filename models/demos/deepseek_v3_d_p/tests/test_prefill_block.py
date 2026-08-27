@@ -23,7 +23,7 @@ from loguru import logger
 from transformers import DynamicCache
 
 import ttnn
-from models.common.utility_functions import hf_cache_layer_kv, is_blackhole, profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_mla_weights
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
@@ -55,9 +55,11 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_5K_PATH,
     PROMPT_25K_PATH,
     create_hf_model,
+    decoder_layer_kwargs,
     extract_layer_state_dict,
     get_4d_causal_mask,
     load_and_compute_layer_by_layer,
+    reference_kvpe_for_layer,
     tokenize_prompt_to_isl,
 )
 
@@ -285,18 +287,18 @@ def run_model(
             position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
             attention_mask = get_4d_causal_mask(torch.ones(1, isl_total), causal_only=True).to(torch.bfloat16)
             ref_cache = DynamicCache()
+            # Bound to the layer's own signature, and reused below for the KVPE line.
+            layer_kwargs = decoder_layer_kwargs(
+                hf_model.layers[layer_idx], hf_model, torch_input, attention_mask, position_ids, ref_cache
+            )
             with torch.no_grad():
-                layer_out = hf_model.layers[layer_idx](
-                    torch_input,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_value=ref_cache,
-                    use_cache=True,
-                )
-                torch_output = layer_out[0]
+                layer_out = hf_model.layers[layer_idx](torch_input, **layer_kwargs)
+                torch_output = layer_out[0] if isinstance(layer_out, (tuple, list)) else layer_out
             logger.info(f"Torch reference output shape: {torch_output.shape}")
             if ref_cache is not None:
-                ref_kvpe = hf_cache_layer_kv(ref_cache, layer_idx)[0]
+                ref_kvpe = reference_kvpe_for_layer(
+                    hf_model.layers[layer_idx], layer_idx, torch_input, layer_kwargs, ref_cache, config
+                )
                 logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
             profiler.end("torch_reference")
 

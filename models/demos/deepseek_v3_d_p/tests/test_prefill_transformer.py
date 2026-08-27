@@ -61,6 +61,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     load_and_compute_layer_by_layer,
     load_debug_trace,
     load_reference_cache,
+    mla_kvpe_width,
     save_reference_cache,
     slice_debug_trace,
     slice_non_padded,
@@ -255,7 +256,10 @@ def run_model(
         n_routed_experts=n_routed_experts,
         padding_side=padding_side,
     )
-    ref_cache_exists = check_reference_cache_exists(variant, cache_key) if (pcc_validation and trace is None) else False
+    # A cache written before the compressed-line fix holds expanded per-head keys, and without the
+    # width check still reports as reusable.
+    kvpe_width = mla_kvpe_width(config)
+    ref_cache_exists = pcc_validation and trace is None and check_reference_cache_exists(variant, cache_key, kvpe_width)
 
     logger.info(
         f"Cache status: TTNN={ttnn_cache_complete}, Trace={'YES' if trace else 'NO'}, Reference={ref_cache_exists}"
