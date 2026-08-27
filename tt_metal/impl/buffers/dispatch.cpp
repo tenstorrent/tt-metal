@@ -688,7 +688,8 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     ttsl::Span<const SubDeviceId> sub_device_ids) {
     TTZoneScopedD(DISPATCH);
     ContextId context_id = tt::tt_metal::extract_context_id(buffer.device());
-    const auto& hal = tt::tt_metal::MetalContext::instance(context_id).hal();
+    MetalContext& metal_ctx = tt::tt_metal::MetalContext::instance(context_id);
+    const auto& hal = metal_ctx.hal();
     const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
@@ -719,14 +720,14 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
 
     // Issue wait commands once at the beginning if needed
     if (dispatch_params.issue_wait && num_worker_counters > 0) {
-        DeviceCommandCalculator calculator;
+        DeviceCommandCalculator calculator(metal_ctx);
         for (int i = 0; i < num_worker_counters; ++i) {
             calculator.add_dispatch_wait();
         }
 
         const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
         void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
-        HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+        HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
         for (const auto& sub_device_id : sub_device_ids) {
             auto offset_index = *sub_device_id;
@@ -764,10 +765,10 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         }
 
         // Use calculator to compute command sequence size
-        DeviceCommandCalculator calculator;
+        DeviceCommandCalculator calculator(metal_ctx);
         calculator.add_dispatch_write_packed_large_unicast(write_sub_cmds.size());
         void* cmd_region = sysmem_manager.issue_queue_reserve(calculator.write_offset_bytes(), dispatch_params.cq_id);
-        HugepageDeviceCommand command_sequence(cmd_region, calculator.write_offset_bytes());
+        HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, calculator.write_offset_bytes());
 
         // Add write packed large unicast command
         command_sequence.add_dispatch_write_packed_large_unicast(
@@ -794,7 +795,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         }
 
         cmd_region = sysmem_manager.issue_queue_reserve(calculator.write_offset_bytes(), dispatch_params.cq_id);
-        HugepageDeviceCommand prefetch_command_sequence(cmd_region, calculator.write_offset_bytes());
+        HugepageDeviceCommand prefetch_command_sequence(metal_ctx, cmd_region, calculator.write_offset_bytes());
 
         // Add relay linear packed command
         if (dispatch_params.remote_chip) {
@@ -946,7 +947,8 @@ void issue_buffer_dispatch_command_sequence(
         use_pinned_memory ? dispatch_params.total_pages_to_write : dispatch_params.pages_per_txn;
     uint64_t data_size_bytes = uint64_t(num_pages_to_write) * dispatch_params.page_size_to_write;
 
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(dispatch_params.device));
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     if (dispatch_params.issue_wait) {
         for (int i = 0; i < num_worker_counters; ++i) {
             calculator.add_dispatch_wait();
@@ -973,7 +975,7 @@ void issue_buffer_dispatch_command_sequence(
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
 
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     if (dispatch_params.issue_wait) {
         for (const auto& sub_device_id : sub_device_ids) {
@@ -1026,7 +1028,7 @@ void issue_buffer_dispatch_command_sequence(
         }
         const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
         void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
-        HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+        HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
         if (dispatch_params.remote_chip) {
             command_sequence.add_prefetch_relay_linear_h(
@@ -1118,7 +1120,8 @@ void write_sharded_buffer_to_core(
         issue_sharded_buffer_pinned_dispatch_command_sequence(
             src, buffer, dispatch_params, core_page_mapping, core, sub_device_ids);
     } else {
-        DeviceCommandCalculator calculator;
+        MetalContext& metal_ctx = MetalContext::instance(extract_context_id(buffer.device()));
+        DeviceCommandCalculator calculator(metal_ctx);
         calculator.add_dispatch_write_linear<true, false>(0);
         uint32_t data_offset_bytes = calculator.write_offset_bytes();
         update_offset_on_issue_wait_cmd(data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
@@ -1424,7 +1427,8 @@ void issue_read_buffer_dispatch_command_sequence(
     }
 
     ContextId context_id = tt::tt_metal::extract_context_id(buffer.device());
-    const auto& hal = tt::tt_metal::MetalContext::instance(context_id).hal();
+    MetalContext& metal_ctx = tt::tt_metal::MetalContext::instance(context_id);
+    const auto& hal = metal_ctx.hal();
 
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
 
@@ -1464,7 +1468,7 @@ void issue_read_buffer_dispatch_command_sequence(
     }
 
     // Build calculator with the chosen path
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         calculator.add_dispatch_wait();
     }
@@ -1486,7 +1490,7 @@ void issue_read_buffer_dispatch_command_sequence(
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     uint32_t last_index = num_worker_counters - 1;
     // We only need the write barrier + prefetch stall for the last wait cmd

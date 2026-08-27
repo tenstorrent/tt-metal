@@ -68,6 +68,8 @@ public:
 
     MemoryBlockTable get_memory_block_table() const override;
 
+    void validate_shrink_size(DeviceAddr shrink_size, bool bottom_up = true) const override;
+
     void shrink_size(DeviceAddr shrink_size, bool bottom_up = true) override;
 
     void reset_size() override;
@@ -106,6 +108,8 @@ private:
     // Unused space is split into a new free block and retuened to the free list and the segregated list
     // NOTE: This function DOES NOT remove block_index from the segregated list. Caller should do that
     size_t allocate_in_block(size_t block_index, DeviceAddr alloc_size, size_t offset);
+
+    size_t find_block_to_shrink(DeviceAddr shrink_size, bool bottom_up) const;
 
     size_t get_size_segregated_index(DeviceAddr size_bytes) const {
         // std::log2 is SLOW, so we use a simple log2 implementation for integers. I assume GCC compiles this to a
