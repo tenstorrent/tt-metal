@@ -723,12 +723,6 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
             RECIP);
     }
 
-    if (c.is_post_all_gather) {
-        add_dfb(spec, STATS, sizes.stats_dfb_size, c.stats_single_tile_size, c.stats_dfb_data_format, STATS_T);
-        add_dfb(spec, STATS_REDUCED, sizes.stats_reduced_dfb_size, c.single_tile_size, c.dfb_data_format);
-        add_dfb(spec, VAR, sizes.ex_global_dfb_size, c.single_tile_size, c.dfb_data_format);
-    }
-
     // Output. When the writer reshards, this buffer is a plain intermediate and the output tensor is
     // reached through its own binding instead.
     add_dfb(
@@ -750,6 +744,16 @@ void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& c) {
             add_dfb(spec, X_WELFORD, sizes.in0_dfb_size, c.in_single_tile_size, c.in_data_format, INPUT);
             alias_pair(spec, IN0, X_WELFORD);
         }
+    }
+
+    // These three are the only buffers this op places on a subset of its cores: the all-to-all compute
+    // kernel binds them alone, so they exist on the all-to-all cores only. A buffer's device-facing slot
+    // is the lowest one no buffer sharing a core with it has taken, so declaring them here, after every
+    // all-core buffer, keeps each core's occupied slots a gap-free run starting at zero.
+    if (c.is_post_all_gather) {
+        add_dfb(spec, STATS, sizes.stats_dfb_size, c.stats_single_tile_size, c.stats_dfb_data_format, STATS_T);
+        add_dfb(spec, STATS_REDUCED, sizes.stats_reduced_dfb_size, c.single_tile_size, c.dfb_data_format);
+        add_dfb(spec, VAR, sizes.ex_global_dfb_size, c.single_tile_size, c.dfb_data_format);
     }
 }
 
@@ -885,9 +889,9 @@ m2::KernelSpec::CompileTimeArgs reader_receiver_compile_time_args(
     };
 }
 
-// `on_gathering_cores` is true for the reader instances placed on the all-to-all group: after the
+// `is_all_to_all_worker` is true for the reader instances placed on the all-to-all group: after the
 // all-gather only those nodes carry the reduced-statistics buffer, so only they bind it.
-void bind_reader_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool on_gathering_cores) {
+void bind_reader_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is_all_to_all_worker) {
     bind_semaphore(kernel, REDUCE_RECEIVER, "reduce_receiver");
     bind_semaphore(kernel, REDUCE_SENDER, "reduce_sender");
     bind_semaphore(kernel, REDUCE_SECOND_STAGE, "reduce_second_stage");
@@ -904,7 +908,7 @@ void bind_reader_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool on_
         // After the all-gather there is nothing to gather across cores: the sender multicasts the
         // reduced statistics and every reader receives them.
         bind_dfb(kernel, EX_GLOBAL, "ex_global", m2::DFBEndpointType::PRODUCER);
-        if (on_gathering_cores) {
+        if (is_all_to_all_worker) {
             bind_dfb(kernel, STATS_REDUCED, "stats_reduced", m2::DFBEndpointType::CONSUMER);
         }
         return;
@@ -1181,7 +1185,7 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
     if (c.welford_fp32_alias) {
         kernel.compiler_options.defines.emplace("WELFORD_FP32_ALIAS", "1");
     }
-    // The gathering cores read three extra runtime arguments and touch three extra buffers, so the
+    // The all-to-all workers read three extra runtime arguments and touch three extra buffers, so the
     // distinction has to be visible to the preprocessor rather than to `if constexpr` alone.
     if (is_all_to_all_worker) {
         kernel.compiler_options.defines.emplace("IS_ALLGATHER_WORKER", "1");
@@ -1263,7 +1267,7 @@ void add_kernel_and_work_unit_specs(
     };
     reader_sender.advanced_options.num_runtime_varargs = sender_num_coords;
     add_reader_defines(reader_sender, c);
-    bind_reader_resources(reader_sender, c, /*on_gathering_cores=*/true);
+    bind_reader_resources(reader_sender, c, /*is_all_to_all_worker=*/true);
     spec.kernels.push_back(std::move(reader_sender));
 
     //----------------------------------------------------------------------
@@ -1287,7 +1291,7 @@ void add_kernel_and_work_unit_specs(
         };
         kernel.advanced_options.num_runtime_varargs = is_all_to_all_worker ? sender_num_coords : 2;
         add_reader_defines(kernel, c);
-        bind_reader_resources(kernel, c, /*on_gathering_cores=*/is_all_to_all_worker);
+        bind_reader_resources(kernel, c, /*is_all_to_all_worker=*/is_all_to_all_worker);
         return kernel;
     };
 
@@ -1407,7 +1411,7 @@ void add_kernel_and_work_unit_specs(
         };
         add_reader_defines(idle_reader, c);
         idle_reader.compiler_options.defines.emplace("IDLE_CORE", "1");
-        bind_reader_resources(idle_reader, c, /*on_gathering_cores=*/false);
+        bind_reader_resources(idle_reader, c, /*is_all_to_all_worker=*/false);
         spec.kernels.push_back(std::move(idle_reader));
 
         m2::KernelSpec idle_writer{
@@ -1444,7 +1448,7 @@ void add_kernel_and_work_unit_specs(
         spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = name, .target_nodes = core_ranges.mcast_dest_cores});
     }
 
-    // The writer and compute kernels of the gathering group span both the sender node set and the
+    // The writer and compute kernels of the all-to-all group span both the sender node set and the
     // rest of the all-to-all group, so they appear in two work units and their derived node set is
     // the union.
     spec.work_units.push_back(m2::WorkUnitSpec{
@@ -1583,9 +1587,9 @@ std::vector<uint32_t> reader_sender_named_values(
     return {mcast_start.x, mcast_start.y, mcast_end.x, mcast_end.y, start_x, start_y};
 }
 
-// The coordinate block a gathering core walks to reach its remote peers: every X coordinate of the
-// multicast grid followed by every Y coordinate. In the 2D cases only one of the two axes varies, so
-// the other contributes the single coordinate of this core's own row or column.
+// The coordinate block an all-to-all worker walks to reach its remote peers: every X coordinate of
+// the multicast grid followed by every Y coordinate. In the 2D cases only one of the two axes varies,
+// so the other contributes the single coordinate of this core's own row or column.
 std::vector<uint32_t> gather_coord_varargs(const CoreIndices& idx, const RuntimeArgsContext& ctx) {
     std::vector<uint32_t> varargs;
     varargs.reserve(ctx.mcast_noc_x.size() + ctx.mcast_noc_y.size());
