@@ -165,7 +165,7 @@ reported CSV files into interactive bandwidth and latency charts. It groups test
 directory, supports search and tags, lets the user select an architecture, and creates
 filters for sweep dimensions found in the CSV. It also displays the test-directory
 README, an optional communication-pattern diagram, and FAQ content. It is currently
-hosted in [tt-low-level-documentation](https://github.com/tenstorrent/tt-low-level-documentation).
+available internally [here](https://github.com/tenstorrent/dm-web-viewer).
 
 It is primarily meant to support generalizable performance sweep tests; it plots
 test results from most of our relevant tests, but not every single test. Some
