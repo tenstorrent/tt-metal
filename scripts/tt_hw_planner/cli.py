@@ -9494,7 +9494,22 @@ def _cmd_up_core_impl(args) -> int:
     total_components = sum(counts.values())
 
     if total_components == 0:
-        print("  VERDICT: UNKNOWN — no bringup_status.json (scaffold did not produce a plan).")
+        # Distinguish "no plan file" from "a plan with nothing in it". Reporting a
+        # missing file when the file exists and simply declares zero components
+        # names the wrong cause and sends the reader looking for the wrong thing.
+        from .bringup_loop import find_demo_dir as _find_demo_dir
+
+        _demo_dir = _find_demo_dir(MODEL)
+        _status_path = (_demo_dir / "bringup_status.json") if _demo_dir else None
+        if _status_path is not None and _status_path.is_file():
+            print(
+                f"  VERDICT: UNKNOWN — {_status_path} exists but declares no components "
+                f"(scaffold produced an empty plan; discovery found nothing to bring up)."
+            )
+        elif _demo_dir is not None:
+            print(f"  VERDICT: UNKNOWN — no bringup_status.json under {_demo_dir} (scaffold produced no plan).")
+        else:
+            print("  VERDICT: UNKNOWN — no demo folder for this model yet (scaffold has not run).")
         print()
         print(
             f"  Component classification: {counts.get('REUSE',0)} REUSE, "

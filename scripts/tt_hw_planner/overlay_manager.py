@@ -859,6 +859,30 @@ def drop(model_id: str, rel_path: str) -> bool:
     return True
 
 
+def component_scopes(model_id: str) -> List[str]:
+    """Overlay scope slugs belonging to ``model_id``'s components.
+
+    A composite's parts are brought up as models in their own right, each with its
+    own overlay scope keyed by that part's directory. Dropping the parent's scope
+    therefore leaves the parts' overlays behind, and the next run replays them --
+    "clean slate" was not clean, and stale patches had to be removed by hand.
+
+    Parts are recognised by the parent-qualified alias naming a component target
+    carries (``<parent>__<part>``), so this reads only the scopes already on disk:
+    no model load, no network, and nothing assumed about what the parts are called.
+    """
+    from .scaffold_demo_folder import _slug as _fs_slug
+
+    token = _fs_slug(os.path.basename(model_id.rstrip("/"))) + "__"
+    parent = _slug(model_id)
+    out: List[str] = []
+    for row in list_overlays(None):
+        scope = str(row.get("model_dir_slug") or "")
+        if scope and scope != parent and token in scope and scope not in out:
+            out.append(scope)
+    return out
+
+
 def drop_scope(model_id: str) -> Tuple[int, List[str]]:
     """Drop EVERY overlay registered under ``model_id``.
 

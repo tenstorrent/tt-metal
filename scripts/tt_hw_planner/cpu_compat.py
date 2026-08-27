@@ -315,6 +315,18 @@ def _publish_stub_distributions(names: List[str]) -> None:
     if len(witness) < _SNAPSHOT_MIN_AGREEMENT:
         return
     probe_key = next(iter(stub_entries), None)
+    # Reading a framework's module attributes can emit its own deprecation warnings
+    # (a value in some __dict__ is itself a deprecated alias). Those have nothing to
+    # do with the caller, and were surfacing against this line twice per component.
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore")
+        _repair_snapshots(stub_entries, probe_key, witness)
+
+
+def _repair_snapshots(stub_entries: dict, probe_key, witness: list) -> None:
+    """Add the stand-in entries to every already-taken copy of the real mapping."""
     for module in list(sys.modules.values()):
         ns = getattr(module, "__dict__", None)
         if not isinstance(ns, dict):
