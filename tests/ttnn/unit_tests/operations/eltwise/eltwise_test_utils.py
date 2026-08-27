@@ -107,7 +107,7 @@ def to_tt_tensor(
 
 
 def float_to_bf16_bits(f: float) -> int:
-    """Convert float to BFloat16 bit representation."""
+    """Convert float to BFloat16 bits by truncating the lower 16 FP32 mantissa bits."""
     f32_bits = struct.unpack(">I", struct.pack(">f", f))[0]
     return f32_bits >> 16
 
