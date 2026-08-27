@@ -39,7 +39,7 @@
 # `fabric_profile: torus_xy` to the production TorusXY descriptor and certification environment.
 
 # Blackhole Galaxy DeepSeek Prefill tests
-- name: "DeepSeek-V3-671B MoE gate accuracy"
+- name: "MoE gate accuracy (all prefill gate models)"
   fabric_profile: torus_xy
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
@@ -71,7 +71,7 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and torus-xy-8x4 and kimi and no_determinism" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and torus-xy-8x4 and k2_6 and no_determinism" -vvv --tb=short
     '
   test_type: mla_chunked
   test_group: module

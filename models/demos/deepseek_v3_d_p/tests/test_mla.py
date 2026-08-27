@@ -908,9 +908,10 @@ _CHUNKED_SCENARIOS = (
     "variant",
     ["kimi_k2_6", "kimi_k3"],
     indirect=True,
-    # "k3", not "kimi_k3": pytest -k is substring-based, so a "kimi_k3" id would silently widen every
-    # existing `-k kimi` selector (CI yaml, tests/perf/test_mla_perf.py) to include K3.
-    ids=["kimi", "k3"],
+    # Name the Kimi generation explicitly. pytest -k is substring-based, so the ids must stay
+    # disjoint: "k2_6" and "k3" cannot cross-match, whereas a bare "kimi" id would match both
+    # generations and silently widen every `-k` selector (CI yaml, tests/perf/test_mla_perf.py).
+    ids=["k2_6", "k3"],
 )
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])

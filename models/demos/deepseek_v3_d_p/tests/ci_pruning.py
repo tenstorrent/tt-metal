@@ -30,10 +30,6 @@ def _ci_only(pred):
     return uncollect_if
 
 
-# GLM-5.1 is fully retired from CI; only GLM-5.2 is a production target. The gate
-# cases are kept in the source so the 5.1 config stays locally runnable.
-retired_model = _ci_only(lambda **params: True)
-
 # Op-level MoE perf rows. Throughput for these shapes is gated at the model level
 # (the chunked-transformer perf legs), so the op-level perf twin buys no signal for
 # a Galaxy slot. The matching `pcc-*` row on the same shape is still collected.
