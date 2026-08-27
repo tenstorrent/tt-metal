@@ -55,7 +55,20 @@
 //                               operand. NOT symmetric: NOC 0 is measurably better for
 //                               these DRAM reads, so the BIG operand belongs on it. See
 //                               unified_llama_prefill.md.
-//   5..      TensorAccessorArgs for A, then B, then out
+//   0..      TensorAccessorArgs for A, then B, then out -- at 0, and staying there, now
+//            that the scalars above are named rather than positional
+//
+//   MMB_SHARE_PAIR              TEST ONLY. Put BOTH collectives on handshake pair 0
+//                               instead of 0 and 1 -- the thing the pair parameter exists
+//                               to prevent. Whether it actually breaks is what MMB_SKEW is
+//                               for; see unified_api_hazards.md hazard 13b.
+//   MMB_SKEW                    TEST ONLY. Busy-wait this many iterations on row 0's
+//                               RECEIVERS before each row load, so the row-0 sender parks
+//                               in its ready wait while lower rows race ahead into their
+//                               column collective. That is the exact interleaving the
+//                               shared-pair hazard needs: a core incrementing (0,0)'s
+//                               ready counter for the COLUMN collective while (0,0) is
+//                               still counting ROW receivers.
 //
 // Runtime args (identical on all three kernels):
 //   0        A base address, an [M, K] tensor
@@ -219,13 +232,32 @@ void kernel_main() {
                     }
                 }).wait();
             u::ComputeBlock w =
+#if defined(MMB_SHARE_PAIR)
+                u::noc_load<MMB_IN1_THREAD, /*pair=*/0>(w_storage, col, [&](u::L1Pages pages) {
+#else
                 u::noc_load<MMB_IN1_THREAD, /*pair=*/1>(w_storage, col, [&](u::L1Pages pages) {
+#endif
                     for (uint32_t p = 0; p < pages.count; ++p) {
                         const uint32_t rr = b * kt + p / nt;
                         const uint32_t cc = n * nt + p % nt;
                         noc_async_read(b_acc.get_noc_addr(rr * ntot + cc), pages.addr(p), pages.page_bytes);
                     }
                 }).wait();
+#endif
+
+#if defined(MMB_SKEW)
+            // AFTER both loads, so `a` and `w` are still live -- their pops are at the end
+            // of this iteration. Row 0's receivers therefore hold buffers they have not
+            // freed while the next round's ready counting is under way, which is the only
+            // placement that can turn an early broadcast into corruption. Before the loads
+            // the delay sits after the previous pop, so the buffer is already free.
+            //
+            // Row 0's sender is (0, 0): delaying (0, 1..) parks it, while lower rows race
+            // on into the column collective and increment (0, 0). volatile to survive -O3.
+            if (me.y == 0 && me.x != 0) {
+                for (volatile uint32_t d = 0; d < MMB_SKEW; ++d) {
+                }
+            }
 #endif
 
             auto store_block = [&](u::Block<Out> blk) {

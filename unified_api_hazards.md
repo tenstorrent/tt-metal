@@ -106,7 +106,7 @@ without a marker are mechanisms the headers document as the caller's responsibil
     `example_matmul.cpp` (now dropped) is the small evidence that the parameter invites
     noise even from someone who knows what it does.
 
-    **And the justification is weaker than the comment claims. NOT REPRODUCED.** Asked
+    **VERIFIED ON HARDWARE.** Asked
     whether a shared pair actually breaks on hardware, the sequential case was settled by
     reading: the handshake is entirely synchronous inside `noc_load` -- sender waits ready,
     barriers, broadcasts, sets and clears the flag; receiver increments, waits, clears --
@@ -115,22 +115,40 @@ without a marker are mechanisms the headers document as the caller's responsibil
     one core sharing a pair, even waited out of order, have nothing to cross: the second
     handshake cannot begin until the first returned.
 
-    The documented hazard is a different one -- cross-core role interference, core (1,0)
-    incrementing (0,0)'s ready counter for the COLUMN collective while (0,0) waits on its
-    ROW one, since per-core sequential is not grid-wide sequential. The mechanism is sound
-    on paper. **It did not fire in twelve trials**: both collectives on thread 0 sharing
-    pair 0, across 2x2, 8x8 and 2x8 grids (the last deliberately asymmetric, so the two
-    rectangles have 7 and 1 destinations and a stray increment could satisfy the wrong
-    `wait`), at 8 k-blocks, at prefetch depth 1 and 2 -- every one correct to the same pcc
-    as the distinct-pair build, none hung.
+    The real hazard is cross-core role interference, exactly as the code comments say:
+    core (1,0) incrementing (0,0)'s ready counter for the COLUMN collective while (0,0) is
+    still counting ROW receivers, since per-core sequential is not grid-wide sequential.
+    (0,0) waits for EQUALITY, so its wait is satisfied by the wrong increments and it
+    broadcasts into a buffer a receiver has not freed.
 
-    Twelve trials do not prove a race absent, and the failure would be a silent wrong
-    answer or a hang depending on timing, so this is NOT grounds for deleting the
-    parameter. But it is grounds for not treating the comment as established: the
-    protocol's own dependency structure -- a sender cannot advance until its receivers are
-    ready, and those receivers cannot advance past their own sends -- may already serialise
-    the grid enough to prevent it. Worth an adversarial test with injected skew before
-    either the comment or the parameter is trusted further.
+    **Twelve ordinary trials missed it and an adversarial one caught it**, which is the
+    useful part. Sharing pair 0 across 2x2, 8x8 and 2x8 grids at depths 1 and 2 was
+    correct every time. THREE conditions have to coincide:
+
+    | condition | why |
+    |---|---|
+    | both collectives on one thread | otherwise the thread-derived pairs already differ |
+    | a receiver holding a LIVE buffer | so an early broadcast has something to corrupt |
+    | prefetch depth 1 | at depth 2 the early write lands in the spare slot, harmlessly |
+
+    The second is where the first skew attempt went wrong: the delay sat BEFORE the load,
+    which is after the previous iteration's pop, so the buffer was already free and nothing
+    could break. Moved to after the loads, where the blocks are still live, it fires
+    immediately.
+
+    | 8x8 grid, thread 0 both, skew on, depth 1 | pcc |
+    |---|---|
+    | distinct pairs (control) | 0.999952 |
+    | **shared pair 0** | **0.904540**, identical on 3 of 3 |
+
+    A SILENT WRONG ANSWER, not a hang, and deterministic once the conditions are met. So
+    the parameter is justified and is not deletable. `test_unified_matmul_blocked.py` now
+    carries this as a regression test asserting the difference -- if shared pairs ever
+    become safe it fails loudly, which is the right way to learn the parameter can go.
+    `MMB_SKEW` and `MMB_SHARE_PAIR` stay in the kernel as the knobs it needs.
+
+    The shape complaints above all still stand. The parameter has to exist; it does not
+    have to be two adjacent ints at a call site far from its partner.
 
 14. **Mismatched multicast rectangle** computed differently on sender and receiver.
 
