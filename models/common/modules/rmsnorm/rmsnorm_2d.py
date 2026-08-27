@@ -109,9 +109,12 @@ class RMSNorm2DConfig:
     decode_progcfg: ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
     decode_stats_memcfg: ttnn.MemoryConfig | None = None
 
-    #: Where a ``HEAD_LOCAL`` decode norm runs its kernel. Optional, and only
-    #: meaningful for that geometry; see ``_decode_head_local``.
-    decode_compute_memcfg: ttnn.MemoryConfig | None = None
+    #: Which cores a ``HEAD_LOCAL`` decode norm runs its kernel on. Optional,
+    #: and only meaningful for that geometry; see ``_decode_head_local``. The
+    #: caller names the cores because only the caller knows which ones its
+    #: sub-device owns; the shard shape is derived from the tensor, because the
+    #: created-head padding is the op's business and not the caller's.
+    decode_compute_cores: ttnn.CoreRangeSet | None = None
 
     # Compute kernel config (only for prefill - decode uses program_config)
     compute_kernel_config_prefill: ttnn.WormholeComputeKernelConfig | None = None
@@ -247,8 +250,8 @@ class RMSNorm2D(LightweightModule):
         A head-local norm is a plain ``ttnn.rms_norm`` - no column reduction, no
         collective - and on an unpartitioned device the obvious spelling is to
         run it straight on whatever placement the caller hands over. On a WH
-        Galaxy decode step it is not that simple, and both of the obvious
-        spellings fail:
+        Galaxy decode step it is not that simple, and both obvious spellings
+        fail, for different reasons:
 
         * **interleaved input.** ``ttnn.rms_norm`` resolves
           ``LayerNormDefaultProgramConfig``, which splits its tile rows over
@@ -274,31 +277,45 @@ class RMSNorm2D(LightweightModule):
 
           (a standing TODO in that file, not a property of the maths.)
 
-        So the kernel runs in a third placement, ``decode_compute_memcfg``: a
-        block-sharded rectangle of worker cores, which the sharded program
-        factory accepts and which it derives its core ranges from - so the
-        program lands exactly on those cores. The caller chooses the rectangle,
-        because only the caller knows which cores its sub-device owns.
+        So the kernel runs in a third placement, block-sharded over
+        ``decode_compute_cores``: the sharded factory accepts block sharding,
+        takes its core ranges from the tensor's own shard spec - so the program
+        lands exactly on those cores - and demands a rectangular grid. One core
+        wide keeps the whole ``head_dim``-wide row on a single core, so the
+        reduction needs no multicast.
 
-        Getting in and out of it is the other half. ``to_memory_config`` between
-        two shard specs resolves to ``reshard``, which builds over the full grid
-        and would abort the same way; the safe pair is
-        ``sharded_to_interleaved`` (runs on its *input's* shard grid) and
-        ``interleaved_to_sharded`` (runs on its *output's* cores). Both ends are
-        worker cores here, so every one of the four hops stays inside the
-        partition. That is a real decode-latency cost - four extra ops per norm,
-        eight per layer - and it belongs on the performance follow-up list; it is
-        not a correctness argument.
+        **The shard shape is derived from the tensor, not configured.** The
+        decode Q and K carry ``users_per_column`` users of one *tile* of padded
+        heads - 8 x 32 = 256 rows on this mesh, whether the model has 8 local Q
+        heads or 1 local K head - and that padding is the create-heads op's
+        business. A configured shape would encode it, and encoding it wrongly is
+        how this landed: a first version sized the rectangle for the full
+        physical batch and got::
 
-        With ``decode_compute_memcfg`` unset the behaviour is exactly what it was
-        before: one ``ttnn.rms_norm`` on the input as given. That is the right
-        thing on an unpartitioned device and for any caller that has already
-        placed its input somewhere the op accepts.
+            TT_FATAL: Shard layout requires 2x1 = 2 shards but shard grid has
+                      8 cores
+            shard_spec_validation.cpp:81
+
+        The result goes back into **the input's own placement**, for the same
+        reason: the rotary that follows expects Q and K exactly as
+        ``nlp_create_qkv_heads_decode`` left them, so the norm has to be
+        invisible to it.
+
+        Getting in and out uses ``sharded_to_interleaved`` (runs on its
+        *input's* shard grid) and ``interleaved_to_sharded`` (runs on its
+        *output's* cores) rather than ``to_memory_config``, which between two
+        shard specs resolves to ``reshard`` and would abort exactly like the
+        interleaved case. That is four extra ops per norm and a real
+        decode-latency cost; it belongs on the performance follow-up list, not
+        in a correctness argument.
+
+        With ``decode_compute_cores`` unset the behaviour is exactly what it was
+        before: one ``ttnn.rms_norm`` on the input as given.
         """
 
         cfg = self.config
-        compute_memcfg = cfg.decode_compute_memcfg
-        if compute_memcfg is None:
+        cores = cfg.decode_compute_cores
+        if cores is None:
             return ttnn.rms_norm(
                 x,
                 epsilon=cfg.eps,
@@ -311,8 +328,10 @@ class RMSNorm2D(LightweightModule):
             # exactly, so it would have to be relocated in step with `x`. No
             # caller needs that - a per-head Q/K norm has no residual - and
             # guessing is worse than saying so.
-            raise ValueError("decode_compute_memcfg does not support a residual input")
+            raise ValueError("decode_compute_cores does not support a residual input")
 
+        source_memcfg = x.memory_config()
+        compute_memcfg = _head_local_compute_memory_config(x, cores)
         placed = _place_without_leaving_subdevice(x, compute_memcfg)
         try:
             normalized = ttnn.rms_norm(
@@ -324,7 +343,7 @@ class RMSNorm2D(LightweightModule):
         finally:
             if placed is not x:
                 placed.deallocate(True)
-        output = _place_without_leaving_subdevice(normalized, cfg.decode_output_memcfg)
+        output = _place_without_leaving_subdevice(normalized, source_memcfg)
         if output is not normalized:
             normalized.deallocate(True)
         return output
@@ -698,6 +717,36 @@ def _resolve_2d_config(config: RMSNorm2DConfig) -> RMSNorm2DConfig:
 # =============================================================================
 # Input Tensor Utilities
 # =============================================================================
+
+
+def _head_local_compute_memory_config(x: ttnn.Tensor, cores: ttnn.CoreRangeSet) -> ttnn.MemoryConfig:
+    """Block-shard `x`'s rows evenly over `cores`, one core wide.
+
+    Rectangular and one core wide are both requirements of the sharded
+    layernorm: it rejects a non-rectangular grid outright, and a wider grid would
+    split the normalized dimension across cores and need a multicast reduction
+    for no benefit at these widths.
+    """
+
+    box = cores.bounding_box()
+    width_in_cores = box.end.x - box.start.x + 1
+    if width_in_cores != 1:
+        raise ValueError(f"a head-local compute grid must be one core wide, got {width_in_cores}")
+    num_cores = cores.num_cores()
+    if num_cores != box.end.y - box.start.y + 1:
+        raise ValueError("a head-local compute grid must be a rectangle")
+    shape = x.padded_shape
+    height = 1
+    for extent in shape[:-1]:
+        height *= int(extent)
+    width = int(shape[-1])
+    if height % num_cores or (height // num_cores) % TILE_SIZE:
+        raise ValueError(f"{height} rows do not divide over {num_cores} cores in whole tiles")
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(cores, (height // num_cores, width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
 
 
 def _place_without_leaving_subdevice(tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:

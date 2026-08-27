@@ -765,35 +765,31 @@ def _norm_config(
     )
 
 
-#: How many worker cores the head-local Q/K decode norm runs on. The tensor it
-#: normalizes is ``GALAXY_PHYSICAL_BATCH`` users x one tile of padded heads, i.e.
-#: 32 tile rows, so eight cores divide it into four tile rows each. Ten - the
-#: full height of a worker column - does not divide 32.
+#: How many worker cores the head-local Q/K decode norm runs its kernel on. The
+#: tensor it normalizes is ``users_per_column`` users of one *tile* of padded
+#: heads - 8 x 32 = 256 rows on this mesh, for the 8 local Q heads and the 1
+#: local K head alike - so eight cores is one tile row each. `RMSNorm2D` derives
+#: the shard shape from the tensor and will refuse a count that does not divide
+#: it into whole tiles.
 _HEAD_LOCAL_DECODE_NORM_CORES = 8
 
 
-def _head_local_decode_compute_memcfg(head_dim: int) -> Any:
-    """Return the placement a head-local decode norm runs its kernel in.
+def _head_local_decode_norm_cores() -> Any:
+    """Return the worker cores a head-local decode norm runs its kernel on.
 
-    Block-sharded, one core wide and ``_HEAD_LOCAL_DECODE_NORM_CORES`` tall,
-    inside the decode worker envelope. Three properties are load-bearing and
-    each of them is a thing `ttnn.rms_norm` refuses without:
+    One core wide, ``_HEAD_LOCAL_DECODE_NORM_CORES`` tall, taken from the decode
+    worker envelope's first column. Three properties are load-bearing, and each
+    is something `ttnn.rms_norm` refuses without:
 
-    * **sharded**, so the op derives a ``LayerNormShardedMultiCoreProgramConfig``
-      from the tensor's own shard spec and the sharded factory takes its core
-      ranges from that shard spec rather than from the device compute grid. An
-      interleaved input takes the default factory, which spreads over the whole
-      grid and aborts under the decode manager (D-B26);
-    * **not height-sharded**, which the op rejects outright
-      (``layernorm_device_operation.cpp:166``, a standing TODO). That is why the
-      created heads' own ``attention_heads_memcfg`` cannot be used directly;
-    * **a rectangle**, which the op also requires
-      (``Sharded layernorm does not support non-rectangular core grids``), and
-      one core wide, so the full 128-column head lands on a single core and the
-      reduction needs no multicast.
+    * **worker cores**, because an interleaved head-local norm spreads over the
+      whole compute grid and aborts under the decode sub-device manager
+      (D-B26);
+    * **a rectangle**, which the sharded layernorm requires outright
+      (``Sharded layernorm does not support non-rectangular core grids``);
+    * **one core wide**, so the full ``head_dim``-wide row lands on a single
+      core and the reduction needs no multicast.
 
-    Taken from the worker envelope's first column, and asserted to lie inside
-    it: `worker_cores()` is ``{[1-0 - 3-9], [5-0 - 6-9]}`` on this mesh, so
+    `worker_cores()` is ``{[1-0 - 3-9], [5-0 - 6-9]}`` on this mesh, so
     ``x = 1, y = 0..7`` is worker-owned and disjoint from the prefetch senders.
     """
 
@@ -809,18 +805,7 @@ def _head_local_decode_compute_memcfg(head_dim: int) -> Any:
     for y in range(core_range.start.y, core_range.end.y + 1):
         if not workers.contains(ttnn.CoreCoord(core_range.start.x, y)):
             raise ValueError(f"head-local decode norm core ({core_range.start.x}, {y}) is not a worker core")
-    rows = GALAXY_PHYSICAL_BATCH * ttnn.TILE_SIZE
-    if rows % _HEAD_LOCAL_DECODE_NORM_CORES:
-        raise ValueError(f"{rows} head rows do not divide over {_HEAD_LOCAL_DECODE_NORM_CORES} cores")
-    return ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            ttnn.CoreRangeSet({core_range}),
-            (rows // _HEAD_LOCAL_DECODE_NORM_CORES, head_dim),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
+    return ttnn.CoreRangeSet({core_range})
 
 
 def _head_local_norm_config(
@@ -829,7 +814,6 @@ def _head_local_norm_config(
     mesh_device: Any,
     precision: Qwen3_32BGalaxyPrecision,
     decode_placements: GalaxyDecodePlacements,
-    head_dim: int,
     eps: float,
 ) -> RMSNorm2DConfig:
     """Return the per-head Q/K norm config `Attention2D` requires.
@@ -856,15 +840,15 @@ def _head_local_norm_config(
     numerical result; the module's D2 fix made interleaved DRAM the *default*
     for this geometry, which is right for prefill and unplaceable for decode.
 
-    Naming ``attention_heads_memcfg`` fixes it without any change to the shared
-    module. A sharded input makes ``ttnn.rms_norm`` derive a
-    ``LayerNormShardedMultiCoreProgramConfig`` from the tensor's own shard spec
-    (``create_layernorm_program_config``), and the sharded factory takes its core
-    ranges from that shard spec rather than from the device grid - and those
-    cores are the 32 head cores, which are worker cores. It also removes two
-    relocations per layer: ``nlp_create_qkv_heads_decode`` already produces Q and
-    K in exactly this placement, and the rotary that follows wants them back in
-    it, so the norm now runs in place instead of round-tripping through DRAM.
+    Naming ``attention_heads_memcfg`` is half the fix: it stops Attention2D
+    relocating Q and K at all, so they reach the norm - and leave it - exactly as
+    ``nlp_create_qkv_heads_decode`` wrote them, which is what the rotary
+    downstream expects. It is not sufficient on its own, because those heads are
+    HEIGHT_SHARDED and ``ttnn.rms_norm`` rejects that layout outright
+    (``layernorm_device_operation.cpp:166``, a standing TODO). The kernel
+    therefore runs in a third placement, block-sharded over
+    ``decode_compute_cores``, and `RMSNorm2D` relocates in and out with the
+    sub-device-aware pair. See ``RMSNorm2D._decode_head_local``.
 
     Prefill keeps interleaved DRAM: its mode plan is a single sub-device over the
     full grid, its heads are ``[1, local_heads, sequence, head_dim]`` in DRAM
@@ -881,7 +865,7 @@ def _head_local_norm_config(
         prefill_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
         decode_output_memcfg=decode_placements.attention_heads_memcfg,
         prefill_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
-        decode_compute_memcfg=_head_local_decode_compute_memcfg(head_dim),
+        decode_compute_cores=_head_local_decode_norm_cores(),
         compute_kernel_config_prefill=precision.norm_kernel_config,
     )
 
@@ -991,7 +975,6 @@ def _build_block_config(
             mesh_device=mesh_device,
             precision=precision,
             decode_placements=decode,
-            head_dim=geometry.head_dim,
             eps=norm_eps,
         ),
         k_norm_config=_head_local_norm_config(
@@ -999,7 +982,6 @@ def _build_block_config(
             mesh_device=mesh_device,
             precision=precision,
             decode_placements=decode,
-            head_dim=geometry.head_dim,
             eps=norm_eps,
         ),
         mesh_device=mesh_device,

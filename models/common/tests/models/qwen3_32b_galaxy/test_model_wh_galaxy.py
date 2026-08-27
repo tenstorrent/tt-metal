@@ -492,11 +492,13 @@ def test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill(me
                 ("k_norm", attention._k_norm, reference_k_norm, local_k_heads),
             ):
                 if mode == "decode":
-                    # Every row of the sharded tile, not only the `heads` live
-                    # ones: the padded rows go through the same kernel and a
-                    # norm that only touched the live rows would still pass a
-                    # comparison restricted to them.
-                    shape = (1, _PHYSICAL_BATCH, ttnn.TILE_SIZE, params.head_dim)
+                    # `users_per_column` users of one *tile* of padded heads -
+                    # 8 x 32 = 256 rows for the 8 local Q heads and the 1 local
+                    # K head alike. Every row of the tile, not only the `heads`
+                    # live ones: the padded rows go through the same kernel, and
+                    # a comparison restricted to the live rows would pass a norm
+                    # that never touched the rest.
+                    shape = (1, model.geometry.users_per_column, ttnn.TILE_SIZE, params.head_dim)
                     memcfg = heads_memcfg
                 else:
                     shape = (1, heads, _PREFILL_LENGTH, params.head_dim)

@@ -380,7 +380,7 @@ def test_distributed_decode_does_not_deallocate_a_tensor_it_returns(monkeypatch)
     source.deallocate.assert_not_called()
 
 
-def _head_local_module(monkeypatch, mesh, *, compute_memcfg=None, output_memcfg=None):
+def _head_local_module(monkeypatch, mesh, *, compute_cores=None, output_memcfg=None):
     """Return a `RMSNorm2D` with a resolved head-local config and a stub weight."""
 
     monkeypatch.setattr(rmsnorm_2d, "resolve_lazy_weight", lambda weight, **_: weight)
@@ -391,7 +391,7 @@ def _head_local_module(monkeypatch, mesh, *, compute_memcfg=None, output_memcfg=
             cluster_shape=(8, 4),
             geometry=RMSNorm2DGeometry.HEAD_LOCAL,
             decode_output_memcfg=output_memcfg,
-            decode_compute_memcfg=compute_memcfg,
+            decode_compute_cores=compute_cores,
         )
     )
     module = object.__new__(RMSNorm2D)
@@ -401,10 +401,17 @@ def _head_local_module(monkeypatch, mesh, *, compute_memcfg=None, output_memcfg=
     return module
 
 
-def _fake_tensor(memory_config):
+def _fake_tensor(memory_config, padded_shape=(1, 8, 32, 128)):
     tensor = MagicMock(spec=ttnn.Tensor)
     tensor.memory_config.return_value = memory_config
+    tensor.padded_shape = padded_shape
     return tensor
+
+
+def _norm_cores():
+    """One core wide, eight tall, as the Galaxy Qwen model asks for."""
+
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 7))})
 
 
 def _memcfg(layout):
@@ -459,12 +466,18 @@ def test_head_local_decode_runs_the_kernel_in_the_compute_placement(monkeypatch)
     mesh = _mesh()
     heads = _memcfg(ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
     compute = _memcfg(ttnn.TensorMemoryLayout.BLOCK_SHARDED)
-    module = _head_local_module(monkeypatch, mesh, compute_memcfg=compute, output_memcfg=heads)
+    module = _head_local_module(monkeypatch, mesh, compute_cores=_norm_cores(), output_memcfg=heads)
 
     ops: list[str] = []
     staged_in, placed_in = _fake_tensor(_memcfg(ttnn.TensorMemoryLayout.INTERLEAVED)), _fake_tensor(compute)
     staged_out, placed_out = _fake_tensor(_memcfg(ttnn.TensorMemoryLayout.INTERLEAVED)), _fake_tensor(heads)
     normalized = _fake_tensor(compute)
+    # 8 users x one tile of padded heads = 256 rows over 8 cores: one tile row
+    # each. Sizing this from the full physical batch instead is what produced
+    #   TT_FATAL: Shard layout requires 2x1 = 2 shards but shard grid has 8 cores
+    derived = rmsnorm_2d._head_local_compute_memory_config(_fake_tensor(heads), _norm_cores())
+    assert derived.shard_spec.shape == [32, 128]
+    assert derived.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
     to_interleaved = iter((staged_in, staged_out))
     to_sharded = iter((placed_in, placed_out))
     monkeypatch.setattr(
@@ -494,7 +507,8 @@ def test_head_local_decode_runs_the_kernel_in_the_compute_placement(monkeypatch)
         "interleaved_to_sharded",
     ]
     assert norm_calls[0][0] is placed_in
-    assert norm_calls[0][1]["memory_config"] is compute
+    # The kernel's own placement is derived from the tensor, not configured.
+    assert norm_calls[0][1]["memory_config"] == derived
     # The caller owns its input; only the module's own intermediates are freed.
     source.deallocate.assert_not_called()
     for intermediate in (staged_in, placed_in, staged_out, normalized):
@@ -510,8 +524,20 @@ def test_head_local_decode_refuses_a_residual_it_cannot_place(monkeypatch, expec
 
     mesh = _mesh()
     heads = _memcfg(ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
-    compute = _memcfg(ttnn.TensorMemoryLayout.BLOCK_SHARDED)
-    module = _head_local_module(monkeypatch, mesh, compute_memcfg=compute, output_memcfg=heads)
+    module = _head_local_module(monkeypatch, mesh, compute_cores=_norm_cores(), output_memcfg=heads)
 
     with expect_error(ValueError, "does not support a residual"):
         module.decode_forward(_fake_tensor(heads), residual=_fake_tensor(heads))
+
+
+def test_head_local_compute_grid_must_be_a_one_wide_rectangle():
+    """Both are the sharded layernorm's own requirements, not a style choice."""
+
+    tensor = _fake_tensor(_memcfg(ttnn.TensorMemoryLayout.HEIGHT_SHARDED))
+    wide = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 3))})
+    with pytest.raises(ValueError, match="one core wide"):  # allow-pytest.raises: module-level helper, no fixture
+        rmsnorm_2d._head_local_compute_memory_config(tensor, wide)
+    # 256 rows over 3 cores is not a whole number of tiles per core.
+    ragged = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 2))})
+    with pytest.raises(ValueError, match="do not divide"):  # allow-pytest.raises: module-level helper, no fixture
+        rmsnorm_2d._head_local_compute_memory_config(tensor, ragged)
