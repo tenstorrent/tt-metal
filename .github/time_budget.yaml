@@ -92,7 +92,7 @@ ttnn:
     bh_galaxy: 40
     bh_p100: 805
     bh_p150b_civ2: 1045
-    wh_n150_civ2: 1205
+    wh_n150_civ2: 1215
     wh_n300_civ2: 1180
     bh_p150b_civ2_viommu: 115
     bh_p300: 60
@@ -156,7 +156,8 @@ train:
   perf:
     bh_p100: 160
     bh_p150b_civ2: 400
-    bh_galaxy_perf: 180
+  e2e_tier3:
+    bh_sc1: 260
 
 ttsim:
   unit:
@@ -235,15 +236,19 @@ scaleout:
 runtime:
   pr_gate:
     wh_n150_civ2: 15
+    github_hosted_cpu: 15
   merge_gate:
     wh_n150_civ2: 45
     wh_n300_civ2: 15
     wh_llmbox_civ2_viommu: 15
     bh_p150b_civ2_viommu: 45
+    github_hosted_cpu: 15
   sanity:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
     bh_loudbox: 5
+    wh_n150: 10
+    bh_p150: 10
     sim_wh_n150: 30
     sim_bh_p150: 30
     sim_wh_galaxy: 10
@@ -331,7 +336,7 @@ models:
     bh_sc1: 20
   e2e_tier1:
     wh_n150: 28
-    wh_galaxy_perf: 120
+    wh_galaxy_perf: 215
     bh_p150: 27
     bh_quietbox_2: 255
     bh_galaxy: 78
@@ -352,14 +357,11 @@ models:
     bh_p150: 33
     bh_p300: 8
     bh_quietbox_2: 42
-  unit:
-    wh_llmbox: 45
-    wh_galaxy_perf: 10
   unit_tier1:
-    wh_llmbox: 86
+    wh_llmbox: 140
     wh_n150: 110
     wh_galaxy: 235
-    wh_galaxy_perf: 45
+    wh_galaxy_perf: 60
     bh_p150: 20
     bh_quietbox_2: 390
     bh_galaxy: 75
@@ -383,11 +385,10 @@ models:
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
-    wh_llmbox: 30
-  perf:
-    wh_galaxy_perf: 55
+    wh_llmbox: 0
   device_perf:
     wh_n150: 20
+    wh_galaxy_perf: 25
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80

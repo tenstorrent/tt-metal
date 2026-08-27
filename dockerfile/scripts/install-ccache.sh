@@ -3,11 +3,11 @@
 # Apt's version for 20.04 predates remote_storage support
 set -euo pipefail
 
-CCACHE_VERSION="${CCACHE_VERSION:-4.13.6}"
-# SHA256 for ccache-4.13.6-linux-x86_64-glibc.tar.xz
+CCACHE_VERSION="${CCACHE_VERSION:-4.14}"
+# SHA256 for ccache-4.14-linux-x86_64-glibc.tar.xz
 # Note: starting v4.11, upstream renamed the tarball to include -glibc suffix
 # Verified by downloading and computing hash with compute-hashes.sh
-CCACHE_SHA256="${CCACHE_SHA256:-508b2a1217dc6e04a23e967c7b95a0fb45d8a7e16fde9e180919698f2e2be060}"
+CCACHE_SHA256="${CCACHE_SHA256:-45a91165db7092e67c6208ada03f54700e684c4cd3735f9031de95669ed9272c}"
 
 # Remote storage helper for S3-backed ccache (crsh: custom storage protocol).
 # ccache derives the helper name (ccache-storage-s3) from the s3:// URL scheme

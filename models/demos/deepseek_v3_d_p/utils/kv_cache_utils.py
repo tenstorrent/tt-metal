@@ -470,6 +470,7 @@ def populate_kv_chunk_address_table_kimi(
     num_users=1,
     config_id=0,
     stage_layout=None,
+    layer_rows=None,
 ):
     """
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
@@ -485,11 +486,24 @@ def populate_kv_chunk_address_table_kimi(
         lookup_table: an existing KvChunkAddressTable (single- or multi-config).
         config: the KvChunkAddressTableConfig for THIS config_id (read for num_layers).
         config_id: which config of the table to populate (default 0, the single-config case).
+        layer_rows: table row to publish each dense cache layer at; None (default) means row == layer.
+            A compacted cache passes its dense -> global layer map here; DRAM addresses do not move.
         (remaining args as in create_kv_chunk_address_table_kimi)
 
     Returns:
         lookup_table: the same table, with config_id populated.
     """
+
+    # Row a dense cache layer is published at; identity unless the cache is compacted.
+    def _table_row(dense_layer):
+        if layer_rows is None:
+            return dense_layer
+        assert dense_layer < len(layer_rows), (
+            f"layer_rows has {len(layer_rows)} entries but the cache holds dense layer {dense_layer}; "
+            f"the map must cover every layer the cache physically stores"
+        )
+        return layer_rows[dense_layer]
+
     if stage_layout is not None:
         # ---- stage_layout-driven path (PP-capable, #48826). ----
         # Per-stage device groups + host tags are built inside the stage loop below (one group per
@@ -541,7 +555,7 @@ def populate_kv_chunk_address_table_kimi(
                                 location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                                 location.size_bytes = chunk_size_bytes
                                 location.device_group_index = group_idx
-                                lookup_table.set(global_layer, position, slot, location, config_id)
+                                lookup_table.set(_table_row(global_layer), position, slot, location, config_id)
 
                                 curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                                 if curr_bank_id == 0:
@@ -612,7 +626,7 @@ def populate_kv_chunk_address_table_kimi(
                         location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                         location.size_bytes = chunk_size_bytes
                         location.device_group_index = group_idx
-                        lookup_table.set(layer, position, slot, location, config_id)
+                        lookup_table.set(_table_row(layer), position, slot, location, config_id)
 
                         curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                         if curr_bank_id == 0:

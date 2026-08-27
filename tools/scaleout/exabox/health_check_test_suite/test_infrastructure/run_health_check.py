@@ -141,6 +141,12 @@ def parse_args() -> argparse.Namespace:
         help="Transition used to close a node's open ticket when it recovers "
         "(falls back to any done-category transition if not found)",
     )
+    jira.add_argument(
+        "--grafana-base-url",
+        default="https://grafana.it.aws.tenstorrent.com",
+        help="Grafana base URL for the node's tt-telemetry dashboard link in failure "
+        "tickets; empty string omits the link",
+    )
 
     p.add_argument(
         "--create-jira",
@@ -389,6 +395,8 @@ def main() -> int:
     # between the deployments: it drives Slurm (scontrol reboot + requeue), which
     # orchestration has no equivalent for, so there we say so and ticket instead.
     restart_count = slurm_restart_count()
+    # Set only when self-heal tried but couldn't reboot/requeue; surfaced on the ticket.
+    reboot_failure: str | None = None
     if effective_code != 0 and args.reboot_on_failure and launch_mode != "slurm":
         log.warning(
             "--reboot-on-failure is not supported in %s launch mode (reboot-and-requeue "
@@ -425,10 +433,14 @@ def main() -> int:
             upload_csv_sftp(pre_reboot_csv, sftp_user, sftp_host, log_dir=log_dir, launch_mode=launch_mode)
         if args.cleanup and pre_reboot_csv:
             remove_path(tempfile.gettempdir(), pre_reboot_csv)
-        if reboot_and_requeue(node, slurm_job_id):
+        reboot_failure = reboot_and_requeue(node, slurm_job_id)
+        if reboot_failure is None:
             log.info("Reboot armed and job requeued; exiting so the node reboots and reruns")
             return effective_code
-        log.warning("Reboot/requeue could not be issued; proceeding to JIRA ticketing")
+        log.error(
+            "Self-heal reboot FAILED (%s); node was NOT rebooted or requeued, " "proceeding to JIRA ticketing",
+            reboot_failure,
+        )
 
     # JIRA ticket creation (failure only)
     ticket_key = None
@@ -473,6 +485,8 @@ def main() -> int:
                         test_output=full_output,
                         attachment_names=attachment_names,
                         restart_count=restart_count,
+                        reboot_failure=reboot_failure,
+                        grafana_base_url=args.grafana_base_url,
                     )
                 )
                 add_comment_to_jira(
@@ -504,6 +518,8 @@ def main() -> int:
                     telemetry_summary=prom_output,
                     attachment_names=attachment_names,
                     restart_count=restart_count,
+                    reboot_failure=reboot_failure,
+                    grafana_base_url=args.grafana_base_url,
                 )
                 if ticket_key:
                     transition_jira_ticket(

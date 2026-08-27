@@ -85,9 +85,10 @@ void issue_trace_commands(
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     CoreCoord dispatch_core) {
+    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
-    HugepageDeviceCommand command_sequence(cmd_region, dispatch_md.cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, dispatch_md.cmd_sequence_sizeB);
 
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {

@@ -563,10 +563,8 @@ class TTSampling(LightweightModule):
         return ttnn.all_gather(
             tensor,
             dim=dim,
-            num_links=num_links,
             memory_config=memory_config,
             cluster_axis=cluster_axis,
-            topology=ttnn.Topology.Linear,
         )
 
     def _get_sampling_cluster_axis(self):
@@ -1051,11 +1049,6 @@ class TTSampling(LightweightModule):
         topk_global_indices_interleaved_untilised = ttnn.untilize(
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
-        ttnn.manual_seed(
-            seeds=self.seeds_tt_tensor,
-            user_ids=self.user_ids_tt_tensor,
-            sub_core_grids=self._sampling_sub_core_grids,
-        )
         # Perform the actual sampling with top-k, top-p, and temperature.
         # WORKAROUND for tenstorrent/tt-metal#33492 (stable top-k unreliable), to be removed with it:
         # for argmax users (k==1) only, boost the single lowest-GLOBAL-INDEX tied maximum in the
@@ -1066,6 +1059,16 @@ class TTSampling(LightweightModule):
         # and its known limitation (>max_top_k maxima tied within one device shard).
         sampling_values = self._adjust_values_for_tiebreak(
             topk_values_gathered_bf16_interleaved, topk_global_indices_interleaved
+        )
+        # Seed immediately before the draw. The tie-break's int32 ops run on the
+        # SFPU (use_sfpu_reduce_path admits INT32 MIN/MAX/SUM) on the same sub-core grid,
+        # and rand_tile's PRNG/LREG state is programmed by manual_seed -- so any SFPU work
+        # between seeding and drawing can perturb the draw. The original's fp32 tie-break
+        # took the FPU path and never disturbed it.
+        ttnn.manual_seed(
+            seeds=self.seeds_tt_tensor,
+            user_ids=self.user_ids_tt_tensor,
+            sub_core_grids=self._sampling_sub_core_grids,
         )
         tt_out_tok = ttnn.sampling(
             sampling_values,

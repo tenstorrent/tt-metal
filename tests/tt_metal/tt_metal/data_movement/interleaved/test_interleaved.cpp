@@ -46,16 +46,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
 
     const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
 
-    InterleavedBufferConfig interleaved_buffer_config{
-        .device = device,
-        .size = total_size_bytes,
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::ReplicatedBufferConfig global_config{.size = total_size_bytes};
+    distributed::DeviceLocalBufferConfig local_config{
         .page_size = test_config.page_size_bytes,
         .buffer_type = test_config.is_dram ? BufferType::DRAM : BufferType::L1};
-    std::shared_ptr<Buffer> input_buffer;
-    input_buffer = CreateBuffer(interleaved_buffer_config);
+    auto input_buffer = distributed::MeshBuffer::create(global_config, local_config, mesh_device.get());
     uint32_t input_buffer_address = input_buffer->address();
 
-    auto output_buffer = CreateBuffer(interleaved_buffer_config);
+    auto output_buffer = distributed::MeshBuffer::create(global_config, local_config, mesh_device.get());
     uint32_t output_buffer_address = output_buffer->address();
 
     TT_FATAL(input_buffer_address != output_buffer_address, "Input and output buffer addresses must be different");
@@ -155,7 +154,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     vector<uint32_t> packed_output;
 
     if (test_config.read_kernel) {
-        detail::WriteToBuffer(input_buffer, packed_input);
+        distributed::EnqueueWriteMeshBuffer(cq, input_buffer, packed_input, /*blocking=*/true);
         if (test_config.is_dram) {
             MetalContext::instance().get_cluster().dram_barrier(device->id());
         } else {
@@ -172,12 +171,11 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
     if (test_config.write_kernel) {
-        detail::ReadFromBuffer(output_buffer, packed_output);
+        distributed::EnqueueReadMeshBuffer(cq, packed_output, output_buffer, /*blocking=*/true);
     } else {
         detail::ReadFromDeviceL1(
             device, corerange_to_cores(test_config.cores)[0], l1_addr, total_size_bytes, packed_output);
