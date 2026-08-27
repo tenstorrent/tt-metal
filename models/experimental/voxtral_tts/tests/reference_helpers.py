@@ -99,3 +99,55 @@ def all_voices():
     from models.experimental.voxtral_tts.reference.voxtral_tokenizer_ref import TekkenTokenizer
 
     return tuple(sorted(TekkenTokenizer().voices))
+
+
+# The device caches a rotated head INTERLEAVED (pairs adjacent); the fp32 reference lays it out
+# HALF-SPLIT (first half, then second). RoPE applies the same permutation to Q, so Q.K is unchanged
+# and attention is identical -- but raw cached K differs, reading PCC ~0.02 in all 26 layers on a
+# perfectly healthy model (measured -0.0035 as-is vs 0.999975 permuted at layer 0). V is never
+# rotated and needs no permutation, and that asymmetry is the tell. Shared because two test files
+# compare caches and a second copy of this is exactly the drift this suite keeps removing.
+_HALF_TO_INTERLEAVED = None
+
+
+def as_device_k_layout(k_ref):
+    """Reference K (half-split head dim) -> the device's interleaved order."""
+    global _HALF_TO_INTERLEAVED
+    from models.experimental.voxtral_tts.reference.voxtral_common_ref import HEAD_DIM
+
+    if _HALF_TO_INTERLEAVED is None:
+        idx = torch.empty(HEAD_DIM, dtype=torch.long)
+        idx[: HEAD_DIM // 2] = torch.arange(0, HEAD_DIM, 2)
+        idx[HEAD_DIM // 2 :] = torch.arange(1, HEAD_DIM, 2)
+        _HALF_TO_INTERLEAVED = idx
+    return k_ref[..., _HALF_TO_INTERLEAVED]
+
+
+@functools.lru_cache(maxsize=8)
+def _fixture_text(reps):
+    """The fixture's own 15 texts joined, repeated `reps` times."""
+    return " ".join([c["text"] for c in fixture_cases()] * reps)
+
+
+def long_prompt_embeds(S, w=None, voice="ar_male"):
+    """-> (embeds [1,S,3072], repeated: bool) built from the FIXTURE's own texts.
+
+    Provenance matters more than length here. The fixture texts are the same corpus every accuracy
+    gate in this suite uses, joined into ONE well-formed prompt with a single header -- so up to the
+    length they naturally reach, a long-shape test is running real text.
+
+    Measured: the 15 texts joined are 1920 chars -> 540 tokens with `ar_male` (fewest placeholder
+    rows, 67, leaving the most room for text), which covers Sp 128/256/384/512. Beyond that the text
+    has to be repeated, and `repeated=True` says so, so the caller can gate accordingly instead of
+    quoting a tight number on text that no request looks like.
+    """
+    from models.experimental.voxtral_tts.reference.voxtral_tokenizer_ref import TekkenTokenizer
+
+    w = backbone_state() if w is None else w
+    tok = TekkenTokenizer()
+    reps = 1
+    while len(tok.build_prompt(_fixture_text(reps), voice)) < S:
+        reps += 1
+        if reps > 64:
+            raise AssertionError(f"cannot reach {S} tokens from the fixture texts")
+    return corpus_embeds(_fixture_text(reps), voice, w)[:, :S], reps > 1

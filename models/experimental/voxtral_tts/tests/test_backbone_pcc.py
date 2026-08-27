@@ -47,6 +47,7 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (  # no
 )
 from models.experimental.voxtral_tts.tests.gates import compare_hidden  # noqa: E402
 from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E402
+    as_device_k_layout,
     backbone_state,
     case_ids,
     fixture_embeds,
@@ -227,8 +228,29 @@ def test_decode_is_bit_deterministic(gen, w):
 #
 # Both sides cache POST-RoPE: the reference applies `apply_rope` before writing the cache, and the
 # device caches what `_qkv` returns, which is also post-RoPE. So this compares like with like.
-CACHE_CASE = 0
-CACHE_PCC = 0.999
+# Cache VALUES were verified at one length only (P=200). These four span P=100..357 -- the reads
+# are 0.1 s even at S=2043, so there was never a cost reason to check just one.
+CACHE_CASES = (0, 2, 3, 12)
+CACHE_CASE = CACHE_CASES[0]
+# Measured across all four prompts, 2026-08-27 (P=100..357). The gate was 0.999, set from case 0
+# alone, which turned out to be the BEST of the four:
+#
+#   case  0 (P=200)  worst 0.999658  worst-sample  7.42%  weakest position 189
+#   case  2 (P=312)  worst 0.998761  worst-sample 27.06%  weakest position 217
+#   case  3 (P=357)  worst 0.999132  worst-sample 31.49%  weakest position 308
+#   case 12 (P=100)  worst 0.998872  worst-sample 17.99%  weakest position  96
+#
+# Always the V side, always in the late layers (16..25).
+#
+# AND THE WEAK CACHE POSITION IS THE WEAK HIDDEN-STATE POSITION. An independent per-position probe
+# of the same prompts put their weakest hidden states at 189, 217 and 308 -- the same three numbers.
+# Two different tensors, measured separately, same position: each prompt has one position that is
+# markedly worse in both. It does not reach the audio (WER 0 of 894, 5.2% of acoustic codes off by
+# one FSQ level), but it is the most concrete lead in this port for where precision goes.
+#
+# Cache worst-sample is deliberately NOT gated: at 7..31% a threshold would have to be ~40% to pass,
+# which asserts nothing. The hidden-state worst-sample IS gated, at 8% pooled, above.
+CACHE_PCC = 0.998
 CACHE_STEPS = 4
 
 # THE K CACHE IS STORED IN A DIFFERENT HEAD-DIM ORDER ON THE TWO SIDES, and comparing raw K without
@@ -243,16 +265,6 @@ CACHE_STEPS = 4
 #
 # This matters beyond the test: anything that reads, transplants or pages the K cache -- or compares
 # it against another implementation -- has to know which order it is in.
-_HALF_TO_INTERLEAVED = torch.empty(HEAD_DIM, dtype=torch.long)
-_HALF_TO_INTERLEAVED[: HEAD_DIM // 2] = torch.arange(0, HEAD_DIM, 2)
-_HALF_TO_INTERLEAVED[HEAD_DIM // 2 :] = torch.arange(1, HEAD_DIM, 2)
-
-
-def _as_device_k_layout(k_ref):
-    """Reference K (half-split head dim) -> the device's interleaved order."""
-    return k_ref[..., _HALF_TO_INTERLEAVED]
-
-
 def _reference_cache(w, embeds):
     """-> {layer_index: (k, v)} after a reference prefill, each [1, N_KV_HEADS, P, HEAD_DIM]."""
     inc = bref.IncrementalBackbone(w, n_layers=N_LAYERS)
@@ -268,9 +280,10 @@ def _device_cache(gen, P):
     return out
 
 
-def test_prefill_kv_cache_matches_reference(gen, w):
+@pytest.mark.parametrize("ci", CACHE_CASES, ids=lambda c: f"case{c}")
+def test_prefill_kv_cache_matches_reference(gen, w, ci):
     """Every cached K and V entry, all 26 layers, against the fp32 reference's own cache."""
-    embeds, case = fixture_embeds(CACHE_CASE, w)
+    embeds, case = fixture_embeds(ci, w)
     P = embeds.shape[1]
     ref_cache, _ = _reference_cache(w, embeds)
     gen.reset()
@@ -282,7 +295,7 @@ def test_prefill_kv_cache_matches_reference(gen, w):
         for side, j in (("K", 0), ("V", 1)):
             exp, got = ref_cache[i][j].float(), dev_cache[i][j]
             if side == "K":
-                exp = _as_device_k_layout(exp)      # see _HALF_TO_INTERLEAVED above
+                exp = as_device_k_layout(exp)       # reference_helpers explains why
             assert exp.shape == got.shape, (
                 f"layer {i} {side}: reference {tuple(exp.shape)} vs device {tuple(got.shape)}")
             m = compare_hidden(got, exp)
@@ -292,7 +305,7 @@ def test_prefill_kv_cache_matches_reference(gen, w):
 
     worst_pcc = min(r[2] for r in rows)
     worst_ws = max(r[3] for r in rows)
-    print(f"\n  case {CACHE_CASE} ({case['voice']}), P={P}, {N_LAYERS} layers x (K,V), "
+    print(f"\n  case {ci} ({case['voice']}), P={P}, {N_LAYERS} layers x (K,V), "
           f"cache [{1}, {N_KV_HEADS}, {P}, {HEAD_DIM}]")
     for i, side, pc, ws, pos in sorted(rows, key=lambda r: r[2])[:5]:
         print(f"    weakest: layer {i:>2} {side}  PCC {pc:.6f}  worst-sample {ws:.2f}%  @pos {pos}")
