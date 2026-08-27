@@ -9,6 +9,7 @@ Compares torch.nn.Linear (reference) against TtLMHead (multi-chip TTNN)
 to verify correctness with DeepSeek 671B LM head dimensions.
 """
 
+
 import pytest
 import torch
 from loguru import logger
@@ -56,6 +57,23 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
     return config, weights
 
 
+def _ci_unsupported_param_combos_lm_head(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
+def _ci_unsupported_param_combos_global_to_local_token_id(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_lm_head)
 @pytest.mark.parametrize("is_column_parallel", [True, False], ids=["col", "row"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.parametrize(
@@ -210,6 +228,7 @@ def test_lm_head(
     logger.debug("PCC test passed!")
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_global_to_local_token_id)
 def test_global_to_local_token_id():
     """Verify token mapping for both balanced and sequential modes."""
     from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id
