@@ -2,9 +2,9 @@
 
 - source commit: [`828c3315149`](https://github.com/tenstorrent/tt-metal/commit/828c3315149)
 - harness: `tests/perf/test_layer_perf.py`, one encoder layer, N150, Release build
-- kernel time: **557.6 ms** (−191.2 ms)
+- kernel time: **487.4 ms** (−194.1 ms)
 - op-to-op gap: **37.9 ms** (−2.9 ms)
-- wall: **595.5 ms** (−194.1 ms, **−24.6%**)
+- wall: **525.3 ms** (−197.0 ms, **−27.3%**)
 - device ops in the signposted region: **140** (−6)
 - PCC gate: **0.999611** vs the baseline's 0.999608
 - CSV: `generated/profiler/reports/2026_08_27_10_06_35/ops_perf_results_2026_08_27_10_06_35.csv`
@@ -18,18 +18,19 @@ same test, with this stage's commit stashed for the baseline run:
 
 | | baseline | this stage |
 |---|---:|---:|
-| kernel | 748.8 ms | 557.6 ms |
+| kernel | 681.5 ms | 487.4 ms |
 | gap | 40.8 ms | 37.9 ms |
-| wall | 789.6 ms | 595.5 ms |
+| wall | 722.3 ms | 525.3 ms |
 | device ops | 146 | 140 |
 
-Op count matches stage 01's 146 exactly, so the baseline is the same code path.
-Kernel time does not (682.0 vs 748.8 ms), and that gap is unexplained — device
-FW duration should not depend on the host build type.
+The baseline reproduces stage 01 on both counts that should not move: 146 device
+ops, and 681.5 ms of kernel against its 682.0 ms. **Only the gap differs, 40.8 ms
+against 218.3 ms** — which is what a Debug build costs in host dispatch, and it
+does not touch device time.
 
 **The remaining candidate-1 work is worth far less than stage 01 implies.** At
 40.8 ms of total gap, candidates 1b, 1c and 1d together cannot recover more
-than that. Kernel is 94% of wall clock.
+than that. Kernel is 93% of wall clock.
 
 ## What this change was
 
@@ -52,17 +53,17 @@ Per-region, measured iteration only:
 
 | region | ops | kernel | Δ kernel |
 |---|---:|---:|---:|
-| SCA — MSDA | 70 | 410.3 ms | **−177.5** |
-| TSA — MSDA | 35 | 86.1 ms | **−13.7** |
-| SCA — rebatch | 11 | 45.4 ms | +0.1 |
-| SCA — scatter-back + normalise | 13 | 13.2 ms | 0.0 |
-| FFN | 3 | 1.7 ms | 0.0 |
+| SCA — MSDA | 70 | 350.1 ms | **−181.5** |
+| TSA — MSDA | 35 | 78.7 ms | **−12.6** |
+| SCA — rebatch | 11 | 44.2 ms | +0.1 |
+| SCA — scatter-back + normalise | 13 | 12.7 ms | 0.0 |
+| FFN | 3 | 1.1 ms | 0.0 |
 | TSA — outside MSDA | 3 | 0.2 ms | 0.0 |
 
 The entire delta is inside the two MSDA calls. Nothing else moved, which is
 what a drop-in replacement should look like.
 
-SCA's MSDA lost 177.5 ms but only 2 device ops. The ops that remain there are
+SCA's MSDA lost 181.5 ms but only 2 device ops. The ops that remain there are
 the padded elementwise and layout ops around the sampling, not the sampling
 itself — see *What this changes about the plan*.
 
@@ -70,41 +71,42 @@ itself — see *What this changes about the plan*.
 
 | Op | Δ ms | Δ inst | note |
 |---|---:|---:|---|
-| GridSampleOperation | **−118.3** | 5 → 0 | absorbed |
-| ConcatDeviceOperation | **−115.5** | 3 → 2 | the per-level `stack`; candidate 4, deleted as a side effect |
-| ReshapeViewDeviceOperation | −93.6 | 23 → 20 | |
-| PermuteDeviceOperation | −38.7 | 27 → 24 | |
-| TilizeWithValPadding | −16.8 | 8 → 7 | |
-| ReduceDeviceOperation | −5.2 | 2 → 0 | the `sum` over (level, point) |
-| FillPadDeviceOperation | −4.8 | 2 → 0 | |
-| TransposeDeviceOperation | −0.5 | 2 → 0 | |
-| MSDAOperation | **+169.1** | 0 → 5 | |
-| BinaryNgDeviceOperation | +17.7 | 18 → 19 | the 3 level-sum adds |
-| UntilizeWithUnpadding | +10.3 | 18 → 20 | `attention_weights` to ROW_MAJOR |
-| SliceDeviceOperation | +4.8 | 13 → 17 | per-level `attn` slice |
+| GridSampleOperation | **−116.1** | 5 → 0 | absorbed |
+| ConcatDeviceOperation | **−115.4** | 3 → 2 | the per-level `stack`; candidate 4, deleted as a side effect |
+| ReshapeViewDeviceOperation | −89.1 | 23 → 20 | |
+| PermuteDeviceOperation | −22.0 | 27 → 24 | |
+| TilizeWithValPadding | −13.5 | 8 → 7 | |
+| ReduceDeviceOperation | −4.5 | 2 → 0 | the `sum` over (level, point) |
+| FillPadDeviceOperation | −4.3 | 2 → 0 | |
+| BinaryNgDeviceOperation | −4.0 | 18 → 19 | one op more, less time: 3 level-sum adds replace a padded `mul` |
+| MSDAOperation | **+167.9** | 0 → 5 | |
+| UntilizeWithUnpadding | +4.5 | 18 → 20 | `attention_weights` to ROW_MAJOR |
+| SliceDeviceOperation | +2.6 | 13 → 17 | per-level `attn` slice |
 
-169.1 ms of fused op replaces 393.4 ms of decomposition. The 115.5 ms concat —
-the single most expensive op in the layer at baseline — drops to 0.01 ms.
+167.9 ms of fused op replaces 369.2 ms of decomposition. The 115.4 ms concat —
+the single most expensive op in the layer at baseline — drops to 0.00 ms.
 Candidate 4 needs no separate work.
 
 **MSDAOperation per call**, all on 64 cores:
 
 | call | ms | shape |
 |---|---:|---|
-| TSA | 24.64 | `num_levels=1`, Q=10000 |
-| SCA level 0 | 36.48 | Q=2496 |
-| SCA level 1 | 36.19 | Q=2496 |
-| SCA level 2 | 35.92 | Q=2496 |
-| SCA level 3 | 35.82 | Q=2496 |
+| TSA | 24.35 | `num_levels=1`, Q=10000 |
+| SCA level 0 | 36.27 | Q=2496 |
+| SCA level 1 | 35.94 | Q=2496 |
+| SCA level 2 | 35.72 | Q=2496 |
+| SCA level 3 | 35.59 | Q=2496 |
 
-The four SCA levels agree to within 0.7 ms. No pathological level.
+The four SCA levels agree to within 0.7 ms despite their `value` tensors
+differing 64-fold in size. The op's cost tracks the sample-point count, not the
+feature map it samples from.
 
 ## Kernel time by op code
 
 | Op | inst | ms | % |
 |---|---:|---:|---:|
 | MSDAOperation | 5 | 167.9 | 34.4 |
-| PermuteDeviceOperation | 24 | 83.6 | 17.2 |
+| PermuteDeviceOperation | 24 | 83.7 | 17.2 |
 | BinaryNgDeviceOperation | 19 | 81.7 | 16.8 |
 | ReshapeViewDeviceOperation | 20 | 67.8 | 13.9 |
 | UntilizeWithUnpaddingDeviceOperation | 20 | 33.7 | 6.9 |

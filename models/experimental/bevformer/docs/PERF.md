@@ -34,23 +34,32 @@ reported for that reason.
 |--:|---|---|---:|---:|---:|---:|
 | 0 | [**baseline**](perf_reports/00-baseline.md) | Debug | 655.6 ms | 2416.5 ms | **3072.1 ms** | — |
 | 1 | [SCA rebatch and scatter-back on device](perf_reports/01-sca-rebatch-on-device.md) | Debug | 682.0 ms | 218.3 ms | **900.2 ms** | **−2171.9 ms** |
-| — | *stage 1 code, re-measured on Release* | Release | 748.8 ms | 40.8 ms | **789.6 ms** | — |
-| 2 | [MSDA through the fused ttnn op](perf_reports/02-fused-msda.md) | Release | 557.6 ms | 37.9 ms | **595.5 ms** | **−194.1 ms** |
+| — | *stage 1 code, re-measured on Release* | Release | 681.5 ms | 40.8 ms | **722.3 ms** | — |
+| 2 | [MSDA through the fused ttnn op](perf_reports/02-fused-msda.md) | Release | 487.4 ms | 37.9 ms | **525.3 ms** | **−197.0 ms** |
+| 3 | [camera fold without tiling a batch-of-one](perf_reports/03-camera-fold.md) | Release | 450.6 ms | 33.2 ms | **483.8 ms** | **−41.5 ms** |
+| 4 | [flat, tile-clean sampling chain](perf_reports/04-flat-sampling-chain.md) | Release | 310.1 ms | 37.6 ms | **347.7 ms** | **−136.1 ms** |
 
 `kernel` = summed `DEVICE KERNEL DURATION`. `gap` = summed `OP TO OP LATENCY`, i.e. the time the
 device spent idle between ops waiting on host dispatch. `wall` = kernel + gap, per layer.
 
-**Stages 0–1 and stage 2 are not on the same build, so their deltas do not sum across that line.**
-Op-to-op latency is host dispatch cost, and a Debug build inflates it ~5×: the same stage-1 code
-measures 218.3 ms of gap on Debug and 40.8 ms on Release, at an identical device-op count of 146.
-Each stage's Δ is against a re-measurement of the previous stage on its own build; the un-numbered
-row above is that re-measurement for stage 1.
+**Stages 0–1 and stages 2–4 are not on the same build, so the deltas do not sum across that line.**
+Op-to-op latency is host dispatch cost and a Debug build inflates it ~5×. Device time is unaffected:
+the same stage-1 code measures 682.0 ms of kernel on Debug and 681.5 ms on Release, at an identical
+146 device ops, while the gap differs 218.3 against 40.8 ms. The un-numbered row is that
+re-measurement, and stage 2 onwards is measured against it.
 
-**Stage 1: −70.7% of wall clock**, trading +26.4 ms of kernel for −2198.2 ms of host gap.
+**Stage 1: −70.7% of wall clock**, trading kernel for −2198.2 ms of host gap.
 
-**Stage 2: −24.6% of wall clock**, all of it kernel — 191.2 ms out of the two deformable-attention
-calls, at a PCC of 0.999611 against 0.999608. Kernel is now **94%** of wall clock, so the remaining
-host-round-trip work is bounded by 40.8 ms.
+**Stages 2–4: 681.5 → 310.1 ms of kernel, −54.5%**, at a PCC gate held at 0.999611 throughout. All
+of it is device time. Kernel is **89%** of wall clock, so what remains of the host-round-trip work
+is bounded by 37.6 ms.
+
+`200×200` spatial cross attention runs as of stage 4; it had been failing on an allocation of 2.97
+GB for a 23.2 MB tensor. The full `tests/pcc/` suite is 33 passed with nothing deselected.
+
+**MSDAOperation is now 54% of kernel** — 167.6 ms in 5 calls of one experimental op, running at
+roughly 1.3% of the DRAM roof. See [04](perf_reports/04-flat-sampling-chain.md) for the estimate.
+Nothing in Python reaches it.
 
 ## Where the baseline time is
 
