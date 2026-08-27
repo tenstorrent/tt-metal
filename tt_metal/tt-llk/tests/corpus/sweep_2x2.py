@@ -718,6 +718,34 @@ KNOBS = {
     # exactly the two target rows' TUs; threshold-fitted and every
     # hand arm byte-identical.
     "store-sink": "-mtt-tensix-optimize-store-fold " "-mtt-tensix-optimize-store-sink",
+    # HZ (stochrnd-store-fold, LICENSED, lane HZ 2026-08-27 under the
+    # owner overnight mandate): fold the semantic body's explicit
+    # deterministic-nearest SFPSTOCHRND float precision reduction into
+    # its consuming format-converting Dst store — the store's own
+    # conversion path (truncation) delivers the value, instruction-for-
+    # instruction the HAND idiom (binary-float class: sem 5 -> 4
+    # words/row, the row's whole +6.45 anatomy).  VALUE-CHANGING per
+    # the standing laneEK 2^32 sweep tt/proofs/stochrnd-store-round
+    # (store truncates toward zero and keeps -0/denormal signs; the
+    # explicit round is ties-away and normalizes specials; BF16 row
+    # 2,155,741,184/2^32) — the bit-exact cut stays refused; the
+    # license admits exactly the swept deterministic-nearest float
+    # pairs (FP16B->BF16, FP16A->FP16, either->SRCB), with lv-carrier /
+    # stochastic-mode / integer-path / cross-precision / multi-use /
+    # mask-divergent-span / PRNG-consumer belts refusing by name
+    # regardless of the token.  Accuracy authority per the licensed
+    # discipline: the folded stream is the hand kernel's own store
+    # path, so the hand arm's device-golden PASS is the certificate
+    # (laneCX: golden = proven hw cast behavior).  The token gates the
+    # pass BY ITSELF and the knob string carries ONLY the token: lane
+    # HZ's silicon A/B showed the parent store-fold flag's own S1
+    # forward re-shapes the production (hand) binary-float TU's replay
+    # window (0,4,1,1 x8 -> 0,6,1,1 x4; 25766 -> 19498 cycles) — a
+    # knob string carrying it would move BOTH arms and the delta would
+    # no longer read as the license's own effect (hand arm anchors
+    # must stay byte-identical; the S1-unlocked hand form is a named
+    # successor finding, not this knob's business).
+    "stochrnd-store-fold": "-mtt-tensix-optimize-stochrnd-store-fold",
     # EK (int-not): single-SFPNOT selection for the
     # all-ones-minus-x value function (exhaustive 2^32 equivalence
     # proof); byte-inert on the mapped corpus at its lane gate.
@@ -1164,6 +1192,13 @@ KNOB_MODES = {
     # store-fold flag rides the knob string because store-fold is not
     # in the reviewed ON set; a licensed fire needs both).
     "store-sink": "on-plus",
+    # HZ stochrnd-store-fold license: booking A/B is (reviewed-ON +
+    # license token) vs plain reviewed-ON.  Unlike store-sink the token
+    # gates its pass alone and the knob string deliberately does NOT
+    # carry -mtt-tensix-optimize-store-fold — the S1 forward would move
+    # the hand arm too (see the KNOBS comment) and the delta must read
+    # as the license's own effect.
+    "stochrnd-store-fold": "on-plus",
     "int-not": "on-plus",
     # EJ licensed reassociation: booking A/B is (reviewed-ON + license
     # tokens) vs plain reviewed-ON — the licensed fire acts on the
@@ -1260,6 +1295,18 @@ LICENSED_KNOBS = {
         "would denormal-flush (golden-closer per "
         "tt/proofs/store-sink-roundtrip); requires BOTH "
         "-mtt-tensix-optimize-store-fold AND -mtt-tensix-optimize-store-sink"
+    ),
+    "stochrnd-store-fold": (
+        "value-changing SFPSTOCHRND-into-store fold on the deterministic-"
+        "nearest float rows, lane HZ 2026-08-27 (owner overnight mandate): "
+        "the explicit rounding word is deleted and the store's own "
+        "truncating conversion delivers the hand idiom's bits "
+        "(tt/proofs/stochrnd-store-round NOT-EQUAL census: round-up / -0 / "
+        "denormal-sign / NaN->Inf); the "
+        "-mtt-tensix-optimize-stochrnd-store-fold token gates the fold by "
+        "itself (the value-preserving S1/S2 merge folds stay behind "
+        "-mtt-tensix-optimize-store-fold, deliberately NOT in this knob's "
+        "string — the S1 forward moves the hand arm too)"
     ),
 }
 for _k in LICENSED_KNOBS:
