@@ -53,8 +53,10 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
     [
         pytest.param(
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4-2link and layer3 and gate_device and no_ref and isl_1280' --wrapper-invocation",
-            14_179_641,  # Re-measured 2026-08-22 at 640 tokens/chip, BH LoudBox bh-lb-15, DDR 16000,
-            # 150W. Mean of 14 runs, 14.153-14.243 ms, 0.64% peak to peak.
+            10_963_542,  # Measured 2026-08-27 at 640 tokens/chip on the CI LoudBox (bh_loudbox, 8xP150),
+            # run 33082257984 job bh_lb_DeepSeek_PREFILL_PERF. Single observation. Supersedes
+            # 14_179_641, a 14-run mean on bh-lb-15 (8xp150b) -- the two boxes disagree by 23%, so
+            # this gate has to be cut on the CI runner, not a dev LoudBox.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",
             1,
