@@ -25,15 +25,26 @@ sequence length (ISL) **8192**, weights and activations in **bfloat8_b**.
 
 ### Run the demo
 
-Builds the model, runs a single warmup forward (JIT compile), captures the
-trace, then does a single trace replay (one forward pass) over 12 prompts:
+`demo_traced.py` builds the model, runs one warmup forward to compile the
+kernels, captures the trace, and replays it to embed the prompts. Use
+`--data-parallel` to run the batch across both chips of an N300, which is the
+configuration the performance and evaluation numbers use.
 
 ```bash
-TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/demo_long_seq.py
+# Batch 12, sequence length 8192, both chips (the serving shape)
+TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/demo_traced.py \
+  --batch 12 --seq-len 8192 --data-parallel
+
+# Batch 12, sequence length 8192, one chip
+TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/demo_traced.py --batch 12 --seq-len 8192
+
+# Batch 1, sequence length 512, one trace replay per prompt
+TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/demo_traced.py --batch 1
 ```
 
-Output is the encoder hidden state `[12, 1, 8192, 1024]` plus one pooled
-(CLS + L2-normalized) embedding per prompt.
+Batch 1 allows sequence length 512, and batch 12 allows sequence length 8192.
+The output is the encoder hidden state `[12, 1, 8192, 1024]` plus one pooled
+CLS embedding per prompt.
 
 ### Measure prefill performance (`perf.py`)
 
@@ -244,7 +255,7 @@ model.release_trace()
 ttnn.close_device(device)
 ```
 
-See `demo/demo_v2.py` for a complete runnable example.
+See `demo/demo_traced.py` for a complete runnable example.
 
 ## Performance benchmarks
 
