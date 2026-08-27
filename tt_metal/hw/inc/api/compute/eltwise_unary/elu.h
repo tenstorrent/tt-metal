@@ -37,6 +37,6 @@ ALWI void elu_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void elu_tile_init() { MATH(SFPU_UNARY_INIT(elu)); }
+ALWI void elu_tile_init() { MATH(SFPU_UNARY_INIT(elu, DST_ACCUM_MODE)); }
 #endif
 }  // namespace ckernel

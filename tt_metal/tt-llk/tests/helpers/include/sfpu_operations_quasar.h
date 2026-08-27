@@ -157,24 +157,27 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
     switch (sfpu_format)
     {
         case DataFormat::Int32:
-            SFPU_UNARY_CALL(DST_SYNC, calculate_zero_comp, (false, DataFormat::Int32, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
+            SFPU_UNARY_CALL_QSR(
+                DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, DataFormat::Int32, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             break;
         case DataFormat::Int16:
-            SFPU_UNARY_CALL(DST_SYNC, calculate_zero_comp, (false, DataFormat::Int16, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
+            SFPU_UNARY_CALL_QSR(
+                DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, DataFormat::Int16, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             break;
         case DataFormat::Int8:
         {
             constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::Int8;
-            SFPU_UNARY_CALL(DST_SYNC, calculate_zero_comp, (false, sfpu_fmt, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
+            SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, sfpu_fmt, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             break;
         }
         case DataFormat::UInt16:
-            SFPU_UNARY_CALL(DST_SYNC, calculate_zero_comp, (false, DataFormat::UInt16, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
+            SFPU_UNARY_CALL_QSR(
+                DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, DataFormat::UInt16, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             break;
         case DataFormat::UInt8:
         {
             constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::UInt8;
-            SFPU_UNARY_CALL(DST_SYNC, calculate_zero_comp, (false, sfpu_fmt, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
+            SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, sfpu_fmt, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             break;
         }
         case DataFormat::Float16:
@@ -182,7 +185,8 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
         case DataFormat::Float32:
             // Float widths share the width-agnostic Float32 path: its sfpmem::DEFAULT access mode
             // resolves the actual width from ALU_FORMAT_SPEC_REG / ACC_CTRL.
-            SFPU_UNARY_CALL(DST_SYNC, calculate_zero_comp, (false, DataFormat::Float32, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
+            SFPU_UNARY_CALL_QSR(
+                DST_SYNC, is_fp32_dest_acc_en, calculate_zero_comp, (false, DataFormat::Float32, OPERATION, ITERATIONS), dst_index, VectorMode::RC);
             break;
         default:
             LLK_ASSERT(false, "Unsupported Quasar comp-to-zero SFPU format");
@@ -219,64 +223,73 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
 {
     if constexpr (OPERATION == SfpuType::abs)
     {
-        SFPU_UNARY_CALL(DST_SYNC, _calculate_abs_, (ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, _calculate_abs_, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
-        SFPU_UNARY_CALL(DST_SYNC, calculate_exponential, (APPROX, is_fp32_dest_acc_en, false, ITERATIONS), dst_index, VectorMode::RC, p_sfpu::kCONST_1_FP16B);
+        SFPU_UNARY_CALL_QSR(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_exponential,
+            (APPROX, is_fp32_dest_acc_en, false, ITERATIONS),
+            dst_index,
+            VectorMode::RC,
+            p_sfpu::kCONST_1_FP16B);
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
-        SFPU_UNARY_CALL(DST_SYNC, calculate_gelu, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, calculate_gelu, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::relu)
     {
-        SFPU_UNARY_CALL(DST_SYNC, _calculate_relu_, (ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, _calculate_relu_, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
-        SFPU_UNARY_CALL(DST_SYNC, calculate_reciprocal, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, calculate_reciprocal, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
-        SFPU_UNARY_CALL(DST_SYNC, _calculate_sqrt_, (true /* APPROX */, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, _calculate_sqrt_, (true /* APPROX */, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::tanh)
     {
-        SFPU_UNARY_CALL(DST_SYNC, calculate_tanh, (ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, calculate_tanh, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::sigmoid)
     {
-        SFPU_UNARY_CALL(DST_SYNC, _calculate_sigmoid_, (ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, _calculate_sigmoid_, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::silu)
     {
-        SFPU_UNARY_CALL(DST_SYNC, _calculate_silu_, (ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, _calculate_silu_, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
-        SFPU_UNARY_CALL(DST_SYNC, calculate_rsqrt, (APPROX, ITERATIONS, is_fp32_dest_acc_en), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, calculate_rsqrt, (APPROX, ITERATIONS, is_fp32_dest_acc_en), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        SFPU_UNARY_CALL(DST_SYNC, calculate_square, (ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, calculate_square, (ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (is_trig_op(OPERATION))
     {
         // One op-templated kernel serves sine/cosine/acosh/asinh/atanh; OPERATION picks the branch
         // at compile time. APPROXIMATION_MODE=false selects the full-polynomial (accurate) path.
-        SFPU_UNARY_CALL(DST_SYNC, calculate_trigonometry, (OPERATION, false /* APPROX */, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_trigonometry, (OPERATION, false /* APPROX */, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::negative)
     {
-        SFPU_UNARY_CALL(DST_SYNC, _calculate_negative_, (false, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, _calculate_negative_, (false, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::softplus)
     {
         // Softplus params beta / (1/beta) / threshold as fp32 bit patterns, matching the
         // UnarySFPUGolden._softplus reference defaults (beta = 1.0, threshold = 20.0).
-        SFPU_UNARY_CALL(
+        SFPU_UNARY_CALL_QSR(
             DST_SYNC,
+            is_fp32_dest_acc_en,
             calculate_softplus,
             (false, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
@@ -289,8 +302,9 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     {
         // Clamp bounds fixed to [-1.0, +1.0] as fp32 bit patterns (matching the UnarySFPUGolden._clamp
         // reference). Extra args are forwarded to the per-face functor call.
-        SFPU_UNARY_CALL(
+        SFPU_UNARY_CALL_QSR(
             DST_SYNC,
+            is_fp32_dest_acc_en,
             calculate_clamp,
             (false, ITERATIONS),
             dst_index,
@@ -304,13 +318,14 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
-        SFPU_UNARY_CALL(DST_SYNC, calculate_typecast, (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_QSR(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_typecast, (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
         // Whole-tile op: the accumulation chain spans all 32 tile rows and crosses the face-pair
         // boundary, so it runs once per tile (RC_custom), not once per face.
-        SFPU_UNARY_CALL(DST_SYNC, calculate_cumsum, (APPROX, ITERATIONS), dst_index, VectorMode::RC_custom, first);
+        SFPU_UNARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, calculate_cumsum, (APPROX, ITERATIONS), dst_index, VectorMode::RC_custom, first);
     }
     else
     {
@@ -428,12 +443,14 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     {
         if (math_format == DataFormat::Int32)
         {
-            SFPU_BINARY_CALL(DST_SYNC, _add_int_, (false, ITERATIONS, DataFormat::Int32, 0, false), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            SFPU_BINARY_CALL_QSR(
+                DST_SYNC, is_fp32_dest_acc_en, _add_int_, (false, ITERATIONS, DataFormat::Int32, 0, false), src0_tile, src1_tile, dst_tile, VectorMode::RC);
         }
         else
         {
-            SFPU_BINARY_CALL(
+            SFPU_BINARY_CALL_QSR(
                 DST_SYNC,
+                is_fp32_dest_acc_en,
                 calculate_sfpu_binary,
                 (APPROXIMATION_MODE, BinaryOp::ADD, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
                 src0_tile,
@@ -445,8 +462,9 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     else if constexpr (OP == BinaryOp::SUB)
     {
         // Int32 SUB is not ported to Quasar (sub_int_sfpu.h is WH-only); float path only.
-        SFPU_BINARY_CALL(
+        SFPU_BINARY_CALL_QSR(
             DST_SYNC,
+            is_fp32_dest_acc_en,
             calculate_sfpu_binary,
             (APPROXIMATION_MODE, BinaryOp::SUB, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
             src0_tile,
@@ -456,30 +474,35 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     }
     else if constexpr (OP == BinaryOp::GT)
     {
-        SFPU_BINARY_CALL(DST_SYNC, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::gt), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+        SFPU_BINARY_CALL_QSR(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::gt), src0_tile, src1_tile, dst_tile, VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::LT)
     {
-        SFPU_BINARY_CALL(DST_SYNC, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::lt), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+        SFPU_BINARY_CALL_QSR(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::lt), src0_tile, src1_tile, dst_tile, VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::LE)
     {
-        SFPU_BINARY_CALL(DST_SYNC, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::le), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+        SFPU_BINARY_CALL_QSR(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::le), src0_tile, src1_tile, dst_tile, VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::GE)
     {
-        SFPU_BINARY_CALL(DST_SYNC, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::ge), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+        SFPU_BINARY_CALL_QSR(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::ge), src0_tile, src1_tile, dst_tile, VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::MUL)
     {
         if (math_format == DataFormat::Int32)
         {
-            SFPU_BINARY_CALL(DST_SYNC, _mul_int32_, (false, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            SFPU_BINARY_CALL_QSR(DST_SYNC, is_fp32_dest_acc_en, _mul_int32_, (false, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
         }
         else
         {
-            SFPU_BINARY_CALL(
+            SFPU_BINARY_CALL_QSR(
                 DST_SYNC,
+                is_fp32_dest_acc_en,
                 calculate_sfpu_binary,
                 (APPROXIMATION_MODE, BinaryOp::MUL, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
                 src0_tile,
@@ -490,8 +513,9 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     }
     else if constexpr (OP == BinaryOp::DIV)
     {
-        SFPU_BINARY_CALL(
+        SFPU_BINARY_CALL_QSR(
             DST_SYNC,
+            is_fp32_dest_acc_en,
             calculate_sfpu_binary,
             (APPROXIMATION_MODE, BinaryOp::DIV, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
             src0_tile,
@@ -502,11 +526,27 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     else if constexpr (OP == BinaryOp::ATAN2)
     {
         // atan2(y, x): src0 = y, src1 = x. is_fp32_dest_acc_en must match the init's.
-        SFPU_BINARY_CALL(DST_SYNC, calculate_sfpu_atan2, (APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+        SFPU_BINARY_CALL_QSR(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_sfpu_atan2,
+            (APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
     }
     else if constexpr (quasar_binary_op_is_quant(OP))
     {
-        SFPU_BINARY_CALL(DST_SYNC, quant_family, (quant_variant_of<OP>(), ITERATIONS, SIGN_MAGNITUDE_FORMAT), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+        SFPU_BINARY_CALL_QSR(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            quant_family,
+            (quant_variant_of<OP>(), ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
     }
     else if constexpr (quasar_binary_op_is_max_min(OP))
     {
@@ -514,11 +554,27 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         // All integer formats route through the Int32 path; float / MX use Float32.
         if (math_format == DataFormat::Int32)
         {
-            SFPU_BINARY_CALL(DST_SYNC, calculate_binary_max_min, (DataFormat::Int32, IS_MAX, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            SFPU_BINARY_CALL_QSR(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                calculate_binary_max_min,
+                (DataFormat::Int32, IS_MAX, ITERATIONS),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                VectorMode::RC);
         }
         else
         {
-            SFPU_BINARY_CALL(DST_SYNC, calculate_binary_max_min, (DataFormat::Float32, IS_MAX, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            SFPU_BINARY_CALL_QSR(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                calculate_binary_max_min,
+                (DataFormat::Float32, IS_MAX, ITERATIONS),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                VectorMode::RC);
         }
     }
     else

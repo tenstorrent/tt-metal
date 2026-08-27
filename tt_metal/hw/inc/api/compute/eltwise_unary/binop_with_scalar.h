@@ -140,7 +140,7 @@ ALWI void binop_with_scalar_tile_init() {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init()));
 #else
-    MATH(SFPU_UNARY_INIT(unused));
+    MATH(SFPU_UNARY_INIT(unused, DST_ACCUM_MODE));
 #endif
 }
 

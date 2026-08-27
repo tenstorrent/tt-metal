@@ -30,7 +30,7 @@ ALWI void identity_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void identity_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void identity_tile_init() { MATH(SFPU_UNARY_INIT(unused, DST_ACCUM_MODE)); }
 
 // clang-format off
 /**

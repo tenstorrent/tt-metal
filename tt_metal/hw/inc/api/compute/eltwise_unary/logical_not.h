@@ -50,6 +50,6 @@ ALWI void logical_not_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void logical_not_tile_init() { MATH(SFPU_UNARY_INIT(logical_not_unary)); }
+ALWI void logical_not_tile_init() { MATH(SFPU_UNARY_INIT(logical_not_unary, DST_ACCUM_MODE)); }
 
 }  // namespace ckernel

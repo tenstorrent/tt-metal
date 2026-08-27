@@ -43,7 +43,7 @@ ALWI void unary_ne_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_ne_tile_init() { MATH(SFPU_UNARY_INIT(unary_ne)); }
+ALWI void unary_ne_tile_init() { MATH(SFPU_UNARY_INIT(unary_ne, DST_ACCUM_MODE)); }
 
 // unary ne : if x != value --> 1, else 0
 // clang-format off
@@ -94,7 +94,7 @@ ALWI void unary_eq_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_eq_tile_init() { MATH(SFPU_UNARY_INIT(unary_eq)); }
+ALWI void unary_eq_tile_init() { MATH(SFPU_UNARY_INIT(unary_eq, DST_ACCUM_MODE)); }
 
 // unary eq : if x == value --> 1, else 0
 // clang-format off
@@ -145,7 +145,7 @@ ALWI void unary_gt_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_gt_tile_init() { MATH(SFPU_UNARY_INIT(unary_gt)); }
+ALWI void unary_gt_tile_init() { MATH(SFPU_UNARY_INIT(unary_gt, DST_ACCUM_MODE)); }
 
 // unary gt : if x > value --> 1, else 0
 // clang-format off
@@ -196,7 +196,7 @@ ALWI void unary_ge_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_ge_tile_init() { MATH(SFPU_UNARY_INIT(unary_ge)); }
+ALWI void unary_ge_tile_init() { MATH(SFPU_UNARY_INIT(unary_ge, DST_ACCUM_MODE)); }
 
 // unary ge : if x >= value --> 1, else 0
 // clang-format off
@@ -273,7 +273,7 @@ ALWI void unary_lt_tile_int32(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_lt_tile_init() { MATH(SFPU_UNARY_INIT(unary_lt)); }
+ALWI void unary_lt_tile_init() { MATH(SFPU_UNARY_INIT(unary_lt, DST_ACCUM_MODE)); }
 
 // unary le : if x <= value --> 1.0, else 0.0
 // clang-format off
@@ -324,7 +324,7 @@ ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_le_tile_init() { MATH(SFPU_UNARY_INIT(unary_le)); }
+ALWI void unary_le_tile_init() { MATH(SFPU_UNARY_INIT(unary_le, DST_ACCUM_MODE)); }
 #endif  // !ARCH_QUASAR
 
 // clang-format off
@@ -359,9 +359,9 @@ ALWI void gtz_tile(uint32_t idst) {
  */
 ALWI void gtz_tile_init() {
 #ifndef ARCH_QUASAR
-    MATH(SFPU_UNARY_INIT(greater_than_zero));
+    MATH(SFPU_UNARY_INIT(greater_than_zero, DST_ACCUM_MODE));
 #else
-    MATH(SFPU_UNARY_INIT(greater_than_zero, sfpu::init_zero_comp));
+    MATH(SFPU_UNARY_INIT_FN_NO_ARGS(greater_than_zero, sfpu::init_zero_comp));
 #endif
 }
 
@@ -397,9 +397,9 @@ ALWI void nez_tile(uint32_t idst) {
  */
 ALWI void nez_tile_init() {
 #ifndef ARCH_QUASAR
-    MATH(SFPU_UNARY_INIT(not_equal_zero));
+    MATH(SFPU_UNARY_INIT(not_equal_zero, DST_ACCUM_MODE));
 #else
-    MATH(SFPU_UNARY_INIT(not_equal_zero, sfpu::init_zero_comp));
+    MATH(SFPU_UNARY_INIT_FN_NO_ARGS(not_equal_zero, sfpu::init_zero_comp));
 #endif
 }
 
@@ -436,9 +436,9 @@ ALWI void gez_tile(uint32_t idst) {
  */
 ALWI void gez_tile_init() {
 #ifndef ARCH_QUASAR
-    MATH(SFPU_UNARY_INIT(greater_than_equal_zero));
+    MATH(SFPU_UNARY_INIT(greater_than_equal_zero, DST_ACCUM_MODE));
 #else
-    MATH(SFPU_UNARY_INIT(greater_than_equal_zero, sfpu::init_zero_comp));
+    MATH(SFPU_UNARY_INIT_FN_NO_ARGS(greater_than_equal_zero, sfpu::init_zero_comp));
 #endif
 }
 
@@ -474,9 +474,9 @@ ALWI void ltz_tile(uint32_t idst) {
  */
 ALWI void ltz_tile_init() {
 #ifndef ARCH_QUASAR
-    MATH(SFPU_UNARY_INIT(less_than_zero));
+    MATH(SFPU_UNARY_INIT(less_than_zero, DST_ACCUM_MODE));
 #else
-    MATH(SFPU_UNARY_INIT(less_than_zero, sfpu::init_zero_comp));
+    MATH(SFPU_UNARY_INIT_FN_NO_ARGS(less_than_zero, sfpu::init_zero_comp));
 #endif
 }
 
@@ -512,9 +512,9 @@ ALWI void eqz_tile(uint32_t idst) {
  */
 ALWI void eqz_tile_init() {
 #ifndef ARCH_QUASAR
-    MATH(SFPU_UNARY_INIT(equal_zero));
+    MATH(SFPU_UNARY_INIT(equal_zero, DST_ACCUM_MODE));
 #else
-    MATH(SFPU_UNARY_INIT(equal_zero, sfpu::init_zero_comp));
+    MATH(SFPU_UNARY_INIT_FN_NO_ARGS(equal_zero, sfpu::init_zero_comp));
 #endif
 }
 
@@ -551,9 +551,9 @@ ALWI void lez_tile(uint32_t idst) {
  */
 ALWI void lez_tile_init() {
 #ifndef ARCH_QUASAR
-    MATH(SFPU_UNARY_INIT(less_than_equal_zero));
+    MATH(SFPU_UNARY_INIT(less_than_equal_zero, DST_ACCUM_MODE));
 #else
-    MATH(SFPU_UNARY_INIT(less_than_equal_zero, sfpu::init_zero_comp));
+    MATH(SFPU_UNARY_INIT_FN_NO_ARGS(less_than_equal_zero, sfpu::init_zero_comp));
 #endif
 }
 

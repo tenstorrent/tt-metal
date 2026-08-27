@@ -15,7 +15,7 @@
 namespace ckernel {
 
 ALWI void mask_tile_init() {
-    MATH(SFPU_UNARY_INIT(mask));  // TODO(AP): move out init
+    MATH(SFPU_UNARY_INIT(mask, DST_ACCUM_MODE));  // TODO(AP): move out init
 }
 
 // clang-format off

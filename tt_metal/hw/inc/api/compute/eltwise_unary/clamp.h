@@ -57,6 +57,6 @@ ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void clamp_tile_init() { MATH(SFPU_UNARY_INIT(clamp)); }
+ALWI void clamp_tile_init() { MATH(SFPU_UNARY_INIT(clamp, DST_ACCUM_MODE)); }
 
 }  // namespace ckernel

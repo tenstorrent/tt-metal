@@ -277,7 +277,7 @@ ALWI void typecast_tile_init() {
     constexpr DataFormat effective_output_format =
         detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
     if constexpr (effective_input_format != effective_output_format) {
-        MATH(SFPU_UNARY_INIT(typecast, sfpu::init_typecast));
+        MATH(SFPU_UNARY_INIT_FN_NO_ARGS(typecast, sfpu::init_typecast));
     }
 #else
     if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Float16_b) {
@@ -330,7 +330,7 @@ ALWI void typecast_tile_init() {
     } else if constexpr (in_format == DataFormat::UInt8 && out_format == DataFormat::UInt16) {
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_uint16, (APPROX)));
     } else {
-        MATH(SFPU_UNARY_INIT(typecast));
+        MATH(SFPU_UNARY_INIT(typecast, DST_ACCUM_MODE));
     }
 #endif  // ARCH_QUASAR
 }

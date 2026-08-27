@@ -60,11 +60,11 @@ ALWI void right_shift_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void left_shift_tile_init() { MATH(SFPU_UNARY_INIT(left_shift)); }
+ALWI void left_shift_tile_init() { MATH(SFPU_UNARY_INIT(left_shift, DST_ACCUM_MODE)); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void right_shift_tile_init() { MATH(SFPU_UNARY_INIT(right_shift)); }
+ALWI void right_shift_tile_init() { MATH(SFPU_UNARY_INIT(right_shift, DST_ACCUM_MODE)); }
 
 }  // namespace ckernel

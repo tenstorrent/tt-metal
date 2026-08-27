@@ -33,6 +33,6 @@ ALWI void bitwise_not_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_not_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_not)); }
+ALWI void bitwise_not_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_not, DST_ACCUM_MODE)); }
 
 }  // namespace ckernel

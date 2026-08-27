@@ -127,7 +127,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Fill every DEST lane in each tile with integer value 5.
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
-            SFPU_UNARY_CALL(dest_sync, _calculate_fill_int_, (FILL_INT_FORMAT, SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC, 5 /*value*/);
+            SFPU_UNARY_CALL_QSR(
+                dest_sync, is_fp32_dest_acc_en, _calculate_fill_int_, (FILL_INT_FORMAT, SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC, 5 /*value*/);
         }
     }
     else
@@ -137,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Walk every tile in DEST starting at DST_INDEX, filling all lanes with 5.0f.
         for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
         {
-            SFPU_UNARY_CALL(dest_sync, _calculate_fill_, (SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC, 5.0f /*value*/);
+            SFPU_UNARY_CALL_QSR(dest_sync, is_fp32_dest_acc_en, _calculate_fill_, (SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC, 5.0f /*value*/);
         }
     }
 

@@ -14,7 +14,7 @@
 
 namespace ckernel {
 
-ALWI void negative_tile_init() { MATH(SFPU_UNARY_INIT(negative)); }
+ALWI void negative_tile_init() { MATH(SFPU_UNARY_INIT(negative, DST_ACCUM_MODE)); }
 // clang-format off
 /**
  * Performs element-wise computation of the negative on each element of a tile

@@ -44,7 +44,7 @@ ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT(unused, DST_ACCUM_MODE)); }
 
 // clang-format off
 /**
@@ -69,6 +69,6 @@ ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_unary_int32_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void rsub_unary_int32_tile_init() { MATH(SFPU_UNARY_INIT(unused, DST_ACCUM_MODE)); }
 
 }  // namespace ckernel

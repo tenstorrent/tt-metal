@@ -83,6 +83,6 @@ ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void fill_tile_init() { MATH(SFPU_UNARY_INIT(fill)); }
+ALWI void fill_tile_init() { MATH(SFPU_UNARY_INIT(fill, DST_ACCUM_MODE)); }
 
 }  // namespace ckernel

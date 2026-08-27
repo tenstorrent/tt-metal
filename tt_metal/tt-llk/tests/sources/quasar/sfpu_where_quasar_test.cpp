@@ -115,8 +115,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // true_val=base+1, false_val=base+2, result written to base+0. Faces
     // outside the selected set keep whatever the producer wrote into Dest before
     // SFPU ran (the cond tile, here), so Python asserts only processed faces.
-    SFPU_TERNARY_CALL(
+    SFPU_TERNARY_CALL_QSR(
         dest_sync,
+        is_fp32_dest_acc_en,
         calculate_where,
         (false /*APPROXIMATION_MODE*/),
         params.DST_INDEX + 0u /*DST_IN0*/,

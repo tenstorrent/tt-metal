@@ -41,6 +41,6 @@ ALWI void threshold_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void threshold_tile_init() { MATH(SFPU_UNARY_INIT(threshold)); }
+ALWI void threshold_tile_init() { MATH(SFPU_UNARY_INIT(threshold, DST_ACCUM_MODE)); }
 
 }  // namespace ckernel

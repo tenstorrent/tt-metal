@@ -455,12 +455,16 @@ void compute_sdpa_recip(
  * Wrapper for fused max-sub-exp-add SFPI kernel.
  * Invokes calculate_fused_max_sub_exp_add_tile via the SFPU macro wrapper.
  */
-template <bool SDPA_EXP_APPROX_MODE, VectorMode vector_mode = VectorMode::C, bool final_norm = false>
+template <
+    bool SDPA_EXP_APPROX_MODE,
+    VectorMode vector_mode = VectorMode::C,
+    bool final_norm = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void fused_max_sub_exp_add_tile(std::uint32_t idst, int scale_bf16) {
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         calculate_fused_max_sub_exp_add_tile,
-        (SDPA_EXP_APPROX_MODE, final_norm),
+        (SDPA_EXP_APPROX_MODE, final_norm, is_fp32_dest_acc_en),
         idst,
         vector_mode,
         scale_bf16);
@@ -494,7 +498,8 @@ template <
     std::uint32_t scale_fp32,
     VectorMode vector_mode = VectorMode::C,
     bool pop_ms = false,
-    bool dense = false>
+    bool dense = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_tail_ms_reduce(
     std::uint32_t cb_worker_ms, std::uint32_t cb_prev_ms, std::uint32_t cb_cur_ms, std::uint32_t cb_l_for_init) {
     copy_tile_to_dst_init_short(cb_worker_ms);
@@ -513,11 +518,12 @@ ALWI void sdpa_tail_ms_reduce(
         cb_pop_front(cb_prev_ms, 1);
         cb_pop_front(cb_worker_ms, 1);
     }
-    MATH((fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, vector_mode, normalize>(0, scale_bf16)));
+    MATH(
+        (fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, vector_mode, normalize, is_fp32_dest_acc_en>(0, scale_bf16)));
     // Initialize SRCB reuse for L tile broadcast multiply
     // TODO: Optimize init sequence with copy_tile
     sdpa_mul_bcast_col_reuse_tiles_init<block_size, dense>(cb_l_for_init);
-    sdpa_bcast_col_reuse_preamble<normalize>();
+    sdpa_bcast_col_reuse_preamble<normalize, is_fp32_dest_acc_en>();
 
     // Not final reduction: pack out stats and release regs
     if constexpr (!normalize) {
@@ -551,7 +557,8 @@ template <
     std::uint32_t num_blocks,
     bool untilize = false,
     bool dense = false,
-    bool manage_cbs = false>
+    bool manage_cbs = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_tail_l_block(
     std::uint32_t cb_l1,
     std::uint32_t cb_l2,
@@ -566,7 +573,7 @@ ALWI void sdpa_tail_l_block(
         cb_wait_front(cb_l2, block_size);
         cb_wait_front(cb_l1, block_size);
     }
-    sdpa_mul_bcast_col_reuse_tiles<block_size>(cb_l2, cb_l1, tile_index, 0);
+    sdpa_mul_bcast_col_reuse_tiles<block_size, is_fp32_dest_acc_en>(cb_l2, cb_l1, tile_index, 0);
     if constexpr (manage_cbs) {
         cb_pop_front(cb_l2, block_size);
         cb_pop_front(cb_l1, block_size);
@@ -639,7 +646,8 @@ template <
     std::uint32_t scale_fp32,
     VectorMode vector_mode = VectorMode::C,
     bool dense = false,
-    bool untilize = false>
+    bool untilize = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_tail(
     std::uint32_t cb_worker_max_sum,
     std::uint32_t cb_prev_max_sum,
@@ -648,8 +656,15 @@ ALWI void sdpa_tail(
     std::uint32_t cb_l2,
     std::uint32_t cb_l_out) {
     // Phase 1: MS reduction - computes P1/P2, sets up SRCB
-    sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode, true, dense>(
-        cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
+    sdpa_tail_ms_reduce<
+        SDPA_EXP_APPROX_MODE,
+        normalize,
+        block_size,
+        scale_fp32,
+        vector_mode,
+        true,
+        dense,
+        is_fp32_dest_acc_en>(cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
 
     // TODO: Update the tile locs in ms_reduce to enable dense packing during entire reduction
     if constexpr (dense && !untilize) {
@@ -678,10 +693,12 @@ ALWI void sdpa_tail(
     }
     // When normalize=true, first block uses regs still held from MS phase
     if constexpr (normalize) {
-        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true>(cb_l1, cb_l2, cb_l_out, 0, 0, false);
+        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true, is_fp32_dest_acc_en>(
+            cb_l1, cb_l2, cb_l_out, 0, 0, false);
     }
     for (std::uint32_t i = (normalize ? 1 : 0); i < num_blocks; i++) {
-        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true>(cb_l1, cb_l2, cb_l_out, 0, i, true);
+        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true, is_fp32_dest_acc_en>(
+            cb_l1, cb_l2, cb_l_out, 0, i, true);
     }
     if constexpr (untilize) {
         cb_push_back(cb_l_out, block_size * num_blocks);

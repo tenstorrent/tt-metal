@@ -12,7 +12,7 @@
 
 namespace ckernel {
 
-ALWI void relu_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
+ALWI void relu_tile_init() { MATH(SFPU_UNARY_INIT(relu_min, DST_ACCUM_MODE)); }
 
 // clang-format off
 /**
@@ -109,8 +109,8 @@ ALWI void relu_max_tile_uint16(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
-ALWI void relu_max_tile_init() { MATH(SFPU_UNARY_INIT(relu_max)); }
-ALWI void relu_max_tile_init_pack() { PACK(SFPU_UNARY_INIT(relu_max)); }
+ALWI void relu_max_tile_init() { MATH(SFPU_UNARY_INIT(relu_max, DST_ACCUM_MODE)); }
+ALWI void relu_max_tile_init_pack() { PACK(SFPU_UNARY_INIT(relu_max, DST_ACCUM_MODE)); }
 
 // clang-format off
 /**
@@ -168,7 +168,7 @@ ALWI void relu_min_tile_uint16(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
-ALWI void relu_min_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
+ALWI void relu_min_tile_init() { MATH(SFPU_UNARY_INIT(relu_min, DST_ACCUM_MODE)); }
 
 ALWI void relu_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
@@ -200,6 +200,6 @@ ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_lrelu, (APPROX), idst, VectorMode::RC, slope));
 }
 
-ALWI void leaky_relu_tile_init() { MATH(SFPU_UNARY_INIT(lrelu)); }
+ALWI void leaky_relu_tile_init() { MATH(SFPU_UNARY_INIT(lrelu, DST_ACCUM_MODE)); }
 #endif
 }  // namespace ckernel

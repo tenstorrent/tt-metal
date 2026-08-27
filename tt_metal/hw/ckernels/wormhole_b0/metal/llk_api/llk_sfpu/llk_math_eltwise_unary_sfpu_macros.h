@@ -25,8 +25,7 @@ template <DstSync DST_SYNC>
 inline __attribute__((always_inline)) void _sfpu_check_(
     std::uint32_t dst_index, [[maybe_unused]] VectorMode vector_mode) {
     LLK_ASSERT(
-        (dst_index < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
-        "dst_index exceeds max dest tiles");
+        (dst_index < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()), "dst_index exceeds max dest tiles");
 }
 
 }  // namespace ckernel
@@ -50,28 +49,23 @@ inline __attribute__((always_inline)) void _sfpu_check_(
      _llk_math_eltwise_unary_sfpu_params_(::ckernel::sfpu::FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
 
 /*
- * SFPU init macros (4 total)
+ * SFPU init macros (3 total)
  *
  * No dst index involved, so no bound check and no DST_SYNC argument.
- * Dest-acc-independent inits use SFPU_UNARY_INIT (defaults to DST_ACCUM_MODE); use
- * SFPU_UNARY_INIT_ACCUM with an explicit bool when the active dest mode may differ
- * from the kernel compile-time default (e.g. after set_fp32_dest_acc).
+ * The bare init takes the dest accumulation mode explicitly: pass DST_ACCUM_MODE
+ * for the kernel compile-time default, or the op's own is_fp32_dest_acc_en when the
+ * active dest mode may differ from it (e.g. after set_fp32_dest_acc).
  * Argument order for callback inits: OP first (which selects the SfpuType),
  * then the init callback (the FN-like argument), then the templates that
  * parameterise it.
  */
 
 /*
- * Bare init: no callback. Uses kernel compile-time DST_ACCUM_MODE.
- *   SFPU_UNARY_INIT(abs);
+ * Bare init: no callback.
+ *   SFPU_UNARY_INIT(abs, DST_ACCUM_MODE);
+ *   SFPU_UNARY_INIT(softcap, is_fp32_dest_acc_en);
  */
-#define SFPU_UNARY_INIT(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP, DST_ACCUM_MODE>()
-
-/*
- * Bare init for dest-acc-sensitive ops. Requires an explicit accum-mode bool.
- *   SFPU_UNARY_INIT_ACCUM(asin, is_fp32_dest_acc_en);
- */
-#define SFPU_UNARY_INIT_ACCUM(OP, ACCUM) ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP, ACCUM>()
+#define SFPU_UNARY_INIT(OP, ACCUM) ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP, ACCUM>()
 
 /*
  * Init with a templated callback.

@@ -55,8 +55,8 @@ ALWI void selu_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu)); }
+ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu, DST_ACCUM_MODE)); }
 
-ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu)); }
+ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu, DST_ACCUM_MODE)); }
 
 }  // namespace ckernel

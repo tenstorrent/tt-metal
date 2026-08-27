@@ -109,7 +109,7 @@ namespace ckernel {
 template <bool fast_and_approx = false>
 ALWI void sigmoid_tile_init() {
 #ifdef ARCH_QUASAR
-    MATH(SFPU_UNARY_INIT(sigmoid));
+    MATH(SFPU_UNARY_INIT(sigmoid, DST_ACCUM_MODE));
 #else
     MATH(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx)));
 #endif
@@ -166,7 +166,7 @@ ALWI void silu_tile(uint32_t idst) {
 
 ALWI void silu_tile_init() {
 #ifdef ARCH_QUASAR
-    MATH(SFPU_UNARY_INIT(silu));
+    MATH(SFPU_UNARY_INIT(silu, DST_ACCUM_MODE));
 #else
     MATH(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX)));
 #endif
@@ -184,7 +184,7 @@ ALWI void tanh_tile_init() {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, is_fp32_dest_acc_en)));
 #else
-    MATH(SFPU_UNARY_INIT(tanh));
+    MATH(SFPU_UNARY_INIT(tanh, DST_ACCUM_MODE));
 #endif
 }
 
@@ -247,9 +247,9 @@ ALWI void square_tile(uint32_t idst) {
  */
 ALWI void square_tile_init() {
 #ifndef ARCH_QUASAR
-    MATH(SFPU_UNARY_INIT(square));
+    MATH(SFPU_UNARY_INIT(square, DST_ACCUM_MODE));
 #else
-    MATH(SFPU_UNARY_INIT(square, sfpu::init_square));
+    MATH(SFPU_UNARY_INIT_FN_NO_ARGS(square, sfpu::init_square));
 #endif
 }
 
@@ -424,7 +424,7 @@ ALWI void abs_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
+ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs, DST_ACCUM_MODE)); }
 
 // clang-format off
 /**
@@ -467,7 +467,7 @@ ALWI void sign_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT(sign)); }
+ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT(sign, DST_ACCUM_MODE)); }
 
 // clang-format off
 /**
@@ -490,7 +490,7 @@ ALWI void tiled_prod_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void tiled_prod_tile_init() { MATH(SFPU_UNARY_INIT(tiled_prod)); }
+ALWI void tiled_prod_tile_init() { MATH(SFPU_UNARY_INIT(tiled_prod, DST_ACCUM_MODE)); }
 
 // POWER : y = x^(const param0)
 // clang-format off
@@ -552,7 +552,7 @@ ALWI void power_iterative_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void power_iterative_tile_init() { MATH(SFPU_UNARY_INIT(power)); }
+ALWI void power_iterative_tile_init() { MATH(SFPU_UNARY_INIT(power, DST_ACCUM_MODE)); }
 
 // clang-format off
 // exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]
@@ -579,7 +579,9 @@ ALWI void exp2_tile(uint32_t idst) {
  * Please refer to documentation for any_init.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void exp2_tile_init() { MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (true /*APPROXIMATE*/, is_fp32_dest_acc_en))); }
+ALWI void exp2_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (true /*APPROXIMATE*/, is_fp32_dest_acc_en)));
+}
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
 // clang-format off
@@ -604,7 +606,7 @@ ALWI void heaviside_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void heaviside_tile_init() { MATH(SFPU_UNARY_INIT(heaviside)); }
+ALWI void heaviside_tile_init() { MATH(SFPU_UNARY_INIT(heaviside, DST_ACCUM_MODE)); }
 
 // expm1 : (exp(x) - 1)
 // clang-format off
@@ -829,7 +831,8 @@ template <
     int num_rows = 9,
     ckernel::DataLayout layout = ckernel::DataLayout::TILE,
     bool accumulate = false,
-    int ITERATIONS = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    int ITERATIONS = 8,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chunk = 0) {
     static_assert(num_rows <= 32, "num_rows must be <= 32");
     MATH((SFPU_BINARY_CALL(
@@ -874,7 +877,11 @@ ALWI void max_reduce_with_indices_init() {
  * | rt_dim          | Tile dimension along rows (runtime); must be 1 when reduce_dim is REDUCE_COL    | uint32_t  | >= 1; default 1
  */
 // clang-format on
-template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDim::REDUCE_COL, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    PoolType pool_type,
+    DataFormat format,
+    ReduceDim reduce_dim = ReduceDim::REDUCE_COL,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL ||
@@ -920,7 +927,8 @@ ALWI void sfpu_reduce_init() {
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
 
-    MATH(SFPU_UNARY_INIT_FN_ARGS(reduce, sfpu::init_reduce, (pool_type, format, is_fp32_dest_acc_en), 1 /* block_ct_dim */));
+    MATH(SFPU_UNARY_INIT_FN_ARGS(
+        reduce, sfpu::init_reduce, (pool_type, format, is_fp32_dest_acc_en), 1 /* block_ct_dim */));
 }
 
 // clang-format off
@@ -1109,7 +1117,7 @@ ALWI void alt_complex_rotate90_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void alt_complex_rotate90_tile_init() { MATH(SFPU_UNARY_INIT(alt_complex_rotate90)); }
+ALWI void alt_complex_rotate90_tile_init() { MATH(SFPU_UNARY_INIT(alt_complex_rotate90, DST_ACCUM_MODE)); }
 
 // unary_min : if x < value --> x, else value
 // clang-format off

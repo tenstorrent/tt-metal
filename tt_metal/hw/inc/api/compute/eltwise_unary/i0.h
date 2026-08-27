@@ -29,5 +29,5 @@ ALWI void i0_tile(uint32_t idst) { MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void i0_tile_init() { MATH(SFPU_UNARY_INIT(i0)); }
+ALWI void i0_tile_init() { MATH(SFPU_UNARY_INIT(i0, DST_ACCUM_MODE)); }
 }  // namespace ckernel

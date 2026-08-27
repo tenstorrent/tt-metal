@@ -60,17 +60,19 @@ inline __attribute__((always_inline)) void _sfpu_check_(std::uint32_t dst_index,
 #define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, FN, DST_IDX, VECTOR_MODE, ...) \
     SFPU_UNARY_CALL_NO_TEMPLATE_ARGS_QSR(DST_SYNC, DST_ACCUM_MODE, FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__)
 
-// Init macros take OP first, then the optional init callback and template args.
+// Init macros take OP first, then the accum mode / init callback and template args.
 
-// Init with an optional non-templated init function.
-//   SFPU_UNARY_INIT(abs);                                       // no init function
-//   SFPU_UNARY_INIT(greater_than_zero, sfpu::init_zero_comp);  // non-templated init function
-#define SFPU_UNARY_INIT_1(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>()
-#define SFPU_UNARY_INIT_2(OP, INIT_FN) ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN)
-#define SFPU_UNARY_INIT_PICK(_1, _2, NAME, ...) NAME
-#define SFPU_UNARY_INIT(...) \
-    SFPU_UNARY_INIT_PICK(    \
-        __VA_ARGS__, SFPU_UNARY_INIT_2, SFPU_UNARY_INIT_1, _ignore /* at least one argument */)(__VA_ARGS__)
+// Bare init: no callback. ACCUM is accepted for signature parity with WH/BH and
+// deliberately unused -- Quasar's llk_math_eltwise_unary_sfpu_init takes no
+// dest-acc parameter, and Quasar has no runtime dest-acc switch.
+//   SFPU_UNARY_INIT(abs, DST_ACCUM_MODE);
+#define SFPU_UNARY_INIT(OP, ACCUM) ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>()
+
+// Init with a non-templated callback (mirrors SFPU_BINARY_INIT_FN_NO_ARGS /
+// SFPU_TERNARY_INIT_FN_NO_ARGS).
+//   SFPU_UNARY_INIT_FN_NO_ARGS(greater_than_zero, sfpu::init_zero_comp);
+#define SFPU_UNARY_INIT_FN_NO_ARGS(OP, INIT_FN) \
+    ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN)
 
 // Init with a templated callback.
 //   SFPU_UNARY_INIT_FN(erf, sfpu::erf_init, (APPROXIMATE));

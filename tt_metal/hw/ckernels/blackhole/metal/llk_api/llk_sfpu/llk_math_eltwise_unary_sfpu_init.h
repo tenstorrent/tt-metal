@@ -69,11 +69,11 @@ void unary_le_init();
 void unary_lt_init();
 void unary_ne_init();
 
-// Residual per-op inits for ops used via bare SFPU_UNARY_INIT(OP) (no callback). config_reg + ADDR_MOD_7 are
-// run per-op by the bare delegate below (_llk_math_eltwise_unary_sfpu_init_once_()), so these program only the
-// op's residual state (op-specific ADDR_MOD_6 where needed + reset the RWC counters).
-// Rounding-family ops (ceil/floor/trunc/frac/round): pure-arithmetic SFPI kernels with no LUT/ADDR_MOD_6
-// state (production shares rounding_op_tile_init -> SFPU_UNARY_INIT(unused)); only reset the RWC counters.
+// Residual per-op inits for ops used via bare SFPU_UNARY_INIT(OP, DST_ACCUM_MODE) (no callback). config_reg +
+// ADDR_MOD_7 are run per-op by the bare delegate below (_llk_math_eltwise_unary_sfpu_init_once_()), so these program
+// only the op's residual state (op-specific ADDR_MOD_6 where needed + reset the RWC counters). Rounding-family ops
+// (ceil/floor/trunc/frac/round): pure-arithmetic SFPI kernels with no LUT/ADDR_MOD_6 state (production shares
+// rounding_op_tile_init -> SFPU_UNARY_INIT(unused, DST_ACCUM_MODE)); only reset the RWC counters.
 inline void ceil_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 inline void fill_init() { math::reset_counters(p_setrwc::SET_ABD_F); }

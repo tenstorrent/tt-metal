@@ -15,7 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rounding_op_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void rounding_op_tile_init() { MATH(SFPU_UNARY_INIT(unused, DST_ACCUM_MODE)); }
 
 // clang-format off
 /**

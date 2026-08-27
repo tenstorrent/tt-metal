@@ -60,7 +60,7 @@ ALWI void softcap_tile(uint32_t idst, uint32_t beta, uint32_t beta_recip) {
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softcap_tile_init() {
-    MATH(SFPU_UNARY_INIT_ACCUM(softcap, is_fp32_dest_acc_en));
+    MATH(SFPU_UNARY_INIT(softcap, is_fp32_dest_acc_en));
 }
 
 }  // namespace ckernel

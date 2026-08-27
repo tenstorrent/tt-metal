@@ -151,7 +151,7 @@ using namespace ckernel::sfpu;
 // `calculate_typecast_*` LLK primitives through the same SFPU_UNARY_* macros
 // production uses. Pairs realised purely by unpacker/packer format conversion
 // issue no SFPU call: they simply match no branch in the calculate helper (the
-// init helper still falls through to the bare `SFPU_UNARY_INIT(typecast)`).
+// init helper still falls through to the bare `SFPU_UNARY_INIT(typecast, DST_ACCUM_MODE)`).
 //
 // These are reached through the shared `call_unary_sfpu_operation[_init]`
 // dispatch below via `SfpuType::typecast` (with IN/OUT supplied as the trailing
@@ -231,7 +231,7 @@ void call_unary_typecast_operation_init()
         // Pairs handled purely by unpacker/packer (no SFPU math) or that need
         // no per-op programming still issue the bare init so the SFPU is in a
         // defined state, exactly like the production `else` branch.
-        SFPU_UNARY_INIT(typecast);
+        SFPU_UNARY_INIT(typecast, DST_ACCUM_MODE);
     }
 }
 
