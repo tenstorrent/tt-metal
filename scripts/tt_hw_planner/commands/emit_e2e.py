@@ -1927,6 +1927,14 @@ For EACH stage expose, ON THE PIPELINE object, the generic contract the perf eng
     calls to obtain the stage's inputs with NO per-model knowledge -- the model-specific assembly (which
     captured tensors, in what order, plus any fixed extras) lives HERE, behind this fixed name. It MUST
     exist for every stage that has _trace_setup/_trace_step, or the perf test cannot drive the stage.
+  <stage>_trace_items(): ZERO-ARG. Returns how many ITEMS one call of _trace_step retires -- the
+    TOTAL for that one call, batch included. This is the ONLY input to the stage's arithmetic
+    ceiling, which is 2 x params x items: a stage that does not state it is priced at ONE item, so
+    an encoder running 1500 frames is given a compute roof ~1500x too small and is then reported as
+    memory-bound when it is compute-bound. Count what the stage's REPEATED BLOCKS process, not what
+    it returns: an audio tower over 1500 frames that projects down to 375 outputs retires 1500.
+    A recurring step (one token, one denoise step) returns 1. Omit it ONLY if the stage genuinely
+    retires one item.
 AR stages ALSO keep the decode contract (decode_prefill seeds resident self- AND, for a seq2seq
 decoder, cross-attn KV; decode_step reads them, never recomputes).
 

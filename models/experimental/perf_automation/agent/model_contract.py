@@ -39,6 +39,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import stage_seams as _seams
+
 # A stage is measured BOTH ways: eager for per-op profiling, traced for end-to-end latency. So every
 # stage needs both paths, and the CHOICE has to belong to the harness -- one authority, not one per
 # stage. These are the names the harness sets; a model that reads any of them is participating.
@@ -234,14 +236,41 @@ def _c_stages(src: Source) -> list:
             Finding(
                 "stages",
                 "no PIPELINE_STAGES and no decode_step",
-                "declare PIPELINE_STAGES and expose <stage>_trace_setup(inputs) / <stage>_trace_step() "
-                "for each; without them there is nothing the harness can measure",
+                "declare PIPELINE_STAGES and expose <stage>%s(inputs) / <stage>%s() " % _seams.REQUIRED
+                + "for each; without them there is nothing the harness can measure",
                 kind="porting",
             )
         ]
     out = []
     for st in declared:
-        for hook in ("%s_trace_setup" % st, "%s_trace_step" % st):
+        # THE ITEM COUNT IS THE COMPUTE CEILING'S ONLY INPUT, and its absence is silent. The roofline
+        # prices a stage at 2 x params x items, and a stage that states nothing is priced at ONE item
+        # -- which is right for a recurring step and 1500x wrong for an audio tower over 1500 frames,
+        # with nothing to tell the two apart downstream. Measured on voxtral 2026-08-27: encode's
+        # compute roof read 0.007 ms against a 238.79 ms measurement, so the stage was reported
+        # memory-bound when it is compute-bound, and the reader had no way to see that the number was
+        # a placeholder rather than a finding.
+        #
+        # WARN AND PORTING, never blocking. A hand-written model that never went through emit-e2e is
+        # a first-class input here, and a missing optional seam must not refuse it -- it only means
+        # that stage's arithmetic ceiling is a placeholder, which is worth saying out loud on every
+        # run rather than discovering from an implausible utilisation figure weeks later.
+        _items_hook = _seams.hook(st, _seams.ITEMS)
+        if not (list(src.functions(_items_hook)) or src.mentions(_items_hook)):
+            out.append(
+                Finding(
+                    "stage-items",
+                    "stage %r states no item count (%s missing) -- its compute ceiling is a "
+                    "placeholder of 1 item" % (st, _items_hook),
+                    "expose %s(): ZERO-ARG, returning how many items ONE %s_trace_step call retires, "
+                    "batch included -- count what the stage's repeated blocks process, not what it "
+                    "returns. A stage that genuinely retires one item should return 1 explicitly, so "
+                    "'one item' is a statement rather than a default." % (_items_hook, st),
+                    severity="warn",
+                    kind="porting",
+                )
+            )
+        for hook in (_seams.hook(st, _s) for _s in _seams.REQUIRED):
             if not (list(src.functions(hook)) or src.mentions(hook)):
                 out.append(
                     Finding(

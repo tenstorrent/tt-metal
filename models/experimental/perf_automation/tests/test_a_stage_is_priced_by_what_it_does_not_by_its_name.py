@@ -488,3 +488,55 @@ def test_an_encoder_lever_is_reachable_from_an_encoder_stage():
     assert "mlp-program-config" in seen["encode"], "the ViT lever is still invisible to an encoder"
     # and the genuinely stage-specific ones stay narrow
     assert "decode-host-comm" in seen["decode"] and "decode-host-comm" not in seen["encode"]
+
+
+# ------------------------------------------------------------- the seam must reach its PRODUCERS
+
+
+def test_the_generator_asks_for_every_seam_the_engine_binds():
+    """THE HALF-BUILT FIX, and the test that would have caught it.
+
+    `_trace_items` was added in August to the adapter, the marker, the parser and the renderer --
+    every CONSUMER -- and to nothing that makes a model. The emit-e2e prompt lists the seams a
+    pipeline must expose, and it was not updated, so no model has ever emitted the marker: the
+    reader worked perfectly on a value nobody ever sent. Voxtral's encoder was therefore priced at
+    one item instead of 1500 and reported memory-bound while being compute-bound, and the suite
+    stayed green because the unit test constructs `_Stage(..., items=1500)` by hand -- proving the
+    consumer, never the chain.
+
+    This asserts the two ends agree, which is the only thing that fails when a seam is half-added.
+    """
+    from agent import stage_seams
+
+    prompt = (_PA.parent.parent.parent / "scripts" / "tt_hw_planner" / "commands" / "emit_e2e.py").read_text()
+    missing = [s for s in stage_seams.ALL if s not in prompt]
+    assert not missing, "emit-e2e never tells a model to write %s, so no model will ever have it" % missing
+
+
+def test_the_contract_asks_for_every_seam_the_engine_binds():
+    """The other producer-side end: a model already emitted can only learn of a new seam here."""
+    from agent import stage_seams
+
+    src = (_PA / "agent" / "model_contract.py").read_text()
+    missing = [s for s in stage_seams.ALL if s not in src and ("_seams" not in src)]
+    assert not missing, "the contract never asks for %s, so an existing model is never told" % missing
+
+
+def test_an_unstated_item_count_is_reported_and_never_blocks(tmp_path):
+    """Reported so a placeholder ceiling cannot pass for a measurement; porting so the direct path
+    -- hand-written models that never went through emit-e2e -- is never refused for it."""
+    from agent.model_contract import check
+
+    root = tmp_path / "m"
+    (root / "tt").mkdir(parents=True)
+    # The stage name is the MODEL'S, read back from what it declares; nothing here is a known name.
+    (root / "tt" / "pipeline.py").write_text(
+        "PIPELINE_STAGES = ['whatever_this_model_calls_it']\n"
+        "def build_pipeline(device, model=None, layers=None, **kwargs): return object()\n"
+        "def whatever_this_model_calls_it_trace_setup(i): ...\n"
+        "def whatever_this_model_calls_it_trace_step(): ...\n"
+    )
+    found = [f for f in check(root) if f.clause == "stage-items"]
+    assert found, "an unstated item count is silent again"
+    assert "whatever_this_model_calls_it" in found[0].detail, "the clause did not use the model's own name"
+    assert not any(f.blocking for f in found), "a missing optional seam must not refuse the direct path"

@@ -33,6 +33,8 @@ import os
 import sys
 from typing import Callable
 
+from . import stage_seams as _seams
+
 
 class NotTraceCapable(AttributeError):
     """A pipeline that GENUINELY cannot be trace-replayed (repeat-prefill / host-argmax decode, no
@@ -114,7 +116,7 @@ def headline_unit(stage_names, pipeline=None) -> str:
     # CALLED -- token, denoising step -- is not a structural fact and is not guessed; a model whose item
     # is not a token declares PIPELINE_UNIT, which is answered first.
     for _n in stage_names or []:
-        _items = getattr(pipeline, "%s_trace_items" % _n, None) if pipeline is not None else None
+        _items = getattr(pipeline, _seams.hook(_n, _seams.ITEMS), None) if pipeline is not None else None
         if not callable(_items):
             continue
         try:
@@ -335,17 +337,17 @@ class PipelineStageAdapter:
             _pmod = _sys.modules.get(type(p).__module__)
             _stage_names = getattr(_pmod, "PIPELINE_STAGES", []) if _pmod else []
         for name in list(_stage_names or []):
-            step = getattr(p, "%s_trace_step" % name, None)
+            step = getattr(p, _seams.hook(name, _seams.STEP), None)
             if not callable(step):
                 continue
-            setup = getattr(p, "%s_trace_setup" % name, None)
+            setup = getattr(p, _seams.hook(name, _seams.SETUP), None)
             if callable(setup):
                 # Standard emit-e2e hook: <stage>_trace_inputs() returns exactly the args this stage's
                 # trace_setup takes (assembled by the pipeline from its captured reference tensors). This
                 # is the model-agnostic seam -- the adapter never has to know the shape or the model. Fall
                 # back to the generic None/prompt_ids path for pipelines that don't expose it (a stage
                 # whose trace_setup self-derives, or a text model driven by prompt_ids).
-                _tin = getattr(p, "%s_trace_inputs" % name, None)
+                _tin = getattr(p, _seams.hook(name, _seams.INPUTS), None)
                 # ONE STAGE THAT CANNOT PRODUCE ITS INPUTS MUST NOT COST THE OTHERS THEIR STAGE.
                 # This was unguarded, so a single hook that raised took the whole adapter down and
                 # every stage lost its boundary. Measured: voxtral's encode_trace_inputs torch.loads a
@@ -377,7 +379,7 @@ class PipelineStageAdapter:
             # prompt length and is not derivable from the byte model, which is why every stage but
             # the prompt-consuming one was priced at a single item. Absent, nothing changes.
             _n = 0
-            _items_fn = getattr(p, "%s_trace_items" % name, None)
+            _items_fn = getattr(p, _seams.hook(name, _seams.ITEMS), None)
             if callable(_items_fn):
                 try:
                     _n = max(0, int(_items_fn() or 0))

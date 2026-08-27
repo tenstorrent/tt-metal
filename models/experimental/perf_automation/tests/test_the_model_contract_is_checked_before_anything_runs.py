@@ -36,6 +36,11 @@ def _model(tmp_path, **files):
     return tmp_path
 
 
+# A compliant model STATES what each stage retires. The item count is the only input to the stage's
+# arithmetic ceiling (2 x params x items), and a stage that states nothing is priced at one item --
+# right for a recurring step, ~1500x wrong for an encoder over 1500 frames, and indistinguishable
+# from a real answer downstream. Note the recurring stage declares 1 EXPLICITLY: "one item" has to
+# be a statement, or it cannot be told apart from "nobody said".
 _GOOD_PIPE = """
     PIPELINE_STAGES = ["prefill", "decode"]
 
@@ -44,8 +49,10 @@ _GOOD_PIPE = """
 
     def prefill_trace_setup(inputs): ...
     def prefill_trace_step(): ...
+    def prefill_trace_items(): return 1024
     def decode_trace_setup(inputs): ...
     def decode_trace_step(): ...
+    def decode_trace_items(): return 1
     def decode_prefill(inputs): ...
     def decode_step(): ...
 
