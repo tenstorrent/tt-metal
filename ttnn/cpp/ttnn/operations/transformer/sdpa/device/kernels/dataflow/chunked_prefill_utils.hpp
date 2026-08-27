@@ -61,7 +61,12 @@ constexpr uint32_t kRotHandoffSemDepth = 3;
 // from this one place so the runtime-arg count can't drift.
 constexpr uint32_t rot_handoff_sem_count(uint32_t ring_size) {
     const uint32_t receiving_iters = ring_size > 0 ? ring_size - 1 : 0;
-    return receiving_iters < kRotHandoffSemDepth ? receiving_iters : kRotHandoffSemDepth;
+    const uint32_t depth = receiving_iters < kRotHandoffSemDepth ? receiving_iters : kRotHandoffSemDepth;
+    // Never zero: a degenerate ring_size <= 1 has no iteration that can receive a float, but the
+    // kernel still declares rot_sem_ids[count] and takes (ring_iter - 1) % count, so 0 would mean a
+    // zero-length array and a modulo by zero. Clamping to 1 keeps those well-formed; the handoff
+    // sites are unreachable there anyway, since iteration 0 never receives.
+    return depth > 0 ? depth : 1;
 }
 
 constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t) {

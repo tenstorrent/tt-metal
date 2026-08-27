@@ -6219,9 +6219,9 @@ if os.environ.get("RING_MLA_K_SWEEP") and not MESH_CONFIG.is_galaxy and MESH_CON
         RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 64, _k, 8, 71.28))
     for _k in (320, 448, 576, 608):
         RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 32, _k, 8, 68.05))
-    # No q128 entries: rot_base_chunks would be 1 (see the hang note in the program factory), and
-    # L1 caps k there anyway -- q128 needs 1954048 B at k448 and 1686272 B at k320 against the
-    # 1572864 B max, since Sq_chunk_t=4 quadruples the mask/qk tiles.
+    # No q128 entries. rot_base_chunks would be 1, which the rotated split must refuse (it hangs --
+    # see the diagnosis in the program factory), and L1 caps k there anyway: q128 needs 1954048 B at
+    # k448 and 1686272 B at k320 against the 1572864 B max, since Sq_chunk_t=4 quadruples mask/qk.
 
 
 if MESH_CONFIG.is_galaxy:

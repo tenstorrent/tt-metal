@@ -2608,33 +2608,58 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     static const bool rotated_q_split_disabled = std::getenv("RING_MLA_DISABLE_ROTATED_Q_SPLIT") != nullptr;
     const bool use_rotated_q_split =
         !rotated_q_split_disabled &&
-        // Path scope: implemented only for chunked latent-V on the streaming compute path, with K
-        // streamed through the mcast batch chain. Four formerly-listed terms are implied here:
-        // k_mcast_enabled is only ever set under k_uses_batch_chain && enable_kv_chains (see the
-        // fallback above), and build_kv_chains == enable_kv_chains && B == 1 where
-        // enable_kv_chains == !has_sliding_window, so !has_sliding_window, enable_kv_chains,
-        // k_uses_batch_chain and B == 1 are all subsumed.
-        kernel_chunked && use_streaming_compute && k_mcast_enabled && build_kv_chains && v_shares_k_buffer &&
+        // Path scope: latent-V on the streaming compute path, with K streamed through the mcast
+        // batch chain. use_streaming_compute was listed and is implied by v_shares_k_buffer: the op
+        // asserts "Latent-V ring attention is implemented only for streaming compute" above, so
+        // latent-V never reaches here on the compute_common.hpp path (which has no ROTATED_Q_SPLIT
+        // hook and would desync compute from the reader). Four more terms are implied here: k_mcast_enabled is only
+        // ever set under k_uses_batch_chain && enable_kv_chains (see the fallback above), and build_kv_chains ==
+        // enable_kv_chains && B == 1 where enable_kv_chains == !has_sliding_window, so !has_sliding_window,
+        // enable_kv_chains, k_uses_batch_chain and B == 1 are all subsumed. kernel_chunked was also listed and was
+        // dropped: no configuration reaches this point without it (every non-chunked latent-V shape is is_balanced, so
+        // !args.is_balanced below excludes it), so it could neither help nor be exercised. If a non-chunked latent-V
+        // unbalanced shape is ever added, note this rotation is a COUNT-based balancer and so
+        // assumes equal-cost Q chunks -- true for chunked prefill, false under a causal mask,
+        // where enable_zigzag_balancing is the right tool instead. That path is unvalidated.
+        k_mcast_enabled && build_kv_chains && v_shares_k_buffer &&
         // Schedules the handoff does not model. !args.is_balanced also covers
-        // !enable_zigzag_balancing, which is defined as args.is_balanced && ... . Joint tensors,
-        // pad-aware rotation and the retained attention sink each carry their own per-iteration
-        // index or retention rules.
-        !args.is_balanced && L == 0 && !kv_pad_rotation_enabled && !kv_pad_from_metadata && !use_attention_sink &&
-        // Ring shape: the rotation cycle needs every iteration active. ring_size <= 8 is no longer
-        // a semaphore-budget limit (the handoff is O(1) in ring_size via kRotHandoffSemDepth) but
-        // is kept as the tested bound -- nothing above 8 exists on Blackhole hardware today, and
-        // lifting it is unverifiable here. The hard ceiling if it is ever raised is the 32-bit
-        // active_ring_iter_mask.
-        ring_size >= 2 && ring_size <= 8 && active_ring_iter_mask == full_ring_iter_mask &&
+        // !enable_zigzag_balancing (defined as args.is_balanced && ...); balanced/zigzag SKIPS whole
+        // Q chunks per device, so the equal-cost counting this rotation does no longer holds. The
+        // kv-pad variants do their own per-iteration index remapping, which would have to compose
+        // with rotated ownership rather than merely coexist. !kv_pad_from_metadata was listed and is
+        // implied: kv_pad_rotation_enabled is defined as has_kv_pad_rotation() || kv_pad_from_metadata.
+        // Two more were listed and dropped: !use_attention_sink is implied by v_shares_k_buffer,
+        // since the op rejects that pair outright ("attention_sink does not support latent-V /
+        // Ring-MLA attention"); and L == 0 is unreachable in practice -- joint tensors are a
+        // video-gen shape and latent-V an MLA one, and nothing builds both, so the term could
+        // neither help nor be exercised. Validation does permit the pair, so if one is ever built
+        // note that joint K adds per-iteration chunks this schedule does not count.
+        !args.is_balanced && !kv_pad_rotation_enabled &&
+        // Ring shape: the rotation cycle needs every iteration active. No ring_size bounds here.
+        // The old ring_size <= 8 cap was the semaphore budget, gone now that the handoff is O(1) in
+        // ring_size (kRotHandoffSemDepth); rings above 8 are unvalidated -- no Blackhole system has
+        // one today -- but are where a static split wastes the most, since the spare +1 slot is paid
+        // every iteration. A degenerate ring_size <= 1 needs no guard here either:
+        // rot_handoff_sem_count clamps to 1 so the kernel's slot array and modulo stay well-formed,
+        // and iteration 0 never receives a float. Note the per-iteration masks are uint32_t, so
+        // ring_size > 32 is broken for the whole op (host builds them with 1u << ring_iter), not
+        // just for this rotation -- nothing enforces that today.
+        active_ring_iter_mask == full_ring_iter_mask &&
         // Degenerate: nothing to rotate because the work divides evenly across cores.
         rot_float_chunks != 0 &&
-        // rot_base_chunks >= 2 is REQUIRED, not conservatism: at base == 1 a core's list is one
-        // base chunk plus the float, so the float's deferred accumulator save has no following
-        // non-float chunk to flush behind. Donor and receiver then wait on each other and the
-        // program hangs -- measured 2026-08-20 on bh-lb-33 ring-8, q128 (120 work units / 110
-        // cores -> base 1, float 10) at both k256 and k224: SAFE_PYTEST_RESULT: HANG. Lifting this
-        // needs the save/restore slack reworked, not just the bound lowered; note base == 1 is
-        // also where the imbalance is worst (2:1), so it is worth fixing properly.
+        // rot_base_chunks >= 2 is REQUIRED. At base == 1 the program hangs -- measured on ring-8
+        // q128 (24 heads x 640/128 = 120 work units over 110 cores -> base 1, float 10) at k256,
+        // k224 and k320. Watcher diagnosis (2026-08-20): 5 cores park with NSW on the READER
+        // (ncrisc), i.e. a NoC semaphore wait, whose only source in that kernel is the K-chain
+        // receive (chain_link.hpp receiver_sem.wait(VALID)); 45 further cores then pile up
+        // downstream on CWFW/CRBW. So the K mcast chain loses phase alignment at base 1 -- this is
+        // not the deferred accumulator handoff, whose waits live in the writer (brisc).
+        // Attempted fix that did NOT work: forcing row_loop uniformly to rot_base_chunks + 1 to
+        // match the injector's static should_forward gate. It failed to fix base 1 AND broke
+        // base 2, so the reader's slot/padding accounting is subtler than a per-row max mismatch.
+        // Fixing this is worthwhile -- base == 1 is the worst static imbalance (2:1) and the
+        // largest predicted win (~1.8x) -- but it needs the reader's dummy-chunk padding path
+        // understood, not a bound lowered.
         rot_base_chunks >= 2;
 
     struct RotatedIterSched {
