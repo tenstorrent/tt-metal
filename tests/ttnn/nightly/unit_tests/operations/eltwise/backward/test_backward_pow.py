@@ -293,3 +293,30 @@ def test_bw_pow_honours_requested_memory_config(input_shapes, exponent, device):
     assert (
         result[0].memory_config().buffer_type == ttnn.BufferType.L1
     ), f"requested L1 but gradient landed in {result[0].memory_config().buffer_type}"
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
+@pytest.mark.parametrize("exponent", [0.0, 2.0])
+def test_bw_pow_preallocated_output_wins_over_memory_config(input_shapes, exponent, device):
+    """A caller-supplied input_grad takes precedence over memory_config.
+
+    This is the invariant whose behaviour changed: the gradient is written into the
+    supplied tensor, so it stays in that tensor's memory space even when a different
+    config is requested. `full_like_impl` reaches this via
+    `optional_output_tensor.value().memory_config()` in `full_impl`, so flipping that
+    precedence would break it silently.
+    """
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 0.1, 10, device)
+
+    preallocated = ttnn.full(input_shapes, 7.0, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
+
+    result = ttnn.pow_bw(
+        grad_tensor, input_tensor, exponent, memory_config=ttnn.DRAM_MEMORY_CONFIG, input_grad=preallocated
+    )
+
+    assert result[0].memory_config().buffer_type == ttnn.BufferType.L1, (
+        "preallocated output should win over memory_config, but the result moved to "
+        f"{result[0].memory_config().buffer_type}"
+    )
+    assert preallocated.memory_config().buffer_type == ttnn.BufferType.L1
