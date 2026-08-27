@@ -98,9 +98,10 @@ void kernel_main() {
 
     // Accumulate one K-slice (one shard) into the output CB. All slices except the first
     // enable packer accumulate mode so the packer sums into the resident output tiles rather
-    // than overwriting them.
+    // than overwriting them. With ENABLE_ALL_GATHER the last shard publishes each N-column
+    // (column-major dest) as soon as it is K-complete so the writer can overlap fabric send.
     bool packer_in_acc = false;
-    auto process_shard = [&](uint32_t in0_cb, uint32_t sender_id) {
+    auto process_shard = [&](uint32_t in0_cb, uint32_t sender_id, bool publish_columns) {
         const uint32_t in1_k_row_base = sender_id * inA_K_tiles_per_core;  // K-tile index
         for (uint32_t bw = 0; bw < N_tiles_per_core; ++bw) {
             tile_regs_acquire();
@@ -112,9 +113,21 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t mt = 0; mt < out_block_h; ++mt) {
+#ifdef ENABLE_ALL_GATHER
+                // Intermediate shards pack at dest bw*M+mt from the original wr_ptr (no
+                // push). On the last shard each push_back(M_tiles) advances wr_ptr, so
+                // dest is just mt relative to the current column.
+                pack_tile<true>(mt, out_cb_id, publish_columns ? mt : bw * M_tiles + mt);
+#else
                 pack_tile<true>(mt, out_cb_id, mt * N_tiles_per_core + bw);
+#endif
             }
             tile_regs_release();
+#ifdef ENABLE_ALL_GATHER
+            if (publish_columns) {
+                out_cb.push_back(M_tiles);
+            }
+#endif
         }
         if (!packer_in_acc) {
             pack_reconfig_l1_acc(1);
@@ -122,25 +135,29 @@ void kernel_main() {
         }
     };
 
+    const uint32_t total_shards = num_arriving_cw + num_arriving_ccw + has_local_shard;
+    uint32_t shard_i = 0;
     // Consume CW ring shards in arrival order.
     for (uint32_t k = 0; k < num_arriving_cw; ++k) {
         in2_cw_cb.wait_front(shard_num_tiles);
-        process_shard(in2_cw_cb_id, cw_sender_ids[k]);
+        process_shard(in2_cw_cb_id, cw_sender_ids[k], ++shard_i == total_shards);
         in2_cw_cb.pop_front(shard_num_tiles);
     }
     // Then CCW ring shards.
     for (uint32_t k = 0; k < num_arriving_ccw; ++k) {
         in2_ccw_cb.wait_front(shard_num_tiles);
-        process_shard(in2_ccw_cb_id, ccw_sender_ids[k]);
+        process_shard(in2_ccw_cb_id, ccw_sender_ids[k], ++shard_i == total_shards);
         in2_ccw_cb.pop_front(shard_num_tiles);
     }
     // Finally the local shard on source-and-compute cores.
     if (has_local_shard) {
-        process_shard(in0_local_cb_id, local_sender_id);
+        process_shard(in0_local_cb_id, local_sender_id, ++shard_i == total_shards);
     }
 
     // Turn accumulate mode back off in case anything after this expects the default packer state.
     pack_reconfig_l1_acc(0);
 
+#ifndef ENABLE_ALL_GATHER
     out_cb.push_back(M_tiles * N_tiles_per_core);
+#endif
 }

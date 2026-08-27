@@ -722,3 +722,66 @@ def test_matmul_decode_batched_width_sharded(device, d0, d1, m, k, n, b_blocks, 
 
     out = ttnn.to_torch(output_tensor).float().reshape(batch, m, n)
     assert_with_pcc(ref, out, 0.99)
+
+
+def _1x4_line_submesh(mesh_device):
+    """Carve a 1x4 ethernet line out of the opened 8x4 galaxy mesh."""
+    return mesh_device.create_submesh(ttnn.MeshShape(1, 4))
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_matmul_decode_all_gather_full_width(mesh_device):
+    """Column-parallel matmul_decode with fused all-gather along N (full-width L1 path)."""
+    torch.manual_seed(0)
+    mesh_device = _1x4_line_submesh(mesh_device)
+
+    m, k, n_local = 32, 128, 64
+    ring_size = mesh_device.get_num_devices()
+    n_full = n_local * ring_size
+    num_inputA_cores = 4
+    num_inputB_cores = n_local // 64
+    grid = mesh_device.compute_with_storage_grid_size()
+    if grid.x * grid.y < max(num_inputA_cores, num_inputB_cores):
+        pytest.skip(f"device grid {grid.x}x{grid.y} is too small")
+
+    torch_a = torch.randn((m, k), dtype=torch.bfloat16)
+    torch_b_full = torch.randn((k, n_full), dtype=torch.bfloat16)
+    ref = torch_a.to(torch.float32) @ torch_b_full.to(torch.float32)
+
+    input_a_core_range_set = num_cores_to_rectangle_core_range_set(num_inputA_cores, mesh_device)
+    input_b_core_range_set = num_cores_to_rectangle_core_range_set(num_inputB_cores, mesh_device)
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        (m, k // num_inputA_cores),
+        core_grid=input_a_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    in1_memory_config = ttnn.create_sharded_memory_config(
+        (k, n_local // num_inputB_cores),
+        core_grid=input_b_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_a,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=in0_memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_b_full,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=in1_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+    )
+
+    output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b, all_gather=True)
+    assert tuple(output_tensor.shape)[-2:] == (m, n_full)
+
+    out = ttnn.to_torch(ttnn.get_device_tensors(output_tensor)[0]).float()
+    assert_with_pcc(ref, out, 0.99)

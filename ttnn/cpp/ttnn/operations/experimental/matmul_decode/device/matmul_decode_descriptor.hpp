@@ -10,7 +10,7 @@
 #include "matmul_decode_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 // Descriptor-facing (nanobind-friendly) mirror of MatmulDecodeDeviceOperation, matching the
 // pattern ttnn::prim::MatmulDeviceOperation / MatmulParams / MatmulInputs use for the plain
@@ -37,6 +37,8 @@ struct MatmulDecodeParams {
     // Fused-weight path: where this op's weight lives inside a larger height-sharded weight
     // tensor (see packed_weight_spec.hpp). Mutually exclusive with global_cb.
     std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec> packed_weight = std::nullopt;
+    bool all_gather = false;
+    uint32_t ring_size = 1;
 };
 
 struct MatmulDecodeInputs {
@@ -81,7 +83,10 @@ matmul_decode_select_program_factory(
 // Per-factory create_descriptor adapters (by-value params/inputs -> the real device
 // operation's create_descriptor, which wants the internal reference-holding types).
 tt::tt_metal::ProgramDescriptor matmul_decode_full_width_sharded_create_descriptor(
-    const MatmulDecodeParams& operation_attributes, const MatmulDecodeInputs& tensor_args, Tensor& tensor_return_value);
+    const MatmulDecodeParams& operation_attributes,
+    const MatmulDecodeInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 
 tt::tt_metal::ProgramDescriptor matmul_decode_partial_width_sharded_create_descriptor(
     const MatmulDecodeParams& operation_attributes, const MatmulDecodeInputs& tensor_args, Tensor& tensor_return_value);

@@ -12,6 +12,7 @@
 #include "ttnn/operations/experimental/matmul_decode/matmul_decode.hpp"
 #include "ttnn/operations/experimental/matmul_decode/device/matmul_decode_descriptor.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace ttnn::operations::experimental::matmul_decode::detail {
 
@@ -51,7 +52,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
 
     ttnn::bind_function<"matmul_decode", "ttnn.experimental.">(
         mod,
-        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None) -> ttnn.Tensor
+        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False) -> ttnn.Tensor
 
         Returns the matrix product of two tensors.
 
@@ -115,6 +116,10 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 batched factory (with `b_blocks`), otherwise full width-sharded with N split
                 across the cores. `partial_width_sharded` is ignored when this is set. Mutually
                 exclusive with `global_cb`. Defaults to None.
+            all_gather (bool, optional): fuse a fabric all-gather of the local N-shard into
+                the same program. Every device then holds `[..., M, N_local * ring_size]`,
+                where the ring is the full mesh of `input_tensor_a`. Requires a multi-device
+                mesh. Not supported with `global_cb` or the batched factory. Defaults to False.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -128,7 +133,8 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("output_mem_config") = nb::none(),
         nb::arg("global_cb") = nb::none(),
         nb::arg("global_cb_k_blocks") = 1,
-        nb::arg("packed_weight") = nb::none());
+        nb::arg("packed_weight") = nb::none(),
+        nb::arg("all_gather") = false);
 }
 
 // Descriptor-level bindings for models/experimental/ops/descriptors/matmul_decode.py, mirroring
@@ -149,7 +155,9 @@ void bind_matmul_decode_descriptor(nb::module_& mod) {
         .def_rw("n_blocks", &ttnn::prim::MatmulDecodeParams::n_blocks)
         .def_rw("global_cb", &ttnn::prim::MatmulDecodeParams::global_cb)
         .def_rw("global_cb_k_blocks", &ttnn::prim::MatmulDecodeParams::global_cb_k_blocks)
-        .def_rw("packed_weight", &ttnn::prim::MatmulDecodeParams::packed_weight);
+        .def_rw("packed_weight", &ttnn::prim::MatmulDecodeParams::packed_weight)
+        .def_rw("all_gather", &ttnn::prim::MatmulDecodeParams::all_gather)
+        .def_rw("ring_size", &ttnn::prim::MatmulDecodeParams::ring_size);
 
     nb::class_<ttnn::prim::MatmulDecodeInputs>(mod, "MatmulDecodeInputs")
         .def(
@@ -191,7 +199,8 @@ void bind_matmul_decode_descriptor(nb::module_& mod) {
             &ttnn::prim::matmul_decode_full_width_sharded_create_descriptor,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
+            nb::arg("tensor_return_value"),
+            nb::arg("mesh_dispatch_coordinate") = nb::none());
 
     nb::class_<ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::PartialWidthSharded>(
         mod, "MatmulDecodePartialWidthShardedProgramFactory")

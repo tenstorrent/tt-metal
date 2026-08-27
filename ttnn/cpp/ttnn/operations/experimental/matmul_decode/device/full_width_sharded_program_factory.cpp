@@ -4,12 +4,14 @@
 
 #include "matmul_decode_device_operation.hpp"
 #include "ring_walk.hpp"
+#include "all_gather_writer.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/shape.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 #include <map>
 #include <memory>
@@ -29,14 +31,16 @@ namespace {
 ProgramDescriptor create_descriptor_ring_gather_full(
     const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
     const MatmulDecodeDeviceOperation::tensor_args_t& tensor_args,
-    MatmulDecodeDeviceOperation::tensor_return_value_t& tensor_return_value);
+    MatmulDecodeDeviceOperation::tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 }  // namespace
 
 // Full width-sharded: B/output are width(N)-sharded; reader gathers full A onto every core.
 ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     // Ring gather covers the L1-resident weight paths (plain and packed_weight) whenever the
     // source grid and the compute grid are disjoint. Two cases still route to the two-hub
     // gather:
@@ -61,9 +65,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             a_grid.intersects(b_grid) ? "overlapping S/C" : "disjoint S/C",
             a_grid.num_cores(),
             b_grid.num_cores());
-        return create_descriptor_ring_gather_full(operation_attributes, tensor_args, tensor_return_value);
+        return create_descriptor_ring_gather_full(
+            operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
     }
     log_info(tt::LogOp, "matmul_decode FullWidthSharded: in0 gather = hub (global_cb / prefetcher path)");
+    (void)mesh_dispatch_coordinate;
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
@@ -541,7 +547,8 @@ using ring_walk::RingWalk;
 ProgramDescriptor create_descriptor_ring_gather_full(
     const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
     const MatmulDecodeDeviceOperation::tensor_args_t& tensor_args,
-    MatmulDecodeDeviceOperation::tensor_return_value_t& tensor_return_value) {
+    MatmulDecodeDeviceOperation::tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
@@ -572,6 +579,10 @@ ProgramDescriptor create_descriptor_ring_gather_full(
     const uint32_t K_tiles = div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
 
     IDevice* device = input_tensor_a.device();
+    const bool all_gather = operation_attributes.all_gather;
+    TT_FATAL(
+        !all_gather || mesh_dispatch_coordinate.has_value(),
+        "matmul_decode all_gather requires a mesh dispatch coordinate");
 
     const auto& packed = operation_attributes.packed_weight;
     auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
@@ -687,8 +698,9 @@ ProgramDescriptor create_descriptor_ring_gather_full(
         .address_offset = packed.has_value() ? packed->tile_offset * in1_tile_size : 0,
     });
 
-    // cb_out: on compute cores, aliased over the output tensor's L1.
-    desc.cbs.push_back(CBDescriptor{
+    // cb_out: on compute cores. Aliased over the output tensor unless all_gather is on,
+    // in which case it is scratch (local N-shard) and the writer copies into the gathered tensor.
+    CBDescriptor out_cb_desc{
         .total_size = M_tiles * inB_N_tiles_per_core * out_tile_size,
         .core_ranges = output_core_range_set,
         .format_descriptors = {{CBFormatDescriptor{
@@ -697,8 +709,11 @@ ProgramDescriptor create_descriptor_ring_gather_full(
             .page_size = out_tile_size,
             .tile = out_tile_desc,
         }}},
-        .buffer = output_tensor.buffer(),
-    });
+    };
+    if (!all_gather) {
+        out_cb_desc.buffer = output_tensor.buffer();
+    }
+    desc.cbs.push_back(std::move(out_cb_desc));
 
     // cb_in2_cw: remote shard ring buffer for the CW direction. Sized to hold every shard this
     // core receives (max = num_senders across all cores in the ring walk). This is the CB whose
@@ -736,6 +751,20 @@ ProgramDescriptor create_descriptor_ring_gather_full(
         .core_ranges = all_ring_cores,
         .initial_value = 0,
     });
+    constexpr uint32_t out_ready_sem_id = 1;
+    constexpr uint32_t barrier_sem_id = 2;
+    if (all_gather) {
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = out_ready_sem_id,
+            .core_ranges = output_core_range_set,
+            .initial_value = 0,
+        });
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = barrier_sem_id,
+            .core_ranges = output_core_range_set,
+            .initial_value = 0,
+        });
+    }
 
     const uint32_t shard_num_tiles = M_tiles * inA_K_tiles_per_core;
     const uint32_t local_shard_num_tiles = shard_num_tiles;
@@ -830,6 +859,9 @@ ProgramDescriptor create_descriptor_ring_gather_full(
         .math_fidelity = MathFidelity::HiFi4,
         .math_approx_mode = false,
     };
+    if (all_gather) {
+        compute_kd.defines.emplace_back("ENABLE_ALL_GATHER", "1");
+    }
     // Per-core runtime args:
     //   [0] has_local_shard  (1 iff this core is also in S -- overlap)
     //   [1] local_sender_id  (source index if has_local_shard, else don't-care)
@@ -865,6 +897,53 @@ ProgramDescriptor create_descriptor_ring_gather_full(
         compute_kd.runtime_args.emplace_back(core, std::move(rt));
     }
     desc.kernels.push_back(std::move(compute_kd));
+
+    if (all_gather) {
+        const auto route = make_all_gather_fabric_route(input_tensor_a, *mesh_dispatch_coordinate);
+        KernelDescriptor writer;
+        writer.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
+            "writer_full_width_all_gather.cpp";
+        writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer.core_ranges = output_core_range_set;
+        writer.named_compile_time_args = all_gather_named_compile_time_args(
+            out_cb_index,
+            M_tiles,
+            inB_N_tiles_per_core,
+            route.ring_index,
+            operation_attributes.ring_size,
+            out_ready_sem_id,
+            barrier_sem_id,
+            route.start_fwd,
+            route.range_fwd,
+            route.start_bwd,
+            route.range_bwd,
+            /*ag_rt_arg_base=*/0);
+        writer.config = DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::NOC_1,
+        };
+        const auto shared_links = all_gather_shared_forwarding_links(input_tensor_a, *mesh_dispatch_coordinate, route);
+        TT_FATAL(
+            shared_links.size() >= C_cores.size(),
+            "matmul_decode all_gather: need {} fabric links (one per compute core), but this device has {}",
+            C_cores.size(),
+            shared_links.size());
+        const KernelHandle writer_id = static_cast<KernelHandle>(desc.kernels.size());
+        desc.kernels.push_back(std::move(writer));
+        for (uint32_t i = 0; i < C_cores.size(); ++i) {
+            set_all_gather_writer_runtime_args(
+                desc,
+                writer_id,
+                C_cores[i],
+                device,
+                input_tensor_a,
+                *mesh_dispatch_coordinate,
+                output_tensor,
+                route,
+                shared_links[i]);
+        }
+    }
 
     log_debug(
         tt::LogOp,

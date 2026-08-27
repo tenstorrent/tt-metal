@@ -11,9 +11,11 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/experimental/matmul_decode/packed_weight_spec.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace ttnn::operations::experimental::matmul_decode {
 
@@ -49,6 +51,10 @@ struct MatmulDecodeDeviceOperation {
         // K/batch cut) comes from here rather than from B's shard spec, and the in1 CB is bound
         // to B's buffer at the region's byte offset. Mutually exclusive with global_cb.
         std::optional<PackedWeightSpec> packed_weight = std::nullopt;
+        // Fuse a fabric all-gather of the local N-shard into the same program. ring_size is
+        // derived from A's mesh (not a user argument).
+        bool all_gather = false;
+        uint32_t ring_size = 1;
     };
 
     struct tensor_args_t {
@@ -63,7 +69,8 @@ struct MatmulDecodeDeviceOperation {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     struct PartialWidthSharded {
@@ -109,5 +116,6 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
     uint32_t global_cb_k_blocks = 1,
-    const std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec>& packed_weight = std::nullopt);
+    const std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec>& packed_weight = std::nullopt,
+    bool all_gather = false);
 }  // namespace ttnn::prim
