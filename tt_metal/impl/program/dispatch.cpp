@@ -1515,29 +1515,9 @@ public:
             // All cores in a DFB's range have the same alloc_addr, so any core works.
             const CoreCoord logical_representative = core_range.start_coord;
 
-            size_t max_byte_end = 0;
-            if (!hal.has_tile_counter_registers()) {
-                // WH/BH: DFBs reuse the CB slot format; device slot N starts at N * 4 words.
-                for (const auto& dfb : dfbs_on_corerange) {
-                    size_t dfb_byte_offset = static_cast<size_t>(dfb->device_slot) *
-                                            UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-                    auto serialized = dfb->serialize_for_core(logical_representative);
-                    TT_FATAL(
-                        dfb_byte_offset + serialized.size() <= payload.size(),
-                        "DFB {} (device slot {}) config at byte offset {} does not fit in the {}-byte config payload "
-                        "sized by finalize_dfbs",
-                        dfb->id,
-                        dfb->device_slot,
-                        dfb_byte_offset,
-                        payload.size());
-                    std::copy(serialized.begin(), serialized.end(), payload.begin() + dfb_byte_offset);
-                    max_byte_end = std::max(max_byte_end, dfb_byte_offset + serialized.size());
-                }
-            } else {
-                max_byte_end = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
-                    logical_representative, dfbs_on_corerange, payload);
-                TT_ASSERT(max_byte_end <= payload.size());
-            }
+            const size_t max_byte_end = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
+                logical_representative, dfbs_on_corerange, payload);
+            TT_ASSERT(max_byte_end <= payload.size());
 
             CoreRange virtual_range(virtual_start, virtual_end);
             auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
