@@ -380,6 +380,9 @@ _RE_ACCUM = re.compile(r"u::Accumulator<[^;]*?>\s+(\w+)\s*\(\s*\w+\s*,\s*(\w+)\s
 _RE_DRAINS_BARE = re.compile(r"noc_store<([^>(]*)>\(\s*u::Block<\w+>\s*\{\s*(\w+)\s*\}")
 
 
+_RE_DEFAULT = re.compile(r"#ifndef\s+(\w+)\s*\n#define\s+\1\s+(\d+)")
+
+
 def _thread_of(text, defines, kernel_source):
     """The `thread` template argument of a data-movement call, as an int.
 
@@ -392,6 +395,12 @@ def _thread_of(text, defines, kernel_source):
         return int(tok)
     if tok in defines:
         return int(defines[tok])
+    # A launcher that does not override the knob gets the kernel's own default, which the
+    # kernel states as `#ifndef X / #define X n`.
+    src = open(os.path.join(TT_METAL_HOME, kernel_source)).read()
+    for name, value in _RE_DEFAULT.findall(src):
+        if name == tok:
+            return int(value)
     raise ValueError(
         f"{kernel_source} names its data-movement thread as `{tok}`, which is not a literal and "
         f"not among the defines this launcher passes, so the buffer's endpoint cannot be resolved."

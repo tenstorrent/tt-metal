@@ -31,10 +31,9 @@ from loguru import logger
 
 import ttnn
 import test_unified_flash as flash
-from unified_harness import core_block, make_cb, split_evenly, unified_program
+from unified_harness import core_block, dfb, run_unified_spec, split_evenly, unified_program_spec
 
 KERNEL = "unified_kernels/matmul_blocked.cpp"
-CB_IN, CB_WO, CB_OUT, CB_ACC = 0, 1, 16, 24
 TILE = 32
 
 
@@ -74,39 +73,40 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
     core_ranges, core_list = core_block(ncores)
     shares = split_evenly(nunits, ncores)
 
-    ct_args = []
     named_ct_args = [("mt", sq), ("ktot", dm), ("ntot", dm), ("kt", kt), ("nt", nt)]
-    for t in (tattn, two, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    addrs = [t.buffer_address() for t in (tattn, two, tout)]
-    rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
 
-    cbs = [
-        make_cb(CB_IN, core_ranges, num_pages=sq * kt),
-        # One (k, n) tile of Wo. This is the CB that used to bound d_model, when it held all
-        # dm * dm of it; now it is kt * nt.
-        make_cb(CB_WO, core_ranges, num_pages=kt * nt),
-        make_cb(CB_OUT, core_ranges, num_pages=sq * nt),
-        # ALWAYS -- see the note in test_unified_matmul_blocked.py. The kernel names
-        # kCbAcc whether or not it accumulates, so the buffer has to exist.
-        make_cb(CB_ACC, core_ranges, num_pages=sq * nt),
+    dfbs = [
+        dfb("in", sq * kt),
+        dfb("wo", kt * nt),
+        dfb("out", sq * nt),
+        dfb("acc", sq * nt),
     ]
 
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=core_list,
-        cbs=cbs,
-        compile_time_args=ct_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
         named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
+        tensors={"attn": tattn, "wo": two, "out": tout},
+        runtime_arg_names=["block_begin", "block_count"],
         defines=[("MMB_ACC_DST", "1")] if acc == "dst" else None,
         **(fidelity or {}),
     )
     logger.info(
         f"projection: sq={sq} dm={dm} kt={kt} nt={nt} (kb={dm // kt} nb={dm // nt}) num_q={num_q} cores={ncores}"
     )
-    out = ttnn.generic_op([tattn, two, tout], program)
+    run_unified_spec(
+        device,
+        spec,
+        {"attn": tattn, "wo": two, "out": tout},
+        runtime_args={
+            # Per core: its slice of the block range. Named, so a launcher that supplied
+            # one and not the other is an error from metal rather than a garbage bound.
+            "block_begin": {c: b for c, (b, _) in zip(core_list, shares)},
+            "block_count": {c: n for c, (_, n) in zip(core_list, shares)},
+        },
+    )
+    out = tout
     for t in (tattn, two):
         ttnn.deallocate(t)
     return ttnn.to_torch(out).to(torch.float32)[0, 0]

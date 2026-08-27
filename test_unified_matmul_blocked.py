@@ -20,10 +20,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import core_block, make_cb, split_evenly, unified_program
+from unified_harness import core_block, dfb, run_unified_spec, split_evenly, unified_program_spec
 
 KERNEL = "unified_kernels/matmul_blocked.cpp"
-CB_A, CB_B, CB_OUT, CB_ACC = 0, 1, 16, 24
 TILE = 32
 
 
@@ -105,12 +104,7 @@ def run(
         core_ranges, core_list = core_block(ncores)
         shares = split_evenly(nunits, ncores)
 
-    ct_args = []
     named_ct_args = [("mt", mt), ("ktot", ktot), ("ntot", ntot), ("kt", kt), ("nt", nt)]
-    for t in (ta, tb, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    addrs = [t.buffer_address() for t in (ta, tb, tout)]
-    rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
 
     # Default 2 with multicast and 1 without, which is measured rather than tidy. Depth pays
     # only when the read path is LATENCY bound: with multicast just 16 of 64 cores touch DRAM
@@ -126,27 +120,22 @@ def run(
     # compute has popped b, so its reads and the compute serialise. The reads within a block
     # are already deep (every page is issued before the single barrier); this is depth
     # ACROSS blocks. Same idea as the flash kernel's stream_buffering.
-    cbs = [
-        make_cb(CB_A, core_ranges, dtype=adtype, num_pages=depth * mt * kt),
-        make_cb(CB_B, core_ranges, dtype=wdtype, num_pages=depth * kt * nt),
-        make_cb(CB_OUT, core_ranges, dtype=odtype, num_pages=mt * nt),
-        # ALWAYS, even at kb == 1 where the kernel never accumulates. matmul_blocked
-        # declares Storage<Out> acc_storage(kCbAcc) unconditionally, and a Storage must not
-        # name a buffer the host did not create -- an unallocated CB reports zero pages, so
-        # the capacity assert in Storage's constructor fires and the kernel hangs. Skipping
-        # it here saved mt*nt pages and broke that contract; hazard 20 in
-        # unified_api_hazards.md, found by the assert added for hazard 1.
-        make_cb(CB_ACC, core_ranges, num_pages=mt * nt),
+    dfbs = [
+        # Each buffer's format follows its tensor's: a mismatch reads the wrong bytes with
+        # nothing to say so, which is hazard D19.
+        dfb("in", depth * mt * kt, dtype=adtype),
+        dfb("wo", depth * kt * nt, dtype=wdtype),
+        dfb("out", mt * nt, dtype=odtype),
+        dfb("acc", mt * nt),
     ]
 
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=core_list,
-        cbs=cbs,
-        compile_time_args=ct_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
         named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
+        tensors={"attn": ta, "wo": tb, "out": tout},
+        runtime_arg_names=["block_begin", "block_count"],
         defines=(
             ([("MMB_ACC_DST", "1")] if acc == "dst" else [])
             + [("MMB_IN0_THREAD", str(in0_thread)), ("MMB_IN1_THREAD", str(in1_thread))]
@@ -163,7 +152,18 @@ def run(
         f"blocked matmul [{mtot}x{ktot}]@[{ktot}x{ntot}]t  mt={mt} kt={kt} nt={nt} "
         f"(mb={mb} kb={ktot // kt} nb={nb} = {nunits} blocks) cores={ncores}{' mcast' if mcast else ''}"
     )
-    out = ttnn.generic_op([ta, tb, tout], program)
+    run_unified_spec(
+        device,
+        spec,
+        {"attn": ta, "wo": tb, "out": tout},
+        runtime_args={
+            # Per core: its slice of the block range. Named, so a launcher that supplied
+            # one and not the other is an error from metal rather than a garbage bound.
+            "block_begin": {c: b for c, (b, _) in zip(core_list, shares)},
+            "block_count": {c: n for c, (_, n) in zip(core_list, shares)},
+        },
+    )
+    out = tout
     for t in (ta, tb):
         ttnn.deallocate(t)
     got = ttnn.to_torch(out).to(torch.float32)[0, 0]

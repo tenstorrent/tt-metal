@@ -31,11 +31,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import core_block, make_cb, split_evenly, unified_program
+from unified_harness import core_block, dfb, run_unified_spec, split_evenly, unified_program_spec
 
 KERNEL = "unified_kernels/binary.cpp"
 
-CB_IN0, CB_IN1, CB_OUT = 0, 1, 16
 
 # name -> (kernel define, reference, commutative, max relative error)
 #
@@ -88,36 +87,40 @@ def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, force_sfpu=False, c
     core_ranges, core_list = core_block(ncores)
     shares = split_evenly(num_blocks, ncores)
 
-    ct_args = []
     named_ct_args = [("num_blocks", num_blocks), ("tiles_per_block", tiles_per_block)]
-    for t in (ta, tb, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
-    addrs = [ta.buffer_address(), tb.buffer_address(), tout.buffer_address()]
-    rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
-
-    cbs = [
-        make_cb(CB_IN0, core_ranges, num_pages=2 * tiles_per_block),
-        make_cb(CB_IN1, core_ranges, num_pages=2 * tiles_per_block),
-        make_cb(CB_OUT, core_ranges, num_pages=2 * tiles_per_block),
+    dfbs = [
+        dfb("in0", 2 * tiles_per_block),
+        dfb("in1", 2 * tiles_per_block),
+        dfb("out", 2 * tiles_per_block),
     ]
 
     define, reference, commutative, _tol = OPS[op]
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=core_list,
-        cbs=cbs,
-        compile_time_args=ct_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
         named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
+        tensors={"in0": ta, "in1": tb, "out": tout},
+        runtime_arg_names=["block_begin", "block_count"],
         defines=([(define, "1")] if define else []) + ([("TT_UNIFIED_NO_FPU_ELTWISE", "1")] if force_sfpu else []),
     )
 
     logger.info(
         f"running unified binary: op={op} num_blocks={num_blocks} tiles_per_block={tiles_per_block} cores={ncores}"
     )
-    out = ttnn.generic_op([ta, tb, tout], program)
+    run_unified_spec(
+        device,
+        spec,
+        {"in0": ta, "in1": tb, "out": tout},
+        runtime_args={
+            # Per core: its slice of the block range. Named, so a launcher that supplied
+            # one and not the other is an error from metal rather than a garbage bound.
+            "block_begin": {c: b for c, (b, _) in zip(core_list, shares)},
+            "block_count": {c: n for c, (_, n) in zip(core_list, shares)},
+        },
+    )
+    out = tout
 
     got = ttnn.to_torch(out).to(torch.float32)
     af, bf = a.to(torch.float32), b.to(torch.float32)

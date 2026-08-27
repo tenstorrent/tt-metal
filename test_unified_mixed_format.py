@@ -25,10 +25,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import dfb, run_unified_spec, single_core, unified_program_spec
 
 KERNEL = "unified_kernels/binary.cpp"
-CB_IN0, CB_IN1, CB_OUT = 0, 1, 16
 TILE = 32
 
 
@@ -49,37 +48,39 @@ def run(device, num_blocks=2, tiles_per_block=2, rhs_dtype=ttnn.float32, seed=0)
     tout = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
 
     core_ranges, cores = single_core()
-    ct_args = []
     named_ct_args = [("num_blocks", num_blocks), ("tiles_per_block", tiles_per_block)]
-    for t in (ta, tb, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    # The last two are the block range. binary.cpp partitions blocks across cores and reads
-    # the range from runtime args; this launcher is single-core, so it owns all of them.
-    # Omitting them does not fail to compile -- the loop bound becomes whatever is in that
-    # arg slot, which is how this hung the device.
-    rt_args = [ta.buffer_address(), tb.buffer_address(), tout.buffer_address(), 0, num_blocks]
+    # binary.cpp partitions blocks across cores and reads its range from runtime args; this
+    # launcher is single-core, so it owns all of them. Naming them is what stops the omission
+    # that hung this device: a missing name is an error, where a missing arg SLOT was a
+    # garbage loop bound.
 
-    # The point of the test: in1's circular buffer carries a different data format, and
-    # therefore a different page size, from in0's.
-    cbs = [
-        make_cb(CB_IN0, core_ranges, dtype=ttnn.bfloat16, num_pages=2 * tiles_per_block),
-        make_cb(CB_IN1, core_ranges, dtype=rhs_dtype, num_pages=2 * tiles_per_block),
-        make_cb(CB_OUT, core_ranges, dtype=ttnn.bfloat16, num_pages=2 * tiles_per_block),
+    dfbs = [
+        dfb("in0", 2 * tiles_per_block),
+        # The point of the test: in1 carries a different data format, and so a different
+        # entry size, from in0.
+        dfb("in1", 2 * tiles_per_block, dtype=rhs_dtype),
+        dfb("out", 2 * tiles_per_block),
     ]
 
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=cbs,
-        compile_time_args=ct_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
         named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
+        tensors={"in0": ta, "in1": tb, "out": tout},
+        runtime_arg_names=["block_begin", "block_count"],
         defines=[("BN_MUL", "1")],
     )
 
     logger.info(f"running mixed-format binary: in0=bfloat16 in1={rhs_dtype} tiles={num_tiles}")
-    out = ttnn.generic_op([ta, tb, tout], program)
+    run_unified_spec(
+        device,
+        spec,
+        {"in0": ta, "in1": tb, "out": tout},
+        runtime_args={"block_begin": 0, "block_count": num_blocks},
+        nodes=cores,
+    )
+    out = tout
 
     got = ttnn.to_torch(out).to(torch.float32)
     want = a.to(torch.float32) * b.to(torch.float32)
