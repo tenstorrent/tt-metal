@@ -32,6 +32,238 @@ def resign(lock: dict, *, entries: bool = False) -> None:
     lock["content_sha256"] = emitter.content_sha256(lock)
 
 
+def op_default_evidence(lock: dict) -> dict:
+    evidence = {
+        "authorizes_exact_entries": True,
+        "build_identity_sha256": lock["build_identity_sha256"],
+        "compute_kernel_config_mode": "op_default",
+        "effective_default_attestation_sha256": "7" * 64,
+        "effective_default_ckc_inventory_sha256": "8" * 64,
+        "exact_entry_inventory_sha256": emitter._sha256_value(emitter._exact_entry_inventory(lock)),
+        "exact_native_support_sha256": emitter.exact_native_support_hash(lock),
+        "fresh_confirmation_sha256": "9" * 64,
+        "measured_tt_metal_commit": lock["producer"]["measured_tt_metal_commit"],
+        "native_parity_sha256": "a" * 64,
+        "online_model_bundle_binding_sha256": "0" * 64,
+        "proof_sha256": "0" * 64,
+        "runtime_capability_sha256": lock["runtime_capability_sha256"],
+        "safety_evidence_sha256": emitter.program_config_safety_inventory_hash(lock, []),
+        "schema_version": 1,
+        "semantic_source_sha256": lock["semantic_source_sha256"],
+        "throttle_policy_sha256": "c" * 64,
+    }
+    evidence["proof_sha256"] = emitter.program_config_only_evidence_hash(evidence)
+    return evidence
+
+
+def add_program_config_exact_entry(lock: dict, family: str = "multi_core_reuse") -> dict:
+    legacy = lock["entries"][0]
+    recipe = legacy["recipe"]["program_config"]
+    program = {
+        "allowed_worker_cores": None,
+        "compute_grid_x": recipe["compute_grid_x"],
+        "compute_grid_y": recipe["compute_grid_y"],
+        "family": family,
+        "fused_activation_present": False,
+        "fuse_batch": False,
+        "gather_in0": False,
+        "hop_cores_present": False,
+        "in0_block_w": recipe["in0_block_w"],
+        "mcast_in0": False,
+        "num_global_cb_receivers": 0,
+        "out_block_h": 0,
+        "out_block_w": 0,
+        "out_subblock_h": recipe["out_subblock_h"],
+        "out_subblock_w": recipe["out_subblock_w"],
+        "per_core_m": recipe["per_core_m"],
+        "per_core_n": recipe["per_core_n"],
+        "stream_in1": False,
+        "transpose_mcast": False,
+        "untilize_out": False,
+    }
+    if family == "multi_cast_1d":
+        program.update(
+            fuse_batch=True,
+            mcast_in0=True,
+            out_block_h=lock["entries"][0]["key"]["padded_m"] // 32,
+            out_block_w=2,
+            num_global_cb_receivers=1,
+            per_core_m=lock["entries"][0]["key"]["padded_m"] // 32,
+            per_core_n=2,
+        )
+    elif family == "multi_cast_2d":
+        program.update(
+            fuse_batch=True,
+            out_block_h=1,
+            out_block_w=2,
+            per_core_m=1,
+            per_core_n=2,
+            transpose_mcast=True,
+        )
+    entry = {
+        "certificate": copy.deepcopy(legacy["certificate"]),
+        "domain": legacy["domain"],
+        "entry_id": "0" * 64,
+        "key": copy.deepcopy(legacy["key"]),
+        "program_config": program,
+    }
+    entry["entry_id"] = emitter.program_config_exact_entry_id(entry)
+    lock["program_config_exact_entries"] = [entry]
+    return entry
+
+
+def active_online_model(lock: dict) -> dict:
+    if "program_config_only_evidence" not in lock:
+        lock["program_config_only_evidence"] = op_default_evidence(lock)
+        lock["program_config_only_evidence"]["authorizes_exact_entries"] = False
+        lock["program_config_only_evidence"]["proof_sha256"] = emitter.program_config_only_evidence_hash(
+            lock["program_config_only_evidence"]
+        )
+    key = lock["entries"][0]["key"]
+    tensor_fields = ("buffer_type", "dtype", "layout", "memory_layout", "tile_height", "tile_width")
+
+    def tensor(name: str) -> dict:
+        return {field: key[name][field] for field in tensor_fields}
+
+    programs = [
+        {
+            "allowed_worker_cores": None,
+            "compute_grid_x": 4,
+            "compute_grid_y": 4,
+            "family": "multi_core_reuse",
+            "fused_activation_present": False,
+            "fuse_batch": False,
+            "gather_in0": False,
+            "hop_cores_present": False,
+            "in0_block_w": 2,
+            "mcast_in0": False,
+            "num_global_cb_receivers": 0,
+            "out_block_h": 0,
+            "out_block_w": 0,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "per_core_m": 4,
+            "per_core_n": key["padded_n"] // 32,
+            "transpose_mcast": False,
+            "untilize_out": False,
+            "stream_in1": False,
+        },
+        {
+            "allowed_worker_cores": None,
+            "compute_grid_x": 8,
+            "compute_grid_y": 8,
+            "family": "multi_cast_1d",
+            "fused_activation_present": False,
+            "fuse_batch": True,
+            "gather_in0": False,
+            "hop_cores_present": False,
+            "in0_block_w": 2,
+            "mcast_in0": True,
+            "num_global_cb_receivers": 1,
+            "out_block_h": key["padded_m"] // 32,
+            "out_block_w": 2,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "per_core_m": key["padded_m"] // 32,
+            "per_core_n": 2,
+            "transpose_mcast": False,
+            "untilize_out": False,
+            "stream_in1": False,
+        },
+        {
+            "allowed_worker_cores": None,
+            "compute_grid_x": 8,
+            "compute_grid_y": 8,
+            "family": "multi_cast_2d",
+            "fused_activation_present": False,
+            "fuse_batch": True,
+            "gather_in0": False,
+            "hop_cores_present": False,
+            "in0_block_w": 2,
+            "mcast_in0": False,
+            "num_global_cb_receivers": 0,
+            "out_block_h": 1,
+            "out_block_w": 2,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "per_core_m": 1,
+            "per_core_n": 2,
+            "transpose_mcast": True,
+            "untilize_out": False,
+            "stream_in1": False,
+        },
+    ]
+    candidates = [
+        {"candidate_id": emitter.program_config_candidate_id(program), "program_config": program}
+        for program in programs
+    ]
+    nodes = [
+        {"feature": "family", "threshold": 0, "left": 1, "right": 2, "leaf_value": 0},
+        {"feature": "leaf", "threshold": 0, "left": 0, "right": 0, "leaf_value": 10},
+        {"feature": "leaf", "threshold": 0, "left": 0, "right": 0, "leaf_value": -10},
+        {"feature": "family", "threshold": 1, "left": 1, "right": 2, "leaf_value": 0},
+        {"feature": "leaf", "threshold": 0, "left": 0, "right": 0, "leaf_value": 10},
+        {"feature": "leaf", "threshold": 0, "left": 0, "right": 0, "leaf_value": -10},
+    ]
+    support = {
+        "architecture": key["architecture"],
+        "board_capability_class": key["board_capability_class"],
+        "device_count": key["device_count"],
+        "domain": lock["entries"][0]["domain"],
+        "input_a": tensor("input_a"),
+        "input_b": tensor("input_b"),
+        "maximum_k": key["logical_k"] * 2,
+        "maximum_m": key["logical_m"] * 2,
+        "maximum_n": key["logical_n"] * 2,
+        "mesh_cols": key["mesh_cols"],
+        "mesh_rows": key["mesh_rows"],
+        "minimum_k": max(1, key["logical_k"] // 2),
+        "minimum_m": max(1, key["logical_m"] // 2),
+        "minimum_n": max(1, key["logical_n"] // 2),
+        "output": tensor("output"),
+        "shape_geometry": "output_wide",
+        "shape_scale": "small_batch",
+        "topology_sha256": key["topology_sha256"],
+    }
+    model = {
+        "base_score": 0,
+        "bundle_binding_sha256": "0" * 64,
+        "candidate_policy_sha256": "6" * 64,
+        "candidates": candidates,
+        "enabled": True,
+        "evaluation_model_payload_sha256": "a" * 64,
+        "feature_schema_sha256": emitter.FEATURE_SCHEMA_SHA256,
+        "lineage_sha256": "7" * 64,
+        "maximum_normalized_shape_distance_ppm": 250_000,
+        "minimum_score_margin": 1,
+        "model_sha256": "0" * 64,
+        "nodes": nodes,
+        "quality_evaluation_sha256": "8" * 64,
+        "safety_evidence_sha256": "5" * 64,
+        "schema_version": 1,
+        "score_orientation": "lower_is_better_negated_pairwise_margin",
+        "score_scale": 1_000_000,
+        "support": support,
+        "support_sha256": emitter._sha256_value(support),
+        "training_table_sha256": "4" * 64,
+        "training_shapes": [
+            [key["logical_m"], key["logical_k"], key["logical_n"]],
+        ],
+        "unseen_abstention_policy_sha256": "9" * 64,
+        "trees": [{"node_count": 3, "node_offset": 0}, {"node_count": 3, "node_offset": 3}],
+    }
+    model["model_sha256"] = emitter.online_model_hash(model)
+    model["bundle_binding_sha256"] = emitter.online_models_bundle_binding(lock, [model])
+    lock["program_config_only_evidence"]["online_model_bundle_binding_sha256"] = model["bundle_binding_sha256"]
+    lock["program_config_only_evidence"]["safety_evidence_sha256"] = emitter.program_config_safety_inventory_hash(
+        lock, [model]
+    )
+    lock["program_config_only_evidence"]["proof_sha256"] = emitter.program_config_only_evidence_hash(
+        lock["program_config_only_evidence"]
+    )
+    return model
+
+
 def test_canonical_fixture_validates_and_emits_deterministically(tmp_path: Path) -> None:
     lock = fixture()
     checked = emitter.validate_lock(lock)
@@ -60,6 +292,278 @@ def test_canonical_fixture_validates_and_emits_deterministically(tmp_path: Path)
         )
         outputs.append((header.read_bytes(), source.read_bytes()))
     assert outputs[0] == outputs[1] == (first_header, first_source)
+
+
+def test_program_config_only_exact_activation_requires_bound_op_default_proof() -> None:
+    legacy = fixture()
+    _, legacy_source = emitter.emit(legacy)
+    assert b".program_config_only_evidence_schema_version = 0" in legacy_source
+
+    active = fixture()
+    add_program_config_exact_entry(active)
+    active["program_config_only_evidence"] = op_default_evidence(active)
+    resign(active)
+    _, active_source = emitter.emit(active)
+    assert b".program_config_only_evidence_schema_version = 1" in active_source
+
+    tampered = copy.deepcopy(active)
+    tampered["program_config_only_evidence"]["effective_default_ckc_inventory_sha256"] = "d" * 64
+    resign(tampered)
+    try:
+        emitter.validate_lock(tampered)
+    except emitter.LockValidationError:
+        pass
+    else:
+        raise AssertionError("tampered op-default proof must fail closed")
+
+    rebound = copy.deepcopy(active)
+    rebound["entries"][0]["key"]["topology_sha256"] = "e" * 64
+    resign(rebound, entries=True)
+    rebound["program_config_only_evidence"]["exact_entry_inventory_sha256"] = emitter._sha256_value(
+        emitter._exact_entry_inventory(rebound)
+    )
+    # Deliberately retain the old exact_native_support_sha256: entry identity
+    # and support-set hashes alone must not permit an entry/support rebind.
+    rebound["program_config_only_evidence"]["safety_evidence_sha256"] = emitter.program_config_safety_inventory_hash(
+        rebound, []
+    )
+    rebound["program_config_only_evidence"]["proof_sha256"] = emitter.program_config_only_evidence_hash(
+        rebound["program_config_only_evidence"]
+    )
+    resign(rebound)
+    try:
+        emitter.validate_lock(rebound)
+    except emitter.LockValidationError:
+        pass
+    else:
+        raise AssertionError("exact entry/native support reassociation must fail closed")
+
+
+def test_program_config_only_exact_entries_cover_all_native_families() -> None:
+    expected = {
+        "multi_core_reuse": b"ProgramFamily::MultiCoreReuse",
+        "multi_cast_1d": b"ProgramFamily::MultiCast1D",
+        "multi_cast_2d": b"ProgramFamily::MultiCast2D",
+    }
+    for family, emitted_family in expected.items():
+        lock = fixture()
+        exact = add_program_config_exact_entry(lock, family)
+        lock["program_config_only_evidence"] = op_default_evidence(lock)
+        resign(lock)
+        checked = emitter.validate_lock(lock)
+        header, source = emitter.emit(checked)
+        assert b"program_config_exact_entries()" in header
+        assert emitted_family in source
+        assert emitter._bytes_cpp(exact["entry_id"]).encode() in source
+
+
+def test_program_config_only_exact_entries_require_bound_authorization() -> None:
+    lock = fixture()
+    add_program_config_exact_entry(lock, "multi_cast_1d")
+    resign(lock)
+    try:
+        emitter.validate_lock(lock)
+    except emitter.LockValidationError:
+        pass
+    else:
+        raise AssertionError("unauthorized program-config exact entry must fail closed")
+
+
+def test_active_online_program_config_model_validates_emits_and_has_reference_parity() -> None:
+    lock = fixture()
+    lock["online_program_config_models"] = [active_online_model(lock)]
+    resign(lock)
+
+    checked = emitter.validate_lock(lock)
+    header, source = emitter.emit(checked)
+    model = checked["online_program_config_models"][0]
+    assert model["bundle_binding_sha256"] == emitter.online_models_bundle_binding(checked, [model])
+    assert b"online_models()" in header
+    assert b"kModelCandidates" in source
+    assert b"ProgramFamily::MultiCast1D" in source
+    assert b"ProgramFamily::MultiCast2D" in source
+    assert b".transpose_mcast = true" in source
+    assert emitter._bytes_cpp(model["bundle_binding_sha256"]).encode() in source
+
+    def score(family: int) -> int:
+        total = model["base_score"]
+        for tree in model["trees"]:
+            relative = 0
+            while True:
+                node = model["nodes"][tree["node_offset"] + relative]
+                if node["feature"] == "leaf":
+                    total += node["leaf_value"]
+                    break
+                value = family if node["feature"] == "family" else 0
+                relative = node["left"] if value <= node["threshold"] else node["right"]
+        return total
+
+    assert [score(family) for family in range(3)] == [20, 0, -20]
+    assert model["candidates"][2]["program_config"]["family"] == "multi_cast_2d"
+
+    missing_activation_proof = copy.deepcopy(lock)
+    del missing_activation_proof["program_config_only_evidence"]
+    resign(missing_activation_proof)
+    try:
+        emitter.validate_lock(missing_activation_proof)
+    except emitter.LockValidationError:
+        pass
+    else:
+        raise AssertionError("enabled online model without activation proof must fail closed")
+
+    overflowing = copy.deepcopy(lock)
+    overflowing["online_program_config_models"][0]["base_score"] = 2**63 - 1
+    resign(overflowing)
+    try:
+        emitter.validate_lock(overflowing)
+    except emitter.LockValidationError:
+        pass
+    else:
+        raise AssertionError("fixed-point score envelope overflow must fail closed")
+
+
+def test_absent_and_explicit_empty_online_models_emit_disabled_cpp() -> None:
+    absent = fixture()
+    explicit = fixture()
+    explicit["online_program_config_models"] = []
+    resign(explicit)
+    absent_header, absent_source = emitter.emit(absent)
+    explicit_header, explicit_source = emitter.emit(explicit)
+    assert absent_header == explicit_header
+    marker = b"constexpr std::array<compact::ProgramConfigGbdtModel, 0> kOnlineModels{{}};"
+    assert marker in absent_source
+    assert marker in explicit_source
+
+
+def test_disjoint_online_model_set_emits_and_overlap_fails_closed() -> None:
+    lock = fixture()
+    first = active_online_model(lock)
+    second = copy.deepcopy(first)
+    second["support"]["domain"] = "dense.linear"
+    second["support_sha256"] = emitter._sha256_value(second["support"])
+    second["model_sha256"] = emitter.online_model_hash(second)
+    models = sorted([first, second], key=lambda model: emitter.canonical_bytes(model["support"]))
+    binding = emitter.online_models_bundle_binding(lock, models)
+    for model in models:
+        model["bundle_binding_sha256"] = binding
+    lock["program_config_only_evidence"]["online_model_bundle_binding_sha256"] = binding
+    lock["program_config_only_evidence"]["safety_evidence_sha256"] = emitter.program_config_safety_inventory_hash(
+        lock, models
+    )
+    lock["program_config_only_evidence"]["proof_sha256"] = emitter.program_config_only_evidence_hash(
+        lock["program_config_only_evidence"]
+    )
+    lock["online_program_config_models"] = models
+    resign(lock)
+    checked = emitter.validate_lock(lock)
+    _, source = emitter.emit(checked)
+    assert b"std::array<compact::ProgramConfigGbdtModel, 2>" in source
+
+    tampered_safety = copy.deepcopy(lock)
+    tampered_safety["online_program_config_models"][1]["safety_evidence_sha256"] = "d" * 64
+    tampered_safety["online_program_config_models"][1]["model_sha256"] = emitter.online_model_hash(
+        tampered_safety["online_program_config_models"][1]
+    )
+    tampered_binding = emitter.online_models_bundle_binding(
+        tampered_safety, tampered_safety["online_program_config_models"]
+    )
+    for model in tampered_safety["online_program_config_models"]:
+        model["bundle_binding_sha256"] = tampered_binding
+    tampered_safety["program_config_only_evidence"]["online_model_bundle_binding_sha256"] = tampered_binding
+    tampered_safety["program_config_only_evidence"]["proof_sha256"] = emitter.program_config_only_evidence_hash(
+        tampered_safety["program_config_only_evidence"]
+    )
+    resign(tampered_safety)
+    try:
+        emitter.validate_lock(tampered_safety)
+    except emitter.LockValidationError:
+        pass
+    else:
+        raise AssertionError("model safety inventory tamper must invalidate the activation proof")
+
+    tampered_lineage = copy.deepcopy(lock)
+    tampered_lineage["online_program_config_models"][1]["lineage_sha256"] = "e" * 64
+    tampered_lineage["online_program_config_models"][1]["model_sha256"] = emitter.online_model_hash(
+        tampered_lineage["online_program_config_models"][1]
+    )
+    lineage_binding = emitter.online_models_bundle_binding(
+        tampered_lineage, tampered_lineage["online_program_config_models"]
+    )
+    for model in tampered_lineage["online_program_config_models"]:
+        model["bundle_binding_sha256"] = lineage_binding
+    # Retain the old lock-level activation proof: it must bind the full-source
+    # lineage transitively through the plural bundle, not merely each model's
+    # locally projected safety ledger.
+    resign(tampered_lineage)
+    try:
+        emitter.validate_lock(tampered_lineage)
+    except emitter.LockValidationError:
+        pass
+    else:
+        raise AssertionError("model lineage tamper must invalidate the activation proof")
+
+    overlapping = copy.deepcopy(lock)
+    overlapping["online_program_config_models"][1]["support"]["domain"] = overlapping["online_program_config_models"][
+        0
+    ]["support"]["domain"]
+    overlapping["online_program_config_models"][1]["support_sha256"] = emitter._sha256_value(
+        overlapping["online_program_config_models"][1]["support"]
+    )
+    overlapping["online_program_config_models"][1]["model_sha256"] = emitter.online_model_hash(
+        overlapping["online_program_config_models"][1]
+    )
+    try:
+        emitter.validate_lock(overlapping)
+    except emitter.LockValidationError:
+        pass
+    else:
+        raise AssertionError("overlapping online model support must fail closed")
+
+
+def test_active_online_model_rejects_malformed_content(expect_error) -> None:
+    mutations = []
+
+    duplicate = fixture()
+    duplicate["online_program_config_models"] = [active_online_model(duplicate)]
+    duplicate["online_program_config_models"][0]["candidates"][1] = copy.deepcopy(
+        duplicate["online_program_config_models"][0]["candidates"][0]
+    )
+    mutations.append(duplicate)
+
+    escaped_tree = fixture()
+    escaped_tree["online_program_config_models"] = [active_online_model(escaped_tree)]
+    escaped_tree["online_program_config_models"][0]["nodes"][0]["right"] = 99
+    mutations.append(escaped_tree)
+
+    unsupported_tensor = fixture()
+    unsupported_tensor["online_program_config_models"] = [active_online_model(unsupported_tensor)]
+    unsupported_tensor["online_program_config_models"][0]["support"]["input_a"]["layout"] = "row_major"
+    mutations.append(unsupported_tensor)
+
+    wrong_feature_schema = fixture()
+    wrong_feature_schema["online_program_config_models"] = [active_online_model(wrong_feature_schema)]
+    wrong_feature_schema["online_program_config_models"][0]["feature_schema_sha256"] = "f" * 64
+    mutations.append(wrong_feature_schema)
+
+    stale_bundle = fixture()
+    stale_bundle["online_program_config_models"] = [active_online_model(stale_bundle)]
+    stale_bundle["online_program_config_models"][0]["bundle_binding_sha256"] = "e" * 64
+    mutations.append(stale_bundle)
+
+    missing_landmarks = fixture()
+    missing_landmarks["online_program_config_models"] = [active_online_model(missing_landmarks)]
+    missing_landmarks["online_program_config_models"][0]["training_shapes"] = []
+    mutations.append(missing_landmarks)
+
+    excessive_distance = fixture()
+    excessive_distance["online_program_config_models"] = [active_online_model(excessive_distance)]
+    excessive_distance["online_program_config_models"][0]["maximum_normalized_shape_distance_ppm"] = 250_001
+    mutations.append(excessive_distance)
+
+    for lock in mutations:
+        resign(lock)
+        with expect_error(emitter.LockValidationError, ".+"):
+            emitter.validate_lock(lock)
 
 
 def test_emitted_table_uses_pod_numeric_order_not_json_number_spelling() -> None:
@@ -172,6 +676,33 @@ def test_duplicate_exact_key_is_rejected(expect_error) -> None:
         emitter.validate_lock(lock)
 
 
+def test_certificate_production_policy_is_enforced_for_every_threshold(expect_error) -> None:
+    invalid_values = {
+        "baseline_policy_id": "unreviewed-baseline",
+        "baseline_calls": emitter.MIN_CERTIFICATE_SESSIONS * emitter.MIN_CERTIFICATE_BLOCKS_PER_SESSION - 1,
+        "baseline_ns": 0,
+        "baseline_sessions": emitter.MIN_CERTIFICATE_SESSIONS - 1,
+        "candidate_calls": emitter.MIN_CERTIFICATE_SESSIONS * emitter.MIN_CERTIFICATE_BLOCKS_PER_SESSION - 1,
+        "candidate_ns": 0,
+        "candidate_sessions": emitter.MIN_CERTIFICATE_SESSIONS - 1,
+        "operational_lower_bound_ppm": emitter.MIN_CERTIFICATE_OPERATIONAL_LOWER_BOUND_PPM,
+        "pcc_min_ppb": emitter.MIN_CERTIFICATE_PCC_PPB - 1,
+        "speedup_ppm": emitter.MIN_CERTIFICATE_SPEEDUP_PPM - 1,
+    }
+    for field, value in invalid_values.items():
+        lock = fixture()
+        lock["entries"][0]["certificate"][field] = value
+        resign(lock)
+        with expect_error(emitter.LockValidationError, f"certificate.{field}"):
+            emitter.validate_lock(lock)
+
+    lock = fixture()
+    lock["entries"][0]["certificate"]["pcc_min_ppb"] = 1_000_000_001
+    resign(lock)
+    with expect_error(emitter.LockValidationError, "pcc_min_ppb exceeds one"):
+        emitter.validate_lock(lock)
+
+
 def test_unknown_field_is_rejected(expect_error) -> None:
     lock = fixture()
     lock["entries"][0]["key"]["surprise"] = False
@@ -217,7 +748,7 @@ def test_malformed_multi_core_reuse_work_splits_are_rejected(expect_error) -> No
             target = target[component]
         target[components[-1]] = value
         resign(lock, entries=True)
-        with expect_error(emitter.LockValidationError):
+        with expect_error(emitter.LockValidationError, ".+"):
             emitter.validate_lock(lock)
 
     lock = fixture()

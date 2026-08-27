@@ -26,7 +26,7 @@ enum class DataType : std::uint8_t { BFloat16 = 0, BFloat8B = 1, Float32 = 2 };
 enum class Layout : std::uint8_t { RowMajor = 0, Tile = 1 };
 enum class MemoryLayout : std::uint8_t { Interleaved = 0 };
 enum class BufferType : std::uint8_t { Dram = 0, L1 = 1 };
-enum class ProgramFamily : std::uint8_t { MultiCoreReuse = 0 };
+enum class ProgramFamily : std::uint8_t { MultiCoreReuse = 0, MultiCast1D = 1, MultiCast2D = 2 };
 enum class MathFidelity : std::uint8_t { LoFi = 0, HiFi2 = 1, HiFi3 = 2, HiFi4 = 3 };
 enum class ThrottleLevel : std::uint8_t { NoThrottle = 0, Throttle1 = 1, Throttle2 = 2, Throttle3 = 3 };
 
@@ -147,10 +147,19 @@ struct TableMetadata {
     std::uint16_t lock_schema_version{};
     std::uint16_t key_schema_version{};
     std::uint16_t replay_schema_version{};
+    // Zero means legacy replay evidence whose explicit CKC cannot authorize a
+    // program-config-only runtime selection. Exact entries require schema 1.
+    std::uint16_t program_config_only_evidence_schema_version{};
+    // Enabled online models independently require the same bound activation
+    // evidence even when the lock contains no exact entries.
+    std::uint16_t online_program_config_model_evidence_schema_version{};
     Sha256 content_sha256{};
     Sha256 semantic_source_sha256{};
     Sha256 build_identity_sha256{};
     Sha256 runtime_capability_sha256{};
+    // Zero for exact-only locks. Active online models bind this independently
+    // reconstructed digest in both table metadata and model metadata.
+    Sha256 online_model_bundle_binding_sha256{};
 };
 
 static_assert(std::is_trivially_copyable_v<EntryDescriptor>);

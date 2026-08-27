@@ -24,6 +24,7 @@ ttnn/cpp/ttnn/operations/matmul/device/config/matmul_program_config.hpp
 ttnn/cpp/ttnn/operations/matmul/device/config/matmul_program_config_types.hpp
 ttnn/cpp/ttnn/operations/matmul/device/config/registry/codegen/emit_build_attestation.py
 ttnn/cpp/ttnn/operations/matmul/device/config/registry/codegen/emit_cpp.py
+ttnn/cpp/ttnn/operations/matmul/device/config/registry/matmul_program_config_model.hpp
 ttnn/cpp/ttnn/operations/matmul/device/config/registry/matmul_registry_attestation.cpp
 ttnn/cpp/ttnn/operations/matmul/device/config/registry/matmul_registry_attestation.hpp
 ttnn/cpp/ttnn/operations/matmul/device/config/registry/matmul_registry_attestation_provider.cpp

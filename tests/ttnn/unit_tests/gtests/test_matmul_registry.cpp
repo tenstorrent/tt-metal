@@ -16,6 +16,7 @@
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
+#include "ttnn/operations/matmul/device/config/registry/matmul_program_config_model.hpp"
 #include "ttnn/operations/matmul/device/config/registry/matmul_registry_descriptor.hpp"
 
 namespace ttnn::operations::matmul::registry {
@@ -65,6 +66,11 @@ OperationDomain next_public_domain(const OperationDomain domain) {
 static_assert(std::is_trivially_copyable_v<compact::KeyDescriptor>);
 static_assert(std::is_trivially_copyable_v<compact::ReplayDescriptor>);
 static_assert(std::is_trivially_copyable_v<compact::EntryDescriptor>);
+
+template <typename T>
+concept HasComputeKernelConfig = requires(T value) { value.compute_kernel_config; };
+
+static_assert(!HasComputeKernelConfig<compact::ProgramConfigCandidate>);
 
 compact::KeyDescriptor compact_key(const std::uint64_t logical_m) {
     compact::KeyDescriptor key{};
@@ -536,6 +542,606 @@ compact::EntryDescriptor compact_entry(const OperationDomain domain = OperationD
     return entry;
 }
 
+compact::ProgramConfigModelSupport compact_model_support(const compact::KeyDescriptor& key) {
+    return {
+        .architecture = key.architecture,
+        .board_capability_class = key.board_capability_class,
+        .device_count = key.device_count,
+        .mesh_rows = key.mesh_rows,
+        .mesh_cols = key.mesh_cols,
+        .topology_sha256 = key.topology_sha256,
+        .domain = key.domain,
+        .input_a = key.input_a,
+        .input_b = key.input_b,
+        .output = key.output,
+        .shape_scale = compact::shape_scale_class(key.logical_m),
+        .shape_geometry = compact::shape_geometry_class(key.logical_k, key.logical_n),
+        .minimum_m = 1,
+        .maximum_m = 16384,
+        .minimum_k = 1,
+        .maximum_k = 32768,
+        .minimum_n = 1,
+        .maximum_n = 32768,
+    };
+}
+
+compact::TableMetadata compact_metadata();
+CompatibilityDigests compatible_digests();
+
+TEST(MatmulConfigRegistry, OnlineProgramConfigLookupUsesExactBeforeGbdt) {
+    auto exact = compact_entry();
+    const std::array entries{compact::ProgramConfigExactEntry{
+        .entry_id = exact.entry_id,
+        .key = exact.key,
+        .program_config = compact::exact_program_config(exact.replay),
+    }};
+    const compact::ProgramConfigGbdtModel malformed_model{};
+
+    const auto result = compact::lookup_program_config(
+        exact.key, entries, malformed_model, compact_metadata().online_model_bundle_binding_sha256);
+
+    EXPECT_EQ(result.source, compact::ProgramConfigLookupSource::Exact);
+    ASSERT_TRUE(result.program_config.has_value());
+    EXPECT_EQ(result.program_config->family, compact::ProgramFamily::MultiCoreReuse);
+    EXPECT_EQ(result.program_config->compute_grid_x, entries[0].program_config.compute_grid_x);
+    EXPECT_EQ(result.identity, &entries[0].entry_id);
+
+    auto malformed_entries = entries;
+    malformed_entries[0].program_config.compute_grid_x = 0;
+    const auto malformed = compact::lookup_program_config(
+        exact.key, malformed_entries, malformed_model, compact_metadata().online_model_bundle_binding_sha256);
+    EXPECT_EQ(malformed.source, compact::ProgramConfigLookupSource::None);
+    EXPECT_FALSE(malformed.program_config.has_value());
+}
+
+TEST(MatmulConfigRegistry, OnlineGbdtScoresOnlyLegalProgramConfigsAndFallsBackOnNoCandidate) {
+    auto key = compact_entry().key;
+    key.logical_m -= 1;
+
+    std::array candidates{
+        compact::ProgramConfigCandidate{
+            .program_config =
+                compact::ProgramConfigDescriptor{
+                    .family = compact::ProgramFamily::MultiCoreReuse,
+                    .compute_grid_x = 4,
+                    .compute_grid_y = 4,
+                    .in0_block_w = 2,
+                    .out_subblock_h = 1,
+                    .out_subblock_w = 2,
+                    .per_core_m = 2,
+                    .per_core_n = 16,
+                    .allowed_worker_cores_present = false},
+            .candidate_id = repeated_digest(1)},
+        compact::ProgramConfigCandidate{
+            .program_config =
+                compact::ProgramConfigDescriptor{
+                    .family = compact::ProgramFamily::MultiCoreReuse,
+                    .compute_grid_x = 8,
+                    .compute_grid_y = 8,
+                    .in0_block_w = 2,
+                    .out_subblock_h = 1,
+                    .out_subblock_w = 2,
+                    .per_core_m = 4,
+                    .per_core_n = 16,
+                    .allowed_worker_cores_present = false},
+            .candidate_id = repeated_digest(2)},
+    };
+    // One stump: larger grid gets the lower (better) score.
+    const std::array nodes{
+        compact::GbdtNode{.feature = compact::ProgramConfigFeature::GridX, .threshold = 4, .left = 1, .right = 2},
+        compact::GbdtNode{.feature = compact::ProgramConfigFeature::Count, .leaf_value = 10},
+        compact::GbdtNode{.feature = compact::ProgramConfigFeature::Count, .leaf_value = -10},
+    };
+    const std::array trees{compact::GbdtTree{.node_offset = 0, .node_count = 3}};
+    const std::array training_shapes{compact::TrainingShapeLandmark{
+        .logical_m = key.logical_m, .logical_k = key.logical_k, .logical_n = key.logical_n}};
+    const compact::ProgramConfigGbdtModel model{
+        .schema_version = 1,
+        .enabled = true,
+        .score_orientation = compact::GbdtScoreOrientation::LowerIsBetterNegatedPairwiseMargin,
+        .feature_schema_sha256 = repeated_digest(2),
+        .model_sha256 = repeated_digest(3),
+        .training_table_sha256 = repeated_digest(4),
+        .safety_evidence_sha256 = repeated_digest(6),
+        .candidate_policy_sha256 = repeated_digest(7),
+        .lineage_sha256 = repeated_digest(8),
+        .evaluation_model_payload_sha256 = repeated_digest(11),
+        .quality_evaluation_sha256 = repeated_digest(9),
+        .unseen_abstention_policy_sha256 = repeated_digest(10),
+        .support_sha256 = repeated_digest(5),
+        .bundle_binding_sha256 = compact_metadata().online_model_bundle_binding_sha256,
+        .support = compact_model_support(key),
+        .base_score = 0,
+        .score_scale = 1,
+        .minimum_score_margin = 1,
+        .maximum_normalized_shape_distance_ppm = 250'000,
+        .training_shapes = training_shapes,
+        .candidates = candidates,
+        .trees = trees,
+        .nodes = nodes,
+    };
+
+    const auto selected =
+        compact::lookup_program_config(key, {}, model, compact_metadata().online_model_bundle_binding_sha256);
+    EXPECT_EQ(selected.source, compact::ProgramConfigLookupSource::Gbdt);
+    ASSERT_TRUE(selected.program_config.has_value());
+    EXPECT_EQ(selected.program_config->compute_grid_x, 8);
+
+    auto insufficient_margin = model;
+    insufficient_margin.minimum_score_margin = 21;
+    const auto low_confidence = compact::lookup_program_config(
+        key, {}, insufficient_margin, compact_metadata().online_model_bundle_binding_sha256);
+    EXPECT_EQ(low_confidence.source, compact::ProgramConfigLookupSource::None);
+
+    auto tie_nodes = nodes;
+    tie_nodes[1].leaf_value = -10;
+    auto tied = model;
+    tied.nodes = tie_nodes;
+    const auto tied_result =
+        compact::lookup_program_config(key, {}, tied, compact_metadata().online_model_bundle_binding_sha256);
+    EXPECT_EQ(tied_result.source, compact::ProgramConfigLookupSource::None);
+
+    key.padded_n += 32;
+    const auto fallback =
+        compact::lookup_program_config(key, {}, model, compact_metadata().online_model_bundle_binding_sha256);
+    EXPECT_EQ(fallback.source, compact::ProgramConfigLookupSource::None);
+    EXPECT_FALSE(fallback.program_config.has_value());
+}
+
+TEST(MatmulConfigRegistry, OnlineModelRejectsDuplicateProgramConfigsFromHiddenKnobVariants) {
+    auto key = compact_entry().key;
+    key.logical_m -= 1;
+    auto candidate = compact::ProgramConfigCandidate{
+        .program_config = compact::exact_program_config(compact_entry().replay),
+        .candidate_id = repeated_digest(1),
+    };
+    std::array candidates{candidate, candidate};
+    candidates[1].candidate_id = repeated_digest(2);
+    const std::array nodes{
+        compact::GbdtNode{.feature = compact::ProgramConfigFeature::Count, .leaf_value = 0},
+    };
+    const std::array trees{compact::GbdtTree{.node_offset = 0, .node_count = 1}};
+    const std::array training_shapes{compact::TrainingShapeLandmark{
+        .logical_m = key.logical_m, .logical_k = key.logical_k, .logical_n = key.logical_n}};
+    const compact::ProgramConfigGbdtModel model{
+        .schema_version = 1,
+        .enabled = true,
+        .score_orientation = compact::GbdtScoreOrientation::LowerIsBetterNegatedPairwiseMargin,
+        .feature_schema_sha256 = repeated_digest(2),
+        .model_sha256 = repeated_digest(3),
+        .training_table_sha256 = repeated_digest(4),
+        .safety_evidence_sha256 = repeated_digest(6),
+        .candidate_policy_sha256 = repeated_digest(7),
+        .lineage_sha256 = repeated_digest(8),
+        .evaluation_model_payload_sha256 = repeated_digest(11),
+        .quality_evaluation_sha256 = repeated_digest(9),
+        .unseen_abstention_policy_sha256 = repeated_digest(10),
+        .support_sha256 = repeated_digest(5),
+        .bundle_binding_sha256 = compact_metadata().online_model_bundle_binding_sha256,
+        .support = compact_model_support(key),
+        .base_score = 0,
+        .score_scale = 1,
+        .minimum_score_margin = 1,
+        .maximum_normalized_shape_distance_ppm = 250'000,
+        .training_shapes = training_shapes,
+        .candidates = candidates,
+        .trees = trees,
+        .nodes = nodes,
+    };
+
+    // The online candidate ABI has no CKC field, and duplicate program config
+    // identities fail closed rather than allowing hidden CKC rows to compete.
+    const auto result =
+        compact::lookup_program_config(key, {}, model, compact_metadata().online_model_bundle_binding_sha256);
+    EXPECT_EQ(result.source, compact::ProgramConfigLookupSource::None);
+    EXPECT_FALSE(result.program_config.has_value());
+}
+
+TEST(MatmulConfigRegistry, OnlineFeatureVectorDistinguishesEveryProgramConfigBoolean) {
+    const auto key = compact_entry().key;
+    auto candidate = compact::ProgramConfigCandidate{
+        .program_config = compact::exact_program_config(compact_entry().replay),
+        .candidate_id = repeated_digest(1),
+    };
+    EXPECT_EQ(compact::feature_value(key, candidate, compact::ProgramConfigFeature::FuseBatch), 0);
+    EXPECT_EQ(compact::feature_value(key, candidate, compact::ProgramConfigFeature::McastIn0), 0);
+    EXPECT_EQ(compact::feature_value(key, candidate, compact::ProgramConfigFeature::TransposeMcast), 0);
+
+    candidate.program_config.fuse_batch = true;
+    candidate.program_config.mcast_in0 = true;
+    candidate.program_config.transpose_mcast = true;
+    EXPECT_EQ(compact::feature_value(key, candidate, compact::ProgramConfigFeature::FuseBatch), 1);
+    EXPECT_EQ(compact::feature_value(key, candidate, compact::ProgramConfigFeature::McastIn0), 1);
+    EXPECT_EQ(compact::feature_value(key, candidate, compact::ProgramConfigFeature::TransposeMcast), 1);
+}
+
+TEST(MatmulConfigRegistry, OnlineModelSupportRejectsNoncanonicalAndOverflowingPadding) {
+    auto key = compact_entry().key;
+    const auto support = compact_model_support(key);
+    const std::array training_shapes{compact::TrainingShapeLandmark{
+        .logical_m = key.logical_m, .logical_k = key.logical_k, .logical_n = key.logical_n}};
+    const auto model = compact::ProgramConfigGbdtModel{
+        .schema_version = 1,
+        .enabled = true,
+        .feature_schema_sha256 = repeated_digest(1),
+        .model_sha256 = repeated_digest(2),
+        .training_table_sha256 = repeated_digest(3),
+        .safety_evidence_sha256 = repeated_digest(4),
+        .candidate_policy_sha256 = repeated_digest(5),
+        .lineage_sha256 = repeated_digest(7),
+        .evaluation_model_payload_sha256 = repeated_digest(10),
+        .quality_evaluation_sha256 = repeated_digest(8),
+        .unseen_abstention_policy_sha256 = repeated_digest(9),
+        .support_sha256 = repeated_digest(6),
+        .bundle_binding_sha256 = compact_metadata().online_model_bundle_binding_sha256,
+        .support = support,
+        .minimum_score_margin = 1,
+        .maximum_normalized_shape_distance_ppm = 250'000,
+        .training_shapes = training_shapes,
+    };
+    EXPECT_TRUE(compact::model_supports(key, model, compact_metadata().online_model_bundle_binding_sha256));
+
+    key.padded_n += key.input_b.tile_width;
+    EXPECT_FALSE(compact::model_supports(key, model, compact_metadata().online_model_bundle_binding_sha256));
+
+    EXPECT_FALSE(compact::is_canonical_tile_padding(
+        std::numeric_limits<std::uint64_t>::max(),
+        std::numeric_limits<std::uint64_t>::max(),
+        key.input_b.tile_width));
+
+    const std::array sparse_landmarks{
+        compact::TrainingShapeLandmark{.logical_m = 1, .logical_k = 1, .logical_n = 1},
+        compact::TrainingShapeLandmark{.logical_m = 100, .logical_k = 100, .logical_n = 100},
+    };
+    auto sparse_model = model;
+    sparse_model.support.minimum_m = sparse_model.support.minimum_k = sparse_model.support.minimum_n = 1;
+    sparse_model.support.maximum_m = sparse_model.support.maximum_k = sparse_model.support.maximum_n = 100;
+    sparse_model.maximum_normalized_shape_distance_ppm = 100'000;
+    sparse_model.training_shapes = sparse_landmarks;
+    // Mirrors the Python ceil(delta * 1e6 / span) boundary: a 99-wide
+    // support at 100k ppm permits delta 9, while delta 10 must abstain.
+    EXPECT_EQ(compact::calibrated_axis_delta(99, 100'000), 9);
+    auto near = key;
+    near.logical_m = 10;
+    near.logical_k = 1;
+    near.logical_n = 1;
+    EXPECT_TRUE(compact::model_shape_is_near_training_data(near, sparse_model));
+    near.logical_m = 11;
+    EXPECT_FALSE(compact::model_shape_is_near_training_data(near, sparse_model));
+    sparse_model.maximum_normalized_shape_distance_ppm =
+        compact::MAX_NORMALIZED_SHAPE_DISTANCE_PPM + 1;
+    EXPECT_FALSE(compact::model_shape_is_near_training_data(key, sparse_model));
+    sparse_model.maximum_normalized_shape_distance_ppm = 100'000;
+    auto sparse_interior = near;
+    sparse_interior.logical_m = 50;
+    sparse_interior.logical_n = 100;
+    EXPECT_FALSE(compact::model_shape_is_near_training_data(sparse_interior, sparse_model));
+}
+
+TEST(MatmulConfigRegistry, OnlineProgramConfigMaterializerSupportsBankedWinnerFamilies) {
+    const auto key = compact_entry().key;
+    const auto common = compact::ProgramConfigDescriptor{
+        .family = compact::ProgramFamily::MultiCoreReuse,
+        .compute_grid_x = 8,
+        .compute_grid_y = 8,
+        .in0_block_w = 2,
+        .out_subblock_h = 1,
+        .out_subblock_w = 2,
+        .per_core_m = 4,
+        .per_core_n = 16,
+        .allowed_worker_cores_present = false,
+        .fuse_batch = false,
+        .mcast_in0 = false,
+        .transpose_mcast = false,
+    };
+    const auto basic = materialize_registry_program_config(key, common);
+    ASSERT_TRUE(basic.has_value());
+    EXPECT_TRUE(std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(*basic));
+
+    auto mm1d_descriptor = common;
+    mm1d_descriptor.family = compact::ProgramFamily::MultiCast1D;
+    mm1d_descriptor.per_core_n = 2;
+    mm1d_descriptor.out_block_h = mm1d_descriptor.per_core_m;
+    mm1d_descriptor.out_block_w = mm1d_descriptor.per_core_n;
+    mm1d_descriptor.num_global_cb_receivers = 1;
+    mm1d_descriptor.fuse_batch = true;
+    mm1d_descriptor.mcast_in0 = true;
+    const auto mm1d = materialize_registry_program_config(key, mm1d_descriptor);
+    ASSERT_TRUE(mm1d.has_value());
+    const auto* mm1d_native = std::get_if<MatmulMultiCoreReuseMultiCast1DProgramConfig>(&*mm1d);
+    ASSERT_NE(mm1d_native, nullptr);
+    EXPECT_TRUE(mm1d_native->mcast_in0);
+    EXPECT_TRUE(mm1d_native->fuse_batch);
+    EXPECT_EQ(mm1d_native->out_block_h, mm1d_descriptor.per_core_m);
+    EXPECT_EQ(mm1d_native->out_block_w, mm1d_descriptor.per_core_n);
+    EXPECT_EQ(mm1d_native->num_global_cb_receivers, 1);
+    EXPECT_FALSE(mm1d_native->fused_activation.has_value());
+
+    auto mm2d_descriptor = common;
+    mm2d_descriptor.family = compact::ProgramFamily::MultiCast2D;
+    mm2d_descriptor.per_core_m = 1;
+    mm2d_descriptor.per_core_n = 2;
+    mm2d_descriptor.out_block_h = mm2d_descriptor.per_core_m;
+    mm2d_descriptor.out_block_w = mm2d_descriptor.per_core_n;
+    mm2d_descriptor.fuse_batch = true;
+    mm2d_descriptor.transpose_mcast = true;
+    const auto mm2d = materialize_registry_program_config(key, mm2d_descriptor);
+    ASSERT_TRUE(mm2d.has_value());
+    const auto* mm2d_native = std::get_if<MatmulMultiCoreReuseMultiCastProgramConfig>(&*mm2d);
+    ASSERT_NE(mm2d_native, nullptr);
+    EXPECT_TRUE(mm2d_native->transpose_mcast);
+    EXPECT_TRUE(mm2d_native->fuse_batch);
+    EXPECT_EQ(mm2d_native->out_block_h, mm2d_descriptor.per_core_m);
+    EXPECT_EQ(mm2d_native->out_block_w, mm2d_descriptor.per_core_n);
+    EXPECT_FALSE(mm2d_native->fused_activation.has_value());
+}
+
+TEST(MatmulConfigRegistry, ProgramConfigOnlyExactResolverCoversEveryBankedWinnerFamily) {
+    const auto request = exact_request();
+    const auto key = compact_registry_key(request);
+    ASSERT_TRUE(key.has_value());
+    auto basic = compact::exact_program_config(compact_entry().replay);
+    auto mm1d = basic;
+    mm1d.family = compact::ProgramFamily::MultiCast1D;
+    mm1d.per_core_n = 2;
+    mm1d.out_block_h = mm1d.per_core_m;
+    mm1d.out_block_w = mm1d.per_core_n;
+    mm1d.num_global_cb_receivers = 1;
+    mm1d.fuse_batch = true;
+    mm1d.mcast_in0 = true;
+    auto mm2d = basic;
+    mm2d.family = compact::ProgramFamily::MultiCast2D;
+    mm2d.per_core_m = 1;
+    mm2d.per_core_n = 2;
+    mm2d.out_block_h = mm2d.per_core_m;
+    mm2d.out_block_w = mm2d.per_core_n;
+    mm2d.fuse_batch = true;
+    mm2d.transpose_mcast = true;
+
+    const std::array programs{basic, mm1d, mm2d};
+    for (std::size_t index = 0; index < programs.size(); ++index) {
+        const std::array exact_entries{compact::ProgramConfigExactEntry{
+            .entry_id = repeated_digest(static_cast<std::uint8_t>(index + 1)),
+            .key = *key,
+            .program_config = programs[index],
+        }};
+        const auto resolution = resolve_with_compact_table_for_testing(
+            Mode::On,
+            request,
+            Eligibility{.call = request.call},
+            compact_metadata(),
+            {},
+            compatible_digests(),
+            {},
+            exact_entries);
+        ASSERT_EQ(resolution.reason, ResolutionReason::CertifiedMatch);
+        ASSERT_TRUE(resolution.predicted_program_config.has_value());
+        EXPECT_EQ(*resolution.predicted_program_config, programs[index]);
+        EXPECT_TRUE(materialize_registry_program_config(*key, *resolution.predicted_program_config).has_value());
+    }
+}
+
+TEST(MatmulConfigRegistry, ResolverRunsExactThenGbdtAndAbstainsOutsideModelContext) {
+    auto request = exact_request();
+    request.workload.logical_m -= 1;
+    const auto key = compact_registry_key(request);
+    ASSERT_TRUE(key.has_value());
+    const auto descriptor = compact::ProgramConfigDescriptor{
+        .family = compact::ProgramFamily::MultiCast1D,
+        .compute_grid_x = 8,
+        .compute_grid_y = 8,
+        .in0_block_w = 2,
+        .out_subblock_h = 1,
+        .out_subblock_w = 2,
+        .per_core_m = 4,
+        .per_core_n = 2,
+        .out_block_h = 4,
+        .out_block_w = 2,
+        .num_global_cb_receivers = 1,
+        .allowed_worker_cores_present = false,
+        .fuse_batch = true,
+        .mcast_in0 = true,
+        .transpose_mcast = false,
+    };
+    const std::array candidates{
+        compact::ProgramConfigCandidate{
+            .program_config = compact::exact_program_config(compact_entry().replay),
+            .candidate_id = repeated_digest(1),
+        },
+        compact::ProgramConfigCandidate{
+            .program_config = descriptor,
+            .candidate_id = repeated_digest(2),
+        },
+    };
+    const std::array nodes{
+        compact::GbdtNode{.feature = compact::ProgramConfigFeature::Family, .threshold = 0, .left = 1, .right = 2},
+        compact::GbdtNode{.feature = compact::ProgramConfigFeature::Count, .leaf_value = 10},
+        compact::GbdtNode{.feature = compact::ProgramConfigFeature::Count, .leaf_value = -10},
+    };
+    const std::array trees{compact::GbdtTree{.node_offset = 0, .node_count = 3}};
+    const std::array training_shapes{compact::TrainingShapeLandmark{
+        .logical_m = key->logical_m, .logical_k = key->logical_k, .logical_n = key->logical_n}};
+    auto model = compact::ProgramConfigGbdtModel{
+        .schema_version = 1,
+        .enabled = true,
+        .score_orientation = compact::GbdtScoreOrientation::LowerIsBetterNegatedPairwiseMargin,
+        .feature_schema_sha256 = repeated_digest(2),
+        .model_sha256 = repeated_digest(3),
+        .training_table_sha256 = repeated_digest(4),
+        .safety_evidence_sha256 = repeated_digest(6),
+        .candidate_policy_sha256 = repeated_digest(7),
+        .lineage_sha256 = repeated_digest(8),
+        .evaluation_model_payload_sha256 = repeated_digest(11),
+        .quality_evaluation_sha256 = repeated_digest(9),
+        .unseen_abstention_policy_sha256 = repeated_digest(10),
+        .support_sha256 = repeated_digest(5),
+        .bundle_binding_sha256 = compact_metadata().online_model_bundle_binding_sha256,
+        .support = compact_model_support(*key),
+        .base_score = 0,
+        .score_scale = 1,
+        .minimum_score_margin = 1,
+        .maximum_normalized_shape_distance_ppm = 250'000,
+        .training_shapes = training_shapes,
+        .candidates = candidates,
+        .trees = trees,
+        .nodes = nodes,
+    };
+    const std::array nonmatching_exact_entries{compact_entry()};
+    const auto predicted = resolve_with_compact_table_for_testing(
+        Mode::On,
+        request,
+        Eligibility{.call = request.call},
+        compact_metadata(),
+        nonmatching_exact_entries,
+        compatible_digests(),
+        std::span<const compact::ProgramConfigGbdtModel>{&model, 1});
+    EXPECT_EQ(predicted.reason, ResolutionReason::PredictedMatch);
+    EXPECT_EQ(execution_action(Mode::On, predicted), ExecutionAction::ApplyRecipe);
+    ASSERT_TRUE(predicted.predicted_program_config.has_value());
+    EXPECT_EQ(predicted.predicted_program_config->family, compact::ProgramFamily::MultiCast1D);
+
+    auto missing_model_proof = compact_metadata();
+    missing_model_proof.online_program_config_model_evidence_schema_version = 0;
+    const auto unproved = resolve_with_compact_table_for_testing(
+        Mode::On,
+        request,
+        Eligibility{.call = request.call},
+        missing_model_proof,
+        nonmatching_exact_entries,
+        compatible_digests(),
+        std::span<const compact::ProgramConfigGbdtModel>{&model, 1});
+    EXPECT_EQ(unproved.reason, ResolutionReason::EmptyRegistry);
+    EXPECT_EQ(execution_action(Mode::On, unproved), ExecutionAction::Fallback);
+
+    const std::array overlapping_models{model, model};
+    const auto ambiguous = resolve_with_compact_table_for_testing(
+        Mode::On,
+        request,
+        Eligibility{.call = request.call},
+        compact_metadata(),
+        nonmatching_exact_entries,
+        compatible_digests(),
+        overlapping_models);
+    EXPECT_EQ(ambiguous.reason, ResolutionReason::EmptyRegistry);
+    EXPECT_EQ(execution_action(Mode::On, ambiguous), ExecutionAction::Fallback);
+
+    model.support.domain = compact::Domain::DenseLinear;
+    const auto abstained = resolve_with_compact_table_for_testing(
+        Mode::On,
+        request,
+        Eligibility{.call = request.call},
+        compact_metadata(),
+        nonmatching_exact_entries,
+        compatible_digests(),
+        std::span<const compact::ProgramConfigGbdtModel>{&model, 1});
+    EXPECT_EQ(abstained.reason, ResolutionReason::EmptyRegistry);
+    EXPECT_EQ(execution_action(Mode::On, abstained), ExecutionAction::Fallback);
+
+    model.support.domain = key->domain;
+    model.bundle_binding_sha256 = repeated_digest(0x99);
+    const auto mixed_bundle = resolve_with_compact_table_for_testing(
+        Mode::On,
+        request,
+        Eligibility{.call = request.call},
+        compact_metadata(),
+        nonmatching_exact_entries,
+        compatible_digests(),
+        std::span<const compact::ProgramConfigGbdtModel>{&model, 1});
+    EXPECT_EQ(mixed_bundle.reason, ResolutionReason::EmptyRegistry);
+}
+
+TEST(MatmulConfigRegistry, LegacyExplicitCkcExactEvidenceCannotActivateProgramConfigOnlyRuntime) {
+    const auto request = exact_request();
+    const std::array entries{compact_entry()};
+    const auto authorized = resolve_with_compact_table_for_testing(
+        Mode::On, request, Eligibility{.call = request.call}, compact_metadata(), entries, compatible_digests(), {});
+    ASSERT_EQ(authorized.reason, ResolutionReason::CertifiedMatch);
+    ASSERT_TRUE(authorized.predicted_program_config.has_value());
+    ttnn::prim::MatmulParams caller_parameters;
+    caller_parameters.compute_kernel_config = DeviceComputeKernelConfig{};
+    const auto exact_parameters = materialize_parameters_for_execution(Mode::On, authorized, caller_parameters);
+    ASSERT_TRUE(exact_parameters.has_value());
+    EXPECT_TRUE(exact_parameters->program_config.has_value());
+    EXPECT_EQ(exact_parameters->compute_kernel_config, caller_parameters.compute_kernel_config);
+
+    auto legacy_metadata = compact_metadata();
+    legacy_metadata.program_config_only_evidence_schema_version = 0;
+
+    const auto skipped = resolve_with_compact_table_for_testing(
+        Mode::On, request, Eligibility{.call = request.call}, legacy_metadata, entries, compatible_digests(), {});
+    EXPECT_EQ(skipped.reason, ResolutionReason::EmptyRegistry);
+    EXPECT_EQ(execution_action(Mode::On, skipped), ExecutionAction::Fallback);
+    EXPECT_EQ(skipped.descriptor, nullptr);
+
+    auto nonmatching_pc_key = entries[0].key;
+    ++nonmatching_pc_key.logical_m;
+    const std::array pc_only_entries{compact::ProgramConfigExactEntry{
+        .entry_id = repeated_digest(0x7a),
+        .key = nonmatching_pc_key,
+        .program_config = compact::exact_program_config(entries[0].replay),
+    }};
+    const auto mixed_lock_miss = resolve_with_compact_table_for_testing(
+        Mode::On,
+        request,
+        Eligibility{.call = request.call},
+        compact_metadata(),
+        entries,
+        compatible_digests(),
+        {},
+        pc_only_entries);
+    EXPECT_EQ(mixed_lock_miss.reason, ResolutionReason::EmptyRegistry);
+    EXPECT_EQ(mixed_lock_miss.descriptor, nullptr);
+    EXPECT_FALSE(mixed_lock_miss.predicted_program_config.has_value());
+
+    const std::array candidates{compact::ProgramConfigCandidate{
+        .program_config = compact::exact_program_config(entries[0].replay),
+        .candidate_id = repeated_digest(1),
+    }};
+    const std::array nodes{
+        compact::GbdtNode{.feature = compact::ProgramConfigFeature::Count, .leaf_value = 0},
+    };
+    const std::array trees{compact::GbdtTree{.node_offset = 0, .node_count = 1}};
+    const std::array training_shapes{compact::TrainingShapeLandmark{
+        .logical_m = entries[0].key.logical_m,
+        .logical_k = entries[0].key.logical_k,
+        .logical_n = entries[0].key.logical_n}};
+    const compact::ProgramConfigGbdtModel model{
+        .schema_version = 1,
+        .enabled = true,
+        .score_orientation = compact::GbdtScoreOrientation::LowerIsBetterNegatedPairwiseMargin,
+        .feature_schema_sha256 = repeated_digest(2),
+        .model_sha256 = repeated_digest(3),
+        .training_table_sha256 = repeated_digest(4),
+        .safety_evidence_sha256 = repeated_digest(5),
+        .candidate_policy_sha256 = repeated_digest(6),
+        .lineage_sha256 = repeated_digest(8),
+        .evaluation_model_payload_sha256 = repeated_digest(11),
+        .quality_evaluation_sha256 = repeated_digest(9),
+        .unseen_abstention_policy_sha256 = repeated_digest(10),
+        .support_sha256 = repeated_digest(7),
+        .bundle_binding_sha256 = legacy_metadata.online_model_bundle_binding_sha256,
+        .support = compact_model_support(entries[0].key),
+        .base_score = 0,
+        .score_scale = 1,
+        .minimum_score_margin = 1,
+        .maximum_normalized_shape_distance_ppm = 250'000,
+        .training_shapes = training_shapes,
+        .candidates = candidates,
+        .trees = trees,
+        .nodes = nodes,
+    };
+    const auto abstained = resolve_with_compact_table_for_testing(
+        Mode::On,
+        request,
+        Eligibility{.call = request.call},
+        legacy_metadata,
+        entries,
+        compatible_digests(),
+        std::span<const compact::ProgramConfigGbdtModel>{&model, 1});
+    EXPECT_EQ(abstained.reason, ResolutionReason::EmptyRegistry);
+    EXPECT_FALSE(abstained.predicted_program_config.has_value());
+}
+
 TEST(MatmulConfigRegistry, RuntimeRequestConvertsToTheExactDisjointCompactKey) {
     for (const auto domain : {OperationDomain::DenseMatmul, OperationDomain::Linear, OperationDomain::Addmm}) {
         const auto request = exact_request(domain);
@@ -579,9 +1185,13 @@ compact::TableMetadata compact_metadata() {
         .lock_schema_version = 1,
         .key_schema_version = 1,
         .replay_schema_version = 2,
+        .program_config_only_evidence_schema_version = 1,
+        .online_program_config_model_evidence_schema_version = 1,
+        .content_sha256 = repeated_digest(0x10),
         .semantic_source_sha256 = repeated_digest(0x11),
         .build_identity_sha256 = repeated_digest(0x22),
-        .runtime_capability_sha256 = repeated_digest(0x33)};
+        .runtime_capability_sha256 = repeated_digest(0x33),
+        .online_model_bundle_binding_sha256 = repeated_digest(0x44)};
 }
 
 CompatibilityDigests compatible_digests() {
@@ -1418,9 +2028,8 @@ TEST(MatmulConfigRegistry, SyntheticHitIsExactAndMaterializesOnlyInOn) {
     ASSERT_TRUE(on_parameters.has_value());
     ASSERT_TRUE(on_parameters->program_config.has_value());
     EXPECT_TRUE(std::holds_alternative<MatmulMultiCoreProgramConfig>(*on_parameters->program_config));
-    ASSERT_TRUE(on_parameters->compute_kernel_config.has_value());
-    EXPECT_FALSE(on_parameters->compute_kernel_config->math_approx_mode);
-    EXPECT_EQ(on_parameters->untilize_out, recipe.untilize_out);
+    EXPECT_EQ(on_parameters->compute_kernel_config, legacy.compute_kernel_config);
+    EXPECT_EQ(on_parameters->untilize_out, legacy.untilize_out);
     EXPECT_EQ(on_parameters->output_dtype, legacy.output_dtype);
     EXPECT_EQ(on_parameters->transpose_a, legacy.transpose_a);
     EXPECT_FALSE(legacy.program_config.has_value());

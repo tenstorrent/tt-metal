@@ -20,6 +20,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/operations/matmul/device/config/registry/matmul_program_config_model.hpp"
 #include "ttnn/operations/matmul/device/config/registry/matmul_registry_attestation.hpp"
 #include "ttnn/operations/matmul/device/config/registry/matmul_registry_descriptor.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
@@ -72,6 +73,7 @@ enum class ResolutionReason {
     MaterializationRejected,
     EmptyRegistry,
     CertifiedMatch,
+    PredictedMatch,
     Count,
 };
 
@@ -313,9 +315,10 @@ RegistryRequestInspection inspect_registry_request(
 
 struct Recipe {
     MatmulProgramConfig program_config;
+    // Legacy evidence fields retained in replay schema v2. They are validated
+    // as provenance/legality context only. The online registry never returns
+    // them and never overwrites caller state with them.
     DeviceComputeKernelConfig compute_kernel_config;
-    // Duplicated native state is selected explicitly rather than inferred from
-    // one program-config alternative at the call site.
     bool untilize_out = false;
 };
 
@@ -325,6 +328,8 @@ struct Resolution {
     const Recipe* recipe = nullptr;
     // Generated static storage; never enters MatmulParams or its cache key.
     const compact::EntryDescriptor* descriptor = nullptr;
+    std::optional<compact::ProgramConfigDescriptor> predicted_program_config = std::nullopt;
+    std::optional<compact::KeyDescriptor> predicted_key = std::nullopt;
 };
 
 enum class MaterializationStatus {
@@ -344,6 +349,11 @@ struct MaterializationResult {
 // Converts compact immutable data into one complete native recipe. This may
 // allocate in future replay families and therefore intentionally is not noexcept.
 MaterializationResult materialize_matmul_registry_recipe(const compact::EntryDescriptor& descriptor);
+
+// Materialize only the selected program config. The exact request is required
+// so family-specific legality is rechecked at the native boundary.
+std::optional<MatmulProgramConfig> materialize_registry_program_config(
+    const compact::KeyDescriptor& key, const compact::ProgramConfigDescriptor& descriptor);
 
 struct CompatibilityDigests {
     compact::Sha256 semantic_source_sha256{};
@@ -412,10 +422,11 @@ constexpr bool registry_constraint_state_required(
 // A certified Shadow hit is observable but never mutates execution parameters.
 ExecutionAction execution_action(Mode mode, const Resolution& resolution) noexcept;
 
-// Construct one complete temporary parameter object before dispatch. Shadow
-// and fallback return nullopt without copying or mutating the legacy object.
-// Native recipe copies can allocate. The dispatch gate catches construction
-// failures, circuit-breaks the affected domain, and preserves the legacy path.
+// Construct a temporary parameter object whose sole registry-controlled field
+// is program_config. Shadow and fallback return nullopt. All caller-owned
+// fields, including compute_kernel_config, untilize_out, dtype, memory config,
+// and call semantics, remain unchanged. Native config copies can allocate; the
+// dispatch gate catches failures and preserves the legacy path.
 std::optional<ttnn::prim::MatmulParams> materialize_parameters_for_execution(
     Mode mode, const Resolution& resolution, const ttnn::prim::MatmulParams& legacy_parameters);
 
@@ -481,7 +492,9 @@ Resolution resolve_with_compact_table_for_testing(
     const Eligibility& eligibility,
     const compact::TableMetadata& metadata,
     std::span<const compact::EntryDescriptor> entries,
-    const CompatibilityDigests& actual) noexcept;
+    const CompatibilityDigests& actual,
+    std::span<const compact::ProgramConfigGbdtModel> models = {},
+    std::span<const compact::ProgramConfigExactEntry> program_config_exact_entries = {}) noexcept;
 
 bool circuit_break_domain(OperationDomain domain) noexcept;
 bool is_domain_circuit_broken(OperationDomain domain) noexcept;

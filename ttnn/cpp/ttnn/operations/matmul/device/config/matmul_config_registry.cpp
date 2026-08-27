@@ -361,6 +361,7 @@ std::string_view resolution_reason_name(const ResolutionReason reason) noexcept 
         case ResolutionReason::MaterializationRejected: return "materialization_rejected";
         case ResolutionReason::EmptyRegistry: return "empty_registry";
         case ResolutionReason::CertifiedMatch: return "certified_match";
+        case ResolutionReason::PredictedMatch: return "predicted_match";
         case ResolutionReason::Count: return "count";
     }
     return "unknown";
@@ -440,7 +441,12 @@ CompatibilityStatus initialize_registry_compatibility_for_testing(
 }
 
 CompatibilityStatus initialize_registry_compatibility(const CompatibilityDigests& actual) noexcept {
-    return initialize_registry_compatibility_for_testing(generated::metadata(), generated::entries().size(), actual);
+    std::size_t model_candidate_count = generated::program_config_exact_entries().size();
+    for (const auto& model : generated::online_models()) {
+        model_candidate_count += model.candidates.size();
+    }
+    return initialize_registry_compatibility_for_testing(
+        generated::metadata(), generated::entries().size() + model_candidate_count, actual);
 }
 
 CompatibilityStatus startup_compatibility_status() noexcept {
@@ -599,7 +605,11 @@ ResolvedMatmulIoContract resolve_matmul_io_contract(const IoContractRequest& req
 ExecutionAction execution_action(const Mode mode, const Resolution& resolution) noexcept {
     const bool has_native_recipe = resolution.recipe != nullptr && has_consistent_untilize_out(*resolution.recipe);
     const bool has_compact_recipe = resolution.descriptor != nullptr;
-    if (resolution.reason != ResolutionReason::CertifiedMatch || (!has_native_recipe && !has_compact_recipe)) {
+    const bool has_predicted_config =
+        resolution.predicted_program_config.has_value() && resolution.predicted_key.has_value();
+    const bool selected =
+        resolution.reason == ResolutionReason::CertifiedMatch || resolution.reason == ResolutionReason::PredictedMatch;
+    if (!selected || (!has_native_recipe && !has_compact_recipe && !has_predicted_config)) {
         return ExecutionAction::Fallback;
     }
     if (mode == Mode::On) {
@@ -612,6 +622,17 @@ std::optional<ttnn::prim::MatmulParams> materialize_parameters_for_execution(
     const Mode mode, const Resolution& resolution, const ttnn::prim::MatmulParams& legacy_parameters) {
     if (execution_action(mode, resolution) != ExecutionAction::ApplyRecipe) {
         return std::nullopt;
+    }
+
+    if (resolution.predicted_program_config.has_value() && resolution.predicted_key.has_value()) {
+        auto program_config =
+            materialize_registry_program_config(*resolution.predicted_key, *resolution.predicted_program_config);
+        if (!program_config.has_value()) {
+            return std::nullopt;
+        }
+        auto materialized = legacy_parameters;
+        materialized.program_config = std::move(program_config);
+        return materialized;
     }
 
     std::optional<Recipe> compact_recipe;
@@ -630,8 +651,6 @@ std::optional<ttnn::prim::MatmulParams> materialize_parameters_for_execution(
 
     auto materialized = legacy_parameters;
     materialized.program_config = selected_recipe->program_config;
-    materialized.compute_kernel_config = selected_recipe->compute_kernel_config;
-    materialized.untilize_out = selected_recipe->untilize_out;
     return materialized;
 }
 
@@ -640,6 +659,64 @@ bool has_consistent_untilize_out(const Recipe& recipe) noexcept {
         return config->untilize_out == recipe.untilize_out;
     }
     return !recipe.untilize_out;
+}
+
+std::optional<MatmulProgramConfig> materialize_registry_program_config(
+    const compact::KeyDescriptor& key, const compact::ProgramConfigDescriptor& descriptor) {
+    const compact::ProgramConfigCandidate candidate{.program_config = descriptor};
+    if (!compact::legal_program_config_candidate(key, candidate)) {
+        return std::nullopt;
+    }
+    const auto grid = tt::tt_metal::CoreCoord{descriptor.compute_grid_x, descriptor.compute_grid_y};
+    // The fixed null/false/empty fields below are part of the versioned
+    // acquisition policy validated by the lock emitter. out_block_* and the
+    // MM1D receiver count are explicit because nanobind resolved their omitted
+    // acquisition arguments to per-core M/N and one receiver respectively.
+    switch (descriptor.family) {
+        case compact::ProgramFamily::MultiCoreReuse:
+            return MatmulProgramConfig{MatmulMultiCoreReuseProgramConfig{
+                .compute_with_storage_grid_size = grid,
+                .in0_block_w = descriptor.in0_block_w,
+                .out_subblock_h = descriptor.out_subblock_h,
+                .out_subblock_w = descriptor.out_subblock_w,
+                .per_core_M = descriptor.per_core_m,
+                .per_core_N = descriptor.per_core_n,
+                .allowed_worker_cores = std::nullopt}};
+        case compact::ProgramFamily::MultiCast1D:
+            return MatmulProgramConfig{MatmulMultiCoreReuseMultiCast1DProgramConfig{
+                .compute_with_storage_grid_size = grid,
+                .in0_block_w = descriptor.in0_block_w,
+                .out_subblock_h = descriptor.out_subblock_h,
+                .out_subblock_w = descriptor.out_subblock_w,
+                .out_block_h = descriptor.out_block_h,
+                .out_block_w = descriptor.out_block_w,
+                .per_core_M = descriptor.per_core_m,
+                .per_core_N = descriptor.per_core_n,
+                .fuse_batch = descriptor.fuse_batch,
+                .fused_activation = std::nullopt,
+                .mcast_in0 = descriptor.mcast_in0,
+                .gather_in0 = false,
+                .hop_cores = CoreRangeSet{},
+                .num_global_cb_receivers = descriptor.num_global_cb_receivers,
+                .untilize_out = false,
+                .allowed_worker_cores = std::nullopt,
+                .stream_in1 = false}};
+        case compact::ProgramFamily::MultiCast2D:
+            return MatmulProgramConfig{MatmulMultiCoreReuseMultiCastProgramConfig{
+                .compute_with_storage_grid_size = grid,
+                .in0_block_w = descriptor.in0_block_w,
+                .out_subblock_h = descriptor.out_subblock_h,
+                .out_subblock_w = descriptor.out_subblock_w,
+                .out_block_h = descriptor.out_block_h,
+                .out_block_w = descriptor.out_block_w,
+                .per_core_M = descriptor.per_core_m,
+                .per_core_N = descriptor.per_core_n,
+                .transpose_mcast = descriptor.transpose_mcast,
+                .fused_activation = std::nullopt,
+                .fuse_batch = descriptor.fuse_batch,
+                .allowed_worker_cores = std::nullopt}};
+    }
+    return std::nullopt;
 }
 
 MaterializationResult materialize_matmul_registry_recipe(const compact::EntryDescriptor& descriptor) {
@@ -808,7 +885,9 @@ static Resolution resolve_impl(
     const Recipe* synthetic_recipe,
     const compact::TableMetadata& metadata,
     const std::span<const compact::EntryDescriptor> entries,
-    const CompatibilityDigests* actual_compatibility) noexcept {
+    const CompatibilityDigests* actual_compatibility,
+    const std::span<const compact::ProgramConfigGbdtModel> models,
+    const std::span<const compact::ProgramConfigExactEntry> program_config_exact_entries) noexcept {
     if (mode == Mode::Off) {
         return {.reason = ResolutionReason::Disabled};
     }
@@ -825,14 +904,18 @@ static Resolution resolve_impl(
         return {.reason = ResolutionReason::CertifiedMatch, .recipe = synthetic_recipe};
     }
 
-    if (entries.empty()) {
+    std::size_t selectable_count = entries.size() + program_config_exact_entries.size();
+    for (const auto& model : models) {
+        selectable_count += model.candidates.size();
+    }
+    if (selectable_count == 0) {
         return {.reason = ResolutionReason::EmptyRegistry};
     }
     if (request.device.attestation_status != DeviceAttestationStatus::Success) {
         return {.reason = ResolutionReason::DeviceAttestationUnavailable};
     }
     const auto compatibility = actual_compatibility != nullptr
-                                   ? validate_registry_compatibility(metadata, entries.size(), *actual_compatibility)
+                                   ? validate_registry_compatibility(metadata, selectable_count, *actual_compatibility)
                                    : startup_compatibility_status();
     if (compatibility != CompatibilityStatus::Compatible) {
         return {.reason = compatibility_reason(compatibility)};
@@ -847,8 +930,70 @@ static Resolution resolve_impl(
     if (!key.has_value()) {
         return {.reason = ResolutionReason::IncompleteRequest};
     }
-    if (const auto* descriptor = compact::ExactIndex{entries}.lookup(*key); descriptor != nullptr) {
-        return {.reason = ResolutionReason::CertifiedMatch, .descriptor = descriptor};
+    if (metadata.program_config_only_evidence_schema_version == 1) {
+        if (const auto* exact = compact::lookup_program_config_exact(*key, program_config_exact_entries);
+            exact != nullptr) {
+            if (!compact::legal_program_config_candidate(
+                    *key,
+                    compact::ProgramConfigCandidate{
+                        .program_config = exact->program_config, .candidate_id = exact->entry_id})) {
+                return {.reason = ResolutionReason::EmptyRegistry};
+            }
+            return {
+                .reason = ResolutionReason::CertifiedMatch,
+                .predicted_program_config = exact->program_config,
+                .predicted_key = key,
+            };
+        }
+        // Preserve the legacy table's unit-test ABI only when it is the sole
+        // selectable representation. The production emitter never grants the
+        // program-config-only evidence bit to a legacy-only lock. In a mixed
+        // lock, a PC-only certificate must never authorize a distinct legacy
+        // row after the typed exact table misses.
+        if (program_config_exact_entries.empty() && models.empty()) {
+            if (const auto* descriptor = compact::ExactIndex{entries}.lookup(*key); descriptor != nullptr) {
+                return {
+                    .reason = ResolutionReason::CertifiedMatch,
+                    .descriptor = descriptor,
+                    .predicted_program_config = compact::exact_program_config(descriptor->replay),
+                    .predicted_key = key,
+                };
+            }
+        }
+    }
+    // Legacy replay rows measured an explicit CKC. They remain readable for
+    // lock compatibility but are never selectable, including in a mixed lock:
+    // a PC-only exact certificate must not authorize a distinct legacy row.
+
+    if (!models.empty() && metadata.online_program_config_model_evidence_schema_version != 1) {
+        return {.reason = ResolutionReason::EmptyRegistry};
+    }
+    const compact::ProgramConfigGbdtModel* supported_model = nullptr;
+    for (const auto& model : models) {
+        if (compact::model_supports(*key, model, metadata.online_model_bundle_binding_sha256)) {
+            if (supported_model != nullptr) {
+                // Overlapping support is invalid even if one model happens to
+                // contain no legal candidates for this particular key.
+                return {.reason = ResolutionReason::EmptyRegistry};
+            }
+            supported_model = &model;
+        }
+    }
+    if (supported_model != nullptr) {
+        const auto predicted_match = compact::lookup_program_config(
+            *key,
+            std::span<const compact::ProgramConfigExactEntry>{},
+            *supported_model,
+            metadata.online_model_bundle_binding_sha256);
+        if (predicted_match.source != compact::ProgramConfigLookupSource::Gbdt ||
+            !predicted_match.program_config.has_value()) {
+            return {.reason = ResolutionReason::EmptyRegistry};
+        }
+        return {
+            .reason = ResolutionReason::PredictedMatch,
+            .predicted_program_config = predicted_match.program_config,
+            .predicted_key = key,
+        };
     }
 
     return {.reason = ResolutionReason::EmptyRegistry};
@@ -856,7 +1001,16 @@ static Resolution resolve_impl(
 
 Resolution resolve(const Mode mode, const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept {
     return resolve_impl(
-        mode, request, eligibility, nullptr, nullptr, generated::metadata(), generated::entries(), nullptr);
+        mode,
+        request,
+        eligibility,
+        nullptr,
+        nullptr,
+        generated::metadata(),
+        generated::entries(),
+        nullptr,
+        generated::online_models(),
+        generated::program_config_exact_entries());
 }
 
 DispatchResult resolve_for_dispatch_decision(
@@ -896,7 +1050,19 @@ DispatchResult resolve_for_dispatch(
     auto& action = decision.action;
     std::optional<ttnn::prim::MatmulParams> materialized_parameters;
     try {
-        if (action == ExecutionAction::ApplyRecipe && resolution.descriptor != nullptr) {
+        if (action == ExecutionAction::ApplyRecipe && resolution.predicted_program_config.has_value() &&
+            resolution.predicted_key.has_value()) {
+            const auto program_config =
+                materialize_registry_program_config(*resolution.predicted_key, *resolution.predicted_program_config);
+            if (!program_config.has_value()) {
+                resolution.reason = ResolutionReason::MaterializationRejected;
+                action = ExecutionAction::Fallback;
+                circuit_break_domain(eligibility.call.domain);
+            } else {
+                materialized_parameters = legacy_parameters;
+                materialized_parameters->program_config = program_config;
+            }
+        } else if (action == ExecutionAction::ApplyRecipe && resolution.descriptor != nullptr) {
             auto materialized_recipe =
                 materializer != nullptr ? materializer(*resolution.descriptor) : MaterializationResult{};
             if (materialized_recipe.status != MaterializationStatus::Success ||
@@ -945,7 +1111,9 @@ Resolution resolve_with_synthetic_candidate_for_testing(
         &candidate_recipe,
         generated::metadata(),
         generated::entries(),
-        nullptr);
+        nullptr,
+        {},
+        {});
 }
 
 Resolution resolve_with_compact_table_for_testing(
@@ -954,8 +1122,11 @@ Resolution resolve_with_compact_table_for_testing(
     const Eligibility& eligibility,
     const compact::TableMetadata& metadata,
     const std::span<const compact::EntryDescriptor> entries,
-    const CompatibilityDigests& actual) noexcept {
-    return resolve_impl(mode, request, eligibility, nullptr, nullptr, metadata, entries, &actual);
+    const CompatibilityDigests& actual,
+    const std::span<const compact::ProgramConfigGbdtModel> models,
+    const std::span<const compact::ProgramConfigExactEntry> program_config_exact_entries) noexcept {
+    return resolve_impl(
+        mode, request, eligibility, nullptr, nullptr, metadata, entries, &actual, models, program_config_exact_entries);
 }
 
 bool circuit_break_domain(const OperationDomain domain) noexcept {
@@ -1041,6 +1212,10 @@ StatsSnapshot stats_snapshot() noexcept {
     snapshot.compatibility_status = startup_compatibility_status();
     snapshot.table_metadata = generated::metadata();
     snapshot.entry_count = generated::entries().size();
+    snapshot.entry_count += generated::program_config_exact_entries().size();
+    for (const auto& model : generated::online_models()) {
+        snapshot.entry_count += model.candidates.size();
+    }
 
     for (std::size_t domain = 0; domain < stats.size(); ++domain) {
         const auto& source = stats[domain];
