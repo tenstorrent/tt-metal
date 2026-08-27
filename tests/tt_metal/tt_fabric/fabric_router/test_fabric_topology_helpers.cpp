@@ -66,6 +66,30 @@ TEST(FabricTopologyHelpers, GenuineTorusAxesRequireDistinctWrapPeers) {
     EXPECT_FALSE(has_genuine_torus_axis(FabricType::TORUS_XY, MeshShape{2, 2}, 1));
 }
 
+// Each 2D torus config must gate exactly its own axis: TORUS_X wraps mesh_shape[1] (columns),
+// TORUS_Y wraps mesh_shape[0] (rows). A short extent on the *other* axis must not throw.
+TEST(FabricTopologyHelpers, RingExtentValidationChecksCorrespondingAxisOnly) {
+    // TORUS_X wraps axis 1: extent-2 rows are fine, extent-2 columns are not.
+    EXPECT_NO_THROW(validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_X, MeshShape{2, 4}));
+    EXPECT_THROW(
+        validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_X, MeshShape{4, 2}), std::runtime_error);
+    // TORUS_Y wraps axis 0: mirrored expectations.
+    EXPECT_NO_THROW(validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_Y, MeshShape{4, 2}));
+    EXPECT_THROW(
+        validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_Y, MeshShape{2, 4}), std::runtime_error);
+    // TORUS_XY requires both axes to exceed 2.
+    EXPECT_NO_THROW(validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_XY, MeshShape{4, 4}));
+    EXPECT_THROW(
+        validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_XY, MeshShape{2, 4}), std::runtime_error);
+    EXPECT_THROW(
+        validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_XY, MeshShape{4, 2}), std::runtime_error);
+    // 1D ring checks ring length; non-ring configs are never gated.
+    EXPECT_NO_THROW(validate_fabric_config_ring_extents(FabricConfig::FABRIC_1D_RING, MeshShape{1, 8}));
+    EXPECT_THROW(
+        validate_fabric_config_ring_extents(FabricConfig::FABRIC_1D_RING, MeshShape{1, 2}), std::runtime_error);
+    EXPECT_NO_THROW(validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D, MeshShape{2, 2}));
+}
+
 TEST(FabricTopologyHelpers, ConnectivityValidationComparesRealizedAxes) {
     EXPECT_FALSE(requires_more_connectivity(FabricType::TORUS_Y, FabricType::MESH, MeshShape{1, 4}));
     EXPECT_FALSE(requires_more_connectivity(FabricType::TORUS_Y, FabricType::MESH, MeshShape{2, 4}));
