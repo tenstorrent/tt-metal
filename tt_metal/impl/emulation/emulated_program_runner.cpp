@@ -4860,9 +4860,19 @@ private:
         while (!stopping()) {
             if (!emule_run_needs_peer_pump()) {
                 std::unique_lock<std::mutex> lk(wait_mu_);
-                cv_.wait(lk, [this] { return stop_ || emule_run_needs_peer_pump(); });
+                // BOUNDED, not a plain wait: the flags the predicate reads are set outside wait_mu_
+                // and notify() cannot take it (the driver reaches notify() through
+                // abandon_locked -> resume_emule_run, so locking there would self-deadlock). A notify
+                // landing between the check above and this wait would otherwise be dropped, leaving
+                // the driver asleep with a peer-fed run parked -- the exact hang it exists to prevent.
+                cv_.wait_for(lk, std::chrono::milliseconds(50), [this] {
+                    return stop_ || emule_run_needs_peer_pump();
+                });
                 if (stop_) {
                     return;
+                }
+                if (!emule_run_needs_peer_pump()) {
+                    continue;
                 }
             }
             const uint64_t current_sequence = g_emule_run_sequence.load(std::memory_order_acquire);
