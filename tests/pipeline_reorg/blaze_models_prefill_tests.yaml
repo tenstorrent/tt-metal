@@ -197,7 +197,7 @@
   team: models
   sp_config: sc1
 
-- name: "KV cache table accuracy (DeepSeek-V3-671B, Kimi-K2.6-1T, GLM-5.2-744B)"
+- name: "KV cache table accuracy (DeepSeek-V3-671B, Kimi-K2.6-1T, GLM-5.2-744B, Mistral-Small-4-119B)"
   fabric_profile: torus_xy
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
@@ -214,12 +214,13 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "torus-xy" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm52_kv_cache_table -k "torus-xy-8x4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_mistral4_kv_cache_table -vvv --tb=short
     '
   test_type: kv_cache_table
   test_group: module
   skus:
     bh_sc1:
-      timeout: 10
+      timeout: 12
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -837,5 +838,119 @@
       # Warm tilized-cache + chunked prefill (5120) x5 timed iters, no PCC; cold cache build will exceed this.
       timeout: 35
   owner_id: U08ECJQ848G # Viacheslav Melnykov
+  team: models
+  sp_config: sc1
+- name: "Mistral-Small-4-119B MLA accuracy 5k, 25k"
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603
+    export MISTRAL4_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/mistral_small_4_119b_mla_ref_cache
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral_small4_mla -vvv --tb=short
+    '
+  test_type: mistral4_mla
+  test_group: module
+  skus:
+    bh_sc1:
+      # measured 73 s of tests on run 32793561151, plus runner setup
+      timeout: 11
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
+  sp_config: sc1
+
+- name: "Mistral-Small-4-119B MLA chunked accuracy 5k@5k, 25k@5k"
+  fabric_profile: torus_xy
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603
+    export MISTRAL4_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/mistral_small_4_119b_mla_ref_cache
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "mistral4 and cpu and scalar and no_determinism and torus-xy-8x4" -vvv --tb=short
+    '
+  test_type: mistral4_mla_chunked
+  test_group: module
+  skus:
+    bh_sc1:
+      # 13 scenarios (verified by --collect-only). Measured: all 13 pass in 1260 s (21 min) on run
+      # 32786508251, but the job still timed out at 30 because the box's setup runs before them.
+      # measured 1164 s (19.4 min) for all 13 scenarios, plus runner setup;
+      # 30 was not enough when the same leg ran 21 min, so this keeps a real margin
+      timeout: 32
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
+  sp_config: sc1
+
+- name: "Mistral-Small-4-119B MoE dispatch, combine, reduce accuracy"
+  fabric_profile: torus_xy
+  cmd: |
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -k "mistral4-perf_no_pcc and 8x4" -vvv --tb=short
+    '
+  test_type: mistral4_moe_ops
+  test_group: module
+  skus:
+    bh_sc1:
+      # 16 cases across the four op files (verified by --collect-only). Measured 12 min; +15%.
+      # mesh_configs' only marker-carrying 8x4 row is fabric2d-torus-xy-8x4-2link, so this leg
+      # measured 86 s for 4 passed + 12 skipped, plus runner setup
+      timeout: 11
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
+  sp_config: sc1
+
+- name: "Mistral-Small-4-119B prefill block accuracy 5k"
+  cmd: |
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_mistral4_prefill_block -vvv --tb=short
+    '
+  test_type: mistral4_prefill_block
+  test_group: module
+  skus:
+    bh_sc1:
+      # the row here is the shared-harness one (smoke, perf, pcc x determinism x
+      # iterations), not the 4-case row this number was measured against -- left generous until CI
+      # reports its own time
+      timeout: 14
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
+  sp_config: sc1
+
+- name: "Mistral-Small-4-119B MoE accuracy 5k"
+  cmd: |
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe -vvv --tb=short
+    '
+  test_type: mistral4_moe
+  test_group: module
+  skus:
+    bh_sc1:
+      # measured 144 s of tests, plus runner setup
+      timeout: 12
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
+  sp_config: sc1
+
+- name: "Mistral-Small-4-119B prefill transformer accuracy 5k"
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/mistral_small_4_host_ref_cache
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer -k "36_layers and 5k and pcc and random and not json" -vvv --tb=short
+    '
+  test_type: mistral4_prefill_transformer
+  test_group: module
+  skus:
+    bh_sc1:
+      # Full-model PCC gated per stage on npcc, heavier than the 5.4 min smoke row it replaces.
+      # full-model PCC, never yet completed on CI -- generous until it reports a time
+      timeout: 20
+  owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
