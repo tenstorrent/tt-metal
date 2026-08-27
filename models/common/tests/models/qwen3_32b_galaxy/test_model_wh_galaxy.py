@@ -271,6 +271,27 @@ def _compose_decode_rot_mat(tensor: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -
     return first_row.reshape(-1, first_row.shape[-1])
 
 
+def _report_quantized_pcc(expected: torch.Tensor, actual: torch.Tensor, case: str) -> None:
+    """Report the PCC against the reference *rounded to the device's dtype*.
+
+    The residual stream is bfloat16 and the reference is fp32, so part of every
+    intermediate's gap is quantization and not a defect. Rounding the reference
+    to bfloat16 before comparing separates the two: if this number is ~1.0 the
+    device is reproducing the best bfloat16 can represent, and the raw PCC beside
+    it is the floor rather than a finding. Magnitudes are printed with it because
+    on Qwen3 the residual carries very large outlier channels, which is what
+    makes that floor low.
+    """
+
+    quantized = expected.to(torch.bfloat16).float()
+    _, message = comp_pcc(quantized, actual.float(), _PCC)
+    print(
+        f"[bisect] {case} vs bfloat16(reference): {message} "
+        f"|ref|max={float(expected.abs().max()):.4g} |dev|max={float(actual.abs().max()):.4g}",
+        flush=True,
+    )
+
+
 def _report_pcc(expected: torch.Tensor, actual: torch.Tensor, case: str) -> None:
     """Compute and print a PCC without asserting on it.
 
@@ -1013,6 +1034,12 @@ def test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128(mesh_device: t
             normed_host = _compose_residual(normed, mesh_device)
             _report_pcc(stages["after layer 0"], after_layer[0], "bisect decode after layer 0 user 0")
             _report_pcc(stages["final norm"], normed_host[0], "bisect decode final norm user 0")
+            # The residual stream and the final norm score lower than every
+            # other boundary while the logits they feed score 0.9994. These two
+            # lines say whether that is quantization or a defect.
+            _report_quantized_pcc(stages["after layer 0"], after_layer[0], "decode after layer 0 user 0")
+            _report_quantized_pcc(stages["final norm"], normed_host[0], "decode final norm user 0")
+            _report_quantized_pcc(stages["attention out"], attention_host[0], "decode attention out user 0")
 
             logits = model.lm_head.decode_forward(_relocate(normed, model.config.lm_head_config.decode_input_memcfg))
             actual = _logits(logits, params.vocab_size, mesh_device)

@@ -156,6 +156,13 @@ def test_qwen3_32b_galaxy_full_model_prefill_and_first_decode_token(mesh_device:
         with GalaxyDirectRunner(handle.model) as runner:
             prefill_logits = runner.prefill_row(prompt, slot=0)
             first_token = int(torch.argmax(prefill_logits[0]))
+            # Print before asserting: a passing gate that records no number is
+            # not evidence.
+            print(
+                f"[full-model] prefill {len(prompt)} predicted {first_token}, "
+                f"reference top-5 {aligned[0, :].tolist()}, target {int(reference_tokens[len(prompt)])}",
+                flush=True,
+            )
             message = f"prefill predicted {first_token}, outside the reference top-5 {aligned[0, :].tolist()}"
             assert first_token in aligned[0, :].tolist(), message
 
@@ -165,6 +172,11 @@ def test_qwen3_32b_galaxy_full_model_prefill_and_first_decode_token(mesh_device:
             positions[0] = len(prompt)
             decode_logits = runner.decode_logits(tokens, positions)
             second_token = int(torch.argmax(decode_logits[0]))
+            print(
+                f"[full-model] decode position {len(prompt)} predicted {second_token}, "
+                f"reference top-5 {aligned[1, :].tolist()}, target {int(reference_tokens[len(prompt) + 1])}",
+                flush=True,
+            )
             message = f"decode predicted {second_token}, outside the reference top-5 {aligned[1, :].tolist()}"
             assert second_token in aligned[1, :].tolist(), message
     finally:
