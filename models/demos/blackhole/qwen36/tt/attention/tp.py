@@ -104,13 +104,6 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # De-interleave [q,gate] per head → contiguous q/gate slices (avoids ~5.3ms relayout).
     qg_deint = fused_qkv
 
-    # TP > n_kv_heads (e.g. 27B's 4 KV heads on TP=8): there is no whole KV head per device, so
-    # pre-expand K/V to tp*head_dim rows where device d holds the head its GQA query group maps
-    # to (devices 2d, 2d+1 share head d at TP=8). The per-device slicing below is then uniform.
-    # No-op when tp <= n_kv_heads, so TP=4 weights stay bit-identical.
-    kv_rep = lambda w: tpc.replicate_kv_weight(w, args.n_kv_heads, args.num_devices, args.head_dim)
-    k_proj, v_proj = kv_rep(state_dict["k_proj.weight"]), kv_rep(state_dict["v_proj.weight"])
-
     if fused_qkv:
         if qg_deint:
             fused = tpc.prepare_attn_qkv_deint(
