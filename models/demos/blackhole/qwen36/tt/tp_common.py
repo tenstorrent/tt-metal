@@ -204,7 +204,9 @@ def rope_permuted_enabled(args):
     pairing coincides with HF's partial one, collapsing the partial-rope slice/transpose/concat
     chain into one call. The permutation is folded into q_proj/k_proj/q_norm/k_norm at load time
     (attention/tp.py's load_attention_weights_tp), so it changes the WEIGHTS, not just an op
-    sequence -- the ".rp" cache tag there keeps the two variants from ever aliasing on disk.
+    sequence -- the ".rp.<hash>" cache tag there (content hash of the source weight +
+    rope_tp.ROPE_PERM_VERSION) keeps the two variants from ever aliasing on disk, and self-
+    invalidates if either the checkpoint weights or the permutation construction code changes.
 
     ON for Wormhole 9B N300 (wh_9b_n300). No env var: this is the shipping path on that config,
     plus the geometric precondition that rope_head_dim < head_dim (Qwen3.5's partial rotary --

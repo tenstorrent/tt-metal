@@ -23,6 +23,7 @@ on:
           - qwen2.5-vl-32b
           - qwen3-0.6b
           - qwen3-1.7b
+          - qwen3.5-9b
           - qwq-32b
           - phi-3-mini
           # phi-4-mini: disabled — assert freqs.shape[-1] == ext_factors.shape[-1]
