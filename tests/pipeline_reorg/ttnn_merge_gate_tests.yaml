@@ -19,18 +19,18 @@
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
 
-# Codegen-path coverage for every op that has one (untilize and repeat today).
+# Codegen-path coverage for every op that has one (untilize, repeat and repeat_interleave today).
 # `-k codegen` selects each op's tests that pin the codegen kernels, so a newly covered op joins
-# this entry by appending its unit-test file rather than by adding another job. Both ops pin them
-# through the verification-only entries in ttnn._ttnn.operations.data_movement -- neither public
-# API takes an implementation argument.
+# this entry by appending its unit-test file rather than by adding another job. All three pin them
+# through the verification-only entries in ttnn._ttnn.operations.data_movement -- none of the three
+# public APIs takes an implementation argument.
 #
 # Those pinned tests are the ones worth gating a merge on: they run the codegen kernels and
 # compare against native on the same input. The generated routing matrices under
 # tests/ttnn/nightly only assert that out-of-scope shapes fall BACK to native, so nothing in
 # them fails when a codegen kernel itself breaks -- and they cost 1-5 minutes per op, which is
-# why they stay in nightly. This selection is 25 tests, 1.9s of pytest on an N300 with the
-# job's warm kernel ccache (~8s cold), no single test over 0.6s.
+# why they stay in nightly. This selection is 49 tests and roughly 35s of wall-clock pytest on an
+# N300, device bring-up and kernel compiles included, against the job's 5-minute budget.
 #
 # Hardware only, to keep the gate cheap. Codegen kernels are not blocked from ttsim -- untilize's
 # codegen tests pass on both sim SKUs and sanity runs them there -- but the simulator would
@@ -40,6 +40,7 @@
     pytest --timeout 60 -xv
     tests/ttnn/unit_tests/operations/data_movement/test_untilize.py
     tests/ttnn/unit_tests/operations/data_movement/test_repeat.py
+    tests/ttnn/unit_tests/operations/data_movement/test_repeat_interleave.py
     -k codegen
   skus:
     wh_n300_civ2:

@@ -5,6 +5,7 @@
 import glob
 import os
 import re
+import shutil
 from dataclasses import fields
 from datetime import datetime, timezone
 from functools import reduce
@@ -439,6 +440,26 @@ def _assert_combined_schema(dfs: list[pd.DataFrame], label: str):
     )
 
 
+def _run_id() -> str:
+    """The ROW_KEY component that identifies one CI run, re-runs included.
+
+    "Re-run all/failed jobs" keeps ``GITHUB_RUN_ID`` and bumps
+    ``GITHUB_RUN_ATTEMPT``. Without the attempt, a re-run republishes a second,
+    different measurement under the same (test_name, commit_sha, arch, run_id) —
+    a colliding ROW_KEY. Attempt 1 stays bare so every row already archived keeps
+    the identity it was published with; every shard of one attempt still shares
+    one run_id, which is what the data team means by "one run".
+
+    Off CI there is no run id. The run tag is unique per invocation, so two local
+    runs of the same commit no longer collide the way the old constant "local" did.
+    """
+    run = os.environ.get("GITHUB_RUN_ID", "").strip()
+    if not run:
+        return TestConfig.perf_run_tag()
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1").strip() or "1"
+    return run if attempt == "1" else f"{run}-{attempt}"
+
+
 def _ci_provenance() -> dict:
     """Run-context provenance for a published Parquet batch, read from the CI
     environment (best-effort defaults when run off-CI)."""
@@ -446,11 +467,83 @@ def _ci_provenance() -> dict:
     return {
         "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
         "arch": os.environ.get("CHIP_ARCH", "unknown"),
-        "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        "run_id": _run_id(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "pipeline": "PR" if event == "pull_request" else "nightly",
         "pr_number": os.environ.get("PR_NUMBER") or None,
     }
+
+
+def _refresh_latest(run_dir: Path) -> None:
+    """Point ``perf_data/latest`` at this run, so callers keep a stable path.
+
+    Best-effort: a report that exists but is not linked is still a usable report.
+    """
+    link = run_dir.parent.parent / "latest"
+    if link.exists() and not link.is_symlink():
+        # A real directory here is somebody's data, not our link. Leave it.
+        logger.warning(f"perf_data/latest exists and is not a symlink: {link}")
+        return
+    # Swap through a temporary name: Path.replace is one rename, so a reader that
+    # opens the link mid-update sees the old run or the new one, never nothing.
+    # The pid keeps two concurrent runs from fighting over the temporary.
+    tmp = link.with_name(f".latest.tmp.{os.getpid()}")
+    try:
+        tmp.unlink(missing_ok=True)  # debris from a crashed run with this pid
+        tmp.symlink_to(run_dir.relative_to(link.parent), target_is_directory=True)
+        tmp.replace(link)
+    except OSError as exc:  # noqa: BLE001 — the link is a convenience, not the report
+        logger.warning(f"perf_data/latest not updated: {exc}")
+        tmp.unlink(missing_ok=True)
+
+
+def _keep_runs() -> int:
+    """How many run directories to retain locally (``PERF_KEEP_RUNS``, default 10).
+
+    The archive is the published Parquet, not this directory, so local history is
+    a debugging convenience and wants a bound. 0 or less disables pruning.
+    """
+    raw = os.environ.get("PERF_KEEP_RUNS", "10")
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(f"PERF_KEEP_RUNS={raw!r} is not an integer; keeping 10 runs")
+        return 10
+
+
+def _prune_runs(runs_dir: Path, keep: int, current: Path) -> None:
+    """Keep the newest ``keep`` run directories, never deleting ``current``.
+
+    ``keep <= 0`` disables pruning. Every step is survivable on its own: one
+    unreadable directory costs that directory, not the whole prune, and the run
+    that just finished is protected by name rather than by being the newest —
+    a clock that jumped backwards must not be able to delete it.
+    """
+    if keep <= 0:
+        return
+    run_dirs: list[tuple[float, Path]] = []
+    try:
+        entries = list(runs_dir.iterdir())
+    except OSError as exc:
+        logger.warning(f"perf_data runs not pruned ({runs_dir}): {exc}")
+        return
+    for d in entries:
+        try:
+            if not d.is_dir() or d.is_symlink():
+                continue
+            run_dirs.append((d.stat().st_mtime, d))
+        except OSError as exc:
+            logger.warning(f"skipping run directory {d}: {exc}")
+    run_dirs.sort(key=lambda pair: pair[0], reverse=True)
+    survivors = {d for _, d in run_dirs[:keep]}
+    survivors.add(current)
+    for _, stale in run_dirs:
+        if stale in survivors:
+            continue
+        try:
+            shutil.rmtree(stale)
+        except OSError as exc:
+            logger.warning(f"failed to prune run directory {stale}: {exc}")
 
 
 def _write_run_parquet(raw_csv_paths, out_dir) -> None:
@@ -490,8 +583,14 @@ def combine_perf_reports():
     - One for regular files (without .post.csv)
     - One for post files (with .post.csv)
 
+    Output goes to this run's own directory, ``perf_data/runs/<tag>/``, and
+    ``perf_data/latest`` is pointed at it. Writing every run into one shared
+    directory used to overwrite the previous run's reports and — worse — a
+    narrower second run left the first run's test directories untouched, so the
+    tree read as complete while holding a blend of two runs.
+
     Also publishes the run's raw combined CSVs as one Parquet batch
-    (perf_data/<run_id>.parquet) so a run emits both CSV and Parquet.
+    (runs/<tag>/<run_id>.parquet) so a run emits both CSV and Parquet.
     Unknown Parquet columns raise ``PerfSchemaError`` (CSV is already written).
     """
 
@@ -499,7 +598,7 @@ def combine_perf_reports():
     if not unique_module_names:
         return
 
-    output_dir = TestConfig.LLK_ROOT / "perf_data"
+    output_dir = TestConfig.perf_run_dir()
 
     if not output_dir.exists():
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -601,6 +700,8 @@ def combine_perf_reports():
             Path(file).unlink()
 
     _write_run_parquet(raw_outputs, output_dir)
+    _refresh_latest(output_dir)
+    _prune_runs(output_dir.parent, _keep_runs(), output_dir)
 
 
 class PerfConfig(TestConfig):

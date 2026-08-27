@@ -11,6 +11,9 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_softmax
 from models.common.utility_functions import torch_random
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize("shape", [[2, 10, 512, 8192]])
 def test_ttnn_softmax_sdxl_attention(device, shape):
