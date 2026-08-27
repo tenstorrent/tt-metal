@@ -24,7 +24,15 @@ from helpers.perf.parquet import (
     write_parquet,
     write_run_batch,
 )
-from helpers.perf.schema import MARKER, METRIC_BASES, RUN_TYPE_NAMES
+from helpers.perf.schema import (
+    MARKER,
+    MEAN,
+    METRIC_BASES,
+    RUN_TYPE_NAMES,
+    STD,
+    metric_column,
+    stat_column,
+)
 from helpers.perf.test_schemas import PERF_TEST_SCHEMAS
 from helpers.perf.wide_schema import DB_SCHEMA, DROPPED_COLUMNS
 
@@ -341,9 +349,13 @@ def test_counter_metrics_stay_out_of_the_published_table():
     # not part of it: no pipeline passes --enable-perf-counters, so every one
     # would be NULL in every published row.
     published = {c.name for c in DB_SCHEMA}
-    leaked = sorted(
-        c for c in published if any(c.endswith("_" + m) for m in METRIC_BASES)
-    )
+    forms = {
+        metric_column(run_type, base)
+        for run_type in RUN_TYPE_NAMES
+        for metric in METRIC_BASES
+        for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
+    }
+    leaked = sorted(published & forms)
     assert not leaked, (
         "counter metric column(s) reached the published table: "
         f"{leaked[:5]}{'...' if len(leaked) > 5 else ''}"
