@@ -953,8 +953,7 @@ jobs:
                           "unit",
                           "fabric",
                           "multiprocess",
-                          "distributed-ops",
-                          "tttv2"
+                          "distributed-ops"
                         ],
                         "type": "string"
                       },
@@ -1399,7 +1398,6 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "dits",
                           "tttv2 modules",
                           "qwen3_vl"
                         ],
@@ -1697,6 +1695,7 @@ jobs:
                           "gemma-4-26b-a4b",
                           "gemma-4-31b",
                           "dit-common",
+                          "dit-encoders",
                           "wan-2.2-t2v",
                           "wan-2.2-i2v",
                           "llama3.3-70b-galaxy",
