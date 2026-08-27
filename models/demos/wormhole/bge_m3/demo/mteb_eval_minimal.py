@@ -8,6 +8,11 @@ trace, and replays it for every batch. Short final batches are padded with empty
 requests; those synthetic rows are removed before MTEB scoring. The model's CLS
 slice is captured in the trace, so only [B, 1, 1, D] is copied back to the host.
 
+The script needs the mteb package. Install it once into the tt-metal
+python_env from the tt-metal root:
+
+    uv pip install --python python_env/bin/python mteb
+
 Examples from the tt-metal root:
 
     # Ten examples per dataset, both HF and TT:
@@ -30,12 +35,12 @@ from pathlib import Path
 try:
     import mteb
     from mteb.models import ModelMeta
-except ImportError:
+except ImportError as exc:  # pragma: no cover - depends on the local install
     raise ImportError(
-        "mteb is required for this evaluation script.\n"
-        "Install with: uv pip install --python python_env/bin/python "
-        "-r models/demos/wormhole/bge_m3/demo/requirements_mteb.txt"
-    )
+        "This script needs the mteb package, and the import failed.\n"
+        "Install it into the tt-metal python_env from the tt-metal root:\n"
+        "    uv pip install --python python_env/bin/python mteb"
+    ) from exc
 
 import numpy as np
 import torch

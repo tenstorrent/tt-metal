@@ -84,7 +84,7 @@ TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.
 Install the eval dependencies once inside `python_env`:
 
 ```bash
-uv pip install --python python_env/bin/python -r models/demos/wormhole/bge_m3/demo/requirements_mteb.txt
+uv pip install --python python_env/bin/python mteb
 ```
 
 ### Kernel-level profiling (`tracy_perf.py`)
