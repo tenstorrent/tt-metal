@@ -76,17 +76,6 @@ inline void _configure_src_zero_flag_(const bool disable)
     _apply_src_zero_flag_(value);
 }
 
-// FP compute / format reconfig slow path: cache the operand formats + write the flag. Out-of-line so
-// the inline fast path below stays tiny -- an SDPA/matmul kernel with many init sites overflows its
-// slot if the format-cache stores are inlined at each one.
-inline __attribute__((noinline)) void _apply_default_zero_flag_state_(
-    const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format, const std::uint32_t value)
-{
-    src_zero_flag_srca_fmt = srca_dst_format;
-    src_zero_flag_srcb_fmt = srcb_dst_format;
-    _apply_src_zero_flag_(value);
-}
-
 // A kernel tight on program-config space (e.g. ring-joint SDPA, which reconfigs ~30x) can
 // #define LLK_ZEROFLAG_OUTLINE before its includes to force this configurator out-of-line -- one copy
 // called from each reconfig/init site instead of an inlined fast path at every one, trading a call for
@@ -97,21 +86,22 @@ inline __attribute__((noinline)) void _apply_default_zero_flag_state_(
 #define LLK_ZEROFLAG_DEFAULT_ATTR
 #endif
 
-// FP compute / format reconfig: the flag follows the operand formats. The fast path (inlined at every
-// init call site, unless LLK_ZEROFLAG_OUTLINE) computes the operand-driven value and returns if the flag
-// already holds it -- the steady state in hot loops. Only a genuine change pays the out-of-line _apply_
-// (which also refreshes the cached formats reconfig_srca/srcb reuse).
-// TODO(tt-metal#53652): the flag must be CLEARED for all FPU compute; once
-// that lands both bodies collapse to _configure_src_zero_flag_(false) and requires_disabled_src_zero_flag()
-// / the format cache are dropped (they are only reachable from here).
-inline LLK_ZEROFLAG_DEFAULT_ATTR void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+// FP compute / format reconfig: the flag follows the operand formats. Reads the cached SrcA/SrcB formats
+// -- maintained by the reconfig sites, the only places the SrcA/SrcB format actually changes -- and applies
+// the operand-driven value, skipping the pipe-draining write when the flag already holds it (the steady
+// state in hot loops). Takes no format args and stores nothing, so the inlined fast path at every init site
+// stays tiny AND the caches can never diverge (they are refreshed on every format change, independent of
+// whether the resulting flag value changed).
+// TODO(tt-metal#53652): the flag must be CLEARED for all FPU compute; once that lands this collapses to
+// _configure_src_zero_flag_(false) and requires_disabled_src_zero_flag() / the format cache are dropped.
+inline LLK_ZEROFLAG_DEFAULT_ATTR void _configure_default_zero_flag_state_()
 {
-    const std::uint32_t value = requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format) ? 1u : 0u;
+    const std::uint32_t value = requires_disabled_src_zero_flag(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt) ? 1u : 0u;
     if (src_zero_flag_hw == value)
     {
         return;
     }
-    _apply_default_zero_flag_state_(srca_dst_format, srcb_dst_format, value);
+    _apply_src_zero_flag_(value);
 }
 
 // Data-movement ops keep the flag set so values pass through faithfully (bf16 -0.0, 16b/32b ints).

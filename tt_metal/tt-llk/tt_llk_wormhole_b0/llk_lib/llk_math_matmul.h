@@ -816,7 +816,7 @@ inline void _llk_math_matmul_init_(
     // llk_math_reconfig_data_format_srca(old, new) skips the LLK reconfig entirely when old == new format, so on a
     // same-format reconfig the reset never runs. Without this line MVMUL would inherit a stale keep-denormals flag
     // (denormal Src results differ). Mirrors what reduce/transpose/datacopy inits already do.
-    math::_configure_default_zero_flag_state_(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
+    math::_configure_default_zero_flag_state_();
 }
 
 /**

@@ -265,7 +265,7 @@ inline void _llk_math_reduce_block_max_row_init_(const ckernel::TensorShape& ten
     // The reduce runs on the FPU pool (GMPOOL). Restore the operand-driven zero-flag baseline so a
     // preceding datacopy/copy_init that left PRESERVE (keep denormals) does not leak into it, mirroring
     // the standard _llk_math_reduce_init_.
-    math::_configure_default_zero_flag_state_(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
+    math::_configure_default_zero_flag_state_();
 }
 
 template <bool is_fp32_dest_acc_en = false>

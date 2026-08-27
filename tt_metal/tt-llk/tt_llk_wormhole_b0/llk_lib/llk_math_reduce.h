@@ -73,7 +73,7 @@ inline void reduce_row_perform_transpose()
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
 
     // Restore the operand-driven baseline for the currently configured formats.
-    math::_configure_default_zero_flag_state_(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt);
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -482,7 +482,7 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
     // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left
     // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
     // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
-    math::_configure_default_zero_flag_state_(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt);
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
