@@ -1,0 +1,8 @@
+graphviz>=0.20        # ttnn.graph imports it unconditionally; `import ttnn` fails without it
+scipy>=1.10           # 24 kHz -> 16 kHz resample in the WER scorer. NOT torchaudio -- its wheel
+                      # ABI is broken against this torch and merely importing it breaks
+                      # transformers, which takes the scorer down with it
+# Regenerating tests/prompt_fixture.json (only) also needs `mistral-common`, and it must go in a
+# THROWAWAY venv, never this one -- see scripts/dump_prompt_ids.py.
+# MOS scoring needs DistillMOS in /tmp/mosvenv -- see tests/probes/mos_setup.sh -- for the same
+# torchaudio reason.

@@ -9,7 +9,7 @@ or optimize the model. Nothing here is imported by the model; the dependency onl
 
 ONE implementation of every on-device comparison, with three consumers:
 
-  - `tests/test_*_ttnn_pcc.py` import the `compare_*` primitives and ASSERT on them (that is the
+  - `tests/test_*_pcc.py` import the `compare_*` primitives and ASSERT on them (that is the
     pass/fail suite, and it is what CI runs);
   - `scripts/quality_report.py` runs `--gate X --json` in a subprocess and reads the returned
     metrics as JSON -- no prose scraping, and each gate keeps its own device and timeout;

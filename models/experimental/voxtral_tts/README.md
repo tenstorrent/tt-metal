@@ -36,7 +36,7 @@ implementation and it is the ground truth, not the device.**
 `ttnn.graph` imports `graphviz` unconditionally:
 
 ```bash
-uv pip install graphviz
+uv pip install -r models/experimental/voxtral_tts/requirements.txt
 ```
 
 > **Do NOT install `torchaudio`.** Its wheel ABI is broken against this torch, and merely having it
@@ -68,15 +68,24 @@ the real checkpoint shapes. Only the device PCC, WER and perf tests need the rea
 ## Quick Start
 
 ```bash
-# Generate the 15-prompt quality set (audio + per-case timings) and score it
+# Speak a sentence in one of the 20 shipped voices
+python -m models.experimental.voxtral_tts.demo.demo "Hello from Tenstorrent." \
+    --voice neutral_male --out hello.wav --seed 0
+python -m models.experimental.voxtral_tts.demo.demo --list-voices
+
+# Interactive server (REPL): load + warm once, then one wav per typed line
+python -m models.experimental.voxtral_tts.demo.demo_server --voice neutral_male
+```
+
+The REPL supports `\voice NAME`, `\voices`, `\seed N`, `\out PATH` and `\quit`.
+
+For the 15-prompt quality set and its scoring (what the gates use):
+
+```bash
 python models/experimental/voxtral_tts/scripts/generate_quality_set.py --tag mychange
 python models/experimental/voxtral_tts/scripts/score_quality_set_scipy.py \
     models/experimental/voxtral_tts/generated/resultsmychange.json
 ```
-
-> A one-shot `demo/demo.py` CLI and an interactive `demo/demo_server.py` REPL are **not yet
-> written** — the quality-set scripts above are currently the only entry points. See the
-> `VOXTRAL_TTS_NEXT_STEPS.md` in the bringup repo.
 
 ### Integration API
 
@@ -102,16 +111,28 @@ structural half needs neither a device nor the checkpoint.
 # Run all tests
 pytest models/experimental/voxtral_tts/tests/
 
-# Individual blocks — reference/architecture invariants (host only, no checkpoint)
-pytest models/experimental/voxtral_tts/tests/test_backbone_pcc.py    # Block 1 reference
-pytest models/experimental/voxtral_tts/tests/test_flow_pcc.py        # Block 2 reference
-pytest models/experimental/voxtral_tts/tests/test_codec_pcc.py       # Block 3 reference
+# Per-block reference/architecture invariants (host only, no device, no checkpoint)
+pytest models/experimental/voxtral_tts/tests/test_backbone_ref.py    # Block 1 reference
+pytest models/experimental/voxtral_tts/tests/test_flow_ref.py        # Block 2 reference
+pytest models/experimental/voxtral_tts/tests/test_codec_ref.py       # Block 3 reference
 
 # On-device PCC against the fp32 reference (needs a device + the checkpoint)
-pytest models/experimental/voxtral_tts/tests/test_backbone_ttnn_pcc.py
-pytest models/experimental/voxtral_tts/tests/test_flow_ttnn_pcc.py
-pytest models/experimental/voxtral_tts/tests/test_codec_ttnn_pcc.py
+# Naming: test_<block>_ref.py is the fp32 reference; test_<block>_pcc.py is the device.
+pytest models/experimental/voxtral_tts/tests/test_backbone_pcc.py
+pytest models/experimental/voxtral_tts/tests/test_flow_pcc.py
+pytest models/experimental/voxtral_tts/tests/test_codec_pcc.py
+pytest models/experimental/voxtral_tts/tests/test_codec_request_path.py
 pytest models/experimental/voxtral_tts/tests/test_model_teacher_forced_pcc.py
+
+# The traced frame loop -- the path that actually ships
+pytest models/experimental/voxtral_tts/tests/test_traced_frame_loop.py
+
+# Request paths: a sequence of requests, not one in isolation
+pytest models/experimental/voxtral_tts/tests/test_backbone_request_path.py
+pytest models/experimental/voxtral_tts/tests/test_request_path_repeatability.py
+
+# All 20 voice presets run
+pytest models/experimental/voxtral_tts/tests/test_all_voices_smoke.py
 
 # Shipped TTNN configuration is what it is documented to be
 pytest models/experimental/voxtral_tts/tests/test_tt_defaults.py
@@ -124,7 +145,8 @@ pytest models/experimental/voxtral_tts/tests/test_request_path_repeatability.py
 # Per-stage timings and RTF, gated against per-stage ceilings
 pytest models/experimental/voxtral_tts/tests/test_perf.py
 
-# The on-device tests are marked `slow`. `-m "not slow"` is the fast subset (~2.5 min).
+# All on-device tests are marked `slow`, at module level. `-m "not slow"` is the
+# host-only subset: 122 tests, ~45 s, no device and no checkpoint needed.
 ```
 
 **Gate on real prompts, never random activations.** Random embeddings are off-manifold and read
@@ -177,6 +199,8 @@ Quality at the same build: long-form **WER 0 wrong of 894 words**, MOS long-form
 | Path | Role |
 |---|---|
 | `tt/` | TTNN blocks + the `TtVoxtralPipeline` serving class |
+| `frontend.py` | host front end: text + voice name -> prompt embeddings |
+| `demo/` | one-shot CLI + interactive REPL server |
 | `reference/` | pure-fp32 PyTorch implementation — the ground truth / PCC oracle |
 | `tests/` | per-block reference + on-device PCC tests, config gates, perf, WER (self-contained) |
 | `scripts/` | quality-set generation, WER scoring, the two-tag quality report |

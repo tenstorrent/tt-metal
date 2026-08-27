@@ -1,15 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block 3 (Voxtral Codec decoder) reference tests.
+"""On-device PCC for the TTNN codec decoder (Block 3) vs the CPU reference.
 
-Structural + wiring tests run always (random weights at real checkpoint shapes; ~150M fits in
-RAM so the FULL decoder runs). Numerical tests need the checkpoint.
+The reference is itself validated against upstream (30/30, all 8 decoder stages bit-exact or
+PCC ~1.0), so matching it here is a real correctness statement, not a self-comparison.
 
-Also pins the two facts that shape the whole port plan: the codec ENCODER is absent from the
-released checkpoint, and the codec's norm_eps is 1e-2.
+Skips cleanly without ttnn, a device, or the checkpoint.
 
-    pytest -svv models/experimental/voxtral_tts/tests/test_codec_pcc.py
+    pytest -svv models/experimental/voxtral_tts/tests/test_codec_ttnn_pcc.py
 """
 
 import os
@@ -18,233 +17,161 @@ import pytest
 import torch
 
 from models.experimental.voxtral_tts.reference import voxtral_codec_ref as ref
-from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
-    ACOUSTIC_CODEBOOK_SIZE,
-    CODEC_DIM,
-    CODEC_NORM_EPS,
-    DEC_CONV_BLOCKS,
-    DEC_TF_BLOCKS,
-    DEFAULT_CKPT,
-    END_AUDIO_ID,
-    LATENT_DIM,
-    N_AUDIO_SPECIAL,
-    NUM_CODEBOOKS,
-    PATCH_SIZE,
-    SEMANTIC_DIM,
-    fold_weight_norm,
-    load_manifest,
-    pcc,
-    random_state_from_manifest,
-)
+from models.experimental.voxtral_tts.reference.voxtral_common_ref import DEFAULT_CKPT, pcc
 
-PREFIX = "audio_tokenizer."
-UPSAMPLE = PATCH_SIZE * 8  # 240 patch x 8 from the three stride-2 transposed convs = 1920/frame
-needs_ckpt = pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no checkpoint at {DEFAULT_CKPT}")
+ttnn = pytest.importorskip("ttnn", reason="ttnn not importable")
+# Every test here opens a device, so `slow` joins the checkpoint guard: `-m "not slow"` is
+# meant to be the host-only subset, and it used to still run these.
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT),
+                       reason=f"no checkpoint at {DEFAULT_CKPT}"),
+]
+
+WAVE_PCC = 0.999  # the gate XTTS-v2's HiFi-GAN port shipped at (0.99946)
+STAGE_PCC = 0.996  # per-stage; the final window-16 stage amplifies inherited error (see below)
 
 
 @pytest.fixture(scope="module")
-def w():
-    """Full-size random codec decoder, weight_norm folded exactly as the real loader does."""
-    raw = random_state_from_manifest(PREFIX, seed=0)
-    s = {k: v for k, v in raw.items() if ".parametrizations.weight.original" not in k}
-    for base in [f"decoder_blocks.{i}.conv" for i in DEC_CONV_BLOCKS] + ["output_proj.conv"]:
-        s[base + ".weight"] = fold_weight_norm(raw, base)
-    s["semantic_embedding"] = raw["quantizer.semantic_codebook.embedding_sum"] / raw[
-        "quantizer.semantic_codebook.cluster_usage"
-    ].clamp(min=1e-5).unsqueeze(-1)
-    return s
+def device():
+    d = ttnn.open_device(device_id=0, l1_small_size=65536)
+    yield d
+    ttnn.close_device(d)
 
 
-# ---------------------------------------------------------------------------------------
-# The finding that drives the port plan
-# ---------------------------------------------------------------------------------------
-def test_codec_encoder_is_absent_from_released_checkpoint():
-    """The public checkpoint ships NO encoder tensors, so waveform -> codes is impossible and
-    voice cloning from arbitrary reference audio cannot be built or validated. Only the 20
-    shipped voice_embedding presets work. If a future release adds them this test will fail —
-    which is the notification we want."""
-    man = load_manifest()
-    enc = [k for k in man if k.startswith((PREFIX + "input_proj", PREFIX + "encoder_blocks"))]
-    assert enc == [], f"encoder weights appeared ({len(enc)} tensors) — Block 4 is now portable"
+@pytest.fixture(scope="module")
+def pair(device):
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    return TtVoxtralCodecDecoder(device), ref.load_codec_state()
 
 
-def test_codec_norm_eps_is_1e_2():
-    """params.json really does say norm_eps 0.01 for the codec (vs 1e-5 elsewhere). Guard it so
-    nobody 'fixes' it into 1e-5 and silently changes every RMSNorm in the decoder."""
-    assert CODEC_NORM_EPS == 1e-2
-
-
-# ---------------------------------------------------------------------------------------
-# Structure
-# ---------------------------------------------------------------------------------------
-def test_decoder_block_layout_matches_checkpoint():
-    """decoder_blocks is an nn.ModuleList of mixed types; the indices must be exactly
-    conv at 0,2,4,6 and 2-layer transformers at 1,3,5,7."""
-    man = load_manifest()
-    conv_idx = sorted({int(k.split(".")[2]) for k in man if ".conv.parametrizations" in k and "decoder_blocks" in k})
-    tf = {}
-    for k in man:
-        parts = k.split(".")
-        if k.startswith(PREFIX + "decoder_blocks") and len(parts) > 4 and parts[3] == "layers":
-            tf.setdefault(int(parts[2]), set()).add(int(parts[4]))
-    assert tuple(conv_idx) == DEC_CONV_BLOCKS
-    assert tuple(sorted(tf)) == DEC_TF_BLOCKS
-    assert all(v == {0, 1} for v in tf.values()), "each transformer stage must hold exactly 2 layers"
-
-
-def test_conv_shapes():
-    man = load_manifest()
-    g = lambda k: tuple(man[PREFIX + k]["shape"])
-    assert g("decoder_blocks.0.conv.parametrizations.weight.original1") == (CODEC_DIM, LATENT_DIM, 3)
-    for i in (2, 4, 6):  # ConvTranspose1d weight is [in, out, k]
-        assert g(f"decoder_blocks.{i}.conv.parametrizations.weight.original1") == (CODEC_DIM, CODEC_DIM, 4)
-    assert g("output_proj.conv.parametrizations.weight.original1") == (PATCH_SIZE, CODEC_DIM, 7)
-
-
-def test_no_conv_biases():
-    """Every conv in the decoder is bias-free (use_bias=False upstream)."""
-    man = load_manifest()
-    assert not [k for k in man if k.startswith(PREFIX) and k.endswith(".conv.bias")]
-
-
-def test_weight_norm_fold_reproduces_direction_and_magnitude():
-    """Folding g,v at dim=0 must give per-output-channel norm == g."""
-    v = torch.randn(8, 4, 3)
-    g = torch.rand(8, 1, 1) + 0.5
-    folded = fold_weight_norm(
-        {"c.parametrizations.weight.original0": g, "c.parametrizations.weight.original1": v}, "c"
-    )
-    assert folded.shape == v.shape
-    assert torch.allclose(folded.flatten(1).norm(dim=1), g.flatten(), atol=1e-5)
-
-
-def test_decoder_windows_are_2_4_8_16():
-    """Derived, not hard-coded: the decoder inherits the encoder's final (narrowest) window and
-    doubles it per upsample, so stage 0 is the NARROWEST."""
-    assert ref.decoder_window_sizes() == (2, 4, 8, 16)
-
-
-def test_alibi_slopes_geometric():
-    s = ref.alibi_slopes(8)
-    assert s.shape == (8,)
-    assert torch.isclose(s[0], torch.tensor(1.0))
-    ratios = s[1:] / s[:-1]
-    assert torch.allclose(ratios, torch.full((7,), 0.5), atol=1e-6), "ratio must be 2^(-8/8) = 0.5"
-
-
-# ---------------------------------------------------------------------------------------
-# Attention bias: ALiBi + causal + sliding window folded into one additive term
-# ---------------------------------------------------------------------------------------
-def test_attention_bias_is_causal_and_windowed():
-    S, window = 10, 3
-    b = ref.attention_bias(S, window)
-    assert b.shape == (1, 8, S, S)
-    ninf = float("-inf")
-    for i in range(S):
-        for j in range(S):
-            if j > i:
-                assert b[0, 0, i, j] == ninf, f"future position {j} visible from {i}"
-            elif i - j > window:
-                assert b[0, 0, i, j] == ninf, f"position {j} outside window from {i}"
-            else:
-                assert b[0, 0, i, j] == pytest.approx(float(j - i)), "head 0 (slope 1) must be j-i"
-    assert (b[0, :, 0, 0] == 0).all(), "self-attention must be unbiased"
-
-
-def test_attention_bias_rows_are_never_fully_masked():
-    """Every query must keep at least its own key, or softmax produces NaN."""
-    for S, window in ((1, 2), (5, 2), (40, 2), (40, 16)):
-        b = ref.attention_bias(S, window)
-        assert torch.isfinite(b).any(dim=-1).all(), f"a fully-masked row at S={S}, window={window}"
-
-
-# ---------------------------------------------------------------------------------------
-# Quantizer
-# ---------------------------------------------------------------------------------------
-def test_quantizer_decode_shapes_and_acoustic_range(w):
-    codes = ref.make_synthetic_codes(n_frames=6)
-    lat = ref.quantizer_decode(codes, w)
-    assert lat.shape == (1, LATENT_DIM, 6)
-    ac = lat[:, SEMANTIC_DIM:]
-    assert ac.min() >= -1.0 - 1e-6 and ac.max() <= 1.0 + 1e-6, "FSQ rescale must land in [-1, 1]"
-
-
-def test_fsq_rescale_inverts_block2_quantization(w):
-    """Round-trip every one of the 21 levels: Block 2 quantizes, Block 3 must rescale back to a
-    value that re-quantizes to the same code. If these two drift the audio degrades silently."""
-    lvl = ACOUSTIC_CODEBOOK_SIZE
-    codes = torch.arange(lvl).view(1, 1, lvl).expand(1, NUM_CODEBOOKS - 1, lvl).contiguous()
-    full = torch.cat([torch.zeros(1, 1, lvl, dtype=torch.long), codes], dim=1)
-    lat = ref.quantizer_decode(full, w)[:, SEMANTIC_DIM:]
-    requant = (((lat + 1) / 2) * (lvl - 1)).round().long()
-    assert torch.equal(requant, codes)
-
-
-def test_strip_offset_and_trim_cuts_at_end_audio():
-    frames = torch.full((6, NUM_CODEBOOKS), 5, dtype=torch.long)
-    frames[4, 0] = END_AUDIO_ID  # EOA in codebook 0 at frame 4
-    out = ref.strip_offset_and_trim(frames)
-    assert out.shape == (1, NUM_CODEBOOKS, 4), "must cut at the first END_AUDIO"
-    assert (out == 5 - N_AUDIO_SPECIAL).all(), "special-token offset not removed"
-
-
-# ---------------------------------------------------------------------------------------
-# Full block
-# ---------------------------------------------------------------------------------------
-@pytest.mark.parametrize("n_frames", [1, 4, 24])
-def test_decode_produces_exactly_1920_samples_per_frame(w, n_frames):
+@pytest.mark.parametrize("n_frames", [8, 24, 64])
+def test_waveform_pcc(pair, n_frames):
+    gen, w = pair
     codes = ref.make_synthetic_codes(n_frames)
-    wav = ref.reference_decode(codes, w)
-    assert wav.shape == (1, 1, n_frames * UPSAMPLE), f"expected {UPSAMPLE} samples/frame @ 24 kHz"
-    assert torch.isfinite(wav).all()
+    got = gen(codes)
+    exp = ref.reference_decode(codes, w)
+    assert got.shape == exp.shape == (1, 1, n_frames * 1920)
+    p = pcc(got, exp)
+    assert p > WAVE_PCC, f"waveform PCC {p:.6f} at T={n_frames}"
 
 
-def test_decode_is_causal_in_frames(w):
-    """Appending frames must not change the audio already produced for the earlier ones. This is
-    what makes the chunked/streaming decode upstream uses legitimate."""
-    codes = ref.make_synthetic_codes(12)
-    short = ref.reference_decode(codes[:, :, :8], w)
-    full = ref.reference_decode(codes, w)
-    n = short.shape[-1]
-    assert pcc(short, full[..., :n]) > 0.999, "later frames changed earlier audio"
-
-
-def test_stage_shapes_upsample_by_two_each(w):
-    """Length must go T -> 2T -> 4T -> 8T across the three transposed convs, and the channel
-    count must stay 1024 until output_proj widens it to the 240-sample patch."""
-    codes = ref.make_synthetic_codes(8)
-    x = ref.causal_conv1d(ref.quantizer_decode(codes, w), w["decoder_blocks.0.conv.weight"], 3, 1, "replicate")
-    assert x.shape == (1, CODEC_DIM, 8)
-    expect = [16, 32, 64]
-    for stage, ci in enumerate((2, 4, 6)):
-        x = ref.codec_transformer(x.permute(0, 2, 1), w, DEC_TF_BLOCKS[stage], 2,
-                                  ref.decoder_window_sizes()[stage]).permute(0, 2, 1)
-        x = ref.causal_conv_transpose1d(x, w[f"decoder_blocks.{ci}.conv.weight"], 4, 2)
-        assert x.shape == (1, CODEC_DIM, expect[stage]), f"stage {stage} length wrong"
-
-
-def test_causal_conv_preserves_length_at_stride_one(w):
-    x = torch.randn(1, LATENT_DIM, 17)
-    out = ref.causal_conv1d(x, w["decoder_blocks.0.conv.weight"], 3, 1, "replicate")
-    assert out.shape[-1] == 17, "stride-1 causal conv must preserve length"
-
-
-def test_causal_conv_transpose_trims_right(w):
-    """k=4, stride=2 gives 2T+2 raw; the trim must remove exactly (k - stride) = 2 from the right."""
-    x = torch.randn(1, CODEC_DIM, 5)
-    raw = torch.nn.functional.conv_transpose1d(x, w["decoder_blocks.2.conv.weight"], None, stride=2)
-    out = ref.causal_conv_transpose1d(x, w["decoder_blocks.2.conv.weight"], 4, 2)
-    assert raw.shape[-1] == 12 and out.shape[-1] == 10
-    assert torch.equal(out, raw[..., :10]), "trim must come off the right, not the left"
-
-
-@needs_ckpt
-def test_real_weights_decode_runs():
-    w_real = ref.load_codec_state()
+def test_quantizer_is_exact(pair):
+    """The semantic gather runs on host precisely so this stays exact — a bf16 device embedding
+    would inject ~0.4% before a deep conv stack that does not cancel error."""
+    gen, w = pair
     codes = ref.make_synthetic_codes(16)
-    wav = ref.reference_decode(codes, w_real)
-    assert wav.shape == (1, 1, 16 * UPSAMPLE)
-    assert torch.isfinite(wav).all()
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    got = TtVoxtralCodecDecoder._chw(gen.quantizer_decode(codes))
+    assert pcc(got, ref.quantizer_decode(codes, w)) > 0.99999
+
+
+def test_every_stage_matches(pair):
+    """Bisects the 8 decoder stages, so a regression localises to one conv or one 2-layer
+    transformer rather than 'the audio sounds wrong'."""
+    gen, w = pair
+    codes = ref.make_synthetic_codes(24)
+    _, stages = gen(codes, return_stages=True)
+    lat = ref.quantizer_decode(codes, w)
+    x = ref.causal_conv1d(lat, w["decoder_blocks.0.conv.weight"], 3, 1, "replicate")
+    assert pcc(stages["after_input_conv"], x) > 0.9999
+    for stage, tf_i in enumerate(ref.DEC_TF_BLOCKS):
+        x = ref.codec_transformer(x.permute(0, 2, 1), w, tf_i, 2,
+                                  ref.decoder_window_sizes()[stage]).permute(0, 2, 1)
+        p = pcc(stages[f"after_tf{tf_i}"], x)
+        assert p > STAGE_PCC, f"after_tf{tf_i} PCC {p:.6f}"
+        if stage < 3:
+            ci = ref.DEC_CONV_BLOCKS[stage + 1]
+            x = ref.causal_conv_transpose1d(x, w[f"decoder_blocks.{ci}.conv.weight"], 4, 2)
+            p = pcc(stages[f"after_up{ci}"], x)
+            assert p > 0.9999, f"after_up{ci} PCC {p:.6f}"
+
+
+def test_final_stage_is_not_itself_lossy(pair):
+    """The window-16 stage shows the lowest in-chain PCC, which could look like a bug in it.
+    Fed the REFERENCE's input it matches at ~0.99998 like every other stage, so the drop is
+    inherited error being amplified (the same effect XTTS-v2 found in the Perceiver), not a
+    defect in this stage. Guards against 'fixing' the wrong thing."""
+    gen, w = pair
+    codes = ref.make_synthetic_codes(24)
+    lat = ref.quantizer_decode(codes, w)
+    x = ref.causal_conv1d(lat, w["decoder_blocks.0.conv.weight"], 3, 1, "replicate")
+    for s, tf in enumerate((1, 3, 5)):
+        x = ref.codec_transformer(x.permute(0, 2, 1), w, tf, 2, ref.decoder_window_sizes()[s]).permute(0, 2, 1)
+        ci = ref.DEC_CONV_BLOCKS[s + 1]
+        x = ref.causal_conv_transpose1d(x, w[f"decoder_blocks.{ci}.conv.weight"], 4, 2)
+    exp = ref.codec_transformer(x.permute(0, 2, 1), w, 7, 2, 16)
+
+    L = x.shape[2]
+    xd = ttnn.from_torch(x.permute(0, 2, 1).reshape(1, L, 1024).contiguous(),
+                         dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=gen.device)
+    seq = xd
+    for li in range(2):
+        seq = gen._block(seq, gen.layers[(7, li)], 16)  # _block takes the WINDOW; it builds/chunks itself
+    got = ttnn.to_torch(seq).float().reshape(1, L, 1024)
+    assert pcc(got, exp) > 0.9999, "stage 7 is lossy in isolation — this IS a bug in stage 7"
+
+
+def test_shipped_precision_holds_the_gate(device):
+    """Precision is no longer switchable -- fp32 weights, bf16 attention, chosen by a sweep whose
+    table is in the codec module docstring. The three rejected combinations used to be pinned here
+    by parametrizing weight_dtype/attn_dtype; those constructor kwargs are gone, so what is left to
+    guard is that the ONE shipped combination still clears the gate. The finding that motivated the
+    default -- bf16 weights with fp32 attention scoring 0.998757 at T=469, the only combination
+    below 0.999 -- is recorded in that same table.
+    """
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    gen = TtVoxtralCodecDecoder(device)
+    w = ref.load_codec_state()
+    codes = ref.make_synthetic_codes(64)
+    p = pcc(gen(codes), ref.reference_decode(codes, w))
+    assert p > 0.999, f"shipped fp32 weights / bf16 attention PCC {p:.6f}"
+
+
+def test_real_speech_frames_decode_correctly(device):
+    """Decode REAL model output, not synthetic codes.
+
+    This exists because it was missing: the real-speech check (PCC 0.999987, ASR WER 0.0%) was
+    run against the FIRST working version, and then bf16 attention, chunked attention, length
+    bucketing and prepared conv weights all landed without it being re-run. Nothing caught that,
+    because every gate was synthetic-codes-vs-reference. Real codes have very different statistics
+    from uniform random ones, so they exercise the numerics differently.
+
+    The fixture is 64 frames of genuine Block 1+2 output (int16, ~5 KB), so this needs no backbone.
+    """
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
+
+    fx = os.path.join(os.path.dirname(__file__), "real_frames_fixture.pt")
+    if not os.path.exists(fx):
+        pytest.skip("real_frames_fixture.pt missing")
+    frames = torch.load(fx).long()
+    codes = ref.strip_offset_and_trim(frames)
+    exp = ref.reference_decode(codes, ref.load_codec_state())
+    got = TtVoxtralCodecDecoder(device)(codes)  # DEFAULT config, as callers get it
+    assert got.shape == exp.shape
+    p = pcc(got, exp)
+    assert p > 0.9999, f"real-speech PCC {p:.6f}"
+    # also bound the worst single sample, which PCC can hide
+    peak = exp.abs().max().item()
+    assert (got - exp).abs().max().item() < 0.02 * peak, "worst-sample error above 2% of peak"
+
+
+def test_causal_padding_matches_torch(pair):
+    """replicate/reflect left-padding is built from slice+concat because ttnn.pad is
+    constant-only and there is no flip. Easy to get backwards; compare against torch."""
+    import torch.nn.functional as F
+
+    gen, _ = pair
+    x = torch.randn(1, 1, 11, 32)
+    xd = ttnn.from_torch(x.contiguous(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=gen.device)
+    for mode, pad in (("replicate", 2), ("reflect", 6)):
+        got = ttnn.to_torch(gen._pad_causal(xd, pad, mode)).float()
+        exp = F.pad(x.permute(0, 3, 1, 2).reshape(1, 32, 11), (pad, 0), mode=mode)
+        exp = exp.reshape(1, 32, 1, 11 + pad).permute(0, 2, 3, 1)
+        assert torch.allclose(got, exp, atol=1e-6), f"{mode} pad mismatch"
 
 
 if __name__ == "__main__":
