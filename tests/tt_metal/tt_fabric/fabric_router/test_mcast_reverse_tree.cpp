@@ -93,15 +93,15 @@ std::vector<std::uint8_t> expected_actions(
 std::uint8_t expected_action_for_code(int axis_dim, std::uint8_t code) {
     if (axis_dim == 0) {
         switch (code) {
-            case IndexedMeshRoutingFields::Y2_NORTH: return IndexedMeshRoutingFields::ACTION_NORTH;
-            case IndexedMeshRoutingFields::Y2_SOUTH: return IndexedMeshRoutingFields::ACTION_SOUTH;
-            case IndexedMeshRoutingFields::Y2_Z: return IndexedMeshRoutingFields::ACTION_Z;
+            case Routing2DCodec::Y2_NORTH: return Routing2DCodec::ACTION_NORTH;
+            case Routing2DCodec::Y2_SOUTH: return Routing2DCodec::ACTION_SOUTH;
+            case Routing2DCodec::Y2_Z: return Routing2DCodec::ACTION_Z;
             default: return 0;
         }
     }
     switch (code) {
-        case IndexedMeshRoutingFields::X2_EAST: return IndexedMeshRoutingFields::ACTION_EAST;
-        case IndexedMeshRoutingFields::X2_WEST: return IndexedMeshRoutingFields::ACTION_WEST;
+        case Routing2DCodec::X2_EAST: return Routing2DCodec::ACTION_EAST;
+        case Routing2DCodec::X2_WEST: return Routing2DCodec::ACTION_WEST;
         default: return 0;
     }
 }
@@ -284,16 +284,16 @@ void check_embed(const std::string& fixture) {
 
     const auto y_size = static_cast<std::uint32_t>(y_topo->axis_len);
     const auto x_size = static_cast<std::uint32_t>(x_topo->axis_len);
-    ASSERT_TRUE(IndexedMeshRoutingFields::hybrid_region_fits(y_size, x_size)) << fixture;
+    ASSERT_TRUE(Routing2DCodec::hybrid_region_fits(y_size, x_size)) << fixture;
 
-    const auto tree_offset = IndexedMeshRoutingFields::mcast_tree_offset_bytes(y_size, x_size);
-    const auto tree_bytes = IndexedMeshRoutingFields::mcast_tree_region_bytes(y_size, x_size);
+    const auto tree_offset = Routing2DCodec::mcast_tree_offset_bytes(y_size, x_size);
+    const auto tree_bytes = Routing2DCodec::mcast_tree_region_bytes(y_size, x_size);
     constexpr std::uint8_t kSentinel = 0xA5;
 
     for (std::uint32_t my_y = 0; my_y < y_size; my_y++) {
         for (std::uint32_t my_x = 0; my_x < x_size; my_x++) {
             const std::string where = fmt::format("{} chip ({},{})", fixture, my_y, my_x);
-            std::vector<std::uint8_t> table(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES, kSentinel);
+            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_BYTES, kSentinel);
 
             std::string failure;
             ASSERT_TRUE(embed_mcast_reverse_trees(
@@ -322,14 +322,14 @@ void check_embed(const std::string& fixture) {
                 *build_mcast_reverse_tree(mesh_graph, MeshId{0}, *x_topo, static_cast<int>(my_x)));
             ASSERT_TRUE(y_packed.has_value() && x_packed.has_value()) << where;
 
-            const std::uint8_t* y_region = table.data() + IndexedMeshRoutingFields::mcast_tree_y_offset(y_size, x_size);
+            const std::uint8_t* y_region = table.data() + Routing2DCodec::mcast_tree_y_offset(y_size, x_size);
             for (std::uint32_t i = 0; i < y_packed->size(); i++) {
-                EXPECT_EQ(IndexedMeshRoutingFields::get_mcast_tree_edge(y_region, i), (*y_packed)[i])
+                EXPECT_EQ(Routing2DCodec::get_mcast_tree_edge(y_region, i), (*y_packed)[i])
                     << where << ": Y edge " << i;
             }
-            const std::uint8_t* x_region = table.data() + IndexedMeshRoutingFields::mcast_tree_x_offset(y_size, x_size);
+            const std::uint8_t* x_region = table.data() + Routing2DCodec::mcast_tree_x_offset(y_size, x_size);
             for (std::uint32_t i = 0; i < x_packed->size(); i++) {
-                EXPECT_EQ(IndexedMeshRoutingFields::get_mcast_tree_edge(x_region, i), (*x_packed)[i])
+                EXPECT_EQ(Routing2DCodec::get_mcast_tree_edge(x_region, i), (*x_packed)[i])
                     << where << ": X edge " << i;
             }
         }
@@ -376,7 +376,7 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
 
     for (int root_y = 0; root_y < y_len; root_y++) {
         for (int root_x = 0; root_x < x_len; root_x++) {
-            std::vector<std::uint8_t> table(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES, 0);
+            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
             std::string failure;
             ASSERT_TRUE(embed_mcast_reverse_trees(
                 mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, table.data(), &failure))
@@ -388,7 +388,7 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                         "{} root ({},{}) N{} S{} W{} E{}", fixture, root_y, root_x, n_hops, s_hops, w_hops, e_hops);
 
                     std::vector<std::uint8_t> got(y_size + x_size, 0);
-                    encode_indexed_mcast_maps(
+                    encode_2d_mcast_maps(
                         got.data(),
                         table.data(),
                         y_size,
@@ -407,14 +407,14 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                     auto want_x = expected_actions(mesh_graph, MeshId{0}, *x_topo, root_x, targets_x);
                     for (int x = 0; x < x_len; x++) {
                         if (targets_x[x] || x == root_x) {
-                            want_x[x] |= IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
+                            want_x[x] |= Routing2DCodec::ACTION_LOCAL_DELIVER;
                         }
                     }
                     auto want_y = expected_actions(mesh_graph, MeshId{0}, *y_topo, root_y, targets_y);
                     const std::uint8_t x_root_action = want_x[root_x];
                     const std::uint8_t teeth =
-                        x_root_action & (IndexedMeshRoutingFields::ACTION_EAST | IndexedMeshRoutingFields::ACTION_WEST);
-                    const std::uint8_t deliver = x_root_action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
+                        x_root_action & (Routing2DCodec::ACTION_EAST | Routing2DCodec::ACTION_WEST);
+                    const std::uint8_t deliver = x_root_action & Routing2DCodec::ACTION_LOCAL_DELIVER;
                     for (int y = 0; y < y_len; y++) {
                         if (targets_y[y]) {
                             want_y[y] |= teeth | deliver;
@@ -428,7 +428,7 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                         ASSERT_EQ(got[y_size + x], want_x[x]) << where << ": route_buffer_x[" << x << "]";
                     }
 
-                    const std::uint8_t root_outputs = got[root_y] & ~IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
+                    const std::uint8_t root_outputs = got[root_y] & ~Routing2DCodec::ACTION_LOCAL_DELIVER;
                     if (root_outputs != 0 && (root_outputs & (root_outputs - 1)) != 0) {
                         multi_output_roots++;
                     }
@@ -438,7 +438,7 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                     // A root with no eth outputs is legal and means deliver locally only.
                     if (n_hops == 0 && s_hops == 0 && e_hops == 0 && w_hops == 0) {
                         EXPECT_EQ(root_outputs, 0) << where << ": local-only mcast must leave no eth output";
-                        EXPECT_NE(got[root_y] & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER, 0)
+                        EXPECT_NE(got[root_y] & Routing2DCodec::ACTION_LOCAL_DELIVER, 0)
                             << where << ": local-only mcast must still deliver at the source";
                     }
                 }
@@ -451,13 +451,13 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
     // drive before source multi-inject exists.
     for (int root_y = 0; root_y < y_len; root_y++) {
         for (int root_x = 0; root_x < x_len; root_x++) {
-            std::vector<std::uint8_t> table(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES, 0);
+            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
             ASSERT_TRUE(
                 embed_mcast_reverse_trees(mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, table.data()));
             const std::vector<std::array<int, 4>> one_hop = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
             for (const auto& [n, s, e, w] : one_hop) {
                 std::vector<std::uint8_t> got(y_size + x_size, 0);
-                encode_indexed_mcast_maps(
+                encode_2d_mcast_maps(
                     got.data(),
                     table.data(),
                     y_size,
@@ -468,7 +468,7 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                     s,
                     e,
                     w);
-                const std::uint8_t outputs = got[root_y] & IndexedMeshRoutingFields::ACTION_ETH_MASK;
+                const std::uint8_t outputs = got[root_y] & Routing2DCodec::ACTION_ETH_MASK;
                 EXPECT_EQ(std::popcount(static_cast<unsigned>(outputs)), 1)
                     << fixture << " root (" << root_y << "," << root_x << ") N" << n << " S" << s << " E" << e << " W"
                     << w << ": one-hop range must leave on a single edge";
@@ -503,7 +503,7 @@ void check_chord_ranges(const std::string& fixture, bool expect_candidates) {
 
     std::vector<std::vector<std::uint8_t>> tables(y_len);
     for (int root_y = 0; root_y < y_len; root_y++) {
-        tables[root_y].assign(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES, 0);
+        tables[root_y].assign(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
         std::string failure;
         ASSERT_TRUE(embed_mcast_reverse_trees(
             mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, 0, tables[root_y].data(), &failure))
@@ -515,7 +515,7 @@ void check_chord_ranges(const std::string& fixture, bool expect_candidates) {
         for (int s_hops = 0; n_hops + s_hops < y_len; s_hops++) {
             for (int root_y = 0; root_y < y_len; root_y++) {
                 std::vector<std::uint8_t> got(y_size + x_size, 0);
-                encode_indexed_mcast_maps(
+                encode_2d_mcast_maps(
                     got.data(),
                     tables[root_y].data(),
                     y_size,
@@ -527,12 +527,12 @@ void check_chord_ranges(const std::string& fixture, bool expect_candidates) {
                     0,
                     0);
 
-                const std::uint8_t outputs = got[root_y] & IndexedMeshRoutingFields::ACTION_ETH_MASK;
+                const std::uint8_t outputs = got[root_y] & Routing2DCodec::ACTION_ETH_MASK;
                 if (std::popcount(static_cast<unsigned>(outputs)) != 1) {
                     continue;
                 }
                 for (int y = 0; y < y_len; y++) {
-                    if ((got[y] & IndexedMeshRoutingFields::ACTION_Z) != 0) {
+                    if ((got[y] & Routing2DCodec::ACTION_Z) != 0) {
                         candidates++;
                         break;
                     }
@@ -582,14 +582,14 @@ void check_full_extent_roots(const std::string& fixture) {
 
     for (int root_y = 0; root_y < y_len; root_y++) {
         for (int root_x = 0; root_x < x_len; root_x++) {
-            std::vector<std::uint8_t> table(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES, 0);
+            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
             std::string failure;
             ASSERT_TRUE(embed_mcast_reverse_trees(
                 mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, table.data(), &failure))
                 << failure;
 
             std::vector<std::uint8_t> got(y_size + x_size, 0);
-            encode_indexed_mcast_maps(
+            encode_2d_mcast_maps(
                 got.data(),
                 table.data(),
                 y_size,
@@ -601,12 +601,11 @@ void check_full_extent_roots(const std::string& fixture) {
                 static_cast<std::uint32_t>(e_hops),
                 static_cast<std::uint32_t>(w_hops));
 
-            const std::uint8_t outputs = got[root_y] & IndexedMeshRoutingFields::ACTION_ETH_MASK;
+            const std::uint8_t outputs = got[root_y] & Routing2DCodec::ACTION_ETH_MASK;
             const int count = std::popcount(static_cast<unsigned>(outputs));
 
             // With a Y extent the source row is not a target row, so no teeth reach it.
-            const std::uint8_t teeth =
-                outputs & (IndexedMeshRoutingFields::ACTION_EAST | IndexedMeshRoutingFields::ACTION_WEST);
+            const std::uint8_t teeth = outputs & (Routing2DCodec::ACTION_EAST | Routing2DCodec::ACTION_WEST);
             EXPECT_EQ(teeth, 0) << fixture << ": root (" << root_y << "," << root_x
                                 << ") has an E/W output on a range with a Y extent, where the source row is not a"
                                 << " target";
@@ -644,7 +643,7 @@ TEST(McastReverseTreeTest, EmbedRejectsShapeThatDoesNotFit) {
     x_topo.axis_dim = 1;
     x_topo.axis_len = 4;
 
-    std::vector<std::uint8_t> table(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES, 0);
+    std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
     std::string failure;
     EXPECT_FALSE(embed_mcast_reverse_trees(mesh_graph, MeshId{0}, y_topo, x_topo, 0, 0, table.data(), &failure));
     EXPECT_NE(failure.find("union slot"), std::string::npos) << "actual: " << failure;

@@ -78,12 +78,12 @@ uint32_t FabricContext::get_max_2d_hops_from_topology(const ControlPlane& contro
     return compute_max_2d_hops(mesh_shapes);
 }
 
-// Every 2D mesh carries destination-indexed action maps rather than a hop program, so its route buffer
-// holds rows + cols bytes -- two more than the (rows-1) + (cols-1) Manhattan hop count.
-uint32_t FabricContext::get_max_2d_indexed_route_bytes_from_topology(const ControlPlane& control_plane) const {
+// Every 2D packet carries action maps rather than a hop program, so its route buffer holds rows + cols
+// bytes -- two more than the (rows-1) + (cols-1) Manhattan hop count.
+uint32_t FabricContext::get_max_2d_route_buffer_bytes_from_topology(const ControlPlane& control_plane) const {
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
-    // Every 2D mesh: the indexed maps occupy Y + X bytes, two more than the (Y-1) + (X-1) hop count
+    // Every 2D mesh: the action maps occupy Y + X bytes, two more than the (Y-1) + (X-1) hop count
     // the tiers were sized from, and after the flip every 2D mesh carries them.
     //
     // compute_packet_specifications() takes the max of this and the hop count, so this can only grow
@@ -112,8 +112,8 @@ uint32_t FabricContext::compute_1d_pkt_hdr_extension_words(uint32_t max_hops) co
     return (max_hops - 1) / ROUTING_1D_HOPS_PER_WORD;
 }
 
-// required_route_bytes is the hop count for the legacy hop program, or rows + cols for express indexed
-// maps. Precondition: bounds validated by compute_packet_specifications().
+// required_route_bytes is the hop count for the legacy hop program, or rows + cols for 2D action maps.
+// Precondition: bounds validated by compute_packet_specifications().
 uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t required_route_bytes) const {
     // Route buffer tiers aligned to packet header size boundaries
     for (const auto& tier : ROUTING_2D_BUFFER_TIERS) {
@@ -153,7 +153,7 @@ void FabricContext::compute_packet_specifications(
 
         // Size for whichever encoding demands more, so neither can overrun the buffer.
         const uint32_t required_2d_route_bytes =
-            std::max(max_2d_hops_, get_max_2d_indexed_route_bytes_from_topology(control_plane));
+            std::max(max_2d_hops_, get_max_2d_route_buffer_bytes_from_topology(control_plane));
 
         TT_FATAL(
             required_2d_route_bytes <= Limits::MAX_2D_ROUTE_BUFFER_SIZE,
@@ -376,11 +376,11 @@ std::map<std::string, std::string> FabricContext::get_2d_kernel_defines(
     if (!is_2D_routing_enabled_) {
         return {};
     }
-    // GLOBAL scope is required: the L1 vectors are packed against the global shape and indexed by
-    // global chip ids, so a local-scope shape would desync the encode from the table.
+    // GLOBAL scope is required: the L1 2D route table is packed against the global shape and indexed
+    // by global chip ids, so a local-scope shape would desync the encode from the table.
     const auto mesh_shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
 
-    // The mesh shape is unconditional for 2D: every 2D mesh now carries indexed action maps, and the
+    // The mesh shape is unconditional for 2D: every 2D mesh now carries 2D action maps, and the
     // worker widens against this shape. It is not an express fact.
     std::map<std::string, std::string> defines{
         {"FABRIC_2D_MESH_Y_SIZE", std::to_string(mesh_shape[0])},

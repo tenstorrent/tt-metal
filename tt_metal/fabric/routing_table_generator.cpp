@@ -64,9 +64,9 @@ RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapp
         }
     }
 
-    // Per-axis topologies, for EVERY mesh and BOTH axes. This is what the indexed multicast encoder
-    // needs: it builds a reverse tree per axis, so a missing topology on either one silently produces
-    // an empty map rather than an error.
+    // Per-axis topologies, for EVERY mesh and BOTH axes. This is what the 2D action-map multicast
+    // encoder needs: it builds a reverse tree per axis, so a missing topology on either one silently
+    // produces an empty map rather than an error.
     //
     // x_rings_ above cannot serve that purpose -- it is only populated for express meshes, and only
     // when the X dimension closes. Deriving it unconditionally is not safe either, because

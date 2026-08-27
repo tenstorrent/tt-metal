@@ -168,14 +168,14 @@ struct RoutingFieldsConstants {
 };
 
 // ============================================================================
-// Indexed 2D route codec (destination-indexed ABI)
+// 2D action-map codec (destination-major ABI)
 // ============================================================================
 // L1 holds destination-major, per-axis 2-bit action vectors (y_vectors[dst_y][cur_y],
 // x_vectors[dst_x][cur_x]); packets carry the widened form, one action byte per logical coordinate,
 // with route_buffer_y[Y] immediately followed by route_buffer_x[X]. The control plane generates the
 // 2-bit tables, workers widen them into packets at setup, and the router decodes an action byte using
 // its own coordinate.
-struct IndexedMeshRoutingFields {
+struct Routing2DCodec {
     // ---- Packet action byte -------------------------------------------------
     // One-hot per output port; bits 0..4 intentionally match eth_chan_directions so the action bit
     // for a direction is (1 << direction). Bit 5 requests local delivery at the current chip.
@@ -253,20 +253,20 @@ struct IndexedMeshRoutingFields {
     //   SLOT_SHAPE_{Y,X}  the shape the L1 slot is *sized* for. [64,4] gives 1024 B of Y table plus
     //                     4 B of X table, reusing the legacy 1024 B 2D union slot plus 4 B of
     //                     trailing padding. This is a budget, not a constraint on mesh shape.
-    //   MAX_INDEXED_MESH_AXIS
+    //   MAX_AXIS_SIZE
     //                     the largest coordinate either axis may take. Fixed at 64 by the packed
     //                     reverse-tree descriptor, which spends 6 bits per row index.
     //
-    // A shape is admissible when both axes are within MAX_INDEXED_MESH_AXIS *and* its packed tables
-    // fit INDEXED_VECTOR_TABLE_BYTES -- not when it matches SLOT_SHAPE. The old per-axis `X <= 4`
+    // A shape is admissible when both axes are within MAX_AXIS_SIZE *and* its packed tables
+    // fit ROUTE_TABLE_BYTES -- not when it matches SLOT_SHAPE. The old per-axis `X <= 4`
     // cap excluded in-tree descriptors ([8,8], [8,16], [16,8], [1,16]) whose tables are an order of
     // magnitude smaller than the slot: [8,16] needs 80 B of 1028.
     static constexpr uint32_t SLOT_SHAPE_Y = 64;
     static constexpr uint32_t SLOT_SHAPE_X = 4;
-    static constexpr uint32_t MAX_INDEXED_MESH_AXIS = 64;
+    static constexpr uint32_t MAX_AXIS_SIZE = 64;
     // Expanded inline because Clang does not treat in-class constexpr member functions as defined for
     // constant evaluation within the class body, so table_bytes() cannot be called here.
-    static constexpr uint32_t INDEXED_VECTOR_TABLE_BYTES =
+    static constexpr uint32_t ROUTE_TABLE_BYTES =
         SLOT_SHAPE_Y * ((SLOT_SHAPE_Y + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE) +
         SLOT_SHAPE_X * ((SLOT_SHAPE_X + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE);  // 1028
 
@@ -295,8 +295,7 @@ struct IndexedMeshRoutingFields {
     // Whether vectors plus trees fit the existing union slot. False is a legal answer -- [64,4] does
     // not fit -- and callers must report it rather than pack over the end of the slot.
     static constexpr bool hybrid_region_fits(uint32_t y_size, uint32_t x_size) {
-        return mcast_tree_offset_bytes(y_size, x_size) + mcast_tree_region_bytes(y_size, x_size) <=
-               INDEXED_VECTOR_TABLE_BYTES;
+        return mcast_tree_offset_bytes(y_size, x_size) + mcast_tree_region_bytes(y_size, x_size) <= ROUTE_TABLE_BYTES;
     }
 
     static constexpr uint32_t mcast_tree_y_offset(uint32_t y_size, uint32_t x_size) {
@@ -340,22 +339,22 @@ struct IndexedMeshRoutingFields {
         return table + table_bytes(y_size) + dst_x * row_bytes(x_size);
     }
 
-    // Whether the indexed unicast vectors can represent this shape at all: both axes must be within
+    // Whether the 2D action-map codec can represent this unicast shape: both axes must be within
     // the coordinate range an action map can address, and the packed tables must fit the L1 slot.
     // This is the real bound that the old per-axis `<= 32` stood in for. It does NOT cover the two
     // other independent limits a shape must also satisfy:
     //   - the packet header route buffer, Y + X <= 67 (checked in FabricContext, issue #32237)
     //   - the multicast trees, hybrid_region_fits() above
     // [64,4] passes this one exactly (1028 B, the whole slot) and fails the header bound by one byte.
-    static constexpr bool shape_is_indexable(uint32_t y_size, uint32_t x_size) {
-        return y_size <= MAX_INDEXED_MESH_AXIS && x_size <= MAX_INDEXED_MESH_AXIS &&
-               vectors_region_bytes(y_size, x_size) <= INDEXED_VECTOR_TABLE_BYTES;
+    static constexpr bool shape_fits_route_table(uint32_t y_size, uint32_t x_size) {
+        return y_size <= MAX_AXIS_SIZE && x_size <= MAX_AXIS_SIZE &&
+               vectors_region_bytes(y_size, x_size) <= ROUTE_TABLE_BYTES;
     }
 
     template <typename YActionSource, typename XActionSource>
-    static inline bool pack_indexed_route_vectors(
+    static inline bool pack_route_vectors(
         std::uint8_t* out, uint32_t y_size, uint32_t x_size, YActionSource&& y_action, XActionSource&& x_action) {
-        if (!shape_is_indexable(y_size, x_size)) {
+        if (!shape_fits_route_table(y_size, x_size)) {
             return false;
         }
         const uint32_t region_bytes = vectors_region_bytes(y_size, x_size);
@@ -491,38 +490,36 @@ struct IndexedMeshRoutingFields {
 
 // Action bits 0..4 must line up with eth_chan_directions (E=0..Z=4): direction -> bit is (1 << dir).
 static_assert(
-    IndexedMeshRoutingFields::action_bit(eth_chan_directions::EAST) == IndexedMeshRoutingFields::ACTION_EAST,
-    "indexed action bit mismatch for EAST");
+    Routing2DCodec::action_bit(eth_chan_directions::EAST) == Routing2DCodec::ACTION_EAST,
+    "2D action-map bit mismatch for EAST");
 static_assert(
-    IndexedMeshRoutingFields::action_bit(eth_chan_directions::WEST) == IndexedMeshRoutingFields::ACTION_WEST,
-    "indexed action bit mismatch for WEST");
+    Routing2DCodec::action_bit(eth_chan_directions::WEST) == Routing2DCodec::ACTION_WEST,
+    "2D action-map bit mismatch for WEST");
 static_assert(
-    IndexedMeshRoutingFields::action_bit(eth_chan_directions::NORTH) == IndexedMeshRoutingFields::ACTION_NORTH,
-    "indexed action bit mismatch for NORTH");
+    Routing2DCodec::action_bit(eth_chan_directions::NORTH) == Routing2DCodec::ACTION_NORTH,
+    "2D action-map bit mismatch for NORTH");
 static_assert(
-    IndexedMeshRoutingFields::action_bit(eth_chan_directions::SOUTH) == IndexedMeshRoutingFields::ACTION_SOUTH,
-    "indexed action bit mismatch for SOUTH");
+    Routing2DCodec::action_bit(eth_chan_directions::SOUTH) == Routing2DCodec::ACTION_SOUTH,
+    "2D action-map bit mismatch for SOUTH");
 static_assert(
-    IndexedMeshRoutingFields::action_bit(eth_chan_directions::Z) == IndexedMeshRoutingFields::ACTION_Z,
-    "indexed action bit mismatch for Z");
+    Routing2DCodec::action_bit(eth_chan_directions::Z) == Routing2DCodec::ACTION_Z, "2D action-map bit mismatch for Z");
 static_assert(
-    (IndexedMeshRoutingFields::ACTION_VALID_MASK | IndexedMeshRoutingFields::ACTION_RESERVED_MASK) == 0xFF &&
-        (IndexedMeshRoutingFields::ACTION_VALID_MASK & IndexedMeshRoutingFields::ACTION_RESERVED_MASK) == 0,
-    "indexed action byte valid/reserved masks must partition the byte");
-static_assert(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES == 1028, "indexed vector table must be 1028 B");
+    (Routing2DCodec::ACTION_VALID_MASK | Routing2DCodec::ACTION_RESERVED_MASK) == 0xFF &&
+        (Routing2DCodec::ACTION_VALID_MASK & Routing2DCodec::ACTION_RESERVED_MASK) == 0,
+    "2D action-map byte valid/reserved masks must partition the byte");
+static_assert(Routing2DCodec::ROUTE_TABLE_BYTES == 1028, "2D route table must be 1028 B");
 
 // Hybrid footprints: [32,4] is 260 B of vectors plus a 68 B tree region and fits the existing slot;
 // [64,4] is 1160 B and does not.
 static_assert(
-    IndexedMeshRoutingFields::vectors_region_bytes(32, 4) == 260 &&
-        IndexedMeshRoutingFields::mcast_tree_region_bytes(32, 4) == 68 &&
-        IndexedMeshRoutingFields::hybrid_region_fits(32, 4),
+    Routing2DCodec::vectors_region_bytes(32, 4) == 260 && Routing2DCodec::mcast_tree_region_bytes(32, 4) == 68 &&
+        Routing2DCodec::hybrid_region_fits(32, 4),
     "[32,4] hybrid layout must fit the 2D union slot");
 static_assert(
-    !IndexedMeshRoutingFields::hybrid_region_fits(64, 4),
+    !Routing2DCodec::hybrid_region_fits(64, 4),
     "[64,4] hybrid layout is expected to exceed the slot until routing_l1_info_t grows");
 static_assert(
-    IndexedMeshRoutingFields::mcast_tree_x_offset(32, 4) == IndexedMeshRoutingFields::mcast_tree_y_offset(32, 4) + 62,
+    Routing2DCodec::mcast_tree_x_offset(32, 4) == Routing2DCodec::mcast_tree_y_offset(32, 4) + 62,
     "X tree must follow the Y tree's y_size-1 edges");
 
 // Shapes with X > 4 are declared by in-tree mesh graph descriptors and must be admissible: the old
@@ -533,32 +530,31 @@ static_assert(
 //   [16,8]  16x8_quad_bh_galaxy_torus_xy
 //   [1,16]  bh_lbx2_1x16
 static_assert(
-    IndexedMeshRoutingFields::vectors_region_bytes(8, 8) == 32 && IndexedMeshRoutingFields::hybrid_region_fits(8, 8),
+    Routing2DCodec::vectors_region_bytes(8, 8) == 32 && Routing2DCodec::hybrid_region_fits(8, 8),
     "[8,8] must fit the 2D union slot");
 static_assert(
-    IndexedMeshRoutingFields::vectors_region_bytes(8, 16) == 80 && IndexedMeshRoutingFields::hybrid_region_fits(8, 16),
+    Routing2DCodec::vectors_region_bytes(8, 16) == 80 && Routing2DCodec::hybrid_region_fits(8, 16),
     "[8,16] must fit the 2D union slot");
 static_assert(
-    IndexedMeshRoutingFields::vectors_region_bytes(16, 8) == 80 && IndexedMeshRoutingFields::hybrid_region_fits(16, 8),
+    Routing2DCodec::vectors_region_bytes(16, 8) == 80 && Routing2DCodec::hybrid_region_fits(16, 8),
     "[16,8] must fit the 2D union slot");
-static_assert(IndexedMeshRoutingFields::hybrid_region_fits(1, 16), "[1,16] must fit the 2D union slot");
+static_assert(Routing2DCodec::hybrid_region_fits(1, 16), "[1,16] must fit the 2D union slot");
 // The widest square shape the current ControlPlane 32-per-axis validation admits.
 static_assert(
-    IndexedMeshRoutingFields::vectors_region_bytes(32, 32) == 512 &&
-        IndexedMeshRoutingFields::hybrid_region_fits(32, 32),
+    Routing2DCodec::vectors_region_bytes(32, 32) == 512 && Routing2DCodec::hybrid_region_fits(32, 32),
     "[32,32] must fit the 2D union slot");
 // The two bounds are independent: an axis may reach 64 even though the slot is sized for [64,4].
 static_assert(
-    IndexedMeshRoutingFields::MAX_INDEXED_MESH_AXIS >= IndexedMeshRoutingFields::SLOT_SHAPE_Y &&
-        IndexedMeshRoutingFields::MAX_INDEXED_MESH_AXIS >= IndexedMeshRoutingFields::SLOT_SHAPE_X,
+    Routing2DCodec::MAX_AXIS_SIZE >= Routing2DCodec::SLOT_SHAPE_Y &&
+        Routing2DCodec::MAX_AXIS_SIZE >= Routing2DCodec::SLOT_SHAPE_X,
     "the per-axis coordinate bound must cover the slot's own shape");
 // 6-bit child/parent fields in the packed reverse-tree descriptor are what fixes the axis bound.
 static_assert(
-    IndexedMeshRoutingFields::MAX_INDEXED_MESH_AXIS <= 64,
+    Routing2DCodec::MAX_AXIS_SIZE <= 64,
     "packed mcast tree edges carry 6-bit row indices, so an axis cannot exceed 64");
 
 // ============================================================================
-// Indexed multicast encode
+// 2D action-map multicast encode
 // ============================================================================
 // Shared by the worker producer and host validation so both run identical arithmetic. No STL, no
 // allocation, and no Z-neighbor lookup, since a reverse-tree edge carries both endpoints and the
@@ -581,17 +577,16 @@ inline void mcast_prune_axis(
     std::uint32_t axis_len,
     std::uint32_t* needed,
     bool is_y_axis) {
-    const std::uint32_t edge_count = IndexedMeshRoutingFields::mcast_tree_edge_count(axis_len);
+    const std::uint32_t edge_count = Routing2DCodec::mcast_tree_edge_count(axis_len);
     for (std::uint32_t i = 0; i < edge_count; ++i) {
-        const std::uint16_t edge = IndexedMeshRoutingFields::get_mcast_tree_edge(tree_region, i);
-        const std::uint32_t child = static_cast<std::uint32_t>(IndexedMeshRoutingFields::mcast_edge_child(edge));
+        const std::uint16_t edge = Routing2DCodec::get_mcast_tree_edge(tree_region, i);
+        const std::uint32_t child = static_cast<std::uint32_t>(Routing2DCodec::mcast_edge_child(edge));
         if (!mcast_test_row_bit(needed, child)) {
             continue;
         }
-        const std::uint32_t parent = static_cast<std::uint32_t>(IndexedMeshRoutingFields::mcast_edge_parent(edge));
-        const std::uint8_t code = IndexedMeshRoutingFields::mcast_edge_output(edge);
-        out_actions[parent] |=
-            is_y_axis ? IndexedMeshRoutingFields::widen_y(code) : IndexedMeshRoutingFields::widen_x(code);
+        const std::uint32_t parent = static_cast<std::uint32_t>(Routing2DCodec::mcast_edge_parent(edge));
+        const std::uint8_t code = Routing2DCodec::mcast_edge_output(edge);
+        out_actions[parent] |= is_y_axis ? Routing2DCodec::widen_y(code) : Routing2DCodec::widen_x(code);
         mcast_set_row_bit(needed, parent);
     }
 }
@@ -607,7 +602,7 @@ inline void mcast_prune_axis(
 //
 // N walks toward decreasing y and S toward increasing y, both modular, so an extent that wraps the ring
 // is legal rather than clamped.
-inline void encode_indexed_mcast_maps(
+inline void encode_2d_mcast_maps(
     std::uint8_t* route_buffer,
     const std::uint8_t* vectors,
     std::uint32_t y_size,
@@ -650,14 +645,14 @@ inline void encode_indexed_mcast_maps(
         mcast_set_row_bit(x_targets, (root_x + x_size - (k % x_size)) % x_size);
     }
 
-    const std::uint8_t* tree_y = vectors + IndexedMeshRoutingFields::mcast_tree_y_offset(y_size, x_size);
-    const std::uint8_t* tree_x = vectors + IndexedMeshRoutingFields::mcast_tree_x_offset(y_size, x_size);
+    const std::uint8_t* tree_y = vectors + Routing2DCodec::mcast_tree_y_offset(y_size, x_size);
+    const std::uint8_t* tree_x = vectors + Routing2DCodec::mcast_tree_x_offset(y_size, x_size);
 
     std::uint32_t needed_x[MCAST_ROW_BITS_WORDS] = {x_targets[0], x_targets[1]};
     mcast_prune_axis(out_x, tree_x, x_size, needed_x, /*is_y_axis=*/false);
     for (std::uint32_t x = 0; x < x_size; ++x) {
         if (mcast_test_row_bit(x_targets, x)) {
-            out_x[x] |= IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
+            out_x[x] |= Routing2DCodec::ACTION_LOCAL_DELIVER;
         }
     }
 
@@ -668,9 +663,8 @@ inline void encode_indexed_mcast_maps(
     // itself a target. Indexed by encode_root_x rather than the anchor, since the teeth are what this
     // chip has to launch.
     const std::uint8_t x_root_action = out_x[encode_root_x];
-    const std::uint8_t teeth =
-        x_root_action & (IndexedMeshRoutingFields::ACTION_EAST | IndexedMeshRoutingFields::ACTION_WEST);
-    const std::uint8_t deliver = x_root_action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER;
+    const std::uint8_t teeth = x_root_action & (Routing2DCodec::ACTION_EAST | Routing2DCodec::ACTION_WEST);
+    const std::uint8_t deliver = x_root_action & Routing2DCodec::ACTION_LOCAL_DELIVER;
     for (std::uint32_t y = 0; y < y_size; ++y) {
         if (mcast_test_row_bit(y_targets, y)) {
             out_y[y] |= teeth | deliver;
@@ -679,7 +673,7 @@ inline void encode_indexed_mcast_maps(
 }
 
 // Same-mesh source, where the anchor and the encode root are the same chip.
-inline void encode_indexed_mcast_maps(
+inline void encode_2d_mcast_maps(
     std::uint8_t* route_buffer,
     const std::uint8_t* vectors,
     std::uint32_t y_size,
@@ -690,57 +684,55 @@ inline void encode_indexed_mcast_maps(
     std::uint32_t s_hops,
     std::uint32_t e_hops,
     std::uint32_t w_hops) {
-    encode_indexed_mcast_maps(
-        route_buffer, vectors, y_size, x_size, root_y, root_x, root_x, n_hops, s_hops, e_hops, w_hops);
+    encode_2d_mcast_maps(route_buffer, vectors, y_size, x_size, root_y, root_x, root_x, n_hops, s_hops, e_hops, w_hops);
 }
 
 // FWD_DIRS slot order: base {E, W, N, S, Z} with the self direction removed.
 static_assert(
-    IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::NORTH>()[0] == eth_chan_directions::EAST &&
-        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::NORTH>()[1] == eth_chan_directions::WEST &&
-        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::NORTH>()[2] == eth_chan_directions::SOUTH &&
-        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::NORTH>()[3] == eth_chan_directions::Z,
+    Routing2DCodec::fwd_dirs<eth_chan_directions::NORTH>()[0] == eth_chan_directions::EAST &&
+        Routing2DCodec::fwd_dirs<eth_chan_directions::NORTH>()[1] == eth_chan_directions::WEST &&
+        Routing2DCodec::fwd_dirs<eth_chan_directions::NORTH>()[2] == eth_chan_directions::SOUTH &&
+        Routing2DCodec::fwd_dirs<eth_chan_directions::NORTH>()[3] == eth_chan_directions::Z,
     "fwd_dirs<NORTH> must be {E, W, S, Z}");
 static_assert(
-    IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::EAST>()[0] == eth_chan_directions::WEST &&
-        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::EAST>()[3] == eth_chan_directions::Z,
+    Routing2DCodec::fwd_dirs<eth_chan_directions::EAST>()[0] == eth_chan_directions::WEST &&
+        Routing2DCodec::fwd_dirs<eth_chan_directions::EAST>()[3] == eth_chan_directions::Z,
     "fwd_dirs<EAST> must be {W, N, S, Z}");
 static_assert(
-    IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::Z>()[0] == eth_chan_directions::EAST &&
-        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::Z>()[1] == eth_chan_directions::WEST &&
-        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::Z>()[2] == eth_chan_directions::NORTH &&
-        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::Z>()[3] == eth_chan_directions::SOUTH,
+    Routing2DCodec::fwd_dirs<eth_chan_directions::Z>()[0] == eth_chan_directions::EAST &&
+        Routing2DCodec::fwd_dirs<eth_chan_directions::Z>()[1] == eth_chan_directions::WEST &&
+        Routing2DCodec::fwd_dirs<eth_chan_directions::Z>()[2] == eth_chan_directions::NORTH &&
+        Routing2DCodec::fwd_dirs<eth_chan_directions::Z>()[3] == eth_chan_directions::SOUTH,
     "fwd_dirs<Z> must be {E, W, N, S}");
 static_assert(
-    IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::SOUTH>()[2] == eth_chan_directions::NORTH &&
-        IndexedMeshRoutingFields::fwd_dirs<eth_chan_directions::WEST>()[1] == eth_chan_directions::NORTH,
+    Routing2DCodec::fwd_dirs<eth_chan_directions::SOUTH>()[2] == eth_chan_directions::NORTH &&
+        Routing2DCodec::fwd_dirs<eth_chan_directions::WEST>()[1] == eth_chan_directions::NORTH,
     "fwd_dirs<SOUTH>/<WEST> must exclude the self direction in slot order");
 
 // Packing example: at a NORTH-facing router, action S|Z|LOCAL_DELIVER packs to 0b1100
 // (LOCAL_DELIVER stays outside the key).
 static_assert(
-    IndexedMeshRoutingFields::pack_fwd_key<eth_chan_directions::NORTH>(
-        IndexedMeshRoutingFields::ACTION_SOUTH | IndexedMeshRoutingFields::ACTION_Z |
-        IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) == 0b1100,
+    Routing2DCodec::pack_fwd_key<eth_chan_directions::NORTH>(
+        Routing2DCodec::ACTION_SOUTH | Routing2DCodec::ACTION_Z | Routing2DCodec::ACTION_LOCAL_DELIVER) == 0b1100,
     "pack_fwd_key<NORTH>(S|Z|LOCAL_DELIVER) must be 0b1100");
 static_assert(
-    IndexedMeshRoutingFields::pack_fwd_key<eth_chan_directions::EAST>(
-        IndexedMeshRoutingFields::ACTION_WEST | IndexedMeshRoutingFields::ACTION_NORTH) == 0b0011,
+    Routing2DCodec::pack_fwd_key<eth_chan_directions::EAST>(
+        Routing2DCodec::ACTION_WEST | Routing2DCodec::ACTION_NORTH) == 0b0011,
     "pack_fwd_key<EAST>(W|N) must select slots {W, N} -> 0b0011");
 
 // Invalid-action checks.
 static_assert(
-    IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::NORTH>(IndexedMeshRoutingFields::ACTION_SOUTH) &&
-        IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::Z>(IndexedMeshRoutingFields::ACTION_EAST),
+    Routing2DCodec::action_is_valid<eth_chan_directions::NORTH>(Routing2DCodec::ACTION_SOUTH) &&
+        Routing2DCodec::action_is_valid<eth_chan_directions::Z>(Routing2DCodec::ACTION_EAST),
     "ordinary non-self outputs must be valid");
 static_assert(
-    !IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::NORTH>(IndexedMeshRoutingFields::ACTION_NORTH) &&
-        !IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::Z>(IndexedMeshRoutingFields::ACTION_Z) &&
-        !IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::EAST>(IndexedMeshRoutingFields::ACTION_EAST),
+    !Routing2DCodec::action_is_valid<eth_chan_directions::NORTH>(Routing2DCodec::ACTION_NORTH) &&
+        !Routing2DCodec::action_is_valid<eth_chan_directions::Z>(Routing2DCodec::ACTION_Z) &&
+        !Routing2DCodec::action_is_valid<eth_chan_directions::EAST>(Routing2DCodec::ACTION_EAST),
     "the self-facing bit must be invalid");
 static_assert(
-    !IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::WEST>(0) &&
-        !IndexedMeshRoutingFields::action_is_valid<eth_chan_directions::SOUTH>(0x80),
+    !Routing2DCodec::action_is_valid<eth_chan_directions::WEST>(0) &&
+        !Routing2DCodec::action_is_valid<eth_chan_directions::SOUTH>(0x80),
     "empty actions and reserved bits must be invalid");
 
 // Centralized routing encoding functions (stateless, buffer-based primitives)
@@ -949,12 +941,12 @@ static const uint16_t MAX_CHIPS_LOWLAT_1D = 64;
 static const uint16_t SINGLE_ROUTE_SIZE_1D = 16;  // 4 words for 64 hops: base + 3 extension words
 
 // 1D only. 2D used to share this template via a `dim` parameter, holding compressed_route_2d_t hop
-// programs; 2D now carries indexed action-map vectors in indexed_route_vectors_t instead, so the 2D
+// programs; 2D now carries destination-major action-map vectors in route_table_2d_t instead, so the 2D
 // arms are gone. `dim` is retained at 1 so the existing <1, compressed> spellings still name this
 // type.
 template <uint8_t dim, bool compressed>
 struct __attribute__((packed)) intra_mesh_routing_path_t {
-    static_assert(dim == 1, "intra_mesh_routing_path_t is 1D only; 2D uses indexed_route_vectors_t");
+    static_assert(dim == 1, "intra_mesh_routing_path_t is 1D only; 2D uses route_table_2d_t");
 
     // Compressed 1D needs no table at all: the hop count the caller passes *is* the compressed form,
     // and the routing word is generated arithmetically (decode_route_to_buffer_by_hops).
@@ -1043,13 +1035,13 @@ struct RouterStateManager {
     }
 };
 
-// Destination-major indexed route vectors, sharing the 2D union slot with the legacy compressed table.
+// Destination-major 2D action-map route table, sharing the 2D union slot with the legacy compressed table.
 // Raw byte storage because row strides depend on the live mesh shape [Y,X]:
 //   y_vectors: row dst_y at byte offset dst_y * ceil(Y/4), region [0, Y*ceil(Y/4))
 //   x_vectors: row dst_x at byte offset dst_x * ceil(X/4), region [Y*ceil(Y/4), Y*ceil(Y/4) + X*ceil(X/4))
-// Typed accessors and the host-side packer live on IndexedMeshRoutingFields.
-struct __attribute__((packed)) indexed_route_vectors_t {
-    std::uint8_t data[IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES];  // 1028
+// Typed accessors and the host-side packer live on Routing2DCodec.
+struct __attribute__((packed)) route_table_2d_t {
+    std::uint8_t data[Routing2DCodec::ROUTE_TABLE_BYTES];  // 1028
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Fills the 2-bit vector table for this mesh by probing ControlPlane's first-hop relation along
@@ -1059,8 +1051,7 @@ struct __attribute__((packed)) indexed_route_vectors_t {
 #endif
 };
 static_assert(
-    sizeof(indexed_route_vectors_t) == IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES,
-    "indexed route vectors must be exactly the [64,4] bound");
+    sizeof(route_table_2d_t) == Routing2DCodec::ROUTE_TABLE_BYTES, "2D route table must be exactly the [64,4] bound");
 
 struct routing_l1_info_t {
     RouterStateManager state_manager{};  // 32 bytes
@@ -1073,10 +1064,10 @@ struct routing_l1_info_t {
     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};  // 384 bytes
 
     // Union overlaps the 1D and 2D routing tables at the same offset; a build is one or the other.
-    // 2D is always the indexed vectors now -- the legacy compressed_route_2d_t table is gone.
+    // 2D always uses the destination-major route table now -- the legacy compressed_route_2d_t table is gone.
     union __attribute__((packed)) {
         intra_mesh_routing_path_t<1, false> routing_path_table_1d;  // 1024 bytes
-        indexed_route_vectors_t indexed_route_vectors;              // 1028 bytes
+        route_table_2d_t route_table_2d;                            // 1028 bytes
     };
 
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
@@ -1088,11 +1079,10 @@ struct routing_l1_info_t {
 };
 static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 516);
 static_assert(
-    offsetof(routing_l1_info_t, exit_node_table) == 516 + IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES,
+    offsetof(routing_l1_info_t, exit_node_table) == 516 + Routing2DCodec::ROUTE_TABLE_BYTES,
     "exit_node_table must follow the 1028-byte 2D union slot");
 static_assert(
-    offsetof(routing_l1_info_t, my_mesh_coord_y) ==
-        516 + IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES + MAX_NUM_MESHES,
+    offsetof(routing_l1_info_t, my_mesh_coord_y) == 516 + Routing2DCodec::ROUTE_TABLE_BYTES + MAX_NUM_MESHES,
     "my_mesh_coord_y must immediately follow exit_node_table");
 static_assert(offsetof(routing_l1_info_t, state_manager) % 16 == 0);
 static_assert(sizeof(routing_l1_info_t) % 16 == 0);

@@ -44,10 +44,10 @@ void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
     const FabricNodeId& /*src_fabric_node_id*/, uint16_t /*num_chips*/) {
     // No-op
 }
-// Builds the destination-indexed 2D routing table from first-hop directions. Axis decomposition
+// Builds the destination-major 2D action-map route table from first-hop directions. Axis decomposition
 // follows DOR: while rows differ the first hop is a Y move (N/S/Z) probed same-column, and once rows
 // match it is an X move (E/W) probed same-row.
-void indexed_route_vectors_t::calculate_chip_to_all_routing_fields(
+void route_table_2d_t::calculate_chip_to_all_routing_fields(
     const FabricNodeId& src_fabric_node_id, uint16_t num_chips) {
     const auto mesh_id = src_fabric_node_id.mesh_id;
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -59,14 +59,14 @@ void indexed_route_vectors_t::calculate_chip_to_all_routing_fields(
     const uint32_t x_size = mesh_shape[1];
     TT_FATAL(
         y_size * x_size == num_chips && num_chips > 0,
-        "Indexed route vectors: mesh {} shape {}x{} does not match {} chips",
+        "2D route table: mesh {} shape {}x{} does not match {} chips",
         *mesh_id,
         y_size,
         x_size,
         num_chips);
 
-    // The packer zeroes only the live [y_size,x_size] region; clear the full [64,4] slot so the memcpy
-    // into L1 is deterministic.
+    // The packer zeroes only the live [y_size,x_size] action-map region; clear the full 2D route-table
+    // slot so the memcpy into L1 is deterministic.
     std::memset(data, 0, sizeof(data));
 
     auto probe = [&control_plane, mesh_id](uint32_t src_chip, uint32_t dst_chip) {
@@ -77,7 +77,7 @@ void indexed_route_vectors_t::calculate_chip_to_all_routing_fields(
         // wrong-but-plausible routing table instead of failing.
         TT_FATAL(
             dir.has_value() && dir.value() != RoutingDirection::NONE,
-            "Indexed route vectors: no first-hop direction from chip {} to chip {}",
+            "2D route table: no first-hop direction from chip {} to chip {}",
             src_chip,
             dst_chip);
         return control_plane.routing_direction_to_eth_direction(dir.value());
@@ -86,7 +86,7 @@ void indexed_route_vectors_t::calculate_chip_to_all_routing_fields(
     auto y_action = [&](uint32_t cur_y, uint32_t dst_y) { return probe(cur_y * x_size, dst_y * x_size); };
     auto x_action = [&](uint32_t cur_x, uint32_t dst_x) { return probe(cur_x, dst_x); };
 
-    const bool ok = IndexedMeshRoutingFields::pack_indexed_route_vectors(data, y_size, x_size, y_action, x_action);
+    const bool ok = Routing2DCodec::pack_route_vectors(data, y_size, x_size, y_action, x_action);
     // TT_FATAL, not TT_ASSERT. This is the load-bearing one: TT_ASSERT is a no-op in Release, `data`
     // is memset to zero above, and a failed pack therefore embeds an ALL-ZERO routing table. Every
     // route buffer then widens to zeros, every router decodes action 0, action_is_valid() rejects it,
@@ -94,7 +94,7 @@ void indexed_route_vectors_t::calculate_chip_to_all_routing_fields(
     // a diagnosable error. Same fail-loud reasoning as the multicast one-feeder gate (D9.1).
     TT_FATAL(
         ok,
-        "Indexed route vectors: mesh {} shape {}x{} is not representable in the [64,4] indexed ABI "
+        "2D route table: mesh {} shape {}x{} is not representable in the destination-major 2D action-map format "
         "(an axis probe returned an off-axis direction, or the shape exceeds the bound)",
         *mesh_id,
         y_size,
