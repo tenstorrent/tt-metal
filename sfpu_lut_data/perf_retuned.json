@@ -1,0 +1,26 @@
+{
+ "GeluAppx|No": {
+  "sessions": 1,
+  "min": 32753,
+  "max": 32753,
+  "mean": 32753.0
+ },
+ "GeluAppx|Yes": {
+  "sessions": 1,
+  "min": 32754,
+  "max": 32754,
+  "mean": 32754.0
+ },
+ "SigmoidAppx|No": {
+  "sessions": 1,
+  "min": 32779,
+  "max": 32779,
+  "mean": 32779.0
+ },
+ "SigmoidAppx|Yes": {
+  "sessions": 1,
+  "min": 32782,
+  "max": 32782,
+  "mean": 32782.0
+ }
+}

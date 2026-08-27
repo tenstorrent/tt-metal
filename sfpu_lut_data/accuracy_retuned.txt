@@ -1,0 +1,23 @@
+=== tanh (3-entry SFPLUT) ===
+  |x| in [0, 1): n= 93  max|err|=0.056338 at x=0.4624 (got 0.375672, want 0.432010)  mean|err|=0.034444
+  |x| in [1, 2): n= 93  max|err|=0.050906 at x=1.0000 (got 0.812500, want 0.761594)  mean|err|=0.015112
+  |x| in [2, inf): n= 64  max|err|=0.035972 at x=2.0000 (got 1.000000, want 0.964028)  mean|err|=0.003267
+  OVERALL max|err| = 0.056338
+
+
+=== sigmoid_appx (3-entry SFPLUT) ===
+  |x| in [0, 1): n= 93  max|err|=0.005274 at x=0.5161 (got 0.620968, want 0.626242)  mean|err|=0.003225
+  |x| in [1, 2): n= 93  max|err|=0.007223 at x=1.0000 (got 0.738281, want 0.731059)  mean|err|=0.003286
+  |x| in [2, inf): n= 64  max|err|=0.119203 at x=2.0000 (got 1.000000, want 0.880797)  mean|err|=0.021716
+  OVERALL max|err| = 0.119203
+
+
+=== gelu_appx (6-entry SFPLUTFP32) ===
+  |x| in [0, 0.5): n= 47  max|err|=0.011602 at x=0.2473 (got 0.159412, want 0.147810)  mean|err|=0.007117
+  |x| in [0.5, 1): n= 46  max|err|=0.006836 at x=0.7312 (got 0.568140, want 0.561304)  mean|err|=0.004120
+  |x| in [1, 1.5): n= 47  max|err|=0.001501 at x=1.0000 (got 0.839844, want 0.841345)  mean|err|=0.000830
+  |x| in [1.5, 2): n= 46  max|err|=0.001442 at x=1.7634 (got 1.693378, want 1.694820)  mean|err|=0.000857
+  |x| in [2, 3): n= 11  max|err|=0.004689 at x=2.4762 (got 2.455061, want 2.459749)  mean|err|=0.002972
+  |x| in [3, inf): n= 53  max|err|=0.003515 at x=3.0476 (got 3.047619, want 3.044104)  mean|err|=0.000246
+  OVERALL max|err| = 0.011602
+
