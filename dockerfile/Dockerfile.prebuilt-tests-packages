@@ -31,5 +31,5 @@ RUN --mount=type=bind,source=artifact,target=/tmp/pkgs \
     && apt-get update \
     && apt-get install -y "${pkgs[@]}" \
     && rm -rf /var/lib/apt/lists/* \
-    && dpkg-query -W -f='${Package} ${Version}\n' 'tt-metalium*' 'tt-nn*' \
+    && dpkg-query -W -f='${Package} ${Version}\n' | grep -E '^tt-' \
         > /etc/prebuilt-tests-manifest
