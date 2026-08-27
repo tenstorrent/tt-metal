@@ -9,6 +9,14 @@
 #include "api/dataflow/dataflow_api.h"
 #include <cstdint>
 
+// NoC reads the writers keep in flight before a barrier while loading the input row.
+// Any depth up to the input CB's is correct: each writer clamps its burst against that CB's own
+// tile count -- Wt_input for the row-buffered plans, chunk_tiles for the streaming one -- so a
+// burst can neither overrun the CB nor straddle its end, since every block starts at the CB base.
+// Unlike WRITE_BATCH no host-side CB sizing is derived from it, so it is shared here rather than
+// threaded as a compile-time arg.
+constexpr uint32_t kGatherReadBatchTiles = 4;
+
 template <typename T>
 FORCE_INLINE uint32_t read_data_from_type(const uint32_t l1_addr, const uint32_t count) {
     // l1_addr is a firmware L1 offset. The tt_l1_ptr attribute is the standard

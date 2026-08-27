@@ -12,6 +12,7 @@
 // Pipelined: batches tile reads and writes for NOC overlap.
 // Multicore: strided row assignment, same as reader.
 
+#include "codegen_gather_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
@@ -37,7 +38,7 @@ void kernel_main() {
     constexpr auto input_ta_args = TensorAccessorArgs<7>();
     constexpr auto output_ta_args = TensorAccessorArgs<input_ta_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t READ_BATCH = 4;
+    constexpr uint32_t READ_BATCH = kGatherReadBatchTiles;
     // Read-pointer position within the output CB ring (see the Phase 2 clamp below).
     uint32_t out_cb_pos = 0;
 

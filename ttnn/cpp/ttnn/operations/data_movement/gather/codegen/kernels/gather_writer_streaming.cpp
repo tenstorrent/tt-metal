@@ -15,6 +15,7 @@
 //   2. Wait for the completed output tile from the reader
 //   3. Write the output tile to DRAM
 
+#include "codegen_gather_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
@@ -40,10 +41,7 @@ void kernel_main() {
 
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t n_chunks = (Wt_input + chunk_tiles - 1) / chunk_tiles;
-    // Same batch depth as the row-buffered writer's row load: enough NOC reads in flight
-    // to overlap, few enough that a batch never straddles the CB end (each block starts
-    // at the CB base).
-    constexpr uint32_t READ_BATCH = 4;
+    constexpr uint32_t READ_BATCH = kGatherReadBatchTiles;
 
     // Input tensor accessor (for DRAM reads)
     constexpr uint32_t input_tile_bytes = get_tile_size(cb_input);
