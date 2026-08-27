@@ -152,6 +152,31 @@ SECTIONS
     . = ALIGN(4);
   }
 
+  /* KERNEL_PROFILER zone names + __FILE__ strings – file-only section, VMA = 0x6600000.
+     Mergeable strings ("MS"), so the linker stores each distinct __FILE__ / zone name once
+     however many zones reference it. Records in .tt_zone_meta hold VMAs into here; the host
+     rebases them by this section's own sh_addr. (INFO) strips SHF_ALLOC so this never enters
+     a PT_LOAD and costs no device memory. */
+  .tt_zone_str 0x6600000 (INFO) :
+  {
+    __tt_zone_str_start = .;
+    KEEP(*(.tt_zone_str))
+    __tt_zone_str_end = .;
+    . = ALIGN(4);
+  }
+
+  /* KERNEL_PROFILER zone source-location records – file-only section, VMA = 0x6700000.
+     A fixed-stride array of 16-byte {zone_id, name_ptr, file_ptr, line} records emitted by
+     TT_ZONE_DEFINE_ID (hostdevcommon/profiler_zone_id.h); the host walks it by that stride, so
+     nothing here has to be parsed to find the next record. (INFO) for the same reason as above. */
+  .tt_zone_meta 0x6700000 (INFO) :
+  {
+    __tt_zone_meta_start = .;
+    KEEP(*(.tt_zone_meta))
+    __tt_zone_meta_end = .;
+    . = ALIGN(4);
+  }
+
 #if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
   .text TEXT_START :
 #else
