@@ -313,6 +313,8 @@ void log_fds_program(const FdsProgramResult& result) {
     }
 }
 
+}  // namespace
+
 class QuasarFdsFixture : public QuasarMeshDeviceSingleCardFixture {
 protected:
     void SetUp() override {
@@ -333,8 +335,6 @@ protected:
 
     IDevice* device_ = nullptr;
 };
-
-}  // namespace
 
 // Drives the Quasar FDS sideband end to end between each dispatch engine and one worker: the
 // dispatch engine kernel writes L1, sends a go signal and waits for the worker's done signal; the
