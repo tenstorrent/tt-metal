@@ -3,8 +3,8 @@
 
 #pragma once
 
+#include <array>
 #include <tuple>
-#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -20,7 +20,7 @@ struct IndexedFusedUpdateCacheInputs {
     Tensor physical_update_idxs_tensor;
 };
 
-using IndexedFusedUpdateCacheResultSpec = std::vector<tt::tt_metal::TensorSpec>;
+using IndexedFusedUpdateCacheResultSpec = std::array<tt::tt_metal::TensorSpec, 2>;
 using IndexedFusedUpdateCacheResult = std::tuple<Tensor, Tensor>;
 
 }  // namespace ttnn::experimental::prim::indexed_fused_update_cache

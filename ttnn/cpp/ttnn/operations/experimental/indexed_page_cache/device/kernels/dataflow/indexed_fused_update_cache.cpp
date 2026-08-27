@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <utility>
 
 #include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
@@ -10,6 +11,10 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+FORCE_INLINE std::pair<uint32_t, uint32_t> divmod(uint32_t dividend, uint32_t divisor) {
+    return {dividend / divisor, dividend % divisor};
+}
+
 void kernel_main() {
     constexpr auto num_heads = get_arg(args::num_heads);
     constexpr auto width_tiles = get_arg(args::width_tiles);
@@ -17,12 +22,13 @@ void kernel_main() {
     constexpr auto cache_page_rows = get_arg(args::cache_page_rows);
     constexpr auto total_cache_rows = get_arg(args::total_cache_rows);
     constexpr auto worker_count = get_arg(args::worker_count);
+    constexpr auto bytes_per_element = get_arg(args::bytes_per_element);
+    constexpr auto scratch_buffer_depth = get_arg(args::scratch_buffer_depth);
 
     constexpr uint32_t tile_width = 32;
     constexpr uint32_t tile_height = 32;
     constexpr uint32_t face_width = 16;
     constexpr uint32_t face_height = 16;
-    constexpr uint32_t bytes_per_element = 2;
     constexpr uint32_t face_bytes = face_width * face_height * bytes_per_element;
     constexpr uint32_t face_line_bytes = face_width * bytes_per_element;
     constexpr uint32_t cache_height_tiles = cache_page_rows / tile_height;
@@ -50,8 +56,7 @@ void kernel_main() {
     CoreLocalMem<volatile int32_t> physical_positions(positions_dfb.get_read_ptr());
 
     auto copy_rows = [&](const auto& source, const auto& cache, uint32_t head, uint32_t width_tile) {
-        constexpr uint32_t scratch_buffer_depth = 2;
-        bool writes_in_flight[scratch_buffer_depth] = {false, false};
+        bool writes_in_flight[scratch_buffer_depth] = {};
 
         auto wait_for_slot_writes = [&](uint32_t slot) {
             if (writes_in_flight[slot]) {
@@ -102,18 +107,14 @@ void kernel_main() {
                 }
 
                 const uint32_t physical_row = static_cast<uint32_t>(physical_row_signed);
-                const uint32_t physical_page = physical_row / cache_page_rows;
-                const uint32_t row_in_page = physical_row % cache_page_rows;
+                const auto [physical_page, row_in_page] = divmod(physical_row, cache_page_rows);
+                const auto [cache_height_tile, dest_tile_row] = divmod(row_in_page, tile_height);
                 const uint32_t cache_tile =
-                    ((physical_page * num_heads + head) * cache_height_tiles + row_in_page / tile_height) *
-                        width_tiles +
+                    ((physical_page * num_heads + head) * cache_height_tiles + cache_height_tile) * width_tiles +
                     width_tile;
 
-                const uint32_t source_face_y = tile_row / face_height;
-                const uint32_t source_line = tile_row % face_height;
-                const uint32_t dest_tile_row = row_in_page % tile_height;
-                const uint32_t dest_face_y = dest_tile_row / face_height;
-                const uint32_t dest_line = dest_tile_row % face_height;
+                const auto [source_face_y, source_line] = divmod(tile_row, face_height);
+                const auto [dest_face_y, dest_line] = divmod(dest_tile_row, face_height);
                 for (uint32_t face_x = 0; face_x < tile_width / face_width; ++face_x) {
                     const uint32_t source_offset =
                         (source_face_y * 2 + face_x) * face_bytes + source_line * face_line_bytes;
@@ -136,6 +137,10 @@ void kernel_main() {
                 noc.async_read_barrier<NocOptions::TXN_ID>({.trid = next_slot + 1});
                 scratch_dfb.push_back(1);
             }
+            // The DFB slot may be released once its tagged writes have departed local L1.
+            if (wrote_current_slot) {
+                noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = current_slot + 1});
+            }
             scratch_dfb.pop_front(1);
         }
 
@@ -149,8 +154,7 @@ void kernel_main() {
     };
 
     for (uint32_t worker = worker_start; worker < worker_count; worker += worker_stride) {
-        const uint32_t head = worker / width_tiles;
-        const uint32_t width_tile = worker % width_tiles;
+        const auto [head, width_tile] = divmod(worker, width_tiles);
         copy_rows(input1, cache1, head, width_tile);
         copy_rows(input2, cache2, head, width_tile);
     }

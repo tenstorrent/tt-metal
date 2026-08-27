@@ -209,11 +209,6 @@ void IndexedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         "flattened cache row count exceeds the range addressable by INT32 physical indices");
 }
 
-void IndexedFusedUpdateCacheDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attrs, const tensor_args_t& args) {
-    validate_on_program_cache_miss(attrs, args);
-}
-
 IndexedFusedUpdateCacheDeviceOperation::spec_return_value_t
 IndexedFusedUpdateCacheDeviceOperation::compute_output_specs(const operation_attributes_t&, const tensor_args_t& args) {
     return {args.cache_tensor1.tensor_spec(), args.cache_tensor2.tensor_spec()};

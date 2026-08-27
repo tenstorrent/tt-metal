@@ -41,6 +41,7 @@ ttnn::device_operation::ProgramArtifacts IndexedFusedUpdateCacheProgramFactory::
 
     const auto cache_data_format = datatype_to_dataformat_converter(cache1.dtype());
     const auto positions_data_format = datatype_to_dataformat_converter(positions.dtype());
+    const uint32_t bytes_per_element = cache1.element_size();
     const uint32_t tile_bytes = cache1.tensor_spec().tile().get_tile_size(cache_data_format);
     const uint32_t positions_page_bytes = positions.buffer()->aligned_page_size();
     constexpr uint32_t scratch_buffer_depth = 2;
@@ -92,7 +93,9 @@ ttnn::device_operation::ProgramArtifacts IndexedFusedUpdateCacheProgramFactory::
              {"source_height_tiles", source_height_tiles},
              {"cache_page_rows", cache_page_rows},
              {"total_cache_rows", total_cache_rows},
-             {"worker_count", worker_count}},
+             {"worker_count", worker_count},
+             {"bytes_per_element", bytes_per_element},
+             {"scratch_buffer_depth", scratch_buffer_depth}},
         .runtime_arg_schema = {.runtime_arg_names = {"source_rows", "worker_start", "worker_stride"}},
         .hw_config = ttnn::create_reader_datamovement_config(cache1.device()->arch()),
     };
