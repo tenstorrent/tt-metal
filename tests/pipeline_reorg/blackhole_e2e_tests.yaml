@@ -1,5 +1,5 @@
 # This file defines the test matrix for the Blackhole e2e pipeline (e2e, integration, perf, unit,
-# DeepSeek prefill).
+# disaggregated prefill).
 
 # Each entry represents a parallel job with the following keys:
 #   id: Stable slug for workflow_dispatch / jq filtering.
@@ -65,7 +65,7 @@
   team: scaleout
 
 - id: bh-grid-20-cores-ttnn-sharding
-  name: ttnn sharding on 20 cores
+  name: ttnn 20-core sharding unit tests
   cmd: pytest tests/ttnn/unit_tests/base_functionality/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
   skus:
     bh_p150b_civ2:
@@ -111,7 +111,7 @@
   team: ttnn
 
 - id: bh-host-io-fast-unit-viommu
-  name: Host IO fast unit test (viommu only)
+  name: Host IO socket loopback unit tests (slow dispatch)
   cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
   skus:
     bh_p300:
@@ -142,9 +142,9 @@
   owner_id: U084DDYSWCW # Adrian Morrison
   team: ttnn
 
-# --- deepseek_prefill ---
+# --- disaggregated prefill ---
 - id: bh-lb-deepseek-prefill
-  name: bh_lb_DeepSeek_PREFILL
+  name: Disaggregated prefill accuracy tests
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
@@ -161,7 +161,7 @@
   team: models
 
 - id: bh-lb-deepseek-dsa
-  name: bh_lb_DeepSeek_DSA
+  name: Disaggregated prefill sparse MLA accuracy tests
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
@@ -179,7 +179,7 @@
   team: models
 
 - id: bh-lb-deepseek-prefill-op-tests
-  name: bh_lb_DeepSeek_PREFILL_OP_TESTS
+  name: Disaggregated prefill op tests
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
@@ -194,7 +194,7 @@
   team: models
 
 - id: bh-lb-deepseek-prefill-perf
-  name: bh_lb_DeepSeek_PREFILL_PERF
+  name: Disaggregated prefill perf tests
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
@@ -213,7 +213,7 @@
   team: models
 
 - id: bh-qb-deepseek-prefill
-  name: bh_qb_DeepSeek_PREFILL
+  name: Disaggregated prefill accuracy & weight cache tests
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
@@ -227,7 +227,7 @@
   team: models
 
 - id: bh-p150-deepseek-prefill-op-tests
-  name: bh_p150_DeepSeek_PREFILL_OP_TESTS
+  name: Disaggregated prefill op tests
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
@@ -240,7 +240,7 @@
   team: models
 
 - id: bh-p300-deepseek-prefill-op-tests
-  name: bh_p300_DeepSeek_PREFILL_OP_TESTS
+  name: Disaggregated prefill op tests
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
@@ -253,7 +253,7 @@
   team: models
 
 - id: bh-qb2-deepseek-prefill-op-tests
-  name: bh_qb2_DeepSeek_PREFILL_OP_TESTS
+  name: Disaggregated prefill op tests
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
@@ -266,7 +266,7 @@
   team: models
 
 - id: bh-qb2-deepseek-d2d-socket-sync
-  name: bh_qb2_DeepSeek_D2D_SOCKET_SYNC
+  name: Disaggregated prefill D2D socket sync op tests
   model-name: deepseek_prefill
   # Program-cache validation for outbound_socket_service_sync (D2D sender op) on a 4-chip
   # QuietBox Fabric2D 2x2 variant: 2 sender + 2 receiver chips over tt-fabric. Confirms the
