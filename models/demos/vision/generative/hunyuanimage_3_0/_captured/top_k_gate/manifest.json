@@ -1,0 +1,67 @@
+{
+  "component": "top_k_gate",
+  "submodule_path": "model.layers.0.mlp.gate",
+  "args": {
+    "kind": "tuple",
+    "items": []
+  },
+  "kwargs": {
+    "kind": "dict",
+    "items": {
+      "hidden_states": {
+        "kind": "tensor",
+        "shape": [
+          1,
+          64,
+          4096
+        ],
+        "dtype": "torch.float32"
+      }
+    }
+  },
+  "output": {
+    "kind": "tuple",
+    "items": [
+      {
+        "kind": "list",
+        "items": [
+          {
+            "kind": "tensor",
+            "shape": [],
+            "dtype": "torch.float32"
+          },
+          {
+            "kind": "tensor",
+            "shape": [],
+            "dtype": "torch.float32"
+          }
+        ]
+      },
+      {
+        "kind": "tensor",
+        "shape": [
+          64,
+          64,
+          18
+        ],
+        "dtype": "torch.float32"
+      },
+      {
+        "kind": "tensor",
+        "shape": [
+          64,
+          64,
+          18
+        ],
+        "dtype": "torch.bool"
+      },
+      {
+        "kind": "tensor",
+        "shape": [
+          64
+        ],
+        "dtype": "torch.int64"
+      }
+    ]
+  }
+}
