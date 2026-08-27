@@ -95,7 +95,8 @@ Two conditioner facts that break naive assumptions:
 - **`rope_scaling.mrope_interleaved` is true.** The chunked and interleaved rotary layouts coincide
   exactly while all three M-RoPE axes share a position — i.e. for `t2va`, where the flag is a no-op.
   A vision run makes them diverge. `create_rope_tensors(..., interleaved=True)` and
-  `mrope_position_ids()` cover that; see `tests/encoders/qwen3vl/test_qwen3vl_mrope.py`.
+  `mrope_position_ids()` cover that; the gate is the `get_rope_index` comparison in
+  `tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py`.
 
 FSDP is a placement choice, and the two consumers make it differently. The pipeline builds the
 encoder with `is_fsdp=True` (`pipeline_minimax_h3.py`), sharding the weights across the non-TP axis
