@@ -1573,6 +1573,21 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Async-ahead token keep unit tests
+  cmd: |
+    pytest --timeout 300 models/tt_transformers/tests/test_async_ahead_token_keep_unit.py \
+      models/tt_transformers/tests/test_async_ahead_token_keep_decode.py
+  model: tt-transformers-async-ahead-keep
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 3
+    bh_p150:
+      timeout: 10
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: TT-Transformers common unit tests
   cmd: |
     unset TT_METAL_WATCHER

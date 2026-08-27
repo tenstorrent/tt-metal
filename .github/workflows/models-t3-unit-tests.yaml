@@ -37,6 +37,7 @@ on:
           - mochi
           - bert-large
           - tt-model-sampling
+          - tt-transformers-async-ahead-keep
           - efficientdet-d0
           - mobilenetv3
           - retinanet
