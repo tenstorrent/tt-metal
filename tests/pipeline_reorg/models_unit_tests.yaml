@@ -610,29 +610,32 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-# TODO See Issue: https://github.com/tenstorrent/tt-metal/issues/42139
-# - name: Llama 3.3-70B unit tests (Galaxy)
-#   cmd: |
-#     export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention.py
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
-#   model: llama3.3-70b-galaxy
-#   skus:
-#     wh_galaxy_perf:
-#       timeout: 30
-#       tier: 1
-#   owner_id: U053W15B6JF # Djordje Ivanovic
-#   team: models
+- name: Llama 3.3-70B unit tests (Galaxy)
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+    # Fail fast (runner-health) if the system mesh degraded below 32 chips: otherwise the mesh_device
+    # fixture skips every test and the job reports a false-green with no HF/device path exercised.
+    python3 -c "import ttnn; s = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size(); assert s == 32, f'Galaxy system mesh degraded to {s} chips (expected 32); failing instead of skipping every test'"
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
+  model: llama3.3-70b-galaxy
+  skus:
+    wh_galaxy_perf:
+      timeout: 30
+      tier: 1
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
 
 - name: Qwen3-32B unit tests (Galaxy)
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+    export QWEN_BH_PREFETCHER=1  # opt-in BH dram_prefetcher path (no-op on WH)
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
@@ -1385,4 +1388,18 @@
       timeout: 15
       tier: 2
   owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
+  team: models
+
+- name: On-device sampling unit tests
+  cmd: |
+    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_route_mirror_parity"
+  model: tt-model-sampling
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 3
+    bh_p150:
+      timeout: 10
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
