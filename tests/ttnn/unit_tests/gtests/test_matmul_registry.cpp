@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <variant>
 
 #include <umd/device/types/arch.hpp>
@@ -58,6 +59,15 @@ MatmulRegistryRequest request(const OperationDomain domain = OperationDomain::De
             .compute_grid_y = 10}};
 }
 
+MatmulRegistryRequest checked_in_request(const OperationDomain domain = OperationDomain::DenseMatmul) {
+    auto result = request(domain);
+    result.workload = {
+        .logical_m = 32, .logical_k = 1280, .logical_n = 2304, .padded_m = 32, .padded_k = 1280, .padded_n = 2304};
+    result.device.compute_grid_x = 12;
+    result.device.compute_grid_y = 10;
+    return result;
+}
+
 Eligibility eligibility(const OperationDomain domain = OperationDomain::DenseMatmul) {
     return Eligibility{.call = semantics(domain)};
 }
@@ -83,6 +93,32 @@ compact::ProgramConfigDescriptor reuse_program(const std::uint16_t grid_x = 2) {
         .per_core_m = 1,
         .per_core_n = 2};
 }
+
+Resolution invalid_materialization_resolution(
+    const MatmulRegistryRequest& runtime_request, const Eligibility&) noexcept {
+    return Resolution{
+        .reason = ResolutionReason::CertifiedMatch,
+        .program_config = reuse_program(14),
+        .compute_kernel_config = kernel(),
+        .key = compact_registry_key(runtime_request)};
+}
+
+struct RuntimeStateReset {
+    MatmulRegistryMode original_mode = ttnn::CONFIG.get<"matmul_registry_mode">();
+
+    RuntimeStateReset() {
+        reset_stats_for_testing();
+        reset_circuit_breakers_for_testing();
+        reset_startup_mode_for_testing();
+    }
+
+    ~RuntimeStateReset() {
+        ttnn::CONFIG.set<"matmul_registry_mode">(original_mode);
+        reset_startup_mode_for_testing();
+        reset_circuit_breakers_for_testing();
+        reset_stats_for_testing();
+    }
+};
 
 compact::ProgramConfigDescriptor multicast_1d_program() {
     return compact::ProgramConfigDescriptor{
@@ -305,9 +341,15 @@ TEST(MatmulConfigRegistry, EmptyAndMalformedArtifactsFallBack) {
     EXPECT_EQ(
         resolve_with_compact_table_for_testing(req, eligibility(), bad_metadata, {&entry, 1}).reason,
         ResolutionReason::UnsupportedArtifact);
+    bad_metadata = metadata();
+    bad_metadata.semantic_source_sha256 = {};
+    EXPECT_EQ(
+        resolve_with_compact_table_for_testing(req, eligibility(), bad_metadata, {&entry, 1}).reason,
+        ResolutionReason::UnsupportedArtifact);
 }
 
 TEST(MatmulConfigRegistry, EveryExplicitTuningAxisBypassesBeforeLookup) {
+    RuntimeStateReset reset;
     const auto req = request();
     ttnn::prim::MatmulParams legacy;
     for (const auto axis : {0, 1, 2}) {
@@ -316,10 +358,103 @@ TEST(MatmulConfigRegistry, EveryExplicitTuningAxisBypassesBeforeLookup) {
         eligible.has_compute_kernel_config = axis == 1;
         eligible.has_user_core_grid = axis == 2;
         EXPECT_EQ(preflight_v1_eligibility(eligible), ResolutionReason::ExplicitOverride);
-        const auto dispatched = resolve_for_dispatch(req, eligible, legacy);
+        const auto dispatched = resolve_for_dispatch(Mode::On, req, eligible, legacy);
         EXPECT_EQ(dispatched.resolution.reason, ResolutionReason::ExplicitOverride);
         EXPECT_FALSE(dispatched.materialized_parameters.has_value());
     }
+}
+
+TEST(MatmulConfigRegistry, StartupModeDefaultsOffAndFreezesOnFirstUse) {
+    RuntimeStateReset reset;
+    ttnn::CONFIG.set<"matmul_registry_mode">(Mode::Off);
+    EXPECT_EQ(current_mode(), Mode::Off);
+    EXPECT_TRUE(stats_snapshot().mode_is_frozen);
+    EXPECT_EQ(stats_snapshot().frozen_mode, Mode::Off);
+
+    reset_startup_mode_for_testing();
+    ttnn::CONFIG.set<"matmul_registry_mode">(Mode::Shadow);
+    EXPECT_EQ(current_mode(), Mode::Shadow);
+    ttnn::CONFIG.set<"matmul_registry_mode">(Mode::On);
+    EXPECT_EQ(current_mode(), Mode::Shadow);
+}
+
+TEST(MatmulConfigRegistry, OffShadowAndOnHaveDistinctMutationAndTelemetryContracts) {
+    RuntimeStateReset reset;
+    const auto req = checked_in_request();
+    const auto eligible = eligibility();
+    const ttnn::prim::MatmulParams legacy;
+
+    auto off = resolve_for_dispatch(Mode::Off, req, eligible, legacy);
+    EXPECT_EQ(off.resolution.reason, ResolutionReason::Disabled);
+    EXPECT_EQ(off.action, ExecutionAction::Fallback);
+    EXPECT_FALSE(off.materialized_parameters.has_value());
+    EXPECT_EQ(stats_snapshot().domains[0].resolution_attempts, 0U);
+
+    auto shadow = resolve_for_dispatch(Mode::Shadow, req, eligible, legacy);
+    EXPECT_EQ(shadow.resolution.reason, ResolutionReason::CertifiedMatch);
+    EXPECT_EQ(shadow.action, ExecutionAction::ObserveOnly);
+    EXPECT_FALSE(shadow.materialized_parameters.has_value());
+    auto snapshot = stats_snapshot().domains[0];
+    EXPECT_EQ(snapshot.resolution_attempts, 1U);
+    EXPECT_EQ(snapshot.certified_hits, 1U);
+    EXPECT_EQ(snapshot.shadow_would_hits, 1U);
+    EXPECT_EQ(snapshot.selected_hits, 0U);
+    EXPECT_EQ(snapshot.fallbacks, 0U);
+
+    auto on = resolve_for_dispatch(Mode::On, req, eligible, legacy);
+    EXPECT_EQ(on.resolution.reason, ResolutionReason::CertifiedMatch);
+    EXPECT_EQ(on.action, ExecutionAction::ApplyRecipe);
+    ASSERT_TRUE(on.materialized_parameters.has_value());
+    EXPECT_TRUE(on.materialized_parameters->program_config.has_value());
+    EXPECT_TRUE(on.materialized_parameters->compute_kernel_config.has_value());
+    snapshot = stats_snapshot().domains[0];
+    EXPECT_EQ(snapshot.resolution_attempts, 2U);
+    EXPECT_EQ(snapshot.certified_hits, 2U);
+    EXPECT_EQ(snapshot.selected_hits, 1U);
+    EXPECT_EQ(snapshot.reasons[static_cast<std::size_t>(ResolutionReason::CertifiedMatch)], 2U);
+}
+
+TEST(MatmulConfigRegistry, MaterializationFailureBreaksOnlyAffectedDomain) {
+    RuntimeStateReset reset;
+    const auto req = checked_in_request();
+    const auto eligible = eligibility();
+    const ttnn::prim::MatmulParams legacy;
+
+    const auto failed = resolve_for_dispatch(Mode::On, req, eligible, legacy, invalid_materialization_resolution);
+    EXPECT_EQ(failed.resolution.reason, ResolutionReason::MaterializationRejected);
+    EXPECT_EQ(failed.action, ExecutionAction::Fallback);
+    EXPECT_FALSE(failed.materialized_parameters.has_value());
+    EXPECT_TRUE(is_domain_circuit_broken(OperationDomain::DenseMatmul));
+    EXPECT_FALSE(is_domain_circuit_broken(OperationDomain::Linear));
+
+    const auto linear = resolve_for_dispatch(
+        Mode::On, checked_in_request(OperationDomain::Linear), eligibility(OperationDomain::Linear), legacy);
+    EXPECT_EQ(linear.resolution.reason, ResolutionReason::CertifiedMatch);
+    EXPECT_EQ(linear.action, ExecutionAction::ApplyRecipe);
+
+    const auto broken = resolve_for_dispatch(Mode::On, req, eligible, legacy);
+    EXPECT_EQ(broken.resolution.reason, ResolutionReason::CircuitBroken);
+    const auto snapshot = stats_snapshot().domains[0];
+    EXPECT_EQ(snapshot.circuit_breaker_activations, 1U);
+    EXPECT_EQ(snapshot.fallbacks, 2U);
+    EXPECT_EQ(snapshot.reasons[static_cast<std::size_t>(ResolutionReason::CircuitBroken)], 1U);
+}
+
+TEST(MatmulConfigRegistry, SelectedExecutionGuardCompletesOrCircuitBreaks) {
+    RuntimeStateReset reset;
+    {
+        SelectedExecutionGuard guard(OperationDomain::DenseMatmul, true);
+    }
+    EXPECT_EQ(stats_snapshot().domains[0].completed_hits, 1U);
+    EXPECT_FALSE(is_domain_circuit_broken(OperationDomain::DenseMatmul));
+
+    try {
+        SelectedExecutionGuard guard(OperationDomain::Linear, true);
+        throw std::runtime_error("selected execution failed");
+    } catch (const std::runtime_error&) {
+    }
+    EXPECT_TRUE(is_domain_circuit_broken(OperationDomain::Linear));
+    EXPECT_EQ(stats_snapshot().domains[1].circuit_breaker_activations, 1U);
 }
 
 TEST(MatmulConfigRegistry, MaterializationSupportsEveryNativeFamily) {

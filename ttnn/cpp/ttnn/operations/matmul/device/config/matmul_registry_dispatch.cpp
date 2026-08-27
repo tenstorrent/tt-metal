@@ -164,6 +164,16 @@ bool try_apply_registry_parameters(
     const CallSemantics call_semantics,
     ttnn::prim::MatmulParams& parameters,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
+    const auto mode = current_mode();
+    if (mode == Mode::Off) {
+        return false;
+    }
+    if (is_domain_circuit_broken(call_semantics.domain)) {
+        const Eligibility eligibility{.call = call_semantics};
+        static_cast<void>(resolve_for_dispatch(mode, std::nullopt, eligibility, parameters));
+        return false;
+    }
+
     RegistryRequestInspection inspection;
     try {
         // Caller-known exclusions are deliberately inspected before the trace
@@ -179,24 +189,31 @@ bool try_apply_registry_parameters(
     } catch (...) {
         // Request construction may inspect tensors before legacy validators
         // do. Preserve their exception timing by falling back untouched.
+        const Eligibility eligibility{.call = call_semantics};
+        static_cast<void>(resolve_for_dispatch(mode, std::nullopt, eligibility, parameters));
         return false;
     }
     if (!inspection.request.has_value()) {
+        static_cast<void>(resolve_for_dispatch(mode, std::nullopt, inspection.eligibility, parameters));
         return false;
     }
 
     try {
         auto* device = input_tensor_a.device();
         if (device == nullptr || tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(device).has_value()) {
+            inspection.eligibility.trace_capture_active = true;
+            static_cast<void>(resolve_for_dispatch(mode, std::nullopt, inspection.eligibility, parameters));
             return false;
         }
     } catch (...) {
         // An unavailable trace state is indistinguishable from active capture.
+        inspection.eligibility.trace_capture_active = true;
+        static_cast<void>(resolve_for_dispatch(mode, std::nullopt, inspection.eligibility, parameters));
         return false;
     }
 
-    auto selected = select_registry_parameters(*inspection.request, inspection.eligibility, parameters);
-    if (!selected.has_value()) {
+    auto dispatch = resolve_for_dispatch(mode, inspection.request, inspection.eligibility, parameters);
+    if (dispatch.action != ExecutionAction::ApplyRecipe || !dispatch.materialized_parameters.has_value()) {
         return false;
     }
 
@@ -204,12 +221,13 @@ bool try_apply_registry_parameters(
         // Preflight proved both fields were absent. Commit only the paired
         // registry-owned axes; caller-owned state never participates in this
         // assignment and a partial failure can restore the proven empty state.
-        parameters.program_config = std::move(selected->program_config);
-        parameters.compute_kernel_config = selected->compute_kernel_config;
+        parameters.program_config = std::move(dispatch.materialized_parameters->program_config);
+        parameters.compute_kernel_config = dispatch.materialized_parameters->compute_kernel_config;
         return true;
     } catch (...) {
         parameters.program_config.reset();
         parameters.compute_kernel_config.reset();
+        circuit_break_domain(call_semantics.domain);
         return false;
     }
 }

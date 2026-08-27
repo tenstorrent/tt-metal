@@ -15,13 +15,17 @@
 #include <tt-metalium/tile.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/matmul/device/config/registry/matmul_registry_exact.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
 namespace ttnn::operations::matmul::registry {
 
+using Mode = ttnn::MatmulRegistryMode;
+
 enum class OperationDomain : std::uint8_t { DenseMatmul, Linear, Addmm, IneligibleSharedCaller };
+inline constexpr std::size_t kOperationDomainCount = 4;
 
 struct CallSemantics {
     OperationDomain domain = OperationDomain::IneligibleSharedCaller;
@@ -38,6 +42,7 @@ constexpr CallSemantics linear_call_semantics() noexcept { return CallSemantics{
 CallSemantics addmm_call_semantics(float alpha, float beta) noexcept;
 
 enum class ResolutionReason : std::uint8_t {
+    Disabled,
     IneligibleOperationDomain,
     MalformedOperationSemantics,
     InconsistentIoContract,
@@ -48,9 +53,14 @@ enum class ResolutionReason : std::uint8_t {
     InconsistentRequest,
     UnsupportedArtifact,
     MaterializationRejected,
+    CircuitBroken,
     EmptyRegistry,
     CertifiedMatch,
+    Count,
 };
+inline constexpr std::size_t kResolutionReasonCount = static_cast<std::size_t>(ResolutionReason::Count);
+
+enum class ExecutionAction : std::uint8_t { Fallback, ObserveOnly, ApplyRecipe };
 
 enum class IoContractStatus : std::uint8_t {
     Resolved,
@@ -210,6 +220,7 @@ struct Resolution {
 
 struct DispatchResult {
     Resolution resolution;
+    ExecutionAction action = ExecutionAction::Fallback;
     std::optional<ttnn::prim::MatmulParams> materialized_parameters = std::nullopt;
 };
 
@@ -217,16 +228,21 @@ ResolutionReason preflight_v1_eligibility(const Eligibility& eligibility) noexce
 ResolutionReason validate_v1_request_envelope(
     const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept;
 
-// Default-on and read-only: consult the checked exact table. Every miss,
+// Read-only: consult the checked exact table. Every miss,
 // unsupported state, or malformed artifact returns a typed fallback reason.
 Resolution resolve(const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept;
 
+using ResolverFunction = Resolution (*)(const MatmulRegistryRequest&, const Eligibility&) noexcept;
+
 DispatchResult resolve_for_dispatch(
+    Mode mode,
     const std::optional<MatmulRegistryRequest>& request,
     const Eligibility& eligibility,
-    const ttnn::prim::MatmulParams& legacy_parameters);
+    const ttnn::prim::MatmulParams& legacy_parameters,
+    ResolverFunction resolver = resolve);
 
 std::optional<ttnn::prim::MatmulParams> select_registry_parameters(
+    Mode mode,
     const MatmulRegistryRequest& request,
     const Eligibility& eligibility,
     const ttnn::prim::MatmulParams& legacy_parameters);
@@ -246,5 +262,50 @@ Resolution resolve_with_compact_table_for_testing(
     const Eligibility& eligibility,
     const compact::TableMetadata& metadata,
     std::span<const compact::ProgramConfigExactEntry> exact_entries = {}) noexcept;
+
+// CONFIG is read exactly once at first dispatch. The test reset is not a
+// production control and must only be used while no registry call is active.
+Mode current_mode() noexcept;
+void reset_startup_mode_for_testing() noexcept;
+
+bool circuit_break_domain(OperationDomain domain) noexcept;
+bool is_domain_circuit_broken(OperationDomain domain) noexcept;
+void reset_circuit_breakers_for_testing() noexcept;
+
+struct DomainStatsSnapshot {
+    std::uint64_t resolution_attempts = 0;
+    std::uint64_t certified_hits = 0;
+    std::uint64_t shadow_would_hits = 0;
+    std::uint64_t selected_hits = 0;
+    std::uint64_t completed_hits = 0;
+    std::uint64_t fallbacks = 0;
+    std::uint64_t circuit_breaker_activations = 0;
+    bool circuit_broken = false;
+    std::array<std::uint64_t, kResolutionReasonCount> reasons{};
+};
+
+struct StatsSnapshot {
+    bool mode_is_frozen = false;
+    Mode frozen_mode = Mode::Off;
+    std::size_t exact_entry_count = 0;
+    std::array<DomainStatsSnapshot, kOperationDomainCount> domains{};
+};
+
+StatsSnapshot stats_snapshot() noexcept;
+void reset_stats_for_testing() noexcept;
+
+class SelectedExecutionGuard {
+public:
+    SelectedExecutionGuard(OperationDomain domain, bool selected) noexcept;
+    ~SelectedExecutionGuard() noexcept;
+
+    SelectedExecutionGuard(const SelectedExecutionGuard&) = delete;
+    SelectedExecutionGuard& operator=(const SelectedExecutionGuard&) = delete;
+
+private:
+    OperationDomain domain_;
+    bool selected_;
+    int uncaught_exceptions_;
+};
 
 }  // namespace ttnn::operations::matmul::registry

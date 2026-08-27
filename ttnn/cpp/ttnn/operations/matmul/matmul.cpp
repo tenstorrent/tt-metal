@@ -233,8 +233,9 @@ static ttnn::Tensor bound_matmul(
     // a local copy so fallback and the legacy body always share one parameter
     // object, while the wrapper-owned input remains untouched.
     auto parameters = legacy_parameters;
-    registry::try_apply_registry_parameters(
+    const bool registry_selected = registry::try_apply_registry_parameters(
         input_tensor_a, input_tensor_b, bias.has_value(), call_semantics, parameters, optional_output_tensor);
+    registry::SelectedExecutionGuard registry_execution_guard(call_semantics.domain, registry_selected);
 
     if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
         TT_FATAL(
