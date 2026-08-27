@@ -448,11 +448,12 @@ TEST(MatmulConfigRegistry, SelectedExecutionGuardCompletesOrCircuitBreaks) {
     EXPECT_EQ(stats_snapshot().domains[0].completed_hits, 1U);
     EXPECT_FALSE(is_domain_circuit_broken(OperationDomain::DenseMatmul));
 
-    try {
-        SelectedExecutionGuard guard(OperationDomain::Linear, true);
-        throw std::runtime_error("selected execution failed");
-    } catch (const std::runtime_error&) {
-    }
+    EXPECT_THROW(
+        {
+            SelectedExecutionGuard guard(OperationDomain::Linear, true);
+            throw std::runtime_error("selected execution failed");
+        },
+        std::runtime_error);
     EXPECT_TRUE(is_domain_circuit_broken(OperationDomain::Linear));
     EXPECT_EQ(stats_snapshot().domains[1].circuit_breaker_activations, 1U);
 }
