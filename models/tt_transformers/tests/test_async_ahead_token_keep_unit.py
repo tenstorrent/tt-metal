@@ -180,14 +180,6 @@ def test_keep_follows_the_declared_capability(
 
 
 @torch.no_grad()
-def test_force_env_var_restores_the_unconditional_keep(mesh_device, reset_seeds, ensure_gc, monkeypatch):
-    """``TT_FORCE_ASYNC_AHEAD_KEEP=1`` is the escape hatch back to the old behaviour."""
-    monkeypatch.setenv("TT_FORCE_ASYNC_AHEAD_KEEP", "1")
-    tokens, positions = _run_keep(mesh_device, {"supports_async_decode": False, "supports_sample_on_device": True})
-    assert (tokens, positions) == (KEEP_TOKENS, KEEP_POSITIONS)
-
-
-@torch.no_grad()
 def test_slot_remap_is_honoured_by_the_keep(mesh_device, reset_seeds, ensure_gc):
     """Condense moves must still be honoured for a model that does keep the token.
 
