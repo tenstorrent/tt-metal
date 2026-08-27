@@ -317,9 +317,14 @@ ttnn::Tensor permute(
     // The no-op shortcut is native's own answer, so a call it covers is left to native rather than
     // dispatched -- but it is not consulted as part of the support scope, so a forced-codegen call
     // still reaches a program.
+    // is_demoted() reads only the rank and dims and is three integer operations; supported_by_codegen()
+    // walks the shape and, on the row-invariant path, queries live L1 occupancy. Demotion rejects the
+    // whole blocked-generic class, so asking the cheap predicate first keeps a demoted caller -- which
+    // gets nothing from this path -- off the expensive one. Both are pure predicates over the same
+    // inputs and neither depends on the other having run.
     if (!detail::is_permute_nop(input_tensor, normalized_dims) &&
-        permute_codegen::supported_by_codegen(input_tensor, normalized_dims, memory_config) &&
-        !permute_codegen::is_demoted(input_tensor, normalized_dims)) {
+        !permute_codegen::is_demoted(input_tensor, normalized_dims) &&
+        permute_codegen::supported_by_codegen(input_tensor, normalized_dims, memory_config)) {
         return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
     }
     return detail::permute_native(input_tensor, normalized_dims, memory_config, pad_value);
