@@ -541,17 +541,21 @@ uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
 void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_command_sequence) {
     // Initialize an empty preamble command in the Program Dispatch Cmd Sequence, which will be
     // updated with the correct write offsets when the program is enqueued
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    TT_ASSERT(program_command_sequence.ctx != nullptr);
+    MetalContext& metal_ctx = *program_command_sequence.ctx;
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     calculator.add_dispatch_set_write_offsets(4);
     const uint32_t preamble_cmd_sizeB = calculator.write_offset_bytes();
-    program_command_sequence.preamble_command_sequence = HostMemDeviceCommand(preamble_cmd_sizeB);
+    program_command_sequence.preamble_command_sequence = HostMemDeviceCommand(metal_ctx, preamble_cmd_sizeB);
     static constexpr uint32_t write_offsets[4] = {0, 0, 0, 0};
     program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(write_offsets);
 }
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id) {
     // Initialize stall command sequences for this program.
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    TT_ASSERT(program_command_sequence.ctx != nullptr);
+    MetalContext& metal_ctx = *program_command_sequence.ctx;
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     calculator.add_dispatch_wait_with_prefetch_stall();
     const uint32_t uncached_stall_cmd_sizeB = calculator.write_offset_bytes();
     calculator.clear();
@@ -563,21 +567,21 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
     // update_program_dispatch_commands/update_traced_program_dispatch_commands patch in the real completion
     // address for the enqueuing CQ before the sequence ever reaches hardware.
     program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx] =
-        HostMemDeviceCommand(uncached_stall_cmd_sizeB);
+        HostMemDeviceCommand(metal_ctx, uncached_stall_cmd_sizeB);
     // Empty wait command initialized here. Will get updated when program is enqueued.
     program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx].add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
-        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
+        metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
         0,
         /*cq_id=*/0);
     // Empty wait command initialized here. Will get updated when program is enqueued.
     program_command_sequence.stall_command_sequences[CachedStallSequenceIdx] =
-        HostMemDeviceCommand(cached_stall_cmd_seqB);
+        HostMemDeviceCommand(metal_ctx, cached_stall_cmd_seqB);
     program_command_sequence.stall_command_sequences[CachedStallSequenceIdx].add_dispatch_wait(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
-        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
+        metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
         0,
         /*cq_id=*/0);
 }
@@ -626,6 +630,7 @@ void repoint_rta_data_into_command_stream(
 
 template <typename PackedSubCmd>
 void generate_runtime_args_cmds(
+    MetalContext& metal_ctx,
     std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
     std::vector<ProgramCommandSequence::RtaUpdate>& rta_updates,
     const uint32_t& l1_arg_base_addr,
@@ -666,7 +671,7 @@ void generate_runtime_args_cmds(
     constexpr bool unicast = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>;
 
     uint32_t num_packed_cmds_in_seq = sub_cmds.size();
-    DeviceCommandCalculator calculator;
+    DeviceCommandCalculator calculator(metal_ctx);
     uint32_t max_packed_cmds = calculator.get_max_write_packed_sub_cmds<PackedSubCmd>(
         max_runtime_args_len,
         constants.max_prefetch_command_size,
@@ -680,22 +685,22 @@ void generate_runtime_args_cmds(
             num_packed_cmds_in_seq,
             max_packed_cmds);
     }
-    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t l1_alignment = metal_ctx.hal().get_alignment(HalMemType::L1);
     while (num_packed_cmds_in_seq != 0) {
         // Generate the device command
         uint32_t num_packed_cmds = std::min(num_packed_cmds_in_seq, max_packed_cmds);
         uint32_t rt_payload_sizeB =
             get_runtime_payload_sizeB(num_packed_cmds, max_runtime_args_len, unicast, no_stride);
-        DeviceCommandCalculator calculator;
+        DeviceCommandCalculator calculator(metal_ctx);
         calculator.add_dispatch_write_packed<PackedSubCmd>(
             num_packed_cmds,
             max_runtime_args_len * sizeof(uint32_t),
             constants.packed_write_max_unicast_sub_cmds,
             no_stride);
-        auto& command_obj = runtime_args_command_sequences.emplace_back(calculator.write_offset_bytes());
+        auto& command_obj = runtime_args_command_sequences.emplace_back(metal_ctx, calculator.write_offset_bytes());
         uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
         // With watcher off, the buffer stays zero-initialized by HostMemDeviceCommand.
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+        if (metal_ctx.rtoptions().get_watcher_enabled()) {
             uint32_t total_words = (calculator.write_offset_bytes() - data_offset) / sizeof(uint32_t);
             uint32_t* command_start_ptr =
                 reinterpret_cast<uint32_t*>(command_obj.data()) + (data_offset / sizeof(uint32_t));
@@ -745,11 +750,12 @@ void generate_runtime_args_cmds(
 // so a large per-core payload forces far fewer than 35 cores per command; exceeding it silently overflows
 // the eth cmddat queue and hangs the device. Returns >=1 (a single core's payload is L1-fit-checked at
 // finalize, so it is expected to fit).
-uint32_t max_cores_per_large_unicast_cmd(uint32_t rta_payload_sizeB, uint32_t max_prefetch_command_size) {
-    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+uint32_t max_cores_per_large_unicast_cmd(
+    MetalContext& metal_ctx, uint32_t rta_payload_sizeB, uint32_t max_prefetch_command_size) {
+    const uint32_t l1_alignment = metal_ctx.hal().get_alignment(HalMemType::L1);
     const uint32_t aligned_core_payload = tt::align(rta_payload_sizeB, l1_alignment);
     for (uint32_t n = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS; n >= 1; --n) {
-        DeviceCommandCalculator calculator;
+        DeviceCommandCalculator calculator(metal_ctx);
         calculator.add_dispatch_write_packed_large_unicast(n, n * aligned_core_payload);
         if (calculator.write_offset_bytes() <= max_prefetch_command_size) {
             return n;
@@ -761,7 +767,7 @@ uint32_t max_cores_per_large_unicast_cmd(uint32_t rta_payload_sizeB, uint32_t ma
     // guard is a TT_ASSERT and compiles out in release builds). The kernel-side RTA ceiling
     // (validate_runtime_args_size) is set before the dispatch core type is known, so this is the first point
     // that can enforce the dispatch-core-specific prefetch command size.
-    DeviceCommandCalculator single_core;
+    DeviceCommandCalculator single_core(metal_ctx);
     single_core.add_dispatch_write_packed_large_unicast(1, aligned_core_payload);
     TT_FATAL(
         false,
@@ -782,6 +788,7 @@ uint32_t max_cores_per_large_unicast_cmd(uint32_t rta_payload_sizeB, uint32_t ma
 // max_cores_per_large_unicast_cmd() per command, with each core's payload laid out
 // exactly as the packed path lays out its per-core data region so the RTA-update pointers stay valid.
 void generate_runtime_args_cmds_large_unicast(
+    MetalContext& metal_ctx,
     std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
     std::vector<ProgramCommandSequence::RtaUpdate>& rta_updates,
     uint32_t l1_arg_base_addr,
@@ -793,13 +800,14 @@ void generate_runtime_args_cmds_large_unicast(
         rt_args_data,
     uint32_t max_prefetch_command_size,
     uint32_t write_offset_index) {
-    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t l1_alignment = metal_ctx.hal().get_alignment(HalMemType::L1);
     // Device reads rta_payload_sizeB bytes per sub-command, then pads the read pointer to `alignment`, so
     // consecutive per-core payloads in the command stream are separated by this aligned size.
     const uint32_t aligned_core_payload = tt::align(rta_payload_sizeB, l1_alignment);
     const uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
     // Cap cores/command by the prefetcher command size, not just the sub-cmd count (see helper above).
-    const uint32_t max_cores_per_cmd = max_cores_per_large_unicast_cmd(rta_payload_sizeB, max_prefetch_command_size);
+    const uint32_t max_cores_per_cmd =
+        max_cores_per_large_unicast_cmd(metal_ctx, rta_payload_sizeB, max_prefetch_command_size);
 
     const uint32_t num_cores = sub_cmds.size();
     uint32_t offset_idx = 0;
@@ -819,7 +827,7 @@ void generate_runtime_args_cmds_large_unicast(
             auto& buf = core_payloads[k];
             buf.assign(aligned_core_payload, 0);
             // With watcher off the buffer stays zero; mirrors the packed path.
-            if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+            if (metal_ctx.rtoptions().get_watcher_enabled()) {
                 fill_runtime_args_watcher_pattern(
                     reinterpret_cast<uint32_t*>(buf.data()), aligned_core_payload / sizeof(uint32_t));
             }
@@ -834,9 +842,9 @@ void generate_runtime_args_cmds_large_unicast(
             data_collection[k] = tt::stl::Span<const uint8_t>(buf.data(), buf.size());
         }
 
-        DeviceCommandCalculator calculator;
+        DeviceCommandCalculator calculator(metal_ctx);
         calculator.add_dispatch_write_packed_large_unicast(num_in_chunk, num_in_chunk * aligned_core_payload);
-        auto& command_obj = runtime_args_command_sequences.emplace_back(calculator.write_offset_bytes());
+        auto& command_obj = runtime_args_command_sequences.emplace_back(metal_ctx, calculator.write_offset_bytes());
 
         std::vector<uint8_t*> data_collection_location;
         command_obj.add_dispatch_write_packed_large_unicast(
@@ -921,10 +929,12 @@ BatchedTransfers assemble_runtime_args_commands(
 
     program_command_sequence.runtime_args_command_sequences = {};
     uint32_t command_count = 0;
-    const DeviceCommandCalculator calculator;
+    TT_ASSERT(program_command_sequence.ctx != nullptr);
+    MetalContext& metal_ctx = *program_command_sequence.ctx;
+    const DeviceCommandCalculator calculator(metal_ctx);
 
     // Unique RTAs
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = metal_ctx.hal();
     for (uint32_t programmable_core_type_index = 0;
          programmable_core_type_index < hal.get_programmable_core_type_count();
          programmable_core_type_index++) {
@@ -938,7 +948,8 @@ BatchedTransfers assemble_runtime_args_commands(
                 if (unique_rta_requires_large_unicast(kg->total_rta_size)) {
                     command_count += div_up(
                         num_sub_cmds,
-                        max_cores_per_large_unicast_cmd(kg->total_rta_size, constants.max_prefetch_command_size));
+                        max_cores_per_large_unicast_cmd(
+                            metal_ctx, kg->total_rta_size, constants.max_prefetch_command_size));
                 } else {
                     uint32_t max_runtime_args_len = kg->total_rta_size / sizeof(uint32_t);
                     uint32_t max_packed_cmds =
@@ -1086,6 +1097,7 @@ BatchedTransfers assemble_runtime_args_commands(
                     // Per-core payload exceeds one dispatch page; the packed-write handler cannot span
                     // pages, so send these unique RTAs via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST.
                     generate_runtime_args_cmds_large_unicast(
+                        metal_ctx,
                         program_command_sequence.runtime_args_command_sequences,
                         program_command_sequence.rta_updates,
                         rta_offset,
@@ -1097,6 +1109,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         get_dispatch_write_offset(programmable_core_type));
                 } else {
                     generate_runtime_args_cmds(
+                        metal_ctx,
                         program_command_sequence.runtime_args_command_sequences,
                         program_command_sequence.rta_updates,
                         rta_offset,
@@ -1187,6 +1200,7 @@ BatchedTransfers assemble_runtime_args_commands(
                     std::visit(
                         [&](auto&& sub_cmds) {
                             generate_runtime_args_cmds(
+                                metal_ctx,
                                 program_command_sequence.runtime_args_command_sequences,
                                 program_command_sequence.rta_updates,
                                 crta_offset,
@@ -1656,13 +1670,14 @@ public:
         const CommandConstants& constants,
         DeviceCommandCalculator& calculator,
         bool using_prefetcher_cache) {
-        const auto& hal = MetalContext::instance().hal();
-        const uint32_t max_length_per_sub_cmd = MetalContext::instance().dispatch_mem_map().scratch_db_size() / 2;
+        MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+        const auto& hal = metal_ctx.hal();
+        const uint32_t max_length_per_sub_cmd = metal_ctx.dispatch_mem_map().scratch_db_size() / 2;
         const uint32_t max_paged_length_per_sub_cmd =
             max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
 
-        const uint32_t unicast_cmd_sequence_sizeB = [using_prefetcher_cache]() {
-            DeviceCommandCalculator calc;
+        const uint32_t unicast_cmd_sequence_sizeB = [using_prefetcher_cache, &metal_ctx]() {
+            DeviceCommandCalculator calc(metal_ctx);
             constexpr bool flush_prefetch = false;
             calc.add_dispatch_write_linear<flush_prefetch>(0);
             if (not using_prefetcher_cache) {
@@ -1712,7 +1727,7 @@ public:
                             },
                             cores);
                     }
-                    kernel_bins_unicast_cmds.emplace_back(unicast_cmd_sequence_sizeB);
+                    kernel_bins_unicast_cmds.emplace_back(metal_ctx, unicast_cmd_sequence_sizeB);
                     calculator.update_write_offset_bytes(unicast_cmd_sequence_sizeB);
                     constexpr bool flush_prefetch = false;
 
@@ -2454,15 +2469,18 @@ void assemble_device_commands(
         *sub_device_id,
         use_prefetcher_cache ? "enabled" : "disabled");
 
+    TT_ASSERT(program_command_sequence.ctx != nullptr);
+    MetalContext& metal_ctx = *program_command_sequence.ctx;
+
     CommandConstants constants{};
     constants.noc_index = k_dispatch_downstream_noc;
-    constants.max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    constants.max_prefetch_command_size = metal_ctx.dispatch_mem_map().max_prefetch_command_size();
     constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(mesh_device);
     BatchedTransfers batched_transfers =
         assemble_runtime_args_commands(program_command_sequence, program, mesh_device, constants);
 
     // Assemble config buffer
-    DeviceCommandCalculator program_config_buffer_calculator;
+    DeviceCommandCalculator program_config_buffer_calculator(metal_ctx);
 
     SemphoreCommandGenerator semaphore_command_generator;
     semaphore_command_generator.size_commands(
@@ -2486,7 +2504,7 @@ void assemble_device_commands(
         absolute_cross_node_config_transfers, program_config_buffer_calculator);
 
     program_command_sequence.program_config_buffer_command_sequence =
-        HostMemDeviceCommand(program_config_buffer_calculator.write_offset_bytes());
+        HostMemDeviceCommand(metal_ctx, program_config_buffer_calculator.write_offset_bytes());
     batched_transfer_generator.assemble_commands(
         program_command_sequence, program_command_sequence.program_config_buffer_command_sequence);
     absolute_cross_node_config_generator.assemble_commands(
@@ -2508,7 +2526,7 @@ void assemble_device_commands(
             "Expected Kernel Binary Buffer to be allocated for program.");
     }
     ProgramBinaryCommandGenerator program_binary_command_generator;
-    DeviceCommandCalculator program_binary_calculator;
+    DeviceCommandCalculator program_binary_calculator(metal_ctx);
     program_binary_command_generator.size_commands(
         mesh_device,
         program,
@@ -2518,7 +2536,7 @@ void assemble_device_commands(
         program_binary_calculator,
         use_prefetcher_cache);
     program_command_sequence.program_binary_command_sequence =
-        HostMemDeviceCommand(program_binary_calculator.write_offset_bytes());
+        HostMemDeviceCommand(metal_ctx, program_binary_calculator.write_offset_bytes());
     program_binary_command_generator.assemble_commands(
         program_command_sequence.program_binary_command_sequence, use_prefetcher_cache);
     TT_ASSERT(
@@ -2530,9 +2548,10 @@ void assemble_device_commands(
 
     // Assemble wait barrier command sequence
     {
-        DeviceCommandCalculator calculator;
+        DeviceCommandCalculator calculator(metal_ctx);
         calculator.add_dispatch_wait();
-        program_command_sequence.wait_barrier_command_sequence = HostMemDeviceCommand(calculator.write_offset_bytes());
+        program_command_sequence.wait_barrier_command_sequence =
+            HostMemDeviceCommand(metal_ctx, calculator.write_offset_bytes());
         // cq_id is unused here: add_dispatch_wait only consults it for WAIT_STREAM/CLEAR_STREAM waits, and this
         // is a plain barrier wait.
         program_command_sequence.wait_barrier_command_sequence.add_dispatch_wait(
@@ -2544,11 +2563,11 @@ void assemble_device_commands(
 
     // Assemble launch message
     LaunchMessageGenerator launch_message_generator;
-    DeviceCommandCalculator launch_message_calculator;
+    DeviceCommandCalculator launch_message_calculator(metal_ctx);
     launch_message_generator.construct_commands(
         mesh_device, program, launch_message_calculator, constants, sub_device_id);
     program_command_sequence.launch_msg_command_sequence =
-        HostMemDeviceCommand(launch_message_calculator.write_offset_bytes());
+        HostMemDeviceCommand(metal_ctx, launch_message_calculator.write_offset_bytes());
     launch_message_generator.assemble_commands(
         program_command_sequence, program_command_sequence.launch_msg_command_sequence, constants);
     TT_ASSERT(
@@ -2557,9 +2576,10 @@ void assemble_device_commands(
 
     // Assemble go signal
     GoSignalGenerator go_signal_generator;
-    DeviceCommandCalculator go_signal_calculator;
+    DeviceCommandCalculator go_signal_calculator(metal_ctx);
     go_signal_generator.size_commands(go_signal_calculator, sub_device_id, program_transfer_info);
-    program_command_sequence.go_msg_command_sequence = HostMemDeviceCommand(go_signal_calculator.write_offset_bytes());
+    program_command_sequence.go_msg_command_sequence =
+        HostMemDeviceCommand(metal_ctx, go_signal_calculator.write_offset_bytes());
     go_signal_generator.assemble_commands(
         program_command_sequence,
         program_command_sequence.go_msg_command_sequence,
@@ -2867,10 +2887,11 @@ void update_program_dispatch_commands(
     // Update prefetcher cache initialization
     if (cached_program_command_sequence.prefetcher_cache_used) {
         // reserve space for cache command
-        uint32_t pcie_alignment =
-            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+        TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
+        MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
+        uint32_t pcie_alignment = metal_ctx.hal().get_alignment(tt::tt_metal::HalMemType::HOST);
         cached_program_command_sequence.program_binary_setup_prefetcher_cache_command =
-            HostMemDeviceCommand(tt::align(sizeof(CQPrefetchCmd), pcie_alignment));
+            HostMemDeviceCommand(metal_ctx, tt::align(sizeof(CQPrefetchCmd), pcie_alignment));
 
         auto is_cached = dispatch_md.prefetcher_cache_info.is_cached;
         auto cache_offset = dispatch_md.prefetcher_cache_info.offset;
@@ -3078,10 +3099,11 @@ void update_traced_program_dispatch_commands(
     // Update prefetcher cache initialization
     if (dispatch_md.send_binary && cached_program_command_sequence.prefetcher_cache_used) {
         // reserve space for cache command
-        uint32_t pcie_alignment =
-            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+        TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
+        MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
+        uint32_t pcie_alignment = metal_ctx.hal().get_alignment(tt::tt_metal::HalMemType::HOST);
         cached_program_command_sequence.program_binary_setup_prefetcher_cache_command =
-            HostMemDeviceCommand(tt::align(sizeof(CQPrefetchCmd), pcie_alignment));
+            HostMemDeviceCommand(metal_ctx, tt::align(sizeof(CQPrefetchCmd), pcie_alignment));
 
         auto is_cached = dispatch_md.prefetcher_cache_info.is_cached;
         auto cache_offset = dispatch_md.prefetcher_cache_info.offset;
@@ -3440,7 +3462,8 @@ void reset_worker_dispatch_state_on_device(
     bool reset_launch_msg_state) {
     auto num_sub_devices = mesh_device->num_sub_devices();
 
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     if (reset_launch_msg_state) {
         for (int i = 0; i < num_sub_devices; ++i) {
             calculator.add_dispatch_go_signal_mcast();
@@ -3459,7 +3482,7 @@ void reset_worker_dispatch_state_on_device(
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     if (reset_launch_msg_state) {
         if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -3526,14 +3549,15 @@ void set_num_worker_sems_on_dispatch(
     ttsl::Span<const uint32_t> workers_per_sub_device) {
     TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     TT_ASSERT(workers_per_sub_device.size() == num_worker_sems);
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         calculator.add_dispatch_set_num_worker_sems();
     }
     calculator.add_dispatch_set_sub_device_worker_counts(num_worker_sems);
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
         command_sequence.add_dispatch_set_sub_device_worker_counts(
@@ -3549,11 +3573,12 @@ void set_num_worker_sems_on_dispatch(
 
 void set_go_signal_noc_data_on_dispatch(
     const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id) {
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     calculator.add_dispatch_set_go_signal_noc_data(go_signal_noc_data.size());
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal =
         MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()
             ? DispatcherSelect::DISPATCH_SUBORDINATE
@@ -3567,7 +3592,8 @@ void set_go_signal_noc_data_on_dispatch(
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
     Device* device, SubDeviceId sub_device_id, uint32_t num_expected_workers, uint8_t cq_id) {
-    tt::tt_metal::DeviceCommandCalculator calculator;
+    MetalContext& metal_ctx = MetalContext::instance(device->get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     bool distributed_dispatcher =
         tt::tt_metal::MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
     if (distributed_dispatcher) {
@@ -3578,7 +3604,7 @@ void reset_expected_num_workers_completed_on_device(
     auto& manager = device->sysmem_manager();
     const auto cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     const auto populate_dispatch_wait_cmd = [&](DispatcherSelect dispatcher_type) {
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
@@ -3627,9 +3653,9 @@ void set_core_go_message_mapping_on_device(
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     SystemMemoryManager& manager,
     uint8_t cq_id) {
-    tt::tt_metal::DeviceCommandCalculator calculator;
-    uint32_t go_msg_size =
-        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+    MetalContext& metal_ctx = MetalContext::instance(device->get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
+    uint32_t go_msg_size = metal_ctx.hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
     calculator.add_dispatch_write_linear<true, true>(go_msg_size);
     calculator.add_dispatch_wait();
 
@@ -3637,7 +3663,7 @@ void set_core_go_message_mapping_on_device(
     std::vector<CQDispatchWritePackedMulticastSubCmd> sub_cmds;
     std::vector<std::pair<uint32_t, uint32_t>> payload;
     uint32_t noc_index = k_dispatch_downstream_noc;
-    uint32_t max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    uint32_t max_prefetch_command_size = metal_ctx.dispatch_mem_map().max_prefetch_command_size();
     uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
 
     size_t num_core_ranges = 0;
@@ -3667,7 +3693,7 @@ void set_core_go_message_mapping_on_device(
 
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     const auto& compute_grid_size = device->compute_with_storage_grid_size();
 
