@@ -693,10 +693,12 @@ inline auto invoke_binary_ng_impl(
     TT_FATAL(
         !(output_preallocated && input_a_rm && input_b_rm),
         "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
-    if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
-        auto result = ttnn::prim::binary_ng(
-            lhs_eff,
-            rhs_eff,
+    // Both layout branches invoke the primitive with the same arguments, so they share one
+    // call site; a per-branch copy is how an argument gets forwarded on one path but not the other.
+    auto dispatch = [&](const auto& a, const auto& b) {
+        return ttnn::prim::binary_ng(
+            a,
+            b,
             binary_op_type,
             out_dtype,
             memory_config,
@@ -708,27 +710,16 @@ inline auto invoke_binary_ng_impl(
             std::nullopt,
             sub_core_grids,
             sub_device_id);
+    };
 
-        return result;
+    if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
+        return dispatch(lhs_eff, rhs_eff);
     }
     // Either one or both are tiles
     const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE);
     const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE);
 
-    auto result = ttnn::prim::binary_ng(
-        input_a,
-        input_b,
-        binary_op_type,
-        out_dtype,
-        memory_config,
-        output,
-        fast_and_approximate_mode,
-        lhs_activations,
-        rhs_activations,
-        post_activations,
-        std::nullopt,
-        sub_core_grids,
-        sub_device_id);
+    auto result = dispatch(input_a, input_b);
 
     // if both inputs are in row major, convert the output to row major
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
