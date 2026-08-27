@@ -285,7 +285,6 @@ void kernel_main() {
     // Seeded at 0 = sweep immediately. Seeding high to skip the idle ramp was measured to stall producers
     // at burst onset: the first sweep must never wait.
     uint32_t gap = kGapCycles;
-    uint32_t idle_streak = 0;  // consecutive frameless sweeps; gates gap growth, see the update site
     uint32_t overflows = 0;
     uint32_t hb_slot = 0;
     uint32_t scan_rot = 0;
@@ -523,11 +522,9 @@ void kernel_main() {
         }
         kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WRITE, SelfMarkPhase> z_write(self_mark_phase);
         *phase = kPhWrChunk;
-        // Not hoisted out of emit_slots: the config/heartbeat writes between pushes can program these
-        // command buffers, so the state must be re-established per push. Both egress buffers get the
-        // same state -- write_to_host_chunked alternates them.
+        // Not hoisted out of emit_slots: the head write-backs between pushes program the same command
+        // buffer, so the state must be re-established per push.
         noc_write_init_state<write_cmd_buf, CQ_NOC_mkp>(NOC_INDEX, kWriteVc);
-        noc_write_init_state<read_cmd_buf, CQ_NOC_mkp>(NOC_INDEX, kWriteVc);
         const uint32_t fifo_size = sender.downstream_fifo_curr_size;
         uint32_t wr = sender.write_ptr;
         // dst is a FIFO offset; socket_push_pages only wraps the pointer, it does not split a transfer, so
@@ -558,7 +555,6 @@ void kernel_main() {
         const uint64_t t3 = get_timestamp();
         c_wr_push += t3 - t2;
         *phase = kPhWrNotify;
-        notify_buf_align();
         // NOT socket_notify_receiver: that re-inits write_cmd_buf onto NOC_UNICAST_WRITE_VC, and on a
         // filler whose data rides the OTHER unicast VC the mesh may deliver the bytes_sent word ahead of
         // the data it announces -- the host then decodes bytes that have not landed (measured: one socket
@@ -1026,29 +1022,13 @@ void kernel_main() {
                         // POSTED: the barriers exist to protect STAGING reuse, which a head write never
                         // touches, so its worker ACK round-trip bought nothing -- and the ack packet itself
                         // rode the congested worker route. Scratch reuse stays safe on the slot rotation.
-                        // On the READ NoC's write cmd buf, NOT the egress NoC: a posted head behind the
-                        // egress queue arrives only after every frame byte queued ahead of it, so a filler
-                        // that falls behind delays exactly the packet that lets its producers refill -- a
-                        // bistable starve (measured at delay 16, 8 fillers: the loser set pacing 10% with
-                        // 16+ sweep published-empty streaks changes from run to run, so it is the dynamics,
-                        // not placement). The read NoC carries only single-flit gather/CV requests, and one
-                        // dedicated cmd buf keeps these back-to-back 20 B writes off the same-NoC-same-VC
-                        // different-cmd-buf silent-drop errata.
-                        while (!noc_cmd_buf_ready(kReadNoc, write_cmd_buf)) {
-                        }
-                        ncrisc_noc_fast_write<DM_DEDICATED_NOC, false, true>(
-                            kReadNoc,
-                            write_cmd_buf,
+                        // Issuing this on the read NoC instead, to decouple head visibility from the egress
+                        // queue, was measured stall-neutral at the delay-16 saturation wall and deleted.
+                        noc_async_write_one_packet<true, true>(
                             sc,
                             get_noc_addr(
                                 coords[c] & 0xFFFFu, coords[c] >> 16, cv_src + kernel_profiler::SPSC_RING_HEAD_0 * 4u),
-                            kNumRisc * 4u,
-                            kWriteVc,
-                            false,
-                            false,
-                            1,
-                            false,
-                            true);
+                            kNumRisc * 4u);
                         hb_slot = (hb_slot + 1u) & (kMaxCores - 1u);
                         if constexpr (kSvcInstr != 0) {
                             c_ph_head += get_timestamp() - t_h0;
@@ -1186,8 +1166,10 @@ void kernel_main() {
             w0_pace = c_pace;
             w0_frames = frames_at_sweep_start;
             w0_sweeps = sweeps;
-            w0_cv = c_cv;
-            w0_issue = c_issue;
+            if constexpr (kSelfZones == 0) {
+                w0_cv = c_cv;
+                w0_issue = c_issue;
+            }
         }
         if (frames == frames_at_sweep_start) {
             sweeps_idle++;
@@ -1229,18 +1211,12 @@ void kernel_main() {
 
         // Collapse the gap on work, creep toward kCvIdleGapMax when idle: widening only saves idle probe
         // traffic, and a producer must never wait on it. Live-but-untriggered counts as work here -- see
-        // kCvBusyPeak. The HOLD-DOWN exists because a scan reads the PUBLISHED view: right after a hard
-        // drain, blocked producers are waiting on head write-backs still in flight and publish nothing,
-        // so the scan legitimately reads ~empty and peak < kCvBusyPeak cannot tell "idle" from "producers
-        // about to burst-refill". Growing the gap there is an oscillation -- sleep exactly through the
-        // refill, wake to over-full rings (measured at delay 16, 8 fillers: pace 12% + idle 5% of a
-        // saturated window, 120k stalls). Idle probe traffic is uncontended, so holding hot for
-        // kGapHoldSweeps frameless sweeps costs nothing real.
-        constexpr uint32_t kGapHoldSweeps = 16;
+        // kCvBusyPeak. (A 16-sweep hold-down before the first growth was measured stall- and pace-neutral
+        // at the delay-16 saturation wall: the losing fillers' published-empty streaks outlast any
+        // plausible hold anyway.)
         if (frames != frames_at_sweep_start || sweep_peak >= kCvBusyPeak) {
-            idle_streak = 0;
             gap = 0;
-        } else if (++idle_streak > kGapHoldSweeps) {
+        } else {
             uint32_t inc = gap >> 1;
             if (inc < 256u) {
                 inc = 256u;
@@ -1266,8 +1242,10 @@ void kernel_main() {
             w1_pace = c_pace;
             w1_frames = frames;
             w1_sweeps = sweeps;
-            w1_cv = c_cv;
-            w1_issue = c_issue;
+            if constexpr (kSelfZones == 0) {
+                w1_cv = c_cv;
+                w1_issue = c_issue;
+            }
         }
         // The window's LAST sweep must flush, or its zones sit in the ring until the next window, or
         // forever. After the gap, so PACE rides in the same frame as the SWEEP it follows.
@@ -1304,8 +1282,7 @@ void kernel_main() {
     // packets stream out in ns) so no scratch slot or unstreamed head is left behind at report time.
     {
         const uint64_t t_ps = get_timestamp() + 1350000u;
-        while ((!ncrisc_noc_posted_writes_sent(NOC_INDEX) || !ncrisc_noc_posted_writes_sent(kReadNoc)) &&
-               get_timestamp() < t_ps) {
+        while (!ncrisc_noc_posted_writes_sent(NOC_INDEX) && get_timestamp() < t_ps) {
         }
     }
     const uint64_t t_end = get_timestamp();
@@ -1426,7 +1403,9 @@ void kernel_main() {
         out[191] = win2_open ? 1u : 0u;
         out[192] = num_cores;
     }
-    {
+    // The read-split window (out[202..205]) and the self-zone build trade the same code-region bytes;
+    // zones supersede it as the diagnostic when both are requested.
+    if constexpr (kSelfZones == 0) {
         const uint64_t wcv = win2_open ? w1_cv - w0_cv : 0u;
         out[202] = static_cast<uint32_t>(wcv & 0xFFFFFFFFu);
         out[203] = static_cast<uint32_t>(wcv >> 32);

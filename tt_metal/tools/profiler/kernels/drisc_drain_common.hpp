@@ -46,28 +46,16 @@ TT_ZONE_DEFINE_ID(DRISC_ZONE_SYNC, "DRISC-SYNC");                // common-trigg
 TT_ZONE_DEFINE_ID(SPSC_DATA_ID_NOCFP, "DRISC-NOC-FOOTPRINT");    // the per-sweep NoC-counter PP_DATA sample
 }  // namespace kernel_profiler
 
-// D2H: write L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks, ALTERNATING two command buffers so chunk
-// N+1 is programmed while chunk N is still being accepted by the NIU -- with one buffer the per-chunk
-// acceptance wait serializes into the sweep, and under PCIe-tile contention that wait is most of the
-// loser filler's write phase. Buf `read_cmd_buf` (1) is free on the egress NoC: every read this kernel
-// issues rides the other NoC. Both buffers hold identical state (the caller inits both once per push),
-// both ride the same static VC and route, and packets on one VC to one destination deliver in issue
-// order, so the alternation cannot reorder the FIFO image. g_egress_alt persists across calls within a
-// push; notify_buf_align() parks the NEXT small write on the buffer that sent the LAST chunk, keeping the
-// 4 B notify off the small-write-after-other-cmd-buf silent-drop errata.
-inline bool g_egress_alt = false;
-inline void notify_buf_align() { g_egress_alt = !g_egress_alt; }
+// D2H: write L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks. The caller runs
+// noc_write_init_state<write_cmd_buf>(NOC_INDEX, vc) once per push -- a push makes several calls (one
+// per frame plus the notify), so a per-call init would repeat command-buffer setup that nothing between
+// the calls invalidates. Alternating two command buffers to pipeline NIU acceptance was measured
+// stall-neutral at the delay-16 saturation wall and deleted.
 inline void write_to_host_chunked(uint32_t pcie_xy_enc, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
     while (size) {
         const uint32_t chunk = size > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : size;
-        if (g_egress_alt) {
-            noc_wwrite_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-                NOC_INDEX, src_l1, pcie_xy_enc, dst_pcie, chunk, 1);
-        } else {
-            noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-                NOC_INDEX, src_l1, pcie_xy_enc, dst_pcie, chunk, 1);
-        }
-        g_egress_alt = !g_egress_alt;
+        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+            NOC_INDEX, src_l1, pcie_xy_enc, dst_pcie, chunk, 1);
         src_l1 += chunk;
         dst_pcie += chunk;
         size -= chunk;
