@@ -87,6 +87,23 @@ Tensor div(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
+// value / input. The tensor still occupies operand slot a; the compute kernel is told to
+// read the scalar as the left operand, so this runs the same DIV / DIV_FLOOR / DIV_TRUNC
+// kernels as the tensor-scalar form and keeps their dtype and rounding-mode coverage.
+Tensor div(
+    operations::unary::ScalarVariant value,
+    const Tensor& input,
+    bool fast_and_approximate_mode = false,
+    const std::optional<std::string>& rounding_mode = std::nullopt,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
 Tensor bias_gelu(
     const Tensor& input_tensor_a_arg,
     const Tensor& input_tensor_b_arg,
