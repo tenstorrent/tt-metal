@@ -1253,7 +1253,8 @@ MISTRAL4_THRESHOLDS = PrefillTransformerThresholds(
 #   * GPT_DEVICE -- moe_grouped_topk.cpp's parse_score_func takes only sigmoid/sqrtsoftplus, so the
 #     sigmoid device gate cannot express softmax -> top-4 -> renormalise. DEVICE_FP32 would apply a
 #     sigmoid affinity and produce wrong routing weights without failing.
-# The PCC case needs supports_pretrained on the adapter; until then it skips at run_model.
+# The adapter sets supports_pretrained, so the PCC case below RUNS -- it is not a vacuous skip. It
+# needs the checkpoint and a ttnn weight cache staged; without the cache it rebuilds ~65 GB in-job.
 @pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 targets the Blackhole galaxy")
 @pytest.mark.parametrize("tokenizer", ["right"], indirect=True, ids=["right_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])

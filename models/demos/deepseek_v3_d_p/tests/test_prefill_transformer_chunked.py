@@ -40,6 +40,7 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
@@ -1052,6 +1053,77 @@ def test_kimi_prefill_transformer_chunked_padded(
     # The harness names its untraced variant "scalar"; here the only question is trace or no trace.
     run_chunked_transformer_padded_trace(
         *common,
+        routing_use_l1_small_for_semaphores=True,
+        mode="traced" if mode == "traced" else "scalar",
+    )
+
+
+# Mistral counterpart of the padded/rotated chunked row above. Three deviations, all forced by the
+# config rather than chosen:
+#   * GPT_DEVICE, not DEVICE_FP32. moe_grouped_topk.cpp's parse_score_func takes only sigmoid and
+#     sqrtsoftplus, so the sigmoid device gate cannot express Mistral's softmax -> top-4 ->
+#     renormalize router. DEVICE_FP32 would apply a sigmoid affinity and produce wrong routing
+#     weights without failing -- no crash, and invisible to a KV-only assertion.
+#   * L1/L36, since the model is 36 layers deep (Kimi is 61).
+#   * No golden trace is baked in: the adapter's prefill_trace_default is None, so this row needs
+#     PREFILL_TRACE_DIR pointing at one. generate_prompt_trace.py builds a host-only golden for an
+#     arbitrary prompt, so this needs no vLLM recording -- but that golden runs the same torch path
+#     the device is compared against, so it gives plumbing and per-layer localisation, NOT
+#     independence from the reference.
+# It also needs a TTNN weight cache for `num_layers`; the row asserts completeness rather than
+# building one, so stage the cache first (TT_MISTRAL4_PREFILL_TTNN_CACHE).
+@pytest.mark.parametrize("mode", _PADDED_MODES, ids=_PADDED_MODES)
+@pytest.mark.parametrize("splits", [_PADDED_MID_15K, _PADDED_FULL_55K], ids=["mid15k", "full55k"])
+@pytest.mark.parametrize("num_layers", [1, 36], ids=["L1", "L36"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=768,
+                trace_region_size=256 * 1024 * 1024,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral4"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 targets the Blackhole galaxy")
+@pytest.mark.timeout(0)
+def test_mistral4_prefill_transformer_chunked_padded(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    num_layers,
+    splits,
+    num_links,
+    mode,
+):
+    """Padded/rotated chunked prefill for Mistral, traced vs untraced, asserted per-layer against the
+    golden KV cache.
+
+    The llama4 query temperature is NOT exercised at L1: the transformer is built kv_only_last_layer,
+    so at one layer the only layer is the kv-only one -- it runs attn_norm and the KV branch, never
+    _q_stem, and the temperature scales Q alone. L36 does reach it (layers 0..34 are full), above
+    8192. test_mla.py and tests/torch/test_mistral_small_4_mla_reference.py cover the term itself."""
+    topology = per_axis_topology(device_params["fabric_config"])
+    run_chunked_transformer_padded_trace(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        splits,
+        GateComputeMode.GPT_DEVICE,
+        num_links,
+        topology,
         routing_use_l1_small_for_semaphores=True,
         mode="traced" if mode == "traced" else "scalar",
     )
