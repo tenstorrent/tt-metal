@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "internal/tt-2xx/quasar/noc/att/att.h"
+#include "internal/tt-2xx/quasar/noc/att/att_address.h"
 
 /**
  * @file
@@ -96,5 +97,29 @@ constexpr noc_att::Window REMOTE_WINDOW{
 // constant so the two cannot drift apart.
 constexpr std::uint64_t LOCAL_WINDOW_BASE = LOCAL_WINDOW.make_address(/*selector*/ 0, /*local_address*/ 0);
 static_assert(LOCAL_WINDOW_BASE == 0x1800000000ull);
+
+// The UMD-visible dispatch tile (1,2): selector from the tile table
+// (ATT_TILE_SELECTORS[y * 2 + x] = 4), aliasing the 2x3_DISPATCH RTL
+// placement at (0,2).
+inline constexpr noc_att::MapData::DispatchEntry DISPATCH_ENTRIES[] = {
+    {.x = 1, .y = 2, .selector = 4, .window = noc_att::WindowClass::FullTile},
+};
+
+// The declarative map: everything the shared resolver needs, as data. This
+// map has a single remote window, so the Worker/Dram/FullTile roles all point
+// at it and differ only in which selector table resolution consults.
+inline constexpr noc_att::MapData MAP{
+    .windows = {{LOCAL_WINDOW, REMOTE_WINDOW, REMOTE_WINDOW, REMOTE_WINDOW}},
+    .local_window_class = noc_att::WindowClass::LoopbackScratch,  // pass-through local window, entry 0 = self
+    .worker_origin_x = ATT_WORKER_API_ORIGIN_X,
+    .worker_origin_y = ATT_WORKER_API_ORIGIN_Y,
+    .worker_grid_x = ATT_WORKER_GRID_X,
+    .worker_grid_y = ATT_WORKER_GRID_Y,
+    .worker_selectors = {ATT_WORKER_SELECTORS},
+    .worker_endpoint_words = {ATT_WORKER_ENDPOINT_WORDS},
+    .full_tile_endpoint_words = {ATT_FULL_TILE_ENDPOINT_WORDS},
+    .dram_selectors = {ATT_LOGICAL_DRAM_SELECTORS},
+    .dispatch_entries = {DISPATCH_ENTRIES},
+};
 
 }  // namespace quasar_aether_2x3_att_config
