@@ -24,7 +24,10 @@ import pytest
 torch = pytest.importorskip("torch")
 ttnn = pytest.importorskip("ttnn")
 
-from models.experimental.voxtral_tts.tests.reference_helpers import fixture_embeds  # noqa: E402
+from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E402
+    case_ids,
+    fixture_embeds,
+)
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (  # noqa: E402
     TtVoxtralPipeline,
     open_device,
@@ -106,3 +109,40 @@ def test_history_does_not_leak_without_reset(pipe):
           f"{after.shape[0]} frames")
     assert torch.equal(alone, after), (
         f"history leaked: {alone.shape[0]} vs {after.shape[0]} frames without an intervening reset")
+
+
+@pytest.mark.slow
+def test_fifteen_case_sequential_run_does_not_change_a_length(pipe):
+    """STATUS 6.21's actual experiment, which nothing reproduced until now.
+
+    It recorded case 10 at **207** frames inside a 15-case sequential run and **220** alone, and
+    concluded that an utterance's length depends on what ran before it. The two-request tests above
+    do not reproduce that, so either it needed more history or it is gone. This runs all 15 cases
+    in one process, in order, then re-runs the same case alone and compares.
+
+    Every case is capped at MAX_FRAMES, so a case that would naturally run longer is compared
+    cap-to-cap and proves nothing about itself -- the ones that matter are those that stop
+    naturally, and the assertion is per case over exactly those.
+    """
+    lengths = {}
+    for ci in case_ids():
+        frames = _run(pipe, ci)          # no reset between cases: this is the point
+        lengths[ci] = frames.shape[0]
+    natural = {ci: n for ci, n in lengths.items() if n < MAX_FRAMES}
+    print(f"\n  sequential run, {len(lengths)} cases: " +
+          " ".join(f"{ci}:{n}" for ci, n in sorted(lengths.items())))
+    print(f"  stopped naturally (comparable): {sorted(natural)}")
+    assert natural, ("no case stopped before the cap, so this run cannot detect a length change -- "
+                     "raise MAX_FRAMES")
+
+    mismatched = []
+    for ci in sorted(natural):
+        pipe.backbone.reset()
+        alone = _run(pipe, ci).shape[0]
+        if alone != natural[ci]:
+            mismatched.append((ci, natural[ci], alone))
+        print(f"    case {ci}: in-sequence {natural[ci]} vs alone {alone}"
+              f"{'   <- DIFFERS' if alone != natural[ci] else ''}")
+    assert not mismatched, (
+        "frame count depends on what ran before, per BUG-11: " +
+        ", ".join(f"case {c} {a} in sequence vs {b} alone" for c, a, b in mismatched))

@@ -74,3 +74,28 @@ def worst_sample_pct(got, exp):
     Always report this next to a PCC. PCC is a correlation: it sits at 0.9998 while individual
     samples are badly wrong, and for audio the outliers are what you hear (STATUS 5.9)."""
     return (got - exp).abs().max().item() / exp.abs().max().item() * 100
+
+
+def corpus_embeds(text, voice, w=None):
+    """(text, voice) -> prompt embeds [1,P,3072], tokenized by the IN-REPO tokenizer.
+
+    `fixture_embeds` is limited to the 15 cases whose mistral_common ids are stored. This one takes
+    any text, so breadth costs nothing -- `TekkenTokenizer.build_prompt` is pure torch and
+    `test_tokenizer_ref.py` pins it against those stored ids, so it is trustworthy for new text.
+    """
+    from models.experimental.voxtral_tts.reference import voxtral_pipeline_ref as pref
+    from models.experimental.voxtral_tts.reference.voxtral_tokenizer_ref import TekkenTokenizer
+
+    import torch as _t
+
+    w = backbone_state() if w is None else w
+    ids = _t.tensor(TekkenTokenizer().build_prompt(text, voice), dtype=_t.long)
+    return pref.build_inputs_embeds(ids, pref.load_voice(voice), w)
+
+
+@functools.lru_cache(maxsize=1)
+def all_voices():
+    """-> every voice preset the checkpoint ships, sorted. 20 of them; the fixture uses 13."""
+    from models.experimental.voxtral_tts.reference.voxtral_tokenizer_ref import TekkenTokenizer
+
+    return tuple(sorted(TekkenTokenizer().voices))
