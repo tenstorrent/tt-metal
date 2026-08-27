@@ -9,7 +9,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <limits>
+#include <optional>
 #include <tt_stl/assert.hpp>
 #include <tuple>
 #include <utility>
@@ -563,6 +565,231 @@ struct Candidate {
     std::vector<Lwt2DChunkPlan> chunks;
 };
 
+using AxisConeSignature = std::vector<int64_t>;
+
+inline void update_signature_anchor(const IndexInterval interval, size_t& anchor) noexcept {
+    if (!interval.empty()) {
+        anchor = std::min(anchor, interval.begin);
+    }
+}
+
+inline void update_signature_anchor(const AxisConePlan& cone, size_t& anchor) noexcept {
+    update_signature_anchor(cone.final_even, anchor);
+    update_signature_anchor(cone.final_odd, anchor);
+    update_signature_anchor(cone.initial_even, anchor);
+    update_signature_anchor(cone.initial_odd, anchor);
+    for (const AxisRouteRequirement& route : cone.routes) {
+        update_signature_anchor(route.before.even, anchor);
+        update_signature_anchor(route.before.odd, anchor);
+        update_signature_anchor(route.after.even, anchor);
+        update_signature_anchor(route.after.odd, anchor);
+        update_signature_anchor(route.source, anchor);
+        update_signature_anchor(route.base, anchor);
+        update_signature_anchor(route.output, anchor);
+    }
+}
+
+inline void append_interval_signature(
+    AxisConeSignature& signature, const IndexInterval interval, const size_t anchor, const size_t tile_extent) {
+    if (interval.empty()) {
+        signature.push_back(-1);
+        signature.push_back(0);
+        signature.push_back(0);
+        return;
+    }
+    TT_FATAL(
+        interval.begin >= anchor && interval.end <= static_cast<size_t>(std::numeric_limits<int64_t>::max()),
+        "2D planner axis signature exceeds int64_t geometry");
+    signature.push_back(static_cast<int64_t>(interval.begin - anchor));
+    signature.push_back(static_cast<int64_t>(interval.length()));
+    signature.push_back(static_cast<int64_t>(interval.begin % tile_extent));
+}
+
+inline void append_cone_signature(
+    AxisConeSignature& signature, const AxisConePlan& cone, const size_t anchor, const size_t tile_extent) {
+    append_interval_signature(signature, cone.final_even, anchor, tile_extent);
+    append_interval_signature(signature, cone.final_odd, anchor, tile_extent);
+    append_interval_signature(signature, cone.initial_even, anchor, tile_extent);
+    append_interval_signature(signature, cone.initial_odd, anchor, tile_extent);
+    signature.push_back(static_cast<int64_t>(cone.routes.size()));
+    for (const AxisRouteRequirement& route : cone.routes) {
+        signature.push_back(static_cast<int64_t>(route.type));
+        append_interval_signature(signature, route.before.even, anchor, tile_extent);
+        append_interval_signature(signature, route.before.odd, anchor, tile_extent);
+        append_interval_signature(signature, route.after.even, anchor, tile_extent);
+        append_interval_signature(signature, route.after.odd, anchor, tile_extent);
+        append_interval_signature(signature, route.source, anchor, tile_extent);
+        append_interval_signature(signature, route.base, anchor, tile_extent);
+        append_interval_signature(signature, route.output, anchor, tile_extent);
+    }
+}
+
+[[nodiscard]] inline AxisConeSignature make_axis_cone_signature(
+    const IndexInterval output,
+    const AxisConePlan& exact_cone,
+    const AxisConePlan* routed_cone,
+    const size_t tile_extent) {
+    size_t anchor = std::numeric_limits<size_t>::max();
+    update_signature_anchor(exact_cone, anchor);
+    if (routed_cone != nullptr) {
+        update_signature_anchor(*routed_cone, anchor);
+    }
+    TT_FATAL(anchor != std::numeric_limits<size_t>::max(), "2D planner axis cone is empty");
+    anchor = (anchor / tile_extent) * tile_extent;
+
+    AxisConeSignature signature;
+    signature.reserve(
+        15 + 22 * exact_cone.routes.size() + (routed_cone != nullptr ? 13 + 22 * routed_cone->routes.size() : 0));
+    signature.push_back(static_cast<int64_t>(output.begin % tile_extent));
+    signature.push_back(static_cast<int64_t>(output.length()));
+    append_cone_signature(signature, exact_cone, anchor, tile_extent);
+    if (routed_cone != nullptr) {
+        append_cone_signature(signature, *routed_cone, anchor, tile_extent);
+    }
+    return signature;
+}
+
+struct AxisChunkClasses {
+    std::vector<IndexInterval> representatives;
+    std::vector<uint32_t> class_ids;
+};
+
+template <typename SignatureBuilder>
+[[nodiscard]] AxisChunkClasses make_axis_chunk_classes(
+    const size_t length, const size_t chunk_extent, SignatureBuilder&& build_signature) {
+    TT_FATAL(chunk_extent > 0, "2D planner chunk extent must be positive");
+    std::vector<AxisConeSignature> signatures;
+    AxisChunkClasses classes;
+    classes.class_ids.reserve(ceil_div(length, chunk_extent));
+    for (size_t begin = 0; begin < length;) {
+        const size_t end = begin + std::min(chunk_extent, length - begin);
+        const IndexInterval interval{.begin = begin, .end = end};
+        AxisConeSignature signature = build_signature(interval);
+        const auto existing = std::find(signatures.begin(), signatures.end(), signature);
+        if (existing == signatures.end()) {
+            signatures.push_back(std::move(signature));
+            classes.representatives.push_back(interval);
+            classes.class_ids.push_back(static_cast<uint32_t>(signatures.size() - 1));
+        } else {
+            classes.class_ids.push_back(static_cast<uint32_t>(std::distance(signatures.begin(), existing)));
+        }
+        begin = end;
+    }
+    return classes;
+}
+
+template <typename SignatureBuilder>
+[[nodiscard]] std::vector<AxisChunkClasses> make_axis_candidate_classes(
+    const size_t length,
+    const uint32_t maximum_chunk_tiles,
+    const size_t tile_extent,
+    SignatureBuilder build_signature) {
+    std::vector<AxisChunkClasses> classes(static_cast<size_t>(maximum_chunk_tiles) + 1);
+    for (uint32_t chunk_tiles = 1; chunk_tiles <= maximum_chunk_tiles; ++chunk_tiles) {
+        classes[chunk_tiles] =
+            make_axis_chunk_classes(length, static_cast<size_t>(chunk_tiles) * tile_extent, build_signature);
+    }
+    return classes;
+}
+
+template <typename ChunkBuilder, typename CostEstimator>
+[[nodiscard]] std::optional<Candidate> evaluate_candidate(
+    const AxisChunkClasses& y_classes,
+    const AxisChunkClasses& x_classes,
+    const uint32_t chunk_tiles_y,
+    const uint32_t chunk_tiles_x,
+    const uint32_t core_limit,
+    const uint64_t l1_budget_bytes,
+    ChunkBuilder&& build_chunk,
+    CostEstimator&& estimate_cost,
+    const uint64_t coordination_penalty_cycles_per_core = 0) {
+    const size_t class_columns = x_classes.representatives.size();
+    std::vector<uint64_t> latency_cycles;
+    latency_cycles.reserve(checked_area(y_classes.representatives.size(), class_columns, "2D planner chunk classes"));
+    double max_dependency_overhead = 0.0;
+    for (const IndexInterval y : y_classes.representatives) {
+        for (const IndexInterval x : x_classes.representatives) {
+            const Lwt2DChunkPlan chunk = build_chunk(IndexRectangle{.y = y, .x = x});
+            if (chunk.resources.total_l1_bytes > l1_budget_bytes) {
+                return std::nullopt;
+            }
+            max_dependency_overhead = std::max(max_dependency_overhead, chunk.dependency_overhead);
+            latency_cycles.push_back(estimate_cost(chunk));
+        }
+    }
+
+    const size_t chunk_count = checked_area(y_classes.class_ids.size(), x_classes.class_ids.size(), "2D chunk grid");
+    const uint32_t active_core_count = static_cast<uint32_t>(std::min(chunk_count, static_cast<size_t>(core_limit)));
+    const size_t base = chunk_count / active_core_count;
+    const size_t extra = chunk_count % active_core_count;
+
+    std::vector<std::vector<uint64_t>> row_prefixes(
+        y_classes.representatives.size(), std::vector<uint64_t>(x_classes.class_ids.size() + 1, 0));
+    for (size_t y_class = 0; y_class < row_prefixes.size(); ++y_class) {
+        auto& prefix = row_prefixes[y_class];
+        for (size_t column = 0; column < x_classes.class_ids.size(); ++column) {
+            const size_t metric_index = y_class * class_columns + x_classes.class_ids[column];
+            prefix[column + 1] = prefix[column] + latency_cycles[metric_index];
+        }
+    }
+    std::vector<uint64_t> row_cost_prefix(y_classes.class_ids.size() + 1, 0);
+    for (size_t row = 0; row < y_classes.class_ids.size(); ++row) {
+        row_cost_prefix[row + 1] = row_cost_prefix[row] + row_prefixes[y_classes.class_ids[row]].back();
+    }
+    const auto prefix_cost = [&](const size_t linear_index) {
+        const size_t row = linear_index / x_classes.class_ids.size();
+        const size_t column = linear_index % x_classes.class_ids.size();
+        return row_cost_prefix[row] +
+               (row < y_classes.class_ids.size() ? row_prefixes[y_classes.class_ids[row]][column] : 0U);
+    };
+
+    size_t linear_index = 0;
+    uint64_t estimated_latency_cycles = 0;
+    for (uint32_t core = 0; core < active_core_count; ++core) {
+        const size_t count = base + (core < extra ? 1U : 0U);
+        const uint64_t core_cycles = 30'000 + prefix_cost(linear_index + count) - prefix_cost(linear_index);
+        estimated_latency_cycles = std::max(estimated_latency_cycles, core_cycles);
+        linear_index += count;
+    }
+    if (coordination_penalty_cycles_per_core > 0 && active_core_count > 64) {
+        estimated_latency_cycles +=
+            static_cast<uint64_t>(active_core_count - 64) * coordination_penalty_cycles_per_core;
+    }
+    return Candidate{
+        .chunk_tiles_y = chunk_tiles_y,
+        .chunk_tiles_x = chunk_tiles_x,
+        .active_core_count = active_core_count,
+        .max_dependency_overhead = max_dependency_overhead,
+        .estimated_latency_cycles = estimated_latency_cycles,
+        .chunks = {},
+    };
+}
+
+[[nodiscard]] constexpr uint64_t maximum_candidate_tile_area(const uint64_t l1_budget_bytes) noexcept {
+    const uint64_t fixed_bytes = kCircularBufferBytes + kMetadataBytes + kSynchronizationBytes;
+    return l1_budget_bytes < fixed_bytes ? 0 : (l1_budget_bytes - fixed_bytes) / kFullFp32TileBytes;
+}
+
+[[nodiscard]] inline AxisConeSignature make_forward_axis_signature(
+    const LiftingForwardPlan& plan,
+    const IndexInterval output,
+    const size_t tile_extent,
+    const Lwt2DRouteDomainPolicy route_domain,
+    const char* even_label,
+    const char* odd_label) {
+    const size_t tap_size = static_cast<size_t>(plan.preprocess_layout.pad_config.left) + 1;
+    const IndexInterval final_even =
+        canonical_to_stream_interval(output, plan.final_even_shift, plan.final_even_length, tap_size / 2, even_label);
+    const IndexInterval final_odd =
+        canonical_to_stream_interval(output, plan.final_odd_shift, plan.final_odd_length, tap_size / 2, odd_label);
+    const AxisConePlan exact_cone = build_axis_cone(plan, final_even, final_odd);
+    if (route_domain == Lwt2DRouteDomainPolicy::kExact) {
+        return make_axis_cone_signature(output, exact_cone, nullptr, tile_extent);
+    }
+    const AxisConePlan routed_cone = build_axis_cone(plan, final_even, final_odd, tile_extent);
+    return make_axis_cone_signature(output, exact_cone, &routed_cone, tile_extent);
+}
+
 enum class AlignmentCostClass : uint8_t {
     kExact,
     kOneAxisShifted,
@@ -691,37 +918,6 @@ enum class AlignmentCostClass : uint8_t {
     return cycles;
 }
 
-[[nodiscard]] inline uint64_t estimate_candidate_latency_cycles(
-    const std::vector<Lwt2DChunkPlan>& chunks,
-    const uint32_t active_core_count,
-    const LiftingForwardPlan& y_plan,
-    const LiftingForwardPlan& x_plan,
-    const bool inverse = false,
-    const uint64_t inverse_coordination_penalty_cycles_per_core = 0) {
-    std::vector<uint64_t> chunk_costs;
-    chunk_costs.reserve(chunks.size());
-    for (const Lwt2DChunkPlan& chunk : chunks) {
-        chunk_costs.push_back(estimate_chunk_latency_cycles(chunk, y_plan, x_plan, inverse));
-    }
-    const size_t base = chunks.size() / active_core_count;
-    const size_t extra = chunks.size() % active_core_count;
-    size_t begin = 0;
-    uint64_t maximum = 0;
-    for (uint32_t core = 0; core < active_core_count; ++core) {
-        const size_t count = base + (core < extra ? 1U : 0U);
-        uint64_t core_cycles = 30'000;
-        for (size_t index = 0; index < count; ++index) {
-            core_cycles += chunk_costs[begin + index];
-        }
-        maximum = std::max(maximum, core_cycles);
-        begin += count;
-    }
-    if (inverse && inverse_coordination_penalty_cycles_per_core > 0 && active_core_count > 64) {
-        maximum += static_cast<uint64_t>(active_core_count - 64) * inverse_coordination_penalty_cycles_per_core;
-    }
-    return maximum;
-}
-
 [[nodiscard]] inline bool is_better_candidate(
     const Candidate& candidate, const Candidate& best, const bool latency_oriented) noexcept {
     if (latency_oriented && candidate.estimated_latency_cycles != best.estimated_latency_cycles) {
@@ -799,36 +995,44 @@ enum class AlignmentCostClass : uint8_t {
     const uint32_t band_tiles_y = static_cast<uint32_t>(band_tiles_y_size);
     const uint32_t band_tiles_x = static_cast<uint32_t>(band_tiles_x_size);
 
+    const uint64_t maximum_tile_area = plan_2d_detail::maximum_candidate_tile_area(l1_budget_bytes);
+    const uint32_t maximum_tiles_y = static_cast<uint32_t>(std::min<uint64_t>(band_tiles_y, maximum_tile_area));
+    const uint32_t maximum_tiles_x = static_cast<uint32_t>(std::min<uint64_t>(band_tiles_x, maximum_tile_area));
+    const auto y_candidate_classes = plan_2d_detail::make_axis_candidate_classes(
+        y_plan.output_length, maximum_tiles_y, plan_2d_detail::kTileHeight, [&](const IndexInterval output) {
+            return plan_2d_detail::make_forward_axis_signature(
+                y_plan, output, plan_2d_detail::kTileHeight, route_domain, "vertical even", "vertical odd");
+        });
+    const auto x_candidate_classes = plan_2d_detail::make_axis_candidate_classes(
+        x_plan.output_length, maximum_tiles_x, plan_2d_detail::kTileWidth, [&](const IndexInterval output) {
+            return plan_2d_detail::make_forward_axis_signature(
+                x_plan, output, plan_2d_detail::kTileWidth, route_domain, "horizontal even", "horizontal odd");
+        });
+
     plan_2d_detail::Candidate best{};
     bool found = false;
-    for (uint32_t tiles_y = 1; tiles_y <= band_tiles_y; ++tiles_y) {
-        for (uint32_t tiles_x = 1; tiles_x <= band_tiles_x; ++tiles_x) {
-            std::vector<Lwt2DChunkPlan> chunks =
-                plan_2d_detail::build_chunks(y_plan, x_plan, tiles_y, tiles_x, fuse_terminal_scale, route_domain);
-            double max_dependency_overhead = 0.0;
-            bool fits = true;
-            for (const Lwt2DChunkPlan& chunk : chunks) {
-                max_dependency_overhead = std::max(max_dependency_overhead, chunk.dependency_overhead);
-                fits = fits && chunk.resources.total_l1_bytes <= l1_budget_bytes;
-            }
-            if (!fits) {
+    for (uint32_t tiles_y = 1; tiles_y <= maximum_tiles_y; ++tiles_y) {
+        const uint32_t candidate_tiles_x = static_cast<uint32_t>(
+            std::min<uint64_t>(maximum_tiles_x, maximum_tile_area / static_cast<uint64_t>(tiles_y)));
+        for (uint32_t tiles_x = 1; tiles_x <= candidate_tiles_x; ++tiles_x) {
+            std::optional<plan_2d_detail::Candidate> candidate = plan_2d_detail::evaluate_candidate(
+                y_candidate_classes[tiles_y],
+                x_candidate_classes[tiles_x],
+                tiles_y,
+                tiles_x,
+                core_limit,
+                l1_budget_bytes,
+                [&](const IndexRectangle output) {
+                    return plan_2d_detail::build_chunk(y_plan, x_plan, output, fuse_terminal_scale, route_domain);
+                },
+                [&](const Lwt2DChunkPlan& chunk) {
+                    return plan_2d_detail::estimate_chunk_latency_cycles(chunk, y_plan, x_plan);
+                });
+            if (!candidate.has_value()) {
                 continue;
             }
-
-            plan_2d_detail::Candidate candidate{
-                .chunk_tiles_y = tiles_y,
-                .chunk_tiles_x = tiles_x,
-                .active_core_count = static_cast<uint32_t>(std::min(chunks.size(), static_cast<size_t>(core_limit))),
-                .max_dependency_overhead = max_dependency_overhead,
-                .estimated_latency_cycles = plan_2d_detail::estimate_candidate_latency_cycles(
-                    chunks,
-                    static_cast<uint32_t>(std::min(chunks.size(), static_cast<size_t>(core_limit))),
-                    y_plan,
-                    x_plan),
-                .chunks = std::move(chunks),
-            };
-            if (!found || plan_2d_detail::is_better_candidate(candidate, best, latency_oriented_planner)) {
-                best = std::move(candidate);
+            if (!found || plan_2d_detail::is_better_candidate(*candidate, best, latency_oriented_planner)) {
+                best = std::move(*candidate);
                 found = true;
             }
         }
@@ -840,6 +1044,8 @@ enum class AlignmentCostClass : uint8_t {
         l1_budget_bytes,
         y_plan.preprocess_layout.input.length,
         x_plan.preprocess_layout.input.length);
+    best.chunks = plan_2d_detail::build_chunks(
+        y_plan, x_plan, best.chunk_tiles_y, best.chunk_tiles_x, fuse_terminal_scale, route_domain);
     const size_t input_height = y_plan.preprocess_layout.input.length;
     const size_t input_width = x_plan.preprocess_layout.input.length;
     const size_t band_height = y_plan.output_length;
