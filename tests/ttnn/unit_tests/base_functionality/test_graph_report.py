@@ -3417,6 +3417,26 @@ class TestSafeArgStr:
         result = _safe_arg_str(ttnn.TILE_LAYOUT)
         assert "TILE" in result
 
+    def test_tensor_sequence_is_summarized_not_dumped(self, device):
+        """A list of ttnn.Tensors is summarized element-wise, never str()'d.
+
+        str() on the list would repr() each tensor, reading it back to host -- fatal inside a
+        device trace capture and a tensor-content dump in the report otherwise.
+        """
+        from ttnn.graph import _safe_arg_str
+
+        tensors = [
+            ttnn.from_torch(torch.rand(32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            for _ in range(2)
+        ]
+        result = _safe_arg_str(tensors)
+
+        assert result.startswith("[ttnn.Tensor(") and result.endswith(")]")
+        assert result.count("ttnn.Tensor(") == 2
+        assert "shape=Shape([32, 32])" in result
+        # No raw tensor data: a dumped tensor renders its rows as "ttnn.Tensor([[".
+        assert "ttnn.Tensor([[" not in result
+
 
 class TestRecordPythonOperation:
     """Tests for ttnn.graph.record_python_operation."""
