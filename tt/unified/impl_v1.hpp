@@ -1052,16 +1052,6 @@ uint32_t Semaphore<thread>::semaphore_id() const {
     return id;
 }
 
-// --- Runtime-argument sentinel ---
-
-template <uint32_t Count>
-inline void check_runtime_args() {
-    // Every projection reads runtime args through the same get_arg_val, so this needs no
-    // thread guard -- unlike the circular-buffer capacity check, whose cb_interface does
-    // not link on a TRISC.
-    ASSERT(get_arg_val<uint32_t>(Count) == kRuntimeArgSentinel);
-}
-
 // --- synchronize_cores: a barrier across CORES, for one data-movement thread ---
 
 template <int thread>

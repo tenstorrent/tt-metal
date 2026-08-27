@@ -122,8 +122,16 @@ void kernel_main() {
     u::Storage<S> out_storage(kCbOut);
 #endif
 
-    // One scratch CB per intermediate pass.
-    u::Storage<S> s1(1), s2(2), s3(3), s4(4), s5(5), s6(6), s7(7);
+    // One scratch buffer per intermediate pass. Named rather than numbered: the slots the
+    // host assigns are its own business, and these used to be hardcoded 1..7 against a CB
+    // layout the launcher had to match by hand.
+    u::Storage<S> s1(get_arg(args::cb_s1));
+    u::Storage<S> s2(get_arg(args::cb_s2));
+    u::Storage<S> s3(get_arg(args::cb_s3));
+    u::Storage<S> s4(get_arg(args::cb_s4));
+    u::Storage<S> s5(get_arg(args::cb_s5));
+    u::Storage<S> s6(get_arg(args::cb_s6));
+    u::Storage<S> s7(get_arg(args::cb_s7));
 
     const auto in_acc = TensorAccessor(tensor::in);
     const auto out = TensorAccessor(tensor::out);

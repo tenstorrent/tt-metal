@@ -51,9 +51,9 @@ void kernel_main() {
     constexpr uint32_t kCbOut0 = get_arg(args::cb_out0);
     constexpr uint32_t kCbOut1 = get_arg(args::cb_out1);
 
-    const auto in = TensorAccessor(tensor::in));
-    const auto out0 = TensorAccessor(tensor::out0));
-    const auto out1 = TensorAccessor(tensor::out1));
+    const auto in = TensorAccessor(tensor::in);
+    const auto out0 = TensorAccessor(tensor::out0);
+    const auto out1 = TensorAccessor(tensor::out1);
 
     using Blk = u::Shape<1, tiles>;
 

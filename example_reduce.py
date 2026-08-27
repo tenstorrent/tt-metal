@@ -19,14 +19,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, unified_program
+from unified_harness import dfb, run_unified_spec, unified_program_spec
 
 KERNEL = "unified_kernels/example_reduce.cpp"
 TILE = 32
 NUM_CORES = 4
 IN_HT, IN_WT = 4, 2
-
-CB_IN, CB_SCALER, CB_PARTIAL, CB_GATHERED, CB_OUT = 0, 1, 2, 3, 16
 
 
 def to_device(device, t):
@@ -52,26 +50,22 @@ def main():
         core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, NUM_CORES - 1))])
         cores = [ttnn.CoreCoord(0, y) for y in range(NUM_CORES)]
 
-        compile_time_args = []
-        for t in (tx, tout):
-            compile_time_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-
-        program = unified_program(
+        tensors = {"in": tx, "out": tout}
+        spec = unified_program_spec(
             kernel_source=KERNEL,
-            core_ranges=core_ranges,
-            cores=cores,
-            cbs=[
-                make_cb(CB_IN, core_ranges, num_pages=IN_HT * IN_WT),
-                make_cb(CB_SCALER, core_ranges, num_pages=1),
-                make_cb(CB_PARTIAL, core_ranges, num_pages=IN_WT),
-                make_cb(CB_GATHERED, core_ranges, num_pages=NUM_CORES * IN_WT),
-                make_cb(CB_OUT, core_ranges, num_pages=IN_WT),
+            nodes=core_ranges,
+            dfbs=[
+                dfb("in", IN_HT * IN_WT),
+                dfb("scaler", 1),
+                dfb("partial", IN_WT),
+                dfb("gathered", NUM_CORES * IN_WT),
+                dfb("out", IN_WT),
             ],
-            compile_time_args=compile_time_args,
-            runtime_args=[t.buffer_address() for t in (tx, tout)],
+            tensors=tensors,
+            name="example_reduce",
         )
-
-        out = ttnn.generic_op([tx, tout], program)
+        run_unified_spec(device, spec, tensors)
+        out = tout
         got = ttnn.to_torch(out).to(torch.float32)[0, 0]
     finally:
         ttnn.close_device(device)

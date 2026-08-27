@@ -32,7 +32,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import dfb, run_unified_spec, single_core, unified_program_spec
 
 KERNEL = "unified_kernels/bcast.cpp"
 TILE = 32
@@ -86,11 +86,13 @@ def run(device, op, axis, ht=2, wt=3, then_sfpu=False, seed=0):
     named_ct_args = [("ht", ht), ("wt", wt)]
 
     vec_pages = {"Rows": wt, "Cols": ht, "Both": 1}[axis]
-    cbs = [
-        make_cb(CB_BLOCK, core_ranges, num_pages=ht * wt),
-        make_cb(CB_VEC, core_ranges, num_pages=vec_pages),
-        make_cb(CB_OUT, core_ranges, num_pages=ht * wt),
-    ] + ([make_cb(CB_TMP, core_ranges, num_pages=ht * wt)] if then_sfpu else [])
+    dfbs = [
+        dfb("block", ht * wt),
+        dfb("vec", vec_pages),
+        dfb("out", ht * wt),
+        # Declared unconditionally, because the kernel declares its Storage that way.
+        dfb("tmp", ht * wt),
+    ]
 
     spec = unified_program_spec(
         kernel_source=KERNEL,

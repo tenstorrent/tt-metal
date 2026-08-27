@@ -27,7 +27,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import dfb, run_unified_spec, single_core, unified_program_spec
 
 KERNEL = "unified_kernels/example_flash_attention.cpp"
 TILE = 32
@@ -38,30 +38,26 @@ N_QUERIES = SQ * TILE
 N_KEYS = KEY_CHUNKS * SK * TILE
 HEAD_DIM = DT * TILE
 
-CB_Q, CB_K, CB_V, CB_ONES, CB_SCALER = 0, 1, 2, 3, 4
-CB_SCORES, CB_CHUNK_MAX, CB_PROB, CB_CHUNK_SUM = 5, 6, 7, 8
-CB_NEW_MAX, CB_CORRECTION, CB_RESCALED, CB_WEIGHTED_V, CB_RECIPROCAL = 9, 10, 11, 12, 13
-CB_OUT, CB_MAX, CB_SUM, CB_ACC = 16, 20, 21, 22
 
-CB_PAGES = {
-    CB_Q: SQ * DT,
-    CB_K: DT * SK,
-    CB_V: SK * DT,
-    CB_ONES: SK,
-    CB_SCALER: 1,
-    CB_SCORES: SQ * SK,
-    CB_CHUNK_MAX: SQ,
-    CB_PROB: SQ * SK,
-    CB_CHUNK_SUM: SQ,
-    CB_NEW_MAX: SQ,
-    CB_CORRECTION: SQ,
-    CB_RESCALED: SQ * DT,
-    CB_WEIGHTED_V: SQ * DT,
-    CB_RECIPROCAL: SQ,
-    CB_OUT: SQ * DT,
-    CB_MAX: 2 * SQ,
-    CB_SUM: 2 * SQ,
-    CB_ACC: 2 * SQ * DT,
+DFB_PAGES = {
+    "q": SQ * DT,
+    "k": DT * SK,
+    "v": SK * DT,
+    "ones": SK,
+    "scaler": 1,
+    "scores": SQ * SK,
+    "chunk_max": SQ,
+    "prob": SQ * SK,
+    "chunk_sum": SQ,
+    "new_max": SQ,
+    "correction": SQ,
+    "rescaled": SQ * DT,
+    "weighted_v": SQ * DT,
+    "reciprocal": SQ,
+    "out": SQ * DT,
+    "max": 2 * SQ,
+    "sum": 2 * SQ,
+    "acc": 2 * SQ * DT,
 }
 
 
@@ -89,21 +85,16 @@ def attention(device, q, k, v):
 
     core_ranges, cores = single_core()
 
-    compile_time_args = []
-    for t in tensors:
-        compile_time_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-
-    program = unified_program(
+    bound = {"q": tq, "k": tk, "v": tv, "ones": tones, "out": tout}
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=[make_cb(index, core_ranges, num_pages=pages) for index, pages in CB_PAGES.items()],
-        compile_time_args=compile_time_args,
-        runtime_args=[t.buffer_address() for t in tensors],
+        nodes=core_ranges,
+        dfbs=[dfb(name, pages) for name, pages in DFB_PAGES.items()],
+        tensors=bound,
+        name="example_flash_attention",
     )
-
-    out = ttnn.generic_op(list(tensors), program)
-    return ttnn.to_torch(out).to(torch.float32)[0, 0]
+    run_unified_spec(device, spec, bound)
+    return ttnn.to_torch(tout).to(torch.float32)[0, 0]
 
 
 def reference(q, k, v):

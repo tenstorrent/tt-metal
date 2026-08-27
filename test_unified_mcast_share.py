@@ -23,7 +23,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, unified_program
+from unified_harness import dfb, run_unified_spec, unified_program_spec
 
 KERNEL = "unified_kernels/mcast_share.cpp"
 TILE = 32
@@ -50,11 +50,11 @@ def run(device, grid_h=8, grid_w=8, tiles=2, rounds=8, share_pair=False, skew=0,
     spec = unified_program_spec(
         kernel_source=KERNEL,
         nodes=core_ranges,
-        cbs=[
-            make_cb(CB_A, core_ranges, num_pages=tiles),
-            make_cb(CB_B, core_ranges, num_pages=tiles),
-            make_cb(CB_OUT0, core_ranges, num_pages=tiles),
-            make_cb(CB_OUT1, core_ranges, num_pages=tiles),
+        dfbs=[
+            dfb("a", tiles),
+            dfb("b", tiles),
+            dfb("out0", tiles),
+            dfb("out1", tiles),
         ],
         named_compile_time_args=[
             ("tiles", tiles),
@@ -62,12 +62,12 @@ def run(device, grid_h=8, grid_w=8, tiles=2, rounds=8, share_pair=False, skew=0,
             ("grid_h", grid_h),
             ("grid_w", grid_w),
         ],
-        runtime_args=[t.buffer_address() for t in (tin, tout0, tout1)],
+        tensors={"in": tin, "out0": tout0, "out1": tout1},
         defines=([("MS_SHARE_PAIR", "1")] if share_pair else []) + ([("MS_SKEW", str(skew))] if skew else []),
         dynamic_noc=dynamic_noc,
     )
 
-    ttnn.generic_op([tin, tout0, tout1], program)
+    run_unified_spec(device, spec, {"in": tin, "out0": tout0, "out1": tout1})
     got0 = ttnn.to_torch(tout0).to(torch.float32)
     got1 = ttnn.to_torch(tout1).to(torch.float32)
     # Every core writes all `rounds` blocks in order, so the expectation is the whole
