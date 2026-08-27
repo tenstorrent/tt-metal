@@ -10,6 +10,8 @@
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
@@ -20,6 +22,14 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "api/dataflow/dataflow_buffer.h"
+
+// The optional fused activation is applied to the final output tile in DEST, right before it is
+// packed into dfb_out (see "Write out the final output" below). The UNTILIZE_OUT branch routes the
+// output through a different CB chain (dfb_untilize_in_id), so that insertion point would not be
+// the last touch of the data — fail the build rather than fuse into the wrong place.
+#if defined(UNTILIZE_OUT) && defined(SFPU_OP_INIT_ACTIVATION)
+#error "fused activation + UNTILIZE_OUT not wired: untilize consumes dfb_untilize_in, not dfb_out"
+#endif
 
 void kernel_main() {
     /*
@@ -620,6 +630,16 @@ void kernel_main() {
                     dfb_x.wait_front(1);
                     tile_regs_acquire();
                     copy_tile(dfb_x_id, 0, dst0);
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    // Optional fused unary activation (e.g. SiLU). Applied here, after gamma and
+                    // beta and on the final output tile still in DEST, so the result equals
+                    // <act>(group_norm(x)) with the activation consuming the fp32 DEST value rather
+                    // than the rounded output a standalone activation op would read back.
+                    // Safe w.r.t. welford's SFPU replay state: this is the POST stage, all welford
+                    // accumulation for the batch is already finished.
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+#endif
                     tile_regs_commit();
                     dfb_x.pop_front(1);
                     dfb_out.reserve_back(1);

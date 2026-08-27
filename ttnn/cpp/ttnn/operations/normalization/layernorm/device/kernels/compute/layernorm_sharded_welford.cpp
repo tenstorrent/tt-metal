@@ -14,6 +14,7 @@
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 /**
  * @brief This kernel computes layernorm for sharded tensors using
@@ -30,17 +31,17 @@
  *     is assigned is `num_tiles_per_allgather_worker`)
  *   - Each core computes its partial mean and variance of its slices
  *     for all rows it is assigned (using Welford's algorithm) and pushes
- *     the interleaved mean and variance results to `cb_ex_partial_id`.
+ *     the interleaved mean and variance results to the partial buffer.
  *     This produces 1 mean tile and 1 variance tile per tile row
- *   - The reader kernels populate `cb_ex_external_id` with the core's
+ *   - The reader kernels populate the external buffer with the core's
  *     partial result + the other partial results from cores in the
  *     same core row for each row the core is assigned
  *   - Each core combines all partial results for its row(s) in
- *     `cb_ex_external_id` into `cb_ex_id`. `cb_ex_id` contains 1 mean tile
+ *     the external buffer into the combined buffer. The combined buffer contains 1 mean tile
  *     followed by 1 tile of 1/sqrt(var + eps) for each assigned row
  *   - The core row's sender core (the first column of cores) collects
  *     all of these combined tiles and multicasts to all cores in the row
- *     into `cb_ex_global_id`
+ *     into the global buffer
  * 2. Two-stage reduce:
  *   - Used for width-sharded tensors, where each core has a
  *     tensor-height-tall slice of the tensor
@@ -51,10 +52,10 @@
  *     in its core row. This is the first stage of the reduce.
  *   - Second stage of the reduce: The reader kernels add the
  *     first stage's combined results into the second stage readers'
- *     `cb_ex_external_id`. The results in `cb_ex_external_id` are combined
+ *     external buffer. The results in the external buffer are combined
  *     in the same way.
  *   - The final combined results are collected by the sender core
- *     and multicasted to all cores into `cb_ex_global_id`
+ *     and multicasted to all cores into the global buffer
  *
  * After one of the two reduce paths above, the rest of the layernorm
  * calculation is done using the global mean and 1/sqrt(var + eps) results.
@@ -130,9 +131,10 @@ inline uint32_t get_next_set_size(
 }
 }  // namespace
 void kernel_main() {
-#ifdef IDLE_CORE
-    return;
-#endif
+    // An idle core sits in a hole of a non-rectangular shard grid. It carries this program's dataflow
+    // buffers so the reduction's multicast has somewhere to land, and does no work of its own, so its
+    // whole body is compiled out.
+#ifndef IDLE_CORE
 
     // ============================================================================
     // Kernel setup
@@ -141,27 +143,22 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Compile-time arguments
     // ---------------------------------------------------------------------------
-    constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(3);
-    constexpr uint32_t block_wt = get_compile_time_arg_val(5);
-    constexpr uint32_t block_ht_const = get_compile_time_arg_val(4);
-    volatile uint32_t block_ht_volatile = get_compile_time_arg_val(4);
-    constexpr uint32_t subblock_wt_const = get_compile_time_arg_val(6);
-    volatile uint32_t subblock_wt_volatile = get_compile_time_arg_val(6);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(7);
-    const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
-    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(14);
-    constexpr uint32_t last_tile_w = get_compile_time_arg_val(15);
-    constexpr uint32_t W = get_compile_time_arg_val(16);
-    constexpr uint32_t eps = get_compile_time_arg_val(17);
-    constexpr uint32_t per_core_recip_lut_size = get_compile_time_arg_val(18);
+    constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
+    constexpr auto block_wt = get_arg(args::block_w);
+    constexpr auto block_ht_const = get_arg(args::block_h);
+    volatile uint32_t block_ht_volatile = get_arg(args::block_h);
+    constexpr auto subblock_wt_const = get_arg(args::subblock_w);
+    volatile uint32_t subblock_wt_volatile = get_arg(args::subblock_w);
+    constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
+    constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
+    constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
+    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
+    constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
+    constexpr auto tile_width = get_arg(args::tile_width);
+    constexpr auto last_tile_w = get_arg(args::last_tile_w);
+    constexpr auto W = get_arg(args::W);
+    constexpr auto eps = get_arg(args::eps);
+    constexpr auto per_core_recip_lut_size = get_arg(args::per_core_recip_lut_size);
     // Valid (logical) tile count of the final width block: the number of its tiles that hold any
     // logical data, the last of which may be only partially valid. Fewer than block_wt when the
     // logical width does not fill the width blocks evenly (each block spans a whole number of tiles).
@@ -171,29 +168,58 @@ void kernel_main() {
     // core and one real tile plus one padding tile on the second. For w=80 (also 3 tiles), the second
     // core owns last_block_wt = 1 tile that is itself partial (last_tile_w = 16 valid columns) plus
     // one padding tile.
-    constexpr uint32_t last_block_wt = get_compile_time_arg_val(19);
+    constexpr auto last_block_wt = get_arg(args::last_block_wt);
+    // gamma and beta each gate a buffer that only exists when their tensor was supplied, so the flag
+    // has to reach the preprocessor as well as `if constexpr`.
+#ifdef FUSE_GAMMA
+    constexpr bool do_gamma = true;
+#else
+    constexpr bool do_gamma = false;
+#endif
+#ifdef FUSE_BETA
+    constexpr bool do_beta = true;
+#else
+    constexpr bool do_beta = false;
+#endif
+    // Only the cores that gather read the cross-core combine's arguments and touch its buffers, so the
+    // distinction is a compile-time one: their runtime-argument schemas differ.
+#ifdef IS_ALLGATHER_WORKER
+    constexpr bool is_allgather_worker = true;
+#else
+    constexpr bool is_allgather_worker = false;
+#endif
 
     // ---------------------------------------------------------------------------
-    // CB definitions
+    // Dataflow buffer definitions
     // ---------------------------------------------------------------------------
-    constexpr uint32_t dfb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t dfb_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
-    constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
-    constexpr uint32_t dfb_x = tt::CBIndex::c_24;             // x minus mean
-    constexpr uint32_t dfb_xmm_id = tt::CBIndex::c_18;        // x minus mean
-    constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;  // Interleaved E[x] and Var[x] partial results
-    constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;          // Interleaved E[x] and Var[x] global reduce
-    constexpr uint32_t dfb_ex_external_id = tt::CBIndex::c_10;
-    constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;  // Interleaved E[x] and Var[x] final global mcast result
-    constexpr uint32_t dfb_transpose_id = tt::CBIndex::c_22;  // Transpose interleaved E[x] and Var[x] to columns
-                                                              // (workaround for bug in transpose_dest)
-    constexpr uint32_t dfb_fusion_id = tt::CBIndex::c_18;     // stream gamma/beta
-    constexpr uint32_t dfb_out_id = tt::CBIndex::c_16;
-    constexpr uint32_t dfb_reciprocals = tt::CBIndex::c_25;  // LUT of pre-computed reciprocals for Welford's algorithm
+    constexpr uint32_t dfb_in0 = dfb::in0;
+#ifdef FUSE_PRE_ADD
+    constexpr uint32_t dfb_in1 = dfb::in1;
+#endif
+#ifdef FUSE_GAMMA
+    constexpr uint32_t dfb_gamma_id = dfb::gamma;
+#endif
+#ifdef FUSE_BETA
+    constexpr uint32_t dfb_beta_id = dfb::beta;
+#endif
+    constexpr uint32_t dfb_x = dfb::x;                       // x minus mean
+    constexpr uint32_t dfb_xmm_id = dfb::xmm;                // x minus mean
+    constexpr uint32_t dfb_ex_partial_id = dfb::ex_partial;  // Interleaved E[x] and Var[x] partial results
+    constexpr uint32_t dfb_ex_id = dfb::ex;                  // Interleaved E[x] and Var[x] global reduce
+    constexpr uint32_t dfb_ex_external_id = dfb::ex_external;
+    constexpr uint32_t dfb_ex_global_id = dfb::ex_global;  // Interleaved E[x] and Var[x] final global mcast result
+    constexpr uint32_t dfb_transpose_id = dfb::transpose;  // Transpose interleaved E[x] and Var[x] to columns
+                                                           // (workaround for bug in transpose_dest)
+    constexpr uint32_t dfb_fusion_id = dfb::xmm;           // stream gamma/beta
+    constexpr uint32_t dfb_out_id = dfb::out;
+    constexpr uint32_t dfb_reciprocals = dfb::reciprocals;  // LUT of pre-computed reciprocals for Welford's algorithm
 
+#ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma(dfb_gamma_id);
+#endif
+#ifdef FUSE_BETA
     DataflowBuffer dfb_beta(dfb_beta_id);
+#endif
     DataflowBuffer dfb_xmm(dfb_xmm_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
@@ -214,14 +240,19 @@ void kernel_main() {
 #endif
     DataflowBuffer dfb_in(dfb_in_id);
 
-    // Welford-fp32 alias of cb_in_id. When welford_fp32_alias is true, cb_x_welford_named points
-    // to c_29, a separate buffer index sharing cb_in_id's SRAM but configured with UnpackToDestFp32,
-    // so Welford's transpose_tile preserves fp32 precision in DEST. The two aliased indices
-    // have independent read/write pointers so the fused path pushes both side by side; the non-fused
-    // path reads c_0 (sharded) without read/write pointer manipulation, and so does the alias.
-    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    constexpr auto dfb_x_welford_named = get_named_compile_time_arg_val("cb_x_welford");
-    constexpr auto dfb_x_welford_id = welford_fp32_alias ? dfb_x_welford_named : dfb_in_id;
+    // Welford-fp32 alias of the intake buffer. When the alias is active it is a separate buffer index
+    // sharing the intake's SRAM but configured with UnpackToDest, so Welford's transpose_tile preserves
+    // fp32 precision in DEST. The two aliased indices have independent read/write pointers so the fused
+    // path pushes both side by side; the non-fused path reads the sharded input without read/write
+    // pointer manipulation, and so does the alias. When the alias is inactive the name resolves to the
+    // intake buffer itself.
+#ifdef WELFORD_FP32_ALIAS
+    constexpr bool welford_fp32_alias = true;
+    constexpr uint32_t dfb_x_welford_id = dfb::x_welford;
+#else
+    constexpr bool welford_fp32_alias = false;
+    constexpr uint32_t dfb_x_welford_id = dfb_in_id;
+#endif
     DataflowBuffer dfb_x_welford(dfb_x_welford_id);
 
     // ---------------------------------------------------------------------------
@@ -237,9 +268,7 @@ void kernel_main() {
     // width is not tile-aligned, a final partial tile. The reduce must stop there rather than at the
     // physical shard end, which carries padding tiles. This is the only per-core quantity that differs
     // for the partial final shard.
-    // On all-to-all workers indices 1 through 3 hold the two-stage-reduce args, so this value is appended
-    // at index 4, whereas on other workers it immediately follows the reduce-tile count at index 1.
-    const uint32_t welford_reduce_w = get_arg_val<uint32_t>(is_allgather_worker ? 4 : 1);
+    const uint32_t welford_reduce_w = get_arg(args::welford_reduce_w);
     const uint32_t partial_reduce_W = welford_reduce_w;
 
     // Split the Welford reduction into full tiles and a final partial tile (present only when the
@@ -247,24 +276,34 @@ void kernel_main() {
     const uint32_t num_full_welford_tiles = welford_reduce_w / tile_width;
     const uint32_t partial_welford_tile_w = welford_reduce_w % tile_width;
 
+#ifdef IS_ALLGATHER_WORKER
     // This is the number of tile rows to process
-    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
+    const uint32_t num_tiles_per_allgather_worker = get_arg(args::num_rows_per_all_to_all_worker);
 
     // These are for two-stage reductions
-    const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
-    const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
+    const bool use_two_stage_reduce = get_arg(args::use_two_stage_reduce) == 1;
+    const bool is_second_stage_reader = get_arg(args::is_second_stage_reader) == 1;
+
+    // Global width-block index of the partial boundary block and this core's own width-block index,
+    // read only on all-to-all workers (the cores that run the cross-core combine). own_row is this
+    // core's first-stage row; a width shard's global index is own_row * num_blocks_first_stage + its
+    // position within the row. These let the combine weight each block/row by its true logical width.
+    const uint32_t boundary_width_index = get_arg(args::boundary_width_index);
+    const uint32_t my_width_index = get_arg(args::my_width_index);
+#else
+    const uint32_t num_tiles_per_allgather_worker = 0;
+    const bool use_two_stage_reduce = false;
+    const bool is_second_stage_reader = false;
+    const uint32_t boundary_width_index = 0;
+    const uint32_t my_width_index = 0;
+#endif
+    const uint32_t own_row = my_width_index / num_blocks_first_stage;
+
     constexpr uint32_t block_w = block_wt * tile_width;
     // Width (valid columns) of the final width block, weighting it in the cross-core combine. The
     // final block owns last_block_wt tiles (<= block_wt), the last of which has last_tile_w valid
     // columns; the other blocks each own a full block_w.
     constexpr uint32_t last_block_w = (last_block_wt - 1) * tile_width + last_tile_w;
-    // Global width-block index of the partial boundary block and this core's own width-block index,
-    // read only on all-to-all workers (the cores that run the cross-core combine). own_row is this
-    // core's first-stage row; a width shard's global index is own_row * num_blocks_first_stage + its
-    // position within the row. These let the combine weight each block/row by its true logical width.
-    const uint32_t boundary_width_index = is_allgather_worker ? get_arg_val<uint32_t>(5) : 0;
-    const uint32_t my_width_index = is_allgather_worker ? get_arg_val<uint32_t>(6) : 0;
-    const uint32_t own_row = my_width_index / num_blocks_first_stage;
 
     // The number of blocks to combine.
     // If we're the second stage reader, we're reducing the
@@ -317,11 +356,11 @@ void kernel_main() {
     add_init(dfb_in0, dfb_in1);
     dfb_in.reserve_back(num_tiles_per_block);
     if constexpr (welford_fp32_alias) {
-        // Must be done in the compute kernel: on the fused path compute is the producer of cb_in_id
-        // via the add_tiles -> pack_tile sequence below; the reader never writes cb_in_id.
-        // cb_x_welford_id shares cb_in_id's SRAM but has its own read/write pointers, so reserve and push
-        // both indices side by side. pack_tile writes once via cb_in_id's wr_ptr; the alias lets the
-        // welford section wait_front on c_29 independently of cb_in_id.
+        // Must be done in the compute kernel: on the fused path compute is the producer of the intake
+        // buffer via the add_tiles -> pack_tile sequence below; the reader never writes it.
+        // The alias shares the intake's SRAM but has its own read/write pointers, so reserve and push
+        // both indices side by side. pack_tile writes once via the intake's wr_ptr; the alias lets the
+        // welford section wait_front on it independently of the intake.
         dfb_x_welford.reserve_back(num_tiles_per_block);
     }
     for (uint32_t i = 0; i < block_ht; i++) {
@@ -355,8 +394,8 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     reconfig_data_format_srca(dfb_x_welford_id);
     dfb_ex_partial.reserve_back(num_block_ht_result_tiles);
-    // Reconfigure the transpose op for the welford intake CB. When the alias is active,
-    // cb_x_welford_id has UnpackToDestFp32 mode so transpose_tile preserves fp32 precision.
+    // Reconfigure the transpose op for the welford intake buffer. When the alias is active,
+    // it has UnpackToDest mode so transpose_tile preserves fp32 precision.
     transpose_init(dfb_x_welford_id);
     welford_init();
     index_h_offset = 0;
@@ -376,7 +415,7 @@ void kernel_main() {
             }
             transpose_tile(dfb_x_welford_id, w + index_h_offset, welford_input_dst);
             if constexpr (welford_fp32_alias) {
-                // transpose_tile took the UnpackToDestFp32 path. Its math-side init clobbered
+                // transpose_tile took the UnpackToDest path. Its math-side init clobbered
                 // the welford recurrence at SFPU replay slots [16, 32).
                 // welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots with
                 // the welford recurrence; PreserveStats keeps the running mean / M2 accumulator
@@ -406,7 +445,7 @@ void kernel_main() {
         welford_finalize_to_row<per_core_recip_lut_size>(welford_mean_dst, partial_reduce_W - 1, *p_reciprocals);
         // We should transpose back to columns here
         // However, transpose_dest() is currently buggy.
-        // So we transpose to an intermediate CB downstream
+        // So we transpose to an intermediate buffer downstream
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(welford_mean_dst, dfb_ex_partial_id);
@@ -419,10 +458,9 @@ void kernel_main() {
 
     // ---------------------------------------------------------------------------
     // Combine Welford local partials with external partials
-    // cb_ex_id <-- cb_ex_external_id, cb_ex_partial_id
     // If reduction is single-stage, or this core is a second-stage reader,
-    // then cb_ex_id contains mean and 1/sqrt(var + eps) interleaved.
-    // Otherwise, cb_ex_id contains mean and var interleaved.
+    // then the combined buffer contains mean and 1/sqrt(var + eps) interleaved.
+    // Otherwise, it contains mean and var interleaved.
     // ---------------------------------------------------------------------------
     reconfig_data_format_srca(dfb_ex_partial_id);
     if constexpr (is_allgather_worker) {
@@ -561,7 +599,8 @@ void kernel_main() {
     // Scale by gamma
     // ---------------------------------------------------------------------------
     dfb_im.wait_front(num_tiles_per_block);
-    if constexpr (do_gamma) {
+#ifdef FUSE_GAMMA
+    {
         reconfig_data_format(dfb_im_id, dfb_gamma_id);
         if constexpr (do_beta == 0) {
             pack_reconfig_data_format(dfb_out_id);
@@ -592,11 +631,13 @@ void kernel_main() {
         dfb_im.pop_front(num_tiles_per_block);
         dfb_outgamma.wait_front(num_tiles_per_block);
     }
+#endif
 
     // ---------------------------------------------------------------------------
     // Add beta
     // ---------------------------------------------------------------------------
-    if constexpr (do_beta) {
+#ifdef FUSE_BETA
+    {
         reconfig_data_format(dfb_fusion_id, dfb_beta_id);
         pack_reconfig_data_format(dfb_out_id);
         add_bcast_rows_init(dfb_fusion_id, dfb_beta_id);
@@ -625,4 +666,7 @@ void kernel_main() {
         dfb_fusion.pop_front(num_tiles_per_block);
         dfb_out.wait_front(num_tiles_per_block);
     }
+#endif
+
+#endif  // IDLE_CORE
 }

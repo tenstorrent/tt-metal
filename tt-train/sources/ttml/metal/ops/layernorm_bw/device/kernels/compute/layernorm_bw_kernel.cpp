@@ -344,7 +344,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         if (col > 0) {
             cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
             reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
-            copy_tile_init(cb_scaled_dy_gamma_xnorm_sum_idx);
+            copy_init(cb_scaled_dy_gamma_xnorm_sum_idx);
             copy_tile(cb_scaled_dy_gamma_xnorm_sum_idx, /* tile_idx */ 0, sum_register);
         } else {
             zero_dst_reg(sum_register);

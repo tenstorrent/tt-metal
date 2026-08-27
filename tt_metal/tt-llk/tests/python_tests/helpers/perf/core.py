@@ -566,7 +566,12 @@ def _write_run_parquet(raw_csv_paths, out_dir) -> None:
         from .parquet import convert_csvs_to_parquet
 
         prov = _ci_provenance()
-        parquet_path = Path(out_dir) / f"{prov['run_id']}.parquet"
+        # Named from the run tag, not run_id. run_id is a ROW_KEY column and is
+        # shared by every shard of one CI workflow by design, so naming files
+        # after it gives all ten shards the same filename -- fine while each
+        # stays in its own directory, wrong the moment they are collected into
+        # one archive. The tag is the filesystem-unique name; use it here.
+        parquet_path = Path(out_dir) / f"{TestConfig.perf_run_tag()}.parquet"
         convert_csvs_to_parquet(
             sorted(raw_csv_paths), parquet_path, strict=True, **prov
         )
@@ -590,7 +595,7 @@ def combine_perf_reports():
     tree read as complete while holding a blend of two runs.
 
     Also publishes the run's raw combined CSVs as one Parquet batch
-    (runs/<tag>/<run_id>.parquet) so a run emits both CSV and Parquet.
+    (runs/<tag>/<tag>.parquet) so a run emits both CSV and Parquet.
     Unknown Parquet columns raise ``PerfSchemaError`` (CSV is already written).
     """
 

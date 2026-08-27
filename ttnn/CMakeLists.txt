@@ -62,6 +62,9 @@ target_precompile_headers(
         # Volatile TTNN headers — only for targets that actually include these
         <ttnn/device_operation.hpp>
         <ttnn/operation.hpp>
+        # Profiling shows distributed.hpp reaching many op TUs (via types.hpp/
+        # global_circular_buffer.hpp) at ~1.4s per parse; precompile it too.
+        <tt-metalium/distributed.hpp>
 )
 target_link_libraries(
     ttnn_pch_full
@@ -96,6 +99,7 @@ add_library(TTNN::Core ALIAS ttnn_core)
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
+target_compile_definitions(ttnn_core PRIVATE "TT_METAL_BUILD_TYPE=\"$<CONFIG>\"")
 
 # Descriptor cache-hit fast-path parity check (opt-in via -DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK).
 # The #ifdef lives in ttnn/api/ttnn/mesh_device_operation_adapter.hpp, so scope the definition to the
@@ -150,7 +154,11 @@ target_include_directories(
         api/ttnn
         core
         cpp # FIXME: Depend on the Ops needed (make the circular obvious)
+        ${PROJECT_BINARY_DIR}/generated
 )
+if(TARGET tt_metal_version_header)
+    add_dependencies(ttnn_core tt_metal_version_header)
+endif()
 target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(
     ttnn_core
