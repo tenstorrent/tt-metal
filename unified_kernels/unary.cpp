@@ -10,19 +10,11 @@
 // torch -- a chain that silently dropped a link would still match torch on the
 // op that survived.
 //
-// Compile-time args (named):
-//   num_blocks, tiles_per_block
-//   cb_in, cb_out   -- Metal 2.0 only; the legacy path hardcodes them below
-//
-// On the LEGACY path, positionally: TensorAccessorArgs for in, then out; and two runtime
-// args, the in and out base addresses, identical on all three kernels.
-//
-// On the METAL 2.0 path there are neither. The accessors come from binding tokens and the
-// base addresses ride along with them, which is hazard D18 gone rather than mitigated. The
-// two spellings differ in four lines, marked below.
+// Compile-time args, all named: num_blocks, tiles_per_block, and a cb_<name> per buffer
+// that TT_U_CB reads. No runtime args at all -- the tensors are BOUND, so their addresses
+// ride along with the accessors rather than being passed and counted.
 //
 // Defines: one of UN_SQRT, UN_RSQRT, UN_EXP, UN_CHAIN; recip is the default.
-//   TT_UNIFIED_METAL2  selects the 2.0 spelling; set by unified_program_spec().
 
 #include <tt/unified/core>
 
@@ -44,16 +36,8 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_named_compile_time_arg_val("num_blocks");
     constexpr uint32_t tiles_per_block = get_named_compile_time_arg_val("tiles_per_block");
 
-#if defined(TT_UNIFIED_METAL2)
-    // The buffer slots come from the host as VALUES, not as dfb:: tokens: a token exists
-    // only in the kernels that bind that buffer, and the three statements below are
-    // compiled on every projection. See unified_metal2_spec.md 7.1.
-    constexpr uint32_t kCbIn = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
-#else
-    constexpr uint32_t kCbIn = 0;
-    constexpr uint32_t kCbOut = 16;
-#endif
+    constexpr uint32_t kCbIn = TT_U_CB(in);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
 
     u::compute_init(kCbIn, kCbOut);
 
@@ -61,28 +45,8 @@ void kernel_main() {
     u::Storage<Block1D> in_storage(kCbIn);
     u::Storage<Block1D> out_storage(kCbOut);
 
-#if defined(TT_UNIFIED_METAL2) && defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-    // The slots above are PREDICTED by the harness from metal's allocator rule. Compute is
-    // the one projection that binds every buffer -- inputs as consumer, outputs as producer
-    // -- so it is the only place all of them can be checked against the ids the host really
-    // assigned. That is what the dfb:: tokens are good for here: not naming, which they
-    // cannot do for a shared source, but verifying.
-    static_assert(
-        kCbIn == static_cast<uint32_t>(dfb::in) && kCbOut == static_cast<uint32_t>(dfb::out),
-        "the harness's predicted dataflow buffer slots do not match the ones the host assigned; "
-        "unified_program_spec() derives them from declaration order, which no longer holds");
-#endif
-
-#if defined(TT_UNIFIED_METAL2)
     const auto in = TensorAccessor(tensor::in);
     const auto out = TensorAccessor(tensor::out);
-#else
-    constexpr auto in_args = TensorAccessorArgs<0>();
-    constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
-    u::check_runtime_args<2>();
-    const auto in = TensorAccessor(in_args, get_arg_val<uint32_t>(0));
-    const auto out = TensorAccessor(out_args, get_arg_val<uint32_t>(1));
-#endif
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
         u::ComputeBlock a = u::noc_load<0>(in_storage, in, b).wait();

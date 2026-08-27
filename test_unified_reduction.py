@@ -30,11 +30,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, unified_program
+from unified_harness import dfb_input, dfb_intermed, dfb_output, run_unified_spec, unified_program_spec
 
 KERNEL = "unified_kernels/reduction_tree.cpp"
 
-CB_IN0, CB_TMP0, CB_TMP1, CB_SCALER, CB_OUT = 0, 1, 2, 3, 16
 TILE = 32
 
 
@@ -47,8 +46,6 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, op="sum", single_s
 
     dram = ttnn.DRAM_MEMORY_CONFIG
     ta = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
-    # Unused by the kernel, present so the accessor arg layout matches.
-    tb = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
     # One reduced tile-row per block, holding every column's result side by side:
     # column x lands at block index b * grid_w + x. Only row 0 of each carries the
     # answer. Sized this way so a column writing the wrong slot is visible.
@@ -59,46 +56,51 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, op="sum", single_s
     core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_w - 1, grid_h - 1))])
     cores = [ttnn.CoreCoord(x, y) for y in range(grid_h) for x in range(grid_w)]
 
-    # CT args: [num_blocks, in_ht, in_wt, num_cores_y] then accessors for in0, in1, out
-    ct_args = []
     named_ct_args = [("num_blocks", num_blocks), ("in_ht", ht), ("in_wt", wt), ("num_cores_y", grid_h)]
-    for t in (ta, tb, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-
-    rt_args = [ta.buffer_address(), tb.buffer_address(), tout.buffer_address()]
-
-    # tmp1 gathers grid_h slices of wt tiles; the scaler is one page, pushed once
-    # and never popped.
-    cbs = [
-        make_cb(CB_IN0, core_ranges, num_pages=ht * wt),
-        make_cb(CB_TMP0, core_ranges, num_pages=wt),
-        make_cb(CB_TMP1, core_ranges, num_pages=wt * grid_h),
-        make_cb(CB_SCALER, core_ranges, num_pages=1),
-        make_cb(CB_OUT, core_ranges, num_pages=wt),
-    ]
-
-    program = unified_program(
-        kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=cbs,
-        compile_time_args=ct_args,
-        named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
-        defines=(
-            ([("RT_MAX", "1")] if op == "max" else [])
-            + ([("RT_MEAN", "1")] if op == "mean" else [])
-            # max and mean are only correct single-stage: stage 2 would fold the
-            # zeros the packer wrote outside stage 1's result row.
-            + ([("RT_SINGLE_STAGE", "1")] if single_stage else [])
-        ),
+    defines = (
+        ([("RT_MAX", "1")] if op == "max" else [])
+        + ([("RT_MEAN", "1")] if op == "mean" else [])
+        # max and mean are only correct single-stage: stage 2 would fold the
+        # zeros the packer wrote outside stage 1's result row.
+        + ([("RT_SINGLE_STAGE", "1")] if single_stage else [])
     )
+
+    # Endpoint roles, read straight off the kernel:
+    #   in0     noc_load<0>            -> DM thread 0 fills it, compute reads it
+    #   scaler  fill_reduce_scaler<1>  -> DM thread 1 fills it once, compute re-reads it
+    #   tmp0    compute stores it, then DM thread 0 drains it -- into the gather in the
+    #           two-stage shape, or straight to DRAM when single-stage. Either way thread 0
+    #           for the gather and thread 1 for the direct store, so the role differs.
+    #   tmp1    the gather destination: DM thread 0 writes it, compute reduces it. Declared
+    #           even single-stage, where nothing touches it, because the kernel declares its
+    #           Storage unconditionally -- exactly as the circular buffer was allocated
+    #           unconditionally before.
+    #   out     compute stores it, DM thread 1 drains it
+    dfbs = [
+        dfb_input("in0", thread=0, num_pages=ht * wt),
+        dfb_output("tmp0", thread=1 if single_stage else 0, num_pages=wt),
+        dfb_input("tmp1", thread=0, num_pages=wt * grid_h),
+        dfb_input("scaler", thread=1, num_pages=1),
+        dfb_output("out", thread=1, num_pages=wt),
+    ]
 
     logger.info(
         f"running reduction tree: op={op} single_stage={single_stage} ht={ht} wt={wt} "
         f"grid={grid_h}x{grid_w} num_blocks={num_blocks} ({ht * TILE}x{wt * TILE} per core)"
     )
-    out = ttnn.generic_op([ta, tb, tout], program)
+
+    tensors = {"in0": ta, "out": tout}
+    spec = unified_program_spec(
+        kernel_source=KERNEL,
+        nodes=core_ranges,
+        dfbs=dfbs,
+        tensors=tensors,
+        named_compile_time_args=named_ct_args,
+        defines=defines,
+        name="reduction_tree",
+    )
+    run_unified_spec(device, spec, tensors)
+    out = tout
     got_full = ttnn.to_torch(out).to(torch.float32)
 
     af = a.to(torch.float32)
