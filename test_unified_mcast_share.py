@@ -30,7 +30,7 @@ TILE = 32
 CB_A, CB_B, CB_OUT0, CB_OUT1 = 0, 1, 16, 17
 
 
-def run(device, grid_h=8, grid_w=8, tiles=2, rounds=8, share_pair=False, skew=0, seed=0):
+def run(device, grid_h=8, grid_w=8, tiles=2, rounds=8, share_pair=False, skew=0, seed=0, dynamic_noc=False):
     cores_n = grid_h * grid_w
     torch.manual_seed(seed)
     src = (torch.rand([1, rounds * tiles, TILE, TILE]) - 0.5).to(torch.bfloat16)
@@ -71,6 +71,7 @@ def run(device, grid_h=8, grid_w=8, tiles=2, rounds=8, share_pair=False, skew=0,
         ],
         runtime_args=[t.buffer_address() for t in (tin, tout0, tout1)],
         defines=([("MS_SHARE_PAIR", "1")] if share_pair else []) + ([("MS_SKEW", str(skew))] if skew else []),
+        dynamic_noc=dynamic_noc,
     )
 
     ttnn.generic_op([tin, tout0, tout1], program)
@@ -83,25 +84,33 @@ def run(device, grid_h=8, grid_w=8, tiles=2, rounds=8, share_pair=False, skew=0,
 
 
 def main():
+    # The second axis is NOC mode. unified_explicit_noc_spec.md 13.1: under
+    # DM_DYNAMIC_NOC the flush predicates sum BOTH RISCs' counters, so the handshake's
+    # noc_async_writes_flushed() now waits on the other thread's writes too. That should
+    # be over-waiting -- slow, not wrong -- but the handshake is the one protocol where
+    # "should be" has not been checked.
     device = ttnn.open_device(device_id=0)
     failed = []
     try:
-        for label, share, sk in (
-            ("distinct pairs, no skew ", False, 0),
-            ("SHARED pair, no skew    ", True, 0),
-            ("distinct pairs, SKEWED  ", False, 5000),
-            ("SHARED pair, SKEWED     ", True, 5000),
-        ):
-            got0, got1, want = run(device, share_pair=share, skew=sk)
-            e0 = (got0 - want).abs().max().item()
-            e1 = (got1 - want).abs().max().item()
-            # Exact: a broadcast copies bits, and copy() is a pack of what was unpacked.
-            ok = e0 == 0.0 and e1 == 0.0
-            logger.info(
-                f"  8x8 rect x8 rounds, {label}: " f"max|err| buf0={e0:.6f} buf1={e1:.6f}   {'ok' if ok else 'FAIL'}"
-            )
-            if not ok:
-                failed.append(label)
+        for dyn in (False, True):
+            mode = "DYNAMIC " if dyn else "dedicated"
+            for label, share, sk in (
+                ("distinct pairs, no skew ", False, 0),
+                ("SHARED pair, no skew    ", True, 0),
+                ("distinct pairs, SKEWED  ", False, 5000),
+                ("SHARED pair, SKEWED     ", True, 5000),
+            ):
+                got0, got1, want = run(device, share_pair=share, skew=sk, dynamic_noc=dyn)
+                e0 = (got0 - want).abs().max().item()
+                e1 = (got1 - want).abs().max().item()
+                # Exact: a broadcast copies bits, and copy() is a pack of what was unpacked.
+                ok = e0 == 0.0 and e1 == 0.0
+                logger.info(
+                    f"  [{mode}] 8x8 rect x8 rounds, {label}: "
+                    f"max|err| buf0={e0:.6f} buf1={e1:.6f}   {'ok' if ok else 'FAIL'}"
+                )
+                if not ok:
+                    failed.append(f"{mode} {label}")
     finally:
         ttnn.close_device(device)
 
