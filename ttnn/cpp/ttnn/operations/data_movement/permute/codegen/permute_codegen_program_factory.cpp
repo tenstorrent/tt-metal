@@ -131,6 +131,10 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreRowInvar
     writer_desc.compile_time_args.push_back(rank);
     writer_desc.config = WriterConfigDescriptor{};
 
+    // The output address is the only writer arg a later dispatch can change, and a per-core buffer
+    // binding is re-patched once per core on every cache hit. Bind it once for the program instead.
+    writer_desc.emplace_common_runtime_args({output_tensor.buffer()});
+
     const auto cores = corerange_to_cores(all_cores, std::nullopt);
     reader_desc.runtime_args.reserve(num_cores);
     writer_desc.runtime_args.reserve(num_cores);
@@ -149,8 +153,7 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::MultiCoreRowInvar
         reader_desc.emplace_runtime_args(core, {input_tensor.buffer(), n, row_start});
 
         KernelDescriptor::RTArgList writer_rt;
-        writer_rt.reserve(3 + 3 * rank);
-        writer_rt.push_back(output_tensor.buffer());
+        writer_rt.reserve(2 + 3 * rank);
         writer_rt.push_back(n);
         writer_rt.push_back(row_start);
         for (uint32_t i = 0; i < rank; i++) {

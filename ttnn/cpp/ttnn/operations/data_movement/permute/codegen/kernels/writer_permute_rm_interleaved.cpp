@@ -7,15 +7,20 @@
 // pipelined batched NOC barriers.
 //
 // CT args: cb_id, stick_bytes, TensorAccessorArgs(out_t)..., BATCH, N
-// RT args: dst_addr, num_rows, start_row, input_shape[N], perm[N], dest_strides[N]
+// RT args: num_rows, start_row, input_shape[N], perm[N], dest_strides[N]
+// Common RT args: dst_addr
+//
+// The output address is a common arg because it is the one arg a later dispatch can change: a
+// cache hit re-patches every buffer binding, and a per-core binding makes that one lookup per
+// core rather than one for the program. The rest are per-core because they are never patched.
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_rows = get_arg_val<uint32_t>(1);
-    uint32_t start_row = get_arg_val<uint32_t>(2);
+    uint32_t dst_addr = get_common_arg_val<uint32_t>(0);
+    uint32_t num_rows = get_arg_val<uint32_t>(0);
+    uint32_t start_row = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t write_size = get_compile_time_arg_val(1);
@@ -39,7 +44,7 @@ void kernel_main() {
 
     uint32_t input_shape[N];
     for (uint32_t i = 0; i < N; i++) {
-        input_shape[i] = get_arg_val<uint32_t>(3 + i);
+        input_shape[i] = get_arg_val<uint32_t>(2 + i);
     }
 
     // Output-page distance of one step along input axis d. dest_strides is indexed by output axis,
@@ -49,7 +54,7 @@ void kernel_main() {
     // axis (is_row_invariant), which makes perm[0..N-2] a bijection onto the same range.
     uint32_t out_stride[N] = {};
     for (uint32_t i = 0; i + 1 < N; ++i) {
-        out_stride[get_arg_val<uint32_t>(3 + N + i)] = get_arg_val<uint32_t>(3 + 2 * N + i);
+        out_stride[get_arg_val<uint32_t>(2 + N + i)] = get_arg_val<uint32_t>(2 + 2 * N + i);
     }
 
     // Rows are visited in input order one at a time, so the index and its output page are carried
