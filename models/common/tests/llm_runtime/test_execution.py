@@ -251,6 +251,8 @@ def test_traced_prefill_compile_does_not_interpret_request_eligibility(monkeypat
         prepare_inputs=lambda: (),
         capture=lambda persistent: torch.zeros(1),
         refresh_fields=("tokens",),
+        prime=None,
+        release_prime_output=None,
     )
 
     def prepare(
