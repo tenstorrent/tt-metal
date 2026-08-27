@@ -348,6 +348,7 @@ Recorded as the brief instructs, with the conservative option taken.
 | `in0_block_w` gcd(k,4) hypothesis | still device-unverified, inherited from job 1 |
 | L1 (global-CB ownership across two constructions) | still never measured |
 | Brief's "host" regression gate includes device suites | worth correcting for `mb-coverage` |
+| `HF_HOME` unset makes Llama's real-checkpoint host tests **skip silently** | verified both ways; see §12 |
 
 ---
 
@@ -368,3 +369,42 @@ instead.
 > no working mesh. Note that `local_qkv_size == local_dim == 1280` for this
 > model, so a fused-QKV-vs-residual width confusion is shape-invisible;
 > `local_attention_dim` is 1024 and is the width that differs.
+
+
+---
+
+## 12. A late finding worth more than it looks
+
+`HF_HOME` is **unset** in this job's environment. The consequence is not a
+failure — it is a **silent skip**.
+
+Llama's two real-checkpoint host tests resolve the checkpoint through
+`snapshot_download`, which with no `HF_HOME` falls through to the network and
+gets a 401 on a gated repo, so they skip:
+
+```text
+SKIPPED  checkpoint 'meta-llama/Llama-3.3-70B-Instruct' is unavailable:
+         You are trying to access a gated repo. 401 Client Error.
+```
+
+Verified both ways:
+
+```sh
+# unset -> skipped
+python -m pytest -q -rs models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py
+# 7 passed, 2 skipped
+
+# set -> the same test passes
+HF_HOME=/proj_sw/user_dev/hf_data python -m pytest -q   "…/test_hf_conversion_host.py::test_real_checkpoint_rope_tables_match_an_independent_llama3_scaling"
+# 1 passed
+```
+
+Llama-3.3-70B really is on this host — 31 safetensors shards, 368 GB, at
+`/proj_sw/user_dev/hf_data/hub/models--meta-llama--Llama-3.3-70B-Instruct` —
+so the skip is purely an environment artefact, not a missing checkpoint.
+
+It matters because job 1's "the Llama adaptor is numerically correct on host"
+result includes those two real-checkpoint tests. Whether they *ran* in that job
+depends on whether `HF_HOME` was exported in its shell. Anyone auditing that
+claim should check its logs for the skip lines rather than assume. `mb-coverage`
+should export `HF_HOME=/proj_sw/user_dev/hf_data` before any host gate.

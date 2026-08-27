@@ -48,9 +48,27 @@ HF_HOME                                             unset in this job's env
 
 `mb-llama`'s handoff warned about exactly this and it was right. Even with a
 healthy mesh you cannot run a Qwen full model or the accuracy gate until
-someone fetches ~65 GB into `/proj_sw/user_dev/hf_data`. **Llama-3.3-70B *is*
-there.** Plan around that asymmetry: if you get one working night, Llama is the
-model you can actually load.
+someone fetches ~65 GB into `/proj_sw/user_dev/hf_data`.
+
+**Llama-3.3-70B *is* there — verified, not assumed:** 31 safetensors shards,
+368 GB, at `/proj_sw/user_dev/hf_data/hub/models--meta-llama--Llama-3.3-70B-Instruct`.
+Plan around that asymmetry: if you get one working night, Llama is the model you
+can actually load.
+
+**But you must `export HF_HOME=/proj_sw/user_dev/hf_data`, and the failure mode
+if you forget is silent.** `HF_HOME` was **unset** in this job's environment.
+With it unset, Llama's two real-checkpoint host tests do not fail — they
+**skip**, because `snapshot_download` falls through to the network and gets a
+401 on a gated repo:
+
+```text
+SKIPPED  checkpoint 'meta-llama/Llama-3.3-70B-Instruct' is unavailable:
+         You are trying to access a gated repo. 401 Client Error.
+```
+
+Verified both ways: unset → skipped; `HF_HOME=/proj_sw/user_dev/hf_data` → the
+same test **passes**. A green run that quietly skipped its only real-checkpoint
+coverage is exactly the kind of evidence this project has learned to distrust.
 
 ## Where both models stand
 
