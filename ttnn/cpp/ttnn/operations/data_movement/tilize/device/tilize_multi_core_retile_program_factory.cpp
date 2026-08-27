@@ -140,10 +140,9 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
         }}},
     });
 
-    // c_1 and c_2 are two views over one shared intermediate L1 region (avoids an L1 copy between
-    // untilize and tilize). They must be separate CBs because face geometry is fixed per-CB at
-    // program-creation time: c_1 carries the input tile shape for pack_untilize to write into, c_2
-    // the output tile shape so llk_unpack_tilize reads the correct number of RM rows.
+    // mid_cb and mid_view_cb are two views of one intermediate region — same bytes, input vs output
+    // tile geometry — because tile shape is fixed per-CB. It holds untilized rows, so a block-float
+    // input is carried here as bfloat16 and converted on the final pack.
     desc.cbs.push_back(CBDescriptor{
         .total_size = mid_total_size,
         .core_ranges = all_cores,
