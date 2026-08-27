@@ -1,6 +1,6 @@
 {
- "last_run": "2026-08-27T02:03:00Z",
- "run_id": "33031830578",
+ "last_run": "2026-08-27T09:26:00Z",
+ "run_id": "33058217894",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -358,6 +358,14 @@
    "last_ping": "2026-08-27",
    "type": "author_checkin",
    "note": "required CI (PR Gate Status, Clang Tidy) failing since 2026-07-29"
+  },
+  "45435": {
+   "date": "2026-08-27",
+   "note": "author nudge (dirty mergeable_state since May, discussion settled per dgomezTT, no revert needed)"
+  },
+  "36251": {
+   "date": "2026-08-27",
+   "note": "author nudge (quiet since Feb reviews, mergeable_state unknown)"
   }
  },
  "backlog_cursor": {
@@ -375,7 +383,10 @@
   "task1_task2_2026_08_26": "reviewed newest issues 54371(tt-train layernorm fw/bw CB format, already labeled bug+assigned, complex root-cause investigation issue, no action needed)/54365/54362/54361/54360/54359/54358/54357/54356/54355/54354(Metal2.0 architectural port issues, no confirmed defect)/54350/54343(tt-train Galaxy/bh_sc1 instability, HW/infra flakiness, no action)/54346/54344/54342(CI auto-triage, auto-generated)/54334(feature complete, closed by PR#54335)/54332/54330/54329 - no new comments or labels needed this run",
   "task1_task2": "reviewed newest issues through 54444 (created 2026-08-26); next run continue from issues older than 54430/prior page",
   "task6": "stale PR scan reached 51544/51567/51558 this run (all nudged); next run resume further down oldest-updated list (51424 skipped - draft)",
-  "task1_task2_issues_20260827": "reviewed newest issues 54508 down to 54446; only 54495 was unlabeled+confirmed-bug-worthy; 54485 (log spam) and 54450 (O3 opt-level, has fix PR #54454) left unlabeled/no action; rest already triaged"
+  "task1_task2_issues_20260827": "reviewed newest issues 54508 down to 54446; only 54495 was unlabeled+confirmed-bug-worthy; 54485 (log spam) and 54450 (O3 opt-level, has fix PR #54454) left unlabeled/no action; rest already triaged",
+  "task1_task2_2026_08_27": "reviewed newest issues 54549 down to 54508; labeled 54524(bug, untilize hang)/54513(bug, reciprocal flush, has fix PR 54514); rest already assigned/covered/CI-auto-triage",
+  "task5_maintain_20260827": "re-verified 53690 (CI green, blocked pending manual runs) and 54246 (mergeable_state now dirty vs prior green, duplicate-fix note with 54375 updated in monthly summary)",
+  "task6_stale_prs_20260827": "scanned oldest-updated-first PR list; nudged 45435 (author, dirty/stale since May) and 36251 (author, unknown mergeable_state, quiet since Feb)"
  },
  "notes": "only layernorm workaround, already assigned to fplavecTT with linked merged PR #53419 for one of two workarounds, no action needed). Task8 updated #51865 monthly summary with new run history + refreshed suggested actions (added #53690 review-ready item, added #30797/#50150 nudge items).\n\n[2026-08-20 run_id=32339578615] Re-verified all 5 previously tracked PRs (#52106,#51868,#53113,#52673,#53478,#53690) - no changes, no action needed (all reviewer/author-blocked or already actioned). Reviewed fresh issues #53736 (draft PR #53737 already in progress, no action), #53739/#53715 (already assigned, feature work), #53693 (deep HW/LLK bug, already assigned, too risky). Found and fixed #53699 (model_preprocessing.git_hash() hard-crash when .git unavailable) - small surgical fix mirroring graph_report.py's existing graceful-degradation pattern; opened PR repo-assist/fix-issue-53699-git-hash-fallback (Closes #53699). Did not find new stale-PR-nudge candidates or new-contributor welcome targets this run (time-limited scan). | 2026-08-20 run (32368798856): Task5 - re-verified 6 tracked PRs unchanged; found PR #53749 (fixes #53699, opened last run) with all CI checks passed, added to suggested actions. Task1/2 - reviewed newest issue batch (~12 issues from 2026-08-20 10:00-12:30 UTC): #53786/#53765/#53760/#53782/#53770 all already have reporter-opened fix PRs, no duplicates opened; labeled #53781 bug (reproducible ttnn.sampling device deadlock, Wt=1 all-equal tie) and commented with an isolation-based hypothesis (CB credit gated on strict inequality in sort/select, skipped when all-equal) plus a suggestion for a deterministic repro test -- did not open a fix PR since I lack hardware to trace/verify the exact credit desync; labeled #53763 performance monitoring (LLK perf-gate cost/noise baseline tracking) and #53764 feature-request (multi-chip CI sweep follow-up); reviewed #53769 (argmax multicore gaps, already assigned, 5 distinct sub-issues too broad for one PR) and #53778 (graph tracer timeout, reporter has own workaround + comment) -- no action needed on either. Task8 updated #51865 monthly summary with new run history + refreshed suggested actions (added #53749 review item, added #53781 comment-check item).\n\n2026-08-20 run 32403143848: Re-verified 7 tracked PRs unchanged. Labeled 53780/53815/53823. Confirmed 53823->#53654 and 53787->#53810 already covered, no dup PR. Nudged stale PR #50149. Reviewed #46960 and #50174 (both dirty/active discussion, no nudge needed). Updated monthly summary #51865. || 2026-08-21 (run 32432680615): Corrected stale #53478 CI status (all checks passed, not action_required). Labeled #53866/#53815 bug. Recorded #53846/#53803 as covered by PR #53858 (no duplicate). Nudged 3 stale PRs (#50411, #50443, #49768) for rebase. Updated Monthly Activity Summary issue #51865. Reviewed several already-triaged fresh issues with no action needed (#53802,#53844,#53840,#53796,#53849,#53830). Task3/4/7 skipped this run per round-robin scheduling.\n2026-08-21 (run 32454384814): opened PR for #53874 (addcdiv_bw mem config), replied to #53690 maintainer objection, updated monthly summary.\n2026-08-21 (run 32513261053): Task1 labeled 9 fresh community-reported eltwise bugs (all already have reporter-opened fix PRs from kinginu, no duplicates). Task5: confirmed PR #53690 maintainer objection resolved. Task6: codeowners-pinged #49800 (new candidate, reviewer-blocked). Task8: rewrote monthly summary #51865 body to strictly match canonical format (previous body had drifted with multiple appended sections).\n[2026-08-23 run=32607872885] Labeled bug on 5 fresh community bounty issues (#54055 addcdiv, #54054 exp2, #54053 erfc, #54049 erfinv, #54046 xielu) - all confirmed defects with contributor fix PRs already open (mostly by 1snob) covering them; no duplicate PRs needed. Checked #54017 (fabric router sync timeout, has detailed contributor root-cause comment re gp-relaxation bug, no PR yet - too deep firmware/HW issue for surgical unverified fix), #54044 (BH gp-relaxation eth wedge, already labeled bug prior run, no PR yet, same root cause family as 54017), #54032 (trace-replay hang, already labeled), #53999 (KV-cache OOB, already labeled) - none have PRs; deep HW/firmware issues, left for maintainers. #54048 remainder bug already has open fix PR #54081. Re-verified tracked PRs #53478/#53113/#51868/#52106/#53690/#53749 unchanged.\n\n[2026-08-23 18:30 run 32657926945] Reviewed PR #51155 review comments (empty via get_reviews/get_comments for mateusznowakTT's inline feedback) \u2014 nudge comment references the automated-reviewer's MAD-instruction discrepancy instead since the human review body wasn't retrievable. #51004 has an unresolved technical objection from bbradelTT in addition to CodeOwners pending; noted this nuance in Suggested Actions rather than treating as a routine ping-only case.\n[2026-08-26 run 32938154957] Verified 54246 vs 54375 duplicate (#54223) still both open - flagged in summary. Nudged stale PRs 36267 (author, CHANGES_REQUESTED unresolved), 39293 (codeowners ping), 36184 (codeowners ping). Re-verified CI status of 52106,51868,53113,54246 unchanged from memory; 53690 carried forward unchanged. Scanned newest issues, no new fixable/labelable targets beyond tracked; #54371 confirmed still assigned/deep-investigation, no action.",
  "labeled_issues": {
@@ -438,7 +449,9 @@
     "bug"
    ],
    "date": "2026-08-26"
-  }
+  },
+  "54524": "bug",
+  "54513": "bug"
  },
  "issues_commented": {
   "53922": {
