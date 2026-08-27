@@ -85,7 +85,7 @@ UNSTABLE_MAX_WORDS = 1
 #
 # For judging a numerical change (a fused matmul, a different norm, a new dtype), prefer the
 # DETERMINISTIC gates instead -- teacher-forced PCC and worst-sample against the fp32 reference in
-# tests/tt_gates.py. Those feed both builds identical inputs, so no trajectory is involved. That
+# tests/gates.py. Those feed both builds identical inputs, so no trajectory is involved. That
 # is what actually caught the Block 1 sharded-norm regression (worst sample 1.06% -> 1.95%), while
 # this metric said 2.06% for a change that was fine and 2.06% again for one that was not.
 LONGFORM_MIN_WORDS = 20

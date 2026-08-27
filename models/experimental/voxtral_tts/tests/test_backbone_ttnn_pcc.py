@@ -38,23 +38,28 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (  # no
     pcc,
     rope_cis,
 )
+from models.experimental.voxtral_tts.tests.gates import compare_hidden  # noqa: E402
 from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E402
     backbone_state,
     case_ids,
     fixture_embeds,
     real_frames,
-    worst_sample_pct,
 )
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
 
 PCC_PREFILL = 0.999
 PCC_DECODE = 0.999
-# The per-position MINIMUM is printed but NOT asserted. Measured on the shipped build it swings
+# The per-position MINIMUM is printed but NOT asserted, because it is not a stable level: it swings
 # 0.938473 (case 2, position 217) to 0.998110 (case 0) while the pooled and last-position figures
-# stay above 0.9997 -- a single position's PCC is a correlation over 3072 values and a low-magnitude
-# position has little structure to correlate. It is a useful diagnostic and a hopeless gate, which
-# is why the harness this replaced only ever printed it.
+# stay above 0.9997.
+#
+# It is NOT a scale artefact -- measured, position 217 has ordinary variance (ref std 1.78 vs 1.93
+# at the strongest positions) and a genuinely larger error: worst-sample 7.28% of scale against
+# ~0.4% typical, a ~13x bigger absolute deviation. So intermediate prefill positions really are
+# less accurate than the pooled number suggests. It does not reach the audio -- only the last
+# position feeds Block 2, and that one reads 0.99988 / 0.68% -- but see VOXTRAL_TTS_BACKBONE.md's
+# open questions, because prefill also writes the KV cache that every decode step then attends to.
 #
 # What IS gated is the worst-sample bound on the last position: "that worst-sample bound is the gate
 # that matters" (STATUS trap 9, PCC hides outliers). Loose -- case 0 measures 0.70%.
@@ -93,11 +98,12 @@ def test_one_layer_wiring_pcc(dev):
     x = torch.randn(1, S, DIM) * 0.02
     exp = bref._layer(x, ws, "layers.0.", rope_cis(S, HEAD_DIM, ROPE_THETA), causal_bias(S, torch.float32))
     got = one.prefill(x, apply_final_norm=False)
-    got_pcc = pcc(got, exp)
+    got_pcc = compare_hidden(got, exp)["pcc"]
     print(f"\n  [1 layer prefill] PCC {got_pcc:.8f}  maxabs {(got - exp).abs().max():.3e}")
     assert got_pcc > 0.999, f"one-layer wiring PCC {got_pcc:.6f} -- suspect the RoPE convention"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("ci", case_ids(), ids=lambda c: f"case{c}")
 def test_prefill_pcc(gen, w, ci):
     """Full 26-layer prefill on a REAL prompt vs `reference_forward`.
@@ -109,18 +115,19 @@ def test_prefill_pcc(gen, w, ci):
     P = embeds.shape[1]
     exp = bref.reference_forward(embeds, w, n_layers=N_LAYERS)
     got = gen.prefill(embeds)
-    all_pcc = pcc(got, exp)
-    last_pcc = pcc(got[:, -1:], exp[:, -1:])
+    all_pcc = compare_hidden(got, exp)["pcc"]
+    m_last = compare_hidden(got[:, -1:], exp[:, -1:])
+    last_pcc = m_last["pcc"]
     per = [pcc(got[:, i], exp[:, i]) for i in range(P)]
     wi = min(range(P), key=lambda i: per[i])
     print(
         f"\n  case {ci} ({case['voice']}, P={P}): PCC all {all_pcc:.6f}  last {last_pcc:.6f}  "
-        f"worst-sample(last) {worst_sample_pct(got[:, -1:], exp[:, -1:]):.2f}%  "
+        f"worst-sample(last) {m_last['worst_pct']:.2f}%  "
         f"min per-pos {per[wi]:.6f} (@{wi})"
     )
     assert last_pcc > PCC_PREFILL, f"case {ci} prefill last-position PCC {last_pcc:.6f}"
     assert all_pcc > PCC_PREFILL, f"case {ci} prefill all-positions PCC {all_pcc:.6f}"
-    ws = worst_sample_pct(got[:, -1:], exp[:, -1:])
+    ws = m_last["worst_pct"]
     assert ws < MAX_WORST_SAMPLE_PCT, f"case {ci} last-position worst sample {ws:.2f}% of reference scale"
 
 
@@ -143,8 +150,9 @@ def test_decode_pcc_teacher_forced(gen, w, ci):
         emb = bref.embed_frame(w, frames[t])
         h_ref = inc.step(emb)
         h_dev = gen.step(emb)
-        pcs.append(pcc(h_dev, h_ref))
-        wss.append(worst_sample_pct(h_dev, h_ref))
+        _m = compare_hidden(h_dev, h_ref)
+        pcs.append(_m["pcc"])
+        wss.append(_m["worst_pct"])
     print(
         f"\n  case {ci} ({case['voice']}, P={P}), {len(pcs)} frames: min PCC {min(pcs):.6f}  "
         f"mean worst-sample {sum(wss)/len(wss):.2f}%  max {max(wss):.2f}%"

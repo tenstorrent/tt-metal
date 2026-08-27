@@ -30,6 +30,7 @@ ttnn = pytest.importorskip("ttnn")
 
 from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as bref  # noqa: E402
 from models.experimental.voxtral_tts.reference import voxtral_flow_ref as fref  # noqa: E402
+from models.experimental.voxtral_tts.tests.gates import compare_codes_frame  # noqa: E402
 from models.experimental.voxtral_tts.tests.reference_helpers import fixture_embeds  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (  # noqa: E402
     CFG_ALPHA,
@@ -70,17 +71,17 @@ def _compare_codes(pipe, embeds, n_frames=N_FRAMES, cfg_alpha=CFG_ALPHA, seed=0)
         torch.manual_seed(1000 + i)  # same noise draw both sides, so only the model differs
         c_ref = fref.reference_frame(h_ref[:, 0], wf, cfg_alpha=cfg_alpha)
         torch.manual_seed(1000 + i)
-        c_dev = pipe.flow(h_dev, cfg_alpha=cfg_alpha)
-        if int(c_ref[0, 0]) != int(c_dev[0, 0]):
-            sem_bad += 1
-        d = (c_ref[0, 1:].long() - c_dev[0, 1:].long()).abs()
-        ac_bad += int((d != 0).sum())
-        total_ac += d.numel()
-        for v in d[d != 0].tolist():
+        c_dev = pipe.flow(h_dev[:, 0], cfg_alpha=cfg_alpha)
+        m = compare_codes_frame(c_ref, c_dev)
+        sem_bad += 0 if m["sem_ok"] else 1
+        ac_bad += m["n_diff"]
+        total_ac += 36
+        for v in m["deltas"]:
             deltas[v] += 1
+        # teacher forcing: BOTH advance on the REFERENCE's codes
         emb = bref.embed_frame(pipe.wb, c_ref[0])
         h_ref = ref_dec.step(emb)
-        h_dev = pipe.backbone.step(emb)
+        h_dev = pipe.backbone.step(emb).reshape(1, 1, -1)
     return sem_bad, ac_bad, total_ac, deltas
 
 
