@@ -15,7 +15,9 @@
 # same version string, as the `ttnn` wheel.
 
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+# >=77 for PEP 639 (SPDX license expression + license-files); the expression below is
+# rejected by older setuptools rather than silently mis-declared.
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -23,13 +25,24 @@ name = "tt-metal-models"
 description = "Tenstorrent tt-metal model implementations (the `models.*` Python tree)"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
+# Tenstorrent's own code is Apache-2.0, but the tree vendors third-party reference
+# implementations under their upstream terms, and the wheel redistributes them:
+#   MIT            -- DeepSeek-V3 reference (models/demos/deepseek_v3/reference/deepseek),
+#                     Z Lab dflash (models/demos/deepseek_v3_d_p/reference/dflash_prefill),
+#                     Motif (models/tt_dit/reference/motif), nanoGPT
+#                     (models/experimental/nanogpt/reference)
+#   LGPL-3.0-only  -- EfficientDet reference (models/experimental/efficientdetd0/reference)
+#   LicenseRef-Kimi-K3 -- MIT plus Model-as-a-Service and attribution conditions
+#                     (models/demos/deepseek_v3_d_p/reference/kimi_k3/attn_res)
+# Each subtree carries its governing text (license-files below); MANIFEST.in also ships
+# them inside the package next to the code they cover.
+license = "Apache-2.0 AND MIT AND LGPL-3.0-only AND LicenseRef-Kimi-K3"
+license-files = ["LICENSE", "models/**/LICENSE*"]
 authors = [{ name = "Tenstorrent" }, { email = "info@tenstorrent.com" }]
 keywords = ["tenstorrent", "tt-metal", "ttnn", "models", "machine learning", "vllm"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: Apache Software License",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",

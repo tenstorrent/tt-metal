@@ -71,6 +71,27 @@ release process that has made the decision to ship it.
 Until that decision is made, those two architectures are unsupported from the packaged
 artifact and should be documented as such.
 
+**Vendored third-party reference code — declared, not hidden.** Beyond the llama
+submodule, the tree vendors reference implementations under their upstream terms, and the
+wheel redistributes them. The wheel's `License-Expression` therefore declares
+`Apache-2.0 AND MIT AND LGPL-3.0-only AND LicenseRef-Kimi-K3`, and every governing text is
+enumerated as a `License-File` and embedded in the wheel's `dist-info/licenses/`:
+
+- **MIT** — the DeepSeek-V3 reference (`models/demos/deepseek_v3/reference/deepseek`),
+  Z Lab's dflash (`models/demos/deepseek_v3_d_p/reference/dflash_prefill`), Motif
+  (`models/tt_dit/reference/motif`), and nanoGPT
+  (`models/experimental/nanogpt/reference`).
+- **LGPL-3.0-only** — the EfficientDet reference
+  (`models/experimental/efficientdetd0/reference`), imported by that model's shipped
+  code, so it cannot be pruned without dropping the model. Redistribution of the
+  unmodified source with its license text is compliant, but a copyleft component in the
+  wheel is a policy decision reviewers should make consciously.
+- **LicenseRef-Kimi-K3** — `models/demos/deepseek_v3_d_p/reference/kimi_k3/attn_res`,
+  MIT plus a Model-as-a-Service restriction and an attribution condition; the governing
+  text is `LICENSE-Kimi-K3` in that folder.
+
+MANIFEST.in also ships each text inside the package, next to the code it covers.
+
 **deepseek_v3_b1 kernels.** The `.cpp` kernel sources are shipped, but the Python code
 refers to them by *repository-relative string literals*
 (`"models/demos/deepseek_v3_b1/micro_ops/persistent_loop/kernels/..."`), which the
