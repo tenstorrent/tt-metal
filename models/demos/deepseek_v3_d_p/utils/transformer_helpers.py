@@ -228,7 +228,18 @@ def reference_rope(hf_model, hidden_states, position_ids):
     rotary_cls = type(rotary)
     if "config" in inspect.signature(rotary_cls.__init__).parameters:
         rotary_f32 = rotary_cls(config=hf_model.config).float()
-    else:  # a rotary that predates `config=`; the bf16 buffer is then unavoidable
+    else:
+        # A rotary predating `config=` cannot be rebuilt, so the bf16 buffer is unavoidable and the
+        # table this returns carries the position-dependent error this function exists to remove.
+        # Not fatal: the four DeepseekV3/Kimi rotaries in reference/ are exactly these classes, and
+        # their vendored layers compute rope internally, so they never reach here -- raising would
+        # be a latent break for them if that ever changed. Say so loudly instead of silently
+        # returning a table that looks fixed.
+        logger.warning(
+            f"{rotary_cls.__name__} does not accept `config=`, so the reference rope falls back to "
+            f"the model's bf16 inv_freq buffer. Long-context PCC from this reference stays subject "
+            f"to the ~4.4e-4 frequency error; give this class a config-based constructor to fix it."
+        )
         rotary_f32 = deepcopy(rotary).float()
     # `forward` reads this tensor only for device and dtype (transformers 5.12), so pass a view --
     # a full fp32 copy of the hidden states is ~251 MB at seq 15360.
