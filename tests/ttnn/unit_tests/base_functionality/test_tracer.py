@@ -112,6 +112,25 @@ def test_graph_report_does_not_enable_torch_tracer_during_dtype_conversion():
         assert not ttnn.torch_tracer.is_tracing_enabled()
 
 
+@pytest.mark.requires_fast_runtime_mode_off
+def test_dtype_conversion_of_traced_torch_tensor_reports_ndarray_import_failure(expect_error):
+    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_torch_tracer", True):
+        tensor = torch.ones((1, 1), dtype=torch.float32)
+        assert isinstance(tensor, ttnn.torch_tracer.TracedTorchTensor)
+
+        with expect_error(RuntimeError, "parse_py_tensor: ndarray_import failed") as exc_info:
+            ttnn.from_torch(tensor, dtype=ttnn.bfloat16)
+
+    message = str(exc_info.value)
+    assert "python type: ttnn.torch_tracer.TracedTorchTensor" in message
+    assert "source: ndim: 2, dtype.code:" in message
+    assert "requested: dtype.code:" in message
+    assert "order: 'C', device_type:" in message
+    assert "(ttnn DataType: DataType::BFLOAT16)" in message
+    assert "tensor.as_subclass(torch.Tensor)" in message
+    assert "ttnn.CONFIG.enable_torch_tracer" in message
+
+
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("show_modules", [True, False])
