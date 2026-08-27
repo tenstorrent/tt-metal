@@ -5,8 +5,9 @@
 #pragma once
 
 #include <optional>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "tilize_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -26,11 +27,10 @@ namespace ttnn::prim {
 //   - L1 INTERLEAVED output: zero-copy input read, TensorAccessor scatter write. Only valid for
 //     HEIGHT_SHARDED with ROW_MAJOR orientation (contiguous output tile ranges).
 struct TilizeMultiCoreShardedRetileProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const TilizeParams& operation_attributes, const TilizeInputs& tensor_args, Tensor& tensor_return_value);
 
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
         const TilizeParams& operation_attributes,
         const TilizeInputs& tensor_args,
         Tensor& tensor_return_value,
