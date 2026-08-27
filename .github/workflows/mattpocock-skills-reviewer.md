@@ -109,13 +109,16 @@ max-daily-ai-credits: 10000
 if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
 "on":
   pull_request:
-    # Base branch, not head. Without this the reviewer fired on every base --
-    # including main -> stable merge-forward PRs, whose thousands of files the
-    # diff API refuses outright (HTTP 406), failing the run before the agent
-    # started. Stacked PRs onto feature branches are reviewed when their parent
-    # lands on main.
-    branches:
-    - main
+    # Matches the base branch, not the head. main -> stable merge-forward PRs
+    # carry thousands of files, which the diff API refuses outright (HTTP 406);
+    # before this filter that failed the run before the agent started.
+    #
+    # An exclusion rather than `branches: [main]` on purpose. A stacked PR opens
+    # against a feature branch, so an allowlist would skip it at open, and the
+    # retarget when its parent merges arrives as `pull_request.edited` -- not a
+    # type this workflow subscribes to. It would never be reviewed at all.
+    branches-ignore:
+    - stable
     paths-ignore:
     - "*.md"
     - docs/**

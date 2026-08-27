@@ -194,9 +194,9 @@ pre-agent-steps:
 
       # Whether code-owner review is enforced at all on this base. The split
       # check counts CODEOWNERS approvals, so where no rule requires them the
-      # whole proposal is moot. `on: pull_request` is now scoped to base main,
-      # which does carry a pull_request ruleset, so this normally resolves true
-      # -- keep the guard rather than assume the ruleset stays put.
+      # whole proposal is moot -- and `on: pull_request` here has path filters
+      # and excludes only stable, so bases without a pull_request rule do
+      # still reach us.
       OWNER_REVIEW=$(printf '%s' "$RULES" | jq '[.[]? | select(.type=="pull_request")
               | .parameters.require_code_owner_review] | any' 2>/dev/null || echo false)
       case "$OWNER_REVIEW" in true|false) ;; *) OWNER_REVIEW=false ;; esac
@@ -233,13 +233,16 @@ max-daily-ai-credits: 10000
 if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
 "on":
   pull_request:
-    # Base branch, not head. Without this the reviewer fired on every base --
-    # including main -> stable merge-forward PRs, whose thousands of files the
-    # diff API refuses outright (HTTP 406), failing the run before the agent
-    # started. Stacked PRs onto feature branches are reviewed when their parent
-    # lands on main.
-    branches:
-    - main
+    # Matches the base branch, not the head. main -> stable merge-forward PRs
+    # carry thousands of files, which the diff API refuses outright (HTTP 406);
+    # before this filter that failed the run before the agent started.
+    #
+    # An exclusion rather than `branches: [main]` on purpose. A stacked PR opens
+    # against a feature branch, so an allowlist would skip it at open, and the
+    # retarget when its parent merges arrives as `pull_request.edited` -- not a
+    # type this workflow subscribes to. It would never be reviewed at all.
+    branches-ignore:
+    - stable
     paths:
     - ttnn/**
     - tt_metal/**
