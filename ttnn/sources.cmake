@@ -126,6 +126,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/mesh_socket.cpp
     cpp/ttnn-nanobind/profiler.cpp
     cpp/ttnn-nanobind/program_descriptors.cpp
+    cpp/ttnn-nanobind/program_spec.cpp
     cpp/ttnn-nanobind/pytensor.cpp
     cpp/ttnn-nanobind/reports.cpp
     cpp/ttnn-nanobind/tensor.cpp

@@ -242,6 +242,12 @@ from ttnn._ttnn.fabric import (
 # Import cluster functions and types
 from ttnn._ttnn import cluster
 
+# Metal 2.0 host API (experimental). Exposed as a SUBMODULE rather than flattened into the
+# ttnn namespace: the surface is a dozen spec types that only mean something together, and
+# keeping them behind ttnn.program_spec.* says which API you are building against. The
+# legacy path stays ttnn.ProgramDescriptor + ttnn.generic_op.
+from ttnn._ttnn import program_spec
+
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
