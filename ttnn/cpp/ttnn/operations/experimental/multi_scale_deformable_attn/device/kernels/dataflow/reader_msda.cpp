@@ -101,6 +101,8 @@ constexpr uint32_t TILE_NBYTES = 2048;  // bf16 32x32 tile
 constexpr uint32_t STICK_WORDS = D / 2;
 constexpr uint32_t WORDS_PER_TILE_ROW = 2 * HALF_WORDS;
 constexpr uint32_t N_D_TILES = (STICK_WORDS + WORDS_PER_TILE_ROW - 1) / WORDS_PER_TILE_ROW;
+constexpr uint32_t STICK_NBYTES = D * 2;                     // logical, before alignment padding
+constexpr uint32_t TILE_ROW_NBYTES = 2 * HALF_STICK_NBYTES;  // 32 bf16 = one tile row
 static_assert(D % 16 == 0 && D > 0, "D must be a positive multiple of 16");
 
 void kernel_main() {
@@ -220,7 +222,15 @@ void kernel_main() {
                 input_tile_cb.reserve_back(N_D_TILES);
                 const uint32_t tile_l1 = input_tile_cb.get_write_ptr();
 
-                // Issue NoC reads for all valid rows.
+                // Read each valid row's stick straight into its face-row halves.
+                //
+                // A tile row is two 32-byte halves at non-contiguous L1 offsets, so a 64-byte
+                // stick cannot land in one transfer — but both halves are 32-byte aligned on
+                // either side, so the NoC can place them directly. Staging into a scratch stick
+                // and copying word by word costs more than the gather it serves.
+                //
+                // Only the logical D*2 bytes are requested, never value_stick_nbytes: the padded
+                // tail would spill past the row into the next one.
                 for (uint32_t r = 0; r < v_rows; ++r) {
                     if (!(yv_arr[r] && xv_arr[r])) {
                         continue;
@@ -228,38 +238,27 @@ void kernel_main() {
                     const uint32_t cy = static_cast<uint32_t>(y0_arr[r] + dy_off);
                     const uint32_t cx = static_cast<uint32_t>(x0_arr[r] + dx_off);
                     const uint32_t stick_idx = n_off + cy * w_in_i + cx;
-                    CoreLocalMem<uint32_t> dst(value_scratch_l1 + r * value_stick_nbytes);
-                    noc.async_read(value_acc, dst, value_stick_nbytes, {.page_id = stick_idx}, {.offset_bytes = 0});
+                    const auto off = msda_tile_layout::tile_row_offsets(r);
+                    for (uint32_t k = 0; k < N_D_TILES; ++k) {
+                        const uint32_t src_off = k * TILE_ROW_NBYTES;
+                        const uint32_t bytes_k =
+                            (STICK_NBYTES - src_off < TILE_ROW_NBYTES) ? (STICK_NBYTES - src_off) : TILE_ROW_NBYTES;
+                        const uint32_t lo_bytes = bytes_k < HALF_STICK_NBYTES ? bytes_k : HALF_STICK_NBYTES;
+                        const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
+                        CoreLocalMem<uint32_t> dl(ktile_l1 + off.lo);
+                        noc.async_read(value_acc, dl, lo_bytes, {.page_id = stick_idx, .offset_bytes = src_off}, {});
+                        if (bytes_k > lo_bytes) {
+                            CoreLocalMem<uint32_t> dh(ktile_l1 + off.hi);
+                            noc.async_read(
+                                value_acc,
+                                dh,
+                                bytes_k - lo_bytes,
+                                {.page_id = stick_idx, .offset_bytes = src_off + HALF_STICK_NBYTES},
+                                {});
+                        }
+                    }
                 }
                 noc.async_read_barrier();
-
-                // Scatter sticks into face rows. Stick words [k*32row .. ] land in
-                // d-tile k at the same row offsets. Invalid corners have stale
-                // staging data but their scalar entry is zero — the multiply
-                // contributes 0.
-                for (uint32_t r = 0; r < v_rows; ++r) {
-                    if (!(yv_arr[r] && xv_arr[r])) {
-                        continue;
-                    }
-                    const auto off = msda_tile_layout::tile_row_offsets(r);
-                    CoreLocalMem<volatile uint32_t> s(value_scratch_l1 + r * value_stick_nbytes);
-                    for (uint32_t k = 0; k < N_D_TILES; ++k) {
-                        const uint32_t base = k * WORDS_PER_TILE_ROW;
-                        const uint32_t words_k =
-                            (STICK_WORDS - base < WORDS_PER_TILE_ROW) ? (STICK_WORDS - base) : WORDS_PER_TILE_ROW;
-                        const uint32_t lo_words = words_k < HALF_WORDS ? words_k : HALF_WORDS;
-                        const uint32_t hi_words = words_k - lo_words;
-                        const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
-                        CoreLocalMem<volatile uint32_t> dl(ktile_l1 + off.lo);
-                        CoreLocalMem<volatile uint32_t> dh(ktile_l1 + off.hi);
-                        for (uint32_t i = 0; i < lo_words; ++i) {
-                            dl[i] = s[base + i];
-                        }
-                        for (uint32_t i = 0; i < hi_words; ++i) {
-                            dh[i] = s[base + HALF_WORDS + i];
-                        }
-                    }
-                }
 
                 // Tail rows (r ≥ v_rows) and OOB-corner rows are left untouched:
                 // their scalar entry is zero (see scalar tile below), so any stale
