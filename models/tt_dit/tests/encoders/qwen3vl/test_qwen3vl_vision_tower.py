@@ -28,7 +28,6 @@ from .common import (
     SPATIAL_MERGE_SIZE,
     VISION_PARAMS,
     resolve_parallel,
-    skip_if_sp_misaligned,
     sp_shard,
     vision_config,
 )
@@ -37,7 +36,6 @@ DEPTH = 27  # released tower: 27 blocks, deepstack taps at 8/16/24
 DEEPSTACK_INDEXES = [8, 16, 24]
 
 # Grids measured through the checkpoint's own image processor; orientation pairs catch h-vs-w swaps.
-# The 4032-patch canvases are 31.5 x 128 rows, so SP=4 skips there (model geometry, not a port bug).
 _CANVAS = {
     "canvas_1to1": [[1, 48, 48]],
     "canvas_4to3": [[1, 48, 64]],
@@ -116,7 +114,6 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     grid = torch.tensor(GRIDS[name], dtype=torch.long)
     total = sum(t * h * w for t, h, w in GRIDS[name])
-    skip_if_sp_misaligned(total, submesh, sp_axis)
     patch_dim = 3 * 2 * 16 * 16
 
     torch.manual_seed(0)
@@ -150,17 +147,17 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
         # --- prep: host build + host->device upload ---
         cos, sin = tower.prepare_rope(grid)
         pos = tower.prepare_pos_embeds(grid)
-        tt_patches = _shard(patches, submesh, sp_axis)
-        tt_pos = _shard(pos, submesh, sp_axis)
-        tt_cos, tt_sin = _shard(cos, submesh, sp_axis), _shard(sin, submesh, sp_axis)
+        tt_patches = sp_shard(patches, submesh, sp_axis)
+        tt_pos = sp_shard(pos, submesh, sp_axis)
+        tt_cos, tt_sin = sp_shard(cos, submesh, sp_axis, value=1.0), sp_shard(sin, submesh, sp_axis)
         ttnn.synchronize_device(submesh)  # uploads landed on device
         t_prep_done = time.time()
 
         # --- op: the tower forward ---
         tokens, deepstack = tower.forward(
-            sp_shard(patches, submesh, sp_axis),
-            pos_embeds=sp_shard(pos, submesh, sp_axis),
-            rope=(sp_shard(cos, submesh, sp_axis), sp_shard(sin, submesh, sp_axis)),
+            tt_patches,
+            pos_embeds=tt_pos,
+            rope=(tt_cos, tt_sin),
             cu_seqlens=cu_seqlens,
         )
         ttnn.synchronize_device(submesh)  # forward complete

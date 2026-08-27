@@ -265,6 +265,22 @@ def vision_cu_seqlens(grid_thw: torch.Tensor) -> tuple[int, ...]:
     return tuple(bounds)
 
 
+def vision_sp_padded_len(seq_len: int, sp_factor: int) -> int:
+    """Round `seq_len` up to a multiple of `sp_factor * TILE` so each SP shard is tile-aligned."""
+    if sp_factor <= 1:
+        return seq_len
+    align = sp_factor * _TILE
+    return -(-seq_len // align) * align
+
+
+def pad_vision_sp_rows(x: torch.Tensor, sp_factor: int, *, value: float = 0.0) -> torch.Tensor:
+    """Zero-pad (or `value`-pad) rows of a `(seq, ...)` tensor to `vision_sp_padded_len`."""
+    npad = vision_sp_padded_len(x.shape[0], sp_factor) - x.shape[0]
+    if npad == 0:
+        return x
+    return torch.nn.functional.pad(x, (0, 0) * (x.ndim - 1) + (0, npad), value=value)
+
+
 def vision_rope_tensors(
     grid_thw: torch.Tensor,
     *,
@@ -639,11 +655,8 @@ class Qwen3VlVisionAttention(Module):
 
         single_block = cu_seqlens is None or len(cu_seqlens) <= 2
         if self._p.sp:
-            # `seq_len` here is the LOCAL shard; the logical sequence spans the whole SP axis.
-            # Ring SDPA rejects a non-tile-aligned shard deep in the device op ("Per-device Q seq
-            # length must be divisible by TILE_HEIGHT"), and the windowed path offsets whole tiles;
-            # check it here so the constraint is legible. This is stricter than, and therefore
-            # subsumes, the merger's merge-group alignment.
+            padded_n = seq_len * self._p.sp_factor
+            logical_n = cu_seqlens[-1] if cu_seqlens is not None else padded_n
             if seq_len % _TILE != 0:
                 msg = (
                     f"sequence-parallel shard has {seq_len} rows, which is not a multiple of {_TILE}; "
@@ -651,9 +664,12 @@ class Qwen3VlVisionAttention(Module):
                 )
                 raise ValueError(msg)
             if single_block:
-                attn = self._ring_attention(q, k, v, seq_len)
+                attn = self._ring_attention(q, k, v, seq_len, logical_n)
             else:
-                attn = self._windowed_sp_attention(q, k, v, seq_len, cu_seqlens)
+                cu = tuple(cu_seqlens)
+                if cu[-1] != padded_n:
+                    cu = (*cu, padded_n)
+                attn = self._windowed_sp_attention(q, k, v, seq_len, cu)
         elif single_block:
             attn = ttnn.transformer.scaled_dot_product_attention(
                 q,
@@ -700,13 +716,14 @@ class Qwen3VlVisionAttention(Module):
         # shard internally when needed, so every grid takes this path.
         return _row_parallel_seq_forward(self.proj, attn, self._p)
 
-    def _ring_attention(self, q, k, v, local_seq_len: int) -> ttnn.Tensor:
+    def _ring_attention(self, q, k, v, local_seq_len: int, logical_n: int) -> ttnn.Tensor:
         """Full attention over a sequence sharded on the SP axis.
 
         `ring_joint_scaled_dot_product_attention` is the same primitive the Wan denoiser drives
         (`wan2_2/attention_wan.py`); it gathers k/v around the ring while streaming the softmax, so no
         device ever materializes the whole `s x s` score matrix. The joint inputs are the API's
         cross-attention slots and are unused here -- zero-width tensors keep it pure self-attention.
+        `logical_n` is the unpadded patch count; the kernel skips K past it.
         """
         sp_axis, ccl = self._p.sp_axis, self._p.ccl_manager
         empty_joint = bf16_tensor(
@@ -722,7 +739,7 @@ class Qwen3VlVisionAttention(Module):
             persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(k.shape, 2, sp_axis, dtype=k.dtype),
             persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(v.shape, 2, sp_axis, dtype=v.dtype),
             joint_strategy="rear",
-            logical_n=local_seq_len * self._p.sp_factor,
+            logical_n=logical_n,
             program_config=self._ring_program_config(local_seq_len),
             compute_kernel_config=self._sdpa_compute_kernel_config,
             dim=2,
@@ -1004,8 +1021,17 @@ class Qwen3VlVisionModel(Module):
 
         Omitting it treats the whole input as one block, which is correct for a single image and wrong
         for several -- pass it whenever `grid_thw` has more than one row or a `t` above 1.
+
+        Under sequence parallelism, pad patches, pos_embeds, and rope with [`pad_vision_sp_rows`]
+        before sharding. `cu_seqlens` still ends at the real patch count; extra merged tokens are
+        sliced off after the SP gather.
         """
         hidden_states = ttnn.add(self.patch_embed.forward(patches), pos_embeds)
+        local_rows = hidden_states.shape[-2]
+        logical_patches = (
+            cu_seqlens[-1] if cu_seqlens is not None else local_rows * (self._p.sp_factor if self._p.sp else 1)
+        )
+        logical_tokens = logical_patches // self.spatial_merge_size**2
 
         # Instrumentation: report the parallel placement and the attention path the blocks will take,
         # so a caller can confirm the sharded windowed/ring path is actually engaged (vs replicated).
@@ -1015,7 +1041,7 @@ class Qwen3VlVisionModel(Module):
         )
         logger.info(
             f"vision tower: path={_path} tp={self._p.tp_factor} sp={self._p.sp_factor} "
-            f"local_rows={hidden_states.shape[-2]} blocks={(len(cu_seqlens) - 1) if cu_seqlens else 1}"
+            f"local_rows={local_rows} blocks={(len(cu_seqlens) - 1) if cu_seqlens else 1}"
         )
 
         deepstack_features: list[ttnn.Tensor] = []
@@ -1023,11 +1049,11 @@ class Qwen3VlVisionModel(Module):
             hidden_states = block.forward(hidden_states, pos_embeds=rope, cu_seqlens=cu_seqlens)
             if layer_idx in self.deepstack_visual_indexes:
                 merger = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_idx)]
-                deepstack_features.append(self._gather_tokens(merger.forward(hidden_states)))
+                deepstack_features.append(self._gather_tokens(merger.forward(hidden_states), logical_tokens))
 
-        return self._gather_tokens(self.merger.forward(hidden_states)), deepstack_features
+        return self._gather_tokens(self.merger.forward(hidden_states), logical_tokens), deepstack_features
 
-    def _gather_tokens(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def _gather_tokens(self, x: ttnn.Tensor, logical_tokens: int) -> ttnn.Tensor:
         """Reassemble merged tokens across the SP axis.
 
         The decoder consumes these through `_scatter_rows`, which walks `vision_runs` over the whole
@@ -1044,11 +1070,13 @@ class Qwen3VlVisionModel(Module):
         its embedding gather.
         """
         if not (self._p.sp or self._p.tp):
-            return x
+            return x[:logical_tokens, :] if x.shape[-2] > logical_tokens else x
         if self._p.sp:
             x, added = _with_batch_axis(x)
             x = self._p.ccl_manager.all_gather_persistent_buffer(
                 x, dim=-2, mesh_axis=self._p.sp_axis, use_hyperparams=True
             )
             x = _drop_batch_axis(x, added)
+        if x.shape[-2] > logical_tokens:
+            x = x[:logical_tokens, :]
         return ttnn.clone(x)
