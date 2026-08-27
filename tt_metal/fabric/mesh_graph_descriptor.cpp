@@ -235,13 +235,20 @@ std::vector<std::string> MeshGraphDescriptor::get_all_mesh_names() const {
     return out;
 }
 
-std::vector<tt::tt_metal::distributed::MeshShape> MeshGraphDescriptor::get_all_mesh_shapes() const {
+std::vector<tt::tt_metal::distributed::MeshShape> MeshGraphDescriptor::get_all_device_topology_shapes() const {
     std::vector<tt::tt_metal::distributed::MeshShape> shapes;
-    shapes.reserve(mesh_instances_.size());
+    shapes.reserve(mesh_instances_.size() + switch_instances_.size());
     for (GlobalNodeId id : mesh_instances_) {
         const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(get_instance(id).desc);
         TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null for instance {}", id);
         shapes.emplace_back(mesh_desc->device_topology().dims(0), mesh_desc->device_topology().dims(1));
+    }
+    // Switches build intra-mesh connectivity the same way as meshes, so a switch with a genuine ring
+    // axis realizes a torus and must count when consolidating the fabric config.
+    for (GlobalNodeId id : switch_instances_) {
+        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(get_instance(id).desc);
+        TT_FATAL(switch_desc != nullptr, "Switch descriptor is null for instance {}", id);
+        shapes.emplace_back(switch_desc->device_topology().dims(0), switch_desc->device_topology().dims(1));
     }
     return shapes;
 }

@@ -174,8 +174,8 @@ public:
     // Unique mesh descriptor names from mesh instances (e.g. "M0", "Decode32x4"), sorted lexicographically.
     std::vector<std::string> get_all_mesh_names() const;
 
-    // Device-topology shape of every mesh instance, in mesh-instance order.
-    std::vector<tt::tt_metal::distributed::MeshShape> get_all_mesh_shapes() const;
+    // Device-topology shape of every mesh and switch instance (meshes first).
+    std::vector<tt::tt_metal::distributed::MeshShape> get_all_device_topology_shapes() const;
 
     // Queries
     const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {

@@ -431,7 +431,7 @@ void ControlPlane::init_control_plane(
     {
         const MeshGraphDescriptor mesh_graph_descriptor(
             std::filesystem::path(mesh_graph_desc_file), /*backwards_compatible=*/true);
-        this->consolidate_fabric_config_with_mesh_graph_shapes(mesh_graph_descriptor.get_all_mesh_shapes());
+        this->consolidate_fabric_config_with_mesh_graph_shapes(mesh_graph_descriptor.get_all_device_topology_shapes());
     }
 
     // Create mesh_graph with the consolidated fabric config

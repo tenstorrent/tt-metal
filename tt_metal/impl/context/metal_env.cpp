@@ -414,6 +414,15 @@ void MetalEnvImpl::initialize_control_plane() {
 }
 
 void MetalEnvImpl::initialize_control_plane_impl() {
+    // Re-derive the effective config from the originally requested one: fabric_config_ may hold a
+    // value the previous control plane consolidated against its mesh shapes, and a new mesh graph
+    // (e.g. a custom topology with genuine ring axes) must be able to re-promote it. Guarded so the
+    // dispatch-fallback path, which writes fabric_config_ directly without going through
+    // set_fabric_config, keeps its value.
+    if (this->requested_fabric_config_ != tt_fabric::FabricConfig::DISABLED) {
+        this->fabric_config_ = this->requested_fabric_config_;
+    }
+
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
