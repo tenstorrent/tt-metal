@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/kernel_types.hpp"
@@ -1034,6 +1035,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
     const bool check_skip_compute = input_cores != output_cores;
 
+    // Unpack-to-Dest overrides for the fp32 depthwise path; empty (default) for every other conv.
+    // Pairs with the SFPU path in compute_depthwise_conv1d.cpp -- that fixes the arithmetic, this
+    // makes sure the tiles reaching DST aren't already TF32-truncated by the unpacker.
+    std::vector<tt::tt_metal::UnpackToDestMode> depthwise_unpack_to_dest;
+
     std::vector<uint32_t> compute_kernel_args;
     if (is_conv_1d_depthwise_conv) {
         // compute_depthwise_conv1d.cpp uses a specialized dest-reuse accumulation path. The last
@@ -1045,6 +1051,23 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         const bool use_partials_scratch = !coalesce_1d_depthwise_kw_reads && num_blocks_act_h_per_core > 1;
         const uint32_t dest_reuse_scratch_cb_id =
             get_cb_info_by_name(cb_info, use_partials_scratch ? Conv2dCb::MATMUL_PARTIALS : Conv2dCb::OUT).index;
+
+        // Only when both operands really are fp32: a bf16/bf8 unpack already widens into the full
+        // 32-bit Dest slot, so overriding it there would be a behaviour change for no gain.
+        if (fp32_dest_acc_en && a.dtype() == tt::tt_metal::DataType::FLOAT32 &&
+            b.dtype() == tt::tt_metal::DataType::FLOAT32) {
+            depthwise_unpack_to_dest.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+            // ACT is included as well as ACT_TILIZED: the tilize step unpacks ACT through SrcA, which
+            // rounds fp32 to TF32 *before* ACT_TILIZED is ever written, so overriding only the
+            // tilized buffer would leave the activation already truncated.
+            for (const uint32_t cb :
+                 {get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+                  get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
+                  get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
+                  dest_reuse_scratch_cb_id}) {
+                depthwise_unpack_to_dest[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+            }
+        }
 
         compute_kernel_args = {
             act_block_w_ntiles,                                         // 0: in0_block_w
@@ -1177,6 +1200,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = depthwise_unpack_to_dest,
     };
 
     // Helper lambda to setup mcast arguments
