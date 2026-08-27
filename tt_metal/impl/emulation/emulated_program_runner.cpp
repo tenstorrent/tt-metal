@@ -2458,8 +2458,9 @@ static std::unordered_map<uint32_t, std::set<uint32_t>> g_ring_adj;
 // Per-op reset flag: cleared at each new op's first connection-record so a later op's different line
 // orientation can't corrupt the src-keyed, direction-deduped table. See tt-emule docs/fabric-ccl-emulation.md.
 static std::atomic<bool> g_conn_route_dirty{true};
-// Per-worker resolved line direction, keyed (src<<32 | wx<<16 | wy): on the MUX path the sender carries no
-// direction, so infer it once from a multicast's range and reuse for that worker's unicasts. Reset per op.
+// Per-worker resolved line direction, keyed (src<<32 | wx<<16 | wy): on a path with neither a worker-owned
+// connection sequence nor MUX coordinates, infer it from a multicast's range and reuse it for unicasts.
+// Reset per op.
 // See tt-emule docs/fabric-ccl-emulation.md.
 static std::unordered_map<uint64_t, uint32_t> g_worker_dir;
 // Per-mux-core line direction, keyed (src<<32 | logical_x<<16 | logical_y): the mux→EDM append records the
@@ -2716,10 +2717,14 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
                 std::lock_guard<std::mutex> lk(g_conn_route_mu);
                 g_worker_dir[wkey] = static_cast<uint32_t>(dir);
             }
-        } else if (dir < 0) {  // UNICAST_1D — reuse this worker's multicast-inferred direction; else the conn index
+        } else if (dir < 0) {  // UNICAST_1D
             std::lock_guard<std::mutex> lk(g_conn_route_mu);
-            auto wit = g_worker_dir.find(wkey);
-            if (wit != g_worker_dir.end()) {
+            // A direct sender's connection index refers to this worker's open sequence. Prefer that exact
+            // mapping over the one-direction cache: a bidirectional collective can send equal hop counts on
+            // both connections, so one cached direction cannot represent both slots.
+            if (!wconns.empty()) {
+                dir = static_cast<int>(wconns[r.dir_index < wconns.size() ? r.dir_index : 0].dir);
+            } else if (auto wit = g_worker_dir.find(wkey); wit != g_worker_dir.end()) {
                 dir = static_cast<int>(wit->second);
             } else if (!idx_conns.empty()) {
                 dir = static_cast<int>(idx_conns[r.dir_index < idx_conns.size() ? r.dir_index : 0].dir);
@@ -3559,6 +3564,7 @@ static constexpr size_t kMaxResolvedPrograms = 256;
 // See docs/fabric-ccl-emulation.md.
 struct ProgramRoutes {
     std::unordered_map<uint32_t, std::vector<ConnRoute>> conn_route;
+    std::unordered_map<uint64_t, std::vector<ConnRoute>> worker_conns;
     std::unordered_map<uint64_t, uint32_t> mux_dir;
     std::unordered_map<uint32_t, std::set<uint32_t>> ring_adj;
 };
@@ -3866,7 +3872,7 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     {
         std::lock_guard<std::mutex> lk(g_conn_route_mu);
         if (g_program_routes.find(pid) == g_program_routes.end()) {
-            g_program_routes[pid] = ProgramRoutes{g_conn_route, g_mux_dir, g_ring_adj};
+            g_program_routes[pid] = ProgramRoutes{g_conn_route, g_worker_conns, g_mux_dir, g_ring_adj};
         }
     }
 
@@ -3934,6 +3940,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
         std::lock_guard<std::mutex> lk(g_conn_route_mu);
         if (auto rit = g_program_routes.find(pid); rit != g_program_routes.end()) {
             g_conn_route = rit->second.conn_route;
+            g_worker_conns = rit->second.worker_conns;
             g_mux_dir = rit->second.mux_dir;
             g_ring_adj = rit->second.ring_adj;
         }
