@@ -530,13 +530,6 @@ def _ref_identity(inputs, kwargs, case):
 
 
 def _ref_matmul(inputs, kwargs, case):
-    # A fused activation (ttnn.linear(..., activation="gelu"), the vision MLP and patch merger)
-    # is left to the structural checks: the capture records the activation's name but not its
-    # approximation, and ttnn's fused gelu and torch's differ in exactly that. The point of those
-    # cases is that the fused path runs at all -- it is the only one that launches the standalone
-    # activation program -- not re-deriving gelu.
-    if "activation" in case["kwargs"]:
-        return None
     return inputs["0"].float() @ inputs["1"].float()
 
 

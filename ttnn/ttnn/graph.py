@@ -340,11 +340,43 @@ def _ttnn_tensor_summary(t) -> str:
     return f"ttnn.Tensor({', '.join(parts)})"
 
 
-# Cap on how many elements of a sequence argument are summarized individually.
+# Cap on how many elements of a sequence argument are summarized individually, and how deep
+# the element-wise walk goes before it elides the rest.
 _MAX_SEQUENCE_ELEMENTS = 32
+_MAX_SEQUENCE_DEPTH = 4
 
 
-def _safe_arg_str(v):
+def _tensor_types():
+    """(ttnn.Tensor, torch.Tensor) -- or just ttnn's when torch is not installed."""
+    import ttnn
+
+    try:
+        import torch
+
+        return (ttnn.Tensor, torch.Tensor)
+    except ImportError:
+        return (ttnn.Tensor,)
+
+
+def _holds_tensor(v, _depth=0):
+    """Is ``v`` a tensor, or a sequence holding one at any depth?
+
+    Mirrors ``_collect_tensor_ids``' recursive treatment: a tensor nested inside
+    ``[[tensor]]`` reaches ``str()`` just as readily as a top-level one.
+
+    The depth limit answers "maybe" as True: a sequence too deep to search cannot be
+    shown tensor-free, and summarizing one that turns out to hold only scalars is
+    harmless, where str()-ing one that holds a tensor is the device read this exists to
+    prevent.
+    """
+    if isinstance(v, _tensor_types()):
+        return True
+    if isinstance(v, (list, tuple)):
+        return True if _depth >= _MAX_SEQUENCE_DEPTH else any(_holds_tensor(e, _depth + 1) for e in v)
+    return False
+
+
+def _safe_arg_str(v, _depth=0):
     """Stringify a function argument without triggering graph-tracked operations."""
     import ttnn
 
@@ -357,16 +389,22 @@ def _safe_arg_str(v):
             return f"torch.Tensor(shape={list(v.shape)}, dtype={v.dtype})"
     except ImportError:
         pass
-    # A sequence holding tensors must be summarized element-wise. str() on a list of ttnn.Tensors
-    # calls repr() on each one, which reads the whole tensor back to host (ttnn::to_string ->
-    # Tensor::cpu). That is expensive everywhere, dumps tensor contents into the report, and is
-    # outright fatal inside a device trace capture ("Reads are not supported during trace capture")
-    # -- which is how ttnn.concat, the one op taking a tensor list, killed capture runs.
-    if isinstance(v, (list, tuple)) and any(isinstance(e, ttnn.Tensor) for e in v):
-        head = [_safe_arg_str(e) for e in v[:_MAX_SEQUENCE_ELEMENTS]]
+    # A sequence holding tensors -- at any nesting depth -- must be summarized element-wise. str()
+    # on a list of ttnn.Tensors calls repr() on each one, which reads the whole tensor back to host
+    # (ttnn::to_string -> Tensor::cpu). That is expensive everywhere, dumps tensor contents into the
+    # report, and is outright fatal inside a device trace capture ("Reads are not supported during
+    # trace capture") -- which is how ttnn.concat, the one op taking a tensor list, killed capture
+    # runs. torch tensors in a sequence are summarized for the same no-dump reason (host-side, so
+    # noise rather than a fault).
+    if isinstance(v, (list, tuple)) and _holds_tensor(v):
+        open_, close = ("(", ")") if isinstance(v, tuple) else ("[", "]")
+        # Past the depth limit, elide rather than fall through to str(): the whole point is that a
+        # tensor below here must never be repr()'d.
+        if _depth >= _MAX_SEQUENCE_DEPTH:
+            return f"{open_}... {len(v)} element(s) below the summary depth limit{close}"
+        head = [_safe_arg_str(e, _depth + 1) for e in v[:_MAX_SEQUENCE_ELEMENTS]]
         if len(v) > _MAX_SEQUENCE_ELEMENTS:
             head.append(f"... +{len(v) - _MAX_SEQUENCE_ELEMENTS} more")
-        open_, close = ("(", ")") if isinstance(v, tuple) else ("[", "]")
         return f"{open_}{', '.join(head)}{close}"
     return str(v)
 

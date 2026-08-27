@@ -84,6 +84,8 @@ _TENSOR_ID_RE = re.compile(r"tensor_id=(\d+)")
 _TILE_RE = re.compile(r"^Tile with shape: \[(?P<h>\d+), (?P<w>\d+)\]$")
 # An unquoted string argument: the capture prints a str's value, not its repr.
 _BARE_STRING_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# ttnn.graph._safe_arg_str' marker for a sequence it summarized only in part.
+_ELIDED_SEQUENCE_RE = re.compile(r"\.\.\. (\+\d+ more|\d+ element\(s\) below the summary depth limit)")
 _GRID_RE = re.compile(r"^(\d+)-(\d+)$")
 
 _DTYPE_TAG = {
@@ -256,6 +258,11 @@ def parse_argument(text: str):
         # Every element must be accounted for: a scan over a list whose element repr
         # changed would quietly return a subset, and a concat case would then run with
         # fewer operands than the captured call and still pass.
+        # An elided sequence is exactly that subset: _safe_arg_str summarizes at most
+        # _MAX_SEQUENCE_ELEMENTS entries and appends "... +N more", which the per-element counts
+        # below cannot see. Fail closed instead of emitting a case with the operands that fit.
+        if _ELIDED_SEQUENCE_RE.search(text):
+            return {"k": "skip", "repr": text}
         expected = text.count("ttnn.Tensor(")
         summaries = list(_TENSOR_SUMMARY_RE.finditer(text))
         if len(summaries) == expected:
