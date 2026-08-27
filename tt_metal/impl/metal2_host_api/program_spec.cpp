@@ -671,12 +671,11 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 // ASSUMPTION: All chips in a MeshDevice are identical, so chip 0 is
 // representative of every device in the mesh.
 
-void ValidateNodeBounds(const ProgramSpec& spec) {
-
-    MetalEnvImpl& env_impl = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+void ValidateNodeBounds(const ProgramSpec& spec, MetalContext& metal_ctx) {
+    MetalEnvImpl& env_impl = MetalEnvAccessor(metal_ctx.get_env()).impl();
 
     // Handle the mock device case (for cheap unit testing)
-    const bool is_mock = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    const bool is_mock = metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
     // A default DispatchCoreConfig and 1 CQ is sufficient to look up the compute grid size
     // from the YAML descriptor, and both are available in mock mode.
@@ -687,7 +686,7 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
     // But, best get the real dispatch_core_config and num_hw_cqs
     // (Makes no difference now, but hardbaking that assumption could be brittle)
     if (!is_mock) {
-        auto& dispatch_mgr = MetalContext::instance().get_dispatch_core_manager();
+        auto& dispatch_mgr = metal_ctx.get_dispatch_core_manager();
         dispatch_core_config = dispatch_mgr.get_dispatch_core_config();
         num_hw_cqs = dispatch_mgr.get_num_hw_cqs();
     }
@@ -748,7 +747,7 @@ bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, con
 //
 // Assumes CollectedSpecData is already built.
 
-void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected) {
+void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected, MetalContext& metal_ctx) {
     // Sanity check for supported architecture.
     TT_FATAL(is_gen1_arch() || is_gen2_arch(), "Unsupported architecture.");
 
@@ -756,7 +755,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Node bounds checks
     //////////////////////////////
 
-    ValidateNodeBounds(spec);
+    ValidateNodeBounds(spec, metal_ctx);
 
     //////////////////////////////
     // Validate KernelSpecs
@@ -1224,7 +1223,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on
     // Gen2 is still checked later at enqueue.
     {
-        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const auto& hal = metal_ctx.hal();
         const uint32_t max_slots_per_core = hal.has_tile_counter_registers()
                                                 ? static_cast<uint32_t>(::dfb::NUM_DFBS)
                                                 : tt::tt_metal::hal::get_arch_num_circular_buffers();
@@ -2892,13 +2891,14 @@ namespace {
 
 Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&mesh_device));
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
 
     // Step 1b: Validate semantic rules (can be skipped for trusted inputs)
     if (!skip_validation) {
-        ValidateProgramSpec(spec, collected);
+        ValidateProgramSpec(spec, collected, metal_ctx);
     }
 
     // Step 2a: Build kernel risc masks (arch-specific)
