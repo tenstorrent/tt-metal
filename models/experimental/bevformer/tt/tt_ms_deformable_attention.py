@@ -164,6 +164,7 @@ class TTMSDeformableAttention:
         self.num_points = config.num_points
         self.batch_first = config.batch_first
         self.device = device
+        self._offset_normalizer = {}
         self.params = params
 
         self.head_dim = self.embed_dims // self.num_heads
@@ -279,17 +280,23 @@ class TTMSDeformableAttention:
             # D represents the number of depth levels in 3D point sampling (e.g., 4 points per pillar)
             D = reference_points.shape[2]
 
-            spatial_shapes_tt = ttnn.from_torch(
-                spatial_shapes, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
+            # The feature-pyramid shapes come from the config, so the normalizer is identical on
+            # every call; cached on its contents rather than rebuilt per layer.
+            normalizer_key = tuple(spatial_shapes.flatten().tolist())
+            offset_normalizer = self._offset_normalizer.get(normalizer_key)
+            if offset_normalizer is None:
+                spatial_shapes_tt = ttnn.from_torch(
+                    spatial_shapes, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                )
 
-            # Create offset normalizer to convert pixel-space offsets to normalized coordinates [0,1]
-            offset_normalizer = ttnn.stack([spatial_shapes_tt[..., 1], spatial_shapes_tt[..., 0]], dim=-1)
+                # Create offset normalizer to convert pixel-space offsets to normalized coordinates [0,1]
+                offset_normalizer = ttnn.stack([spatial_shapes_tt[..., 1], spatial_shapes_tt[..., 0]], dim=-1)
 
-            # sampling_offsets: [bs*num_queries*num_heads, num_levels, num_points, 2]
-            # offset_normalizer: [num_levels, 2] -> [1, num_levels, 1, 2] for broadcasting
-            offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add batch * query * head dimension
-            offset_normalizer = ttnn.unsqueeze(offset_normalizer, -2)  # Add point dimension
+                # sampling_offsets: [bs*num_queries*num_heads, num_levels, num_points, 2]
+                # offset_normalizer: [num_levels, 2] -> [1, num_levels, 1, 2] for broadcasting
+                offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add batch * query * head dimension
+                offset_normalizer = ttnn.unsqueeze(offset_normalizer, -2)  # Add point dimension
+                self._offset_normalizer[normalizer_key] = offset_normalizer
 
             sampling_offsets = ttnn.div(sampling_offsets, offset_normalizer)
 

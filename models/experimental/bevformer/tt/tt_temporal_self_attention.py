@@ -65,6 +65,7 @@ class TTTemporalSelfAttention:
         **kwargs,
     ):
         self.device = device
+        self._level_start_index = {}
         self.params = params
 
         if embed_dims % num_heads != 0:
@@ -157,11 +158,16 @@ class TTTemporalSelfAttention:
         if level_start_index is None:
             level_start_index = torch.tensor([0], dtype=torch.long)
 
-        # Convert level_start_index to ttnn if needed
+        # Convert level_start_index to ttnn if needed. Temporal attention runs a single level, so
+        # this is the same handful of values on every layer and every forward; cached on its
+        # contents because the caller may hand over a fresh tensor each time.
         if isinstance(level_start_index, torch.Tensor):
-            level_start_index = ttnn.from_torch(
-                level_start_index, device=self.device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
+            key = tuple(level_start_index.flatten().tolist())
+            if key not in self._level_start_index:
+                self._level_start_index[key] = ttnn.from_torch(
+                    level_start_index, device=self.device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+            level_start_index = self._level_start_index[key]
 
         if ENABLE_LOGGING:
             logger.info("TSA Tensor Conversion Complete")

@@ -12,11 +12,11 @@ Numbers quoted below as *cost* come from the baseline profile
 
 | # | candidate | targets | measured cost at baseline | effort | risk | status |
 |--:|---|---|---|---|---|---|
-| [1](#candidate-1--host-round-trips) | remove host round-trips from SCA | gap | **1917 ms** (62% of wall) | — | — | partly landed |
+| [1](#candidate-1--host-round-trips) | remove host round-trips from SCA | gap | **1917 ms** (62% of wall) | — | — | **complete** |
 | [1a](#1a-rebatch-and-scatter-back-on-device) | rebatch + scatter-back on device | gap | **−2171.9 ms wall (−71%)** | L | med | **landed — [01](perf_reports/01-sca-rebatch-on-device.md)** |
 | [1b](#1b-bound-max_len-statically) | bound `max_len` statically | gap, trace | +129 ms kernel to unlock −218 ms gap | M | high | **[rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len)** |
 | [1c](#1c-hoist-index-computation-above-the-layer-loop) | rebatch plan once per frame, not per layer | gap | −94.6 ms encoder wall (−2.2%) | S | low | **landed — [02](perf_reports/02-rebatch-plan-hoisted.md)** |
-| [1d](#1d-per-call-constant-uploads) | move to `__init__` what is frame-invariant | gap | small, every layer | S | none | todo |
+| [1d](#1d-per-call-constant-uploads) | cache what is frame-invariant | gap | −56.4 ms encoder wall (−1.3%) | S | none | **landed — [03](perf_reports/03-constant-uploads-cached.md)** |
 | [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | up to 613 ms | M | med | todo |
 | [3](#candidate-3--tile-padding-waste) | kill tile padding on degenerate dims | kernel | ~60 ms | M | low | todo |
 | [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | **114 ms** (single op) | S | low | todo |
@@ -105,7 +105,11 @@ therefore per-forward work that was being repeated per layer.
 
 ### 1d. Per-call constant uploads
 
-Small, but they run every layer / every forward:
+**Landed** — [stage 03](perf_reports/03-constant-uploads-cached.md), −56.4 ms encoder wall (−1.3%),
+no numerical change. A steady-state win: the caches are keyed so they hold across forwards, not just
+across layers, so the first frame still pays.
+
+They were small individually, but ran every layer / every forward:
 
 | Location | Tensor | Fix |
 |---|---|---|
@@ -245,7 +249,7 @@ lifts.
 2. ~~**1b**~~ — [rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len): costs more than
    half of what it unlocks, and candidate 2 owns the memory ceiling that caps it.
 3. ~~**1c**~~ — landed, −94.6 ms encoder wall.
-4. **1d** — move to `__init__` what is genuinely frame-invariant.
+4. ~~**1d**~~ — landed, −56.4 ms encoder wall. **Candidate 1 is complete.**
 5. **4** — one op, 113 ms, cheap to try.
 6. **2** — the big kernel lever; 613 ms of kernel is the two MSDA calls. Measure the fused op at TSA
    shapes before committing to the rewrite.

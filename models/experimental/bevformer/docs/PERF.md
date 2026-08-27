@@ -50,10 +50,16 @@ cannot join the table above — different harness, different metric.
 
 | # | change | encoder wall (6 layers) | Δ | report |
 |--:|---|---:|---:|---|
-| 2 | rebatch plan resolved once per forward | **4290.9 ms** median | −94.6 ms (−2.2%) | [02](perf_reports/02-rebatch-plan-hoisted.md) |
+| — | *before stage 2* | 4385.5 ms median | — | — |
+| 2 | rebatch plan resolved once per forward | 4290.9 ms median | −94.6 ms (−2.2%) | [02](perf_reports/02-rebatch-plan-hoisted.md) |
+| 3 | constant uploads cached | **4234.5 ms** median | −56.4 ms (−1.3%) | [03](perf_reports/03-constant-uploads-cached.md) |
 
-Encoder wall clock is end-to-end host time over 11 iterations, not a profiled figure. The median and
-minimum for stage 2 disagree by a factor of three, so read it as **~1–2%**.
+Encoder wall clock is end-to-end host time over 11 iterations, not a profiled figure — noisier than
+the layer harness. Stage 2's median and minimum disagree by a factor of three, so read it as
+**~1–2%**; stage 3's agree (−56.4 vs −48.3 ms). Together **−151.0 ms, −3.4%**.
+
+Both are **steady-state** figures: the benchmark warms up before timing, and stage 3 in particular
+caches across forwards, so the first frame still pays.
 
 ## Where the baseline time is
 

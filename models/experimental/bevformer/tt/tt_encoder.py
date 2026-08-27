@@ -81,6 +81,8 @@ class TTBEVFormerLayer:
         self.use_spatial_cross_attention = use_spatial_cross_attention
         self.batch_first = batch_first
         self.feedforward_channels = feedforward_channels
+        self._bev_reference_points = None
+        self._bev_reference_points_src = None
 
         # Temporal Self-Attention
         if use_temporal_self_attention and hasattr(params, "temporal_self_attention"):
@@ -154,10 +156,16 @@ class TTBEVFormerLayer:
         if use_signpost:
             signpost(header="TTNN BEVFormerLayer Forward Start")
 
-        bev_reference_points = reference_points_3d[:, :, 0, :2].unsqueeze(2)  # [bs, num_queries, 1, 2]
-        bev_reference_points = ttnn.from_torch(
-            bev_reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-        )
+        # The BEV grid does not move, so this upload is the same for every layer and every forward.
+        # Keyed on the source tensor rather than its contents: the encoder hands the same object to
+        # all its layers, and a caller passing a different one gets a rebuild.
+        if self._bev_reference_points_src is not reference_points_3d:
+            bev_reference_points = reference_points_3d[:, :, 0, :2].unsqueeze(2)  # [bs, num_queries, 1, 2]
+            self._bev_reference_points = ttnn.from_torch(
+                bev_reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            self._bev_reference_points_src = reference_points_3d
+        bev_reference_points = self._bev_reference_points
 
         if use_signpost:
             signpost(header="BEVLayer Tensor Setup Complete")
@@ -324,6 +332,7 @@ class TTBEVFormerEncoder:
     ):
         self.device = device
         self.params = params
+        self._reference_points_3d = {}
 
         if pc_range is None:
             pc_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
@@ -427,14 +436,21 @@ class TTBEVFormerEncoder:
             # Generate 3D reference points in world coordinates
             # Creates a 3D grid in BEV space with multiple depth levels (pillar sampling)
             # Shape: [bev_h*bev_w, num_points_in_pillar, 3] representing (x, y, z) coordinates
-            # TODO: Move to init as it's done once in torch
-            reference_points_3d = generate_reference_points(
-                bev_h=bev_h,
-                bev_w=bev_w,
-                z_cfg=self.z_cfg,
-                batch_size=bs,
-                dtype=torch.float32,
-            )
+            #
+            # Depends only on the grid geometry, so it is built once per shape and reused. Layers
+            # key their own derived uploads on this object's identity, which is what makes those
+            # caches hit across forwards too.
+            grid_key = (bev_h, bev_w, bs)
+            reference_points_3d = self._reference_points_3d.get(grid_key)
+            if reference_points_3d is None:
+                reference_points_3d = generate_reference_points(
+                    bev_h=bev_h,
+                    bev_w=bev_w,
+                    z_cfg=self.z_cfg,
+                    batch_size=bs,
+                    dtype=torch.float32,
+                )
+                self._reference_points_3d[grid_key] = reference_points_3d
 
             # Extract camera transformation matrices from metadata
             # These matrices transform 3D world coordinates to 2D camera pixel coordinates
