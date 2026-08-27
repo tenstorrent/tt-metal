@@ -553,6 +553,41 @@ Block<S> NocAsyncReadTx<thread, S>::wait() const {
     return Block<S>(cb_id);
 }
 
+// --- NocAsyncMcastTx ---
+
+template <int thread, typename S>
+NocAsyncMcastTx<thread, S>::NocAsyncMcastTx(const Storage<S>& storage, uint32_t data_sent_id, bool sender) :
+    cb_id(storage.cb_id), data_sent(data_sent_id), sender(sender) {}
+
+#if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
+template <int thread, typename S>
+NocAsyncMcastTx<thread, S>::~NocAsyncMcastTx() {
+    if constexpr (thread == TT_DM_THREAD_ID) {
+        // A handle that was never waited is a block reserved and never published, which
+        // is a deadlock waiting for whoever consumes that buffer. Same check the other
+        // handles carry.
+        ASSERT(waited);
+    }
+}
+#endif
+
+template <int thread, typename S>
+Block<S> NocAsyncMcastTx<thread, S>::wait() const {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    if constexpr (thread == TT_DM_THREAD_ID) {
+        // Byte for byte NocAsyncReadTx::wait(). The receiver's data_sent wait is still
+        // inside noc_load; moving it here is the next step and a behaviour change, so it
+        // is not smuggled into this one. `data_sent` and `sender` are carried for it.
+        noc_async_read_barrier();
+        cb_push_back(cb_id, num_pages);
+    }
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    waited = true;
+#endif
+#endif
+    return Block<S>(cb_id);
+}
+
 // --- NocAsyncWriteTx ---
 
 template <int thread, typename S>
@@ -719,8 +754,13 @@ NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, const Accessor& ac
     });
 }
 
+namespace detail {
+
+// The producing half of a load: reserve the block, then let `fn` fill it. Extracted so
+// the multicast form can run exactly this and return its own handle type -- previously it
+// delegated to the plain noc_load below and inherited NocAsyncReadTx with it.
 template <int thread, typename S, typename Fn>
-NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn) {
+inline void issue_load(const Storage<S>& storage, Fn fn) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         {
@@ -737,8 +777,16 @@ NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn) {
         }
     }
 #else
+    (void)storage;
     (void)fn;
 #endif
+}
+
+}  // namespace detail
+
+template <int thread, typename S, typename Fn>
+NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn) {
+    detail::issue_load<thread>(storage, fn);
     return NocAsyncReadTx<thread, S>(storage);
 }
 
@@ -772,7 +820,7 @@ NocAsyncWriteTx<thread, S> noc_store(Block<S> block, Fn fn) {
 }
 
 template <int thread, typename S, typename Fn>
-NocAsyncReadTx<thread, S> noc_load(
+NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage,
     PhysicalMcast mcast,
     Semaphore<thread>& receivers_ready,
@@ -788,7 +836,18 @@ NocAsyncReadTx<thread, S> noc_load(
     // matrix, is strided in DRAM but perfectly ordinary once it is in L1, and the
     // broadcast that follows does not care how it got there. Same page count either
     // way -- the built-in read issues one per page too.
-    return noc_load<thread>(storage, [&](L1Pages pages) {
+    // Which role this core plays, computed once so the handle can carry it. Data
+    // movement only: PhysicalCoord::this_core() returns the ORIGIN on a compute
+    // projection, so the answer there is meaningless -- which is harmless, because
+    // everything that reads it is behind the same guard.
+    bool is_sender = false;
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    if constexpr (thread == TT_DM_THREAD_ID) {
+        is_sender = (PhysicalCoord::this_core() == mcast.start);
+    }
+#endif
+
+    detail::issue_load<thread>(storage, [&](L1Pages pages) {
         const uint32_t num_dests = mcast.volume() - 1;
 
         if (PhysicalCoord::this_core() == mcast.start) {
@@ -863,10 +922,11 @@ NocAsyncReadTx<thread, S> noc_load(
             data_sent.set(0);  // rearm for the next block
         }
     });
+    return NocAsyncMcastTx<thread, S>(storage, data_sent.semaphore_id(), is_sender);
 }
 
 template <int thread, typename S, typename Accessor>
-NocAsyncReadTx<thread, S> noc_load(
+NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage,
     PhysicalMcast mcast,
     Semaphore<thread>& receivers_ready,
@@ -882,7 +942,7 @@ NocAsyncReadTx<thread, S> noc_load(
 }
 
 template <int thread, typename S, typename Accessor>
-NocAsyncReadTx<thread, S> noc_load(
+NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage,
     LogicalMcast mcast,
     Semaphore<thread>& receivers_ready,
@@ -899,7 +959,7 @@ NocAsyncReadTx<thread, S> noc_load(
 // extern, so a static Semaphore is rejected outright ("dynamic initialization of
 // static-storage is disallowed in this environment").
 template <int thread, int pair, typename S, typename Accessor>
-NocAsyncReadTx<thread, S> noc_load(
+NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
     static_assert(
         kMcastSemsReserved,
@@ -920,13 +980,13 @@ NocAsyncReadTx<thread, S> noc_load(
 }
 
 template <int thread, int pair, typename S, typename Accessor>
-NocAsyncReadTx<thread, S> noc_load(
+NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
     return noc_load<thread, pair>(storage, mcast.to_physical(), acc, block_idx);
 }
 
 template <int thread, int pair, typename S, typename Fn>
-NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, Fn fn) {
+NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, Fn fn) {
     static_assert(
         kMcastSemsReserved,
         "multicast needs its handshake semaphores reserved by the host: build the program through "
@@ -946,7 +1006,7 @@ NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcas
 }
 
 template <int thread, int pair, typename S, typename Fn>
-NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, Fn fn) {
+NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, Fn fn) {
     return noc_load<thread, pair>(storage, mcast.to_physical(), fn);
 }
 
@@ -985,6 +1045,11 @@ void custom_compute(Ts&&... ts) {
     // Compiled here, never called. See the contract in api.h.
     (void)packed;
 #endif
+}
+
+template <int thread>
+uint32_t Semaphore<thread>::semaphore_id() const {
+    return id;
 }
 
 // --- Runtime-argument sentinel ---
