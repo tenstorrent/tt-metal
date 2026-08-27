@@ -115,150 +115,11 @@ void add_program_sub_device_meta_data(nlohmann::json& meta_data, uint32_t encode
 }
 
 #if defined(TRACY_ENABLE)
-NOCDebugEvent make_noc_debug_event(
-    const CoreCoord& src_core,
-    const KernelProfilerNocEventMetadata::LocalNocEvent& event,
-    const KernelProfilerNocEventMetadata::LocalNocEventDstTrailer& trailer) {
-    using EMD = KernelProfilerNocEventMetadata;
-    int8_t src_x = static_cast<int8_t>(src_core.x);
-    int8_t src_y = static_cast<int8_t>(src_core.y);
-    switch (event.noc_xfer_type) {
-        case EMD::NocEventType::READ_WITH_STATE: [[fallthrough]];
-        case EMD::NocEventType::READ_WITH_STATE_AND_TRID: [[fallthrough]];
-        case EMD::NocEventType::READ:
-            return NOCDebugEvent(NocReadEvent{
-                trailer.getDstAddr(),
-                trailer.getSrcAddr(),
-                event.getNumBytes(),
-                static_cast<uint32_t>(trailer.counter_value),
-                event.dst_x,
-                event.dst_y,
-                src_x,
-                src_y,
-                event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::WRITE_: [[fallthrough]];
-        case EMD::NocEventType::WRITE_WITH_TRID: [[fallthrough]];
-        case EMD::NocEventType::WRITE_WITH_STATE: [[fallthrough]];
-        case EMD::NocEventType::WRITE_WITH_TRID_WITH_STATE: [[fallthrough]];
-        case EMD::NocEventType::WRITE_MULTICAST: [[fallthrough]];
-        case EMD::NocEventType::SEMAPHORE_SET_MULTICAST: [[fallthrough]];
-        case EMD::NocEventType::SEMAPHORE_SET_REMOTE: {
-            bool is_semaphore = event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_MULTICAST ||
-                                event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_REMOTE;
-            bool is_mcast = event.noc_xfer_type == EMD::NocEventType::WRITE_MULTICAST ||
-                            event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_MULTICAST;
-            // Stateful writes program their destination core in an earlier WRITE_SET_STATE / WRITE_WITH_TRID_SET_STATE
-            // call, so the dst_x/dst_y recorded on this event are the placeholder (0,0), not a real destination. Flag
-            // that so the write-to-locked check resolves the real destination core (and size) from the tracked write
-            // state (see NOCDebugState::handle_write_set_state_event) instead of these placeholder fields. The
-            // destination address itself is real here -- the with-state call records dst_local_l1_addr.
-            bool has_valid_dst = event.noc_xfer_type != EMD::NocEventType::WRITE_WITH_STATE &&
-                                 event.noc_xfer_type != EMD::NocEventType::WRITE_WITH_TRID_WITH_STATE;
-            return NOCDebugEvent(NocWriteEvent{
-                trailer.getSrcAddr(),
-                trailer.getDstAddr(),
-                event.getNumBytes(),
-                static_cast<uint32_t>(trailer.counter_value),
-                src_x,
-                src_y,
-                event.dst_x,
-                event.dst_y,
-                static_cast<bool>(event.posted),
-                event.noc_type == EMD::NocType::NOC_1,
-                is_semaphore,
-                is_mcast,
-                event.mcast_end_dst_x,
-                event.mcast_end_dst_y,
-                /*has_source_buffer=*/true,
-                has_valid_dst});
-        }
-        case EMD::NocEventType::WRITE_INLINE:
-            // An inline dword write: a small write whose value is an immediate register, so it carries no L1
-            // source buffer. Modeled as a write (tracked for the unflushed-at-end and write-to-locked checks and
-            // released by a write barrier) but with has_source_buffer=false so the source-reuse and
-            // counter-monotonicity checks are skipped (there is no source data, and no usable counter snapshot).
-            return NOCDebugEvent(NocWriteEvent{
-                trailer.getSrcAddr(),
-                trailer.getDstAddr(),
-                event.getNumBytes(),
-                static_cast<uint32_t>(trailer.counter_value),
-                src_x,
-                src_y,
-                event.dst_x,
-                event.dst_y,
-                static_cast<bool>(event.posted),
-                event.noc_type == EMD::NocType::NOC_1,
-                /*is_semaphore=*/false,
-                /*is_mcast=*/false,
-                event.mcast_end_dst_x,
-                event.mcast_end_dst_y,
-                /*has_source_buffer=*/false,
-                /*has_valid_dst=*/true});
-        case EMD::NocEventType::WRITE_SET_STATE: [[fallthrough]];
-        case EMD::NocEventType::WRITE_WITH_TRID_SET_STATE:
-            // A stateful-write set-state: it programs the destination core (and, for the non-trid variant, the size)
-            // that later WRITE_WITH_STATE / WRITE_WITH_TRID_WITH_STATE writes reuse. Those writes record their own
-            // destination core as a placeholder, so the host tracks this event and resolves the real destination from
-            // it (see handle_write_set_state_event). num_bytes is the programmed size for WRITE_SET_STATE and 0 for
-            // the trid variant (whose size arrives at the with-state call). Stateful writes are unicast.
-            return NOCDebugEvent(NocWriteSetStateEvent{
-                trailer.getDstAddr(),
-                event.getNumBytes(),
-                src_x,
-                src_y,
-                event.dst_x,
-                event.dst_y,
-                /*is_mcast=*/false,
-                event.mcast_end_dst_x,
-                event.mcast_end_dst_y,
-                static_cast<uint8_t>(event.noc_type == EMD::NocType::NOC_1)});
-        case EMD::NocEventType::READ_BARRIER_END: [[fallthrough]];
-        case EMD::NocEventType::READ_BARRIER_WITH_TRID:
-            // READ_BARRIER_WITH_TRID is folded in with READ_BARRIER_END: a future per-trid model could treat it
-            // differently, but for now the debug model tracks reads by address, not trid, so a trid read barrier is
-            // treated as a full read barrier (may under-report a same-address read racing across different trids,
-            // but never false-positives).
-            return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::WRITE_BARRIER_END:
-            // A regular write barrier waits for outstanding non-posted writes only.
-            TT_ASSERT(!event.posted);
-            return NOCDebugEvent(
-                NocWriteFlushEvent{src_x, src_y, /*posted=*/false, event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::WRITE_FLUSH:
-            // A write flush: non-posted (noc_async_writes_flushed) clears the non-posted pending set; posted
-            // (noc_async_posted_writes_flushed) clears the posted pending set. The posted flag selects which.
-            return NOCDebugEvent(NocWriteFlushEvent{
-                src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::WRITE_FLUSH_WITH_TRID: [[fallthrough]];
-        case EMD::NocEventType::WRITE_BARRIER_WITH_TRID:
-            TT_ASSERT(!event.posted);
-            return NOCDebugEvent(NocWriteFlushEvent{
-                src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::FULL_BARRIER:
-            return NOCDebugEvent(NocFullBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::SEMAPHORE_INC: [[fallthrough]];
-        case EMD::NocEventType::SEMAPHORE_INC_MULTICAST: {
-            // A remote atomic increment (unicast or multicast). It has no source buffer (immediate increment value)
-            // and does not advance the NIU write counter, so it is modeled distinctly from a write. For the
-            // multicast variant dst_x/dst_y are the rectangle start and mcast_end_dst_x/y the end.
-            bool is_mcast = event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_INC_MULTICAST;
-            return NOCDebugEvent(NocSemaphoreIncEvent{
-                trailer.getDstAddr(),
-                src_x,
-                src_y,
-                event.dst_x,
-                event.dst_y,
-                static_cast<bool>(event.posted),
-                event.noc_type == EMD::NocType::NOC_1,
-                is_mcast,
-                event.mcast_end_dst_x,
-                event.mcast_end_dst_y});
-        }
-        case EMD::NocEventType::ATOMIC_BARRIER:
-            return NOCDebugEvent(NocAtomicBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
-        default: return NOCDebugEvent(UnknownNocEvent{});
-    }
-}
+// make_noc_debug_event() lived here: it turned a KernelProfilerNocEventMetadata payload into a
+// NOCDebugEvent for NOCDebugState. Its only caller was the NOC_TRACING_STATIC_ID id-value branch in
+// readTsData16BMarkerData, which was deleted when marker identification moved from id VALUES to
+// ELF-resolved NAMES -- so this went with it rather than being left as dead code. DRAM readback path,
+// disabled by default; see the notes at the deletion sites below.
 
 uint32_t risc_type_to_control_buffer_dram_address_offset(tracy::RiscType risc_type) {
     kernel_profiler::ControlBuffer offset;
@@ -2031,27 +1892,14 @@ void DeviceProfiler::readDeviceMarkerData(
     updateFirstTimestamp(timestamp);
 
 #if defined(TRACY_ENABLE)
-    if ((timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK) == kernel_profiler::NOC_DEBUGGING_STATIC_ID) {
-        NOCDebugState* noc_debug_state = MetalContext::instance(context_id).noc_debug_state().get();
-        if (noc_debug_state) {
-            const metal_SocDescriptor& soc_desc =
-                MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
-            // disable linting here; slicing is __intended__
-            // NOLINTBEGIN
-            const CoreCoord virtual_core =
-                soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
-            // NOLINTEND
-
-            NocDebuggingEventMetadata ev_md(data);
-            ScopedLockEvent scoped_ev{
-                static_cast<int8_t>(virtual_core.x),
-                static_cast<int8_t>(virtual_core.y),
-                static_cast<NocDebuggingEventMetadata::NocDebugEventType>(ev_md.event_type),
-                ev_md.getLockedAddressBase(),
-                ev_md.getNumBytes()};
-            noc_debug_state->push_event(device_id, timestamp, get_processor_id(risc_type), NOCDebugEvent{scoped_ev});
-        }
-    }
+    // The NoC-debug event dispatch that used to live here compared `timer_id` against the magic constant
+    // kernel_profiler::NOC_DEBUGGING_STATIC_ID (23456) -- i.e. it recognised a marker by the VALUE of its
+    // id. Structural zone ids make that unsound in principle (every value in the space is a legitimate
+    // source location) and unnecessary in practice: a marker is identified by its NAME, which now travels
+    // in the kernel's own ELF. This is the DRAM readback path, which is disabled by default and is not
+    // being carried forward; the dispatch was DELETED rather than re-expressed. Consequence: the DRAM path
+    // no longer feeds NOCDebugState. See the streaming path (tools/profiler/perf_debug_profiler.cpp),
+    // which names "NOC-DEBUG" from the ELF like any other zone.
 #endif
 }
 
@@ -2072,45 +1920,11 @@ void DeviceProfiler::readTsData16BMarkerData(
     nlohmann::json meta_data;
     [[maybe_unused]] std::optional<NOCDebugEvent> noc_debug_event;
 #if defined(TRACY_ENABLE)
-    if ((timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK) == kernel_profiler::NOC_TRACING_STATIC_ID) {
-        using EMD = KernelProfilerNocEventMetadata;
-
-        EMD event_metadata(data);
-        auto event_contents = event_metadata.getContents();
-
-        // Local Noc Event is expected to have one trailer with dst_addr
-        if (!std::holds_alternative<EMD::LocalNocEvent>(event_contents)) {
-            TT_THROW("TS_DATA_16B marker contains unexpected event contents {:#X}", event_metadata.asU64());
-        }
-
-        const uint32_t total_data_size = trailer_data.size() + 1;
-        if (total_data_size != kernel_profiler::TimestampedDataSize<kernel_profiler::PacketTypes::TS_DATA_16B>::size) {
-            TT_THROW(
-                "TS_DATA_16B marker expected {} trailers, got {}",
-                kernel_profiler::TimestampedDataSize<kernel_profiler::PacketTypes::TS_DATA_16B>::size,
-                total_data_size);
-        }
-
-        EMD trailer_metadata(trailer_data[0]);
-        const auto& trailer = trailer_metadata.getLocalNocEventDstTrailer();
-        meta_data["dst_addr"] = trailer.getDstAddr();
-        meta_data["src_addr"] = trailer.getSrcAddr();
-        meta_data["noc_status_counter"] = static_cast<uint32_t>(trailer.counter_value);
-
-        auto& noc_debug_state = MetalContext::instance(context_id).noc_debug_state();
-        if (noc_debug_state) {
-            EMD::LocalNocEvent local_noc_event = std::get<EMD::LocalNocEvent>(event_contents);
-            const metal_SocDescriptor& soc_desc =
-                MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
-            // disable linting here; slicing is __intended__
-            // NOLINTBEGIN
-            const CoreCoord virtual_core =
-                soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
-            // NOLINTEND
-            noc_debug_event =
-                make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer());
-        }
-    }
+    // Same deletion as in readTsDataMarkerData above: this recognised a NoC-trace marker by comparing
+    // `timer_id` against the magic kernel_profiler::NOC_TRACING_STATIC_ID (12345). Identification by id
+    // VALUE is gone from the profiler; markers are identified by ELF-resolved name. DRAM path, disabled by
+    // default, deliberately not carried forward -- the metadata this used to unpack into meta_data /
+    // NOCDebugState is no longer produced here.
 #endif
 
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
@@ -2751,6 +2565,12 @@ void DeviceProfiler::pushTracyDeviceResults(
             TracyTTPushStartMarker(device_tracy_contexts[device_core], marker_to_push);
         } else if (marker_to_push.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
             TracyTTPushEndMarker(device_tracy_contexts[device_core], marker_to_push);
+        } else if (
+            marker_to_push.marker_type == tracy::TTDeviceMarkerType::TS_EVENT ||
+            marker_to_push.marker_type == tracy::TTDeviceMarkerType::TS_DATA ||
+            marker_to_push.marker_type == tracy::TTDeviceMarkerType::TS_DATA_16B) {
+            // Point-in-time device events; they render as markers on the RISC lane rather than zones.
+            TracyTTPushMarker(device_tracy_contexts[device_core], marker_to_push);
         }
     }
 #endif
@@ -3156,6 +2976,26 @@ void DeviceProfiler::pollDebugDumpResults(
 #endif
 }
 
+// When an external streaming consumer OWNS the worker profiler rings and drains them continuously, the
+// standard DRAM device profiler must stand down -- its per-program control-buffer reset (see the readback
+// path) rewinds the ring TAIL and breaks the continuous drain (~30x duplicate zones).
+//
+// Two such consumers exist and both are affected identically, because the hazard is the rewind, not who
+// is reading: TT_METAL_STREAMING_PROFILER (the DRISC drainer) and TT_METAL_DRISC_PROFILER (the
+// DRISC drainer). Read once.
+static bool external_ring_drainer_active() {
+    static const bool active = [] {
+        for (const char* var : {"TT_METAL_STREAMING_PROFILER", "TT_METAL_DRISC_PROFILER"}) {
+            const char* s = std::getenv(var);
+            if (s != nullptr && *s != '\0' && *s != '0') {
+                return true;
+            }
+        }
+        return false;
+    }();
+    return active;
+}
+
 bool getDeviceProfilerState(ContextId context_id) {
     auto& ctx = MetalContext::instance(context_id);
 
@@ -3164,7 +3004,10 @@ bool getDeviceProfilerState(ContextId context_id) {
         return false;
     }
 
-    return ctx.rtoptions().get_profiler_enabled();
+    // NOTE: PROFILE_KERNEL (marker emission) keys off get_profiler_enabled()
+    // DIRECTLY (build.cpp / build_env_manager.cpp), so disabling the DRAM profiler here does NOT stop the
+    // kernels emitting markers -- it only stands down the DRAM readback/reset.
+    return ctx.rtoptions().get_profiler_enabled() && !external_ring_drainer_active();
 }
 
 bool getDeviceDebugDumpEnabled(ContextId context_id) {

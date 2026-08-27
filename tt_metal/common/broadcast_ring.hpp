@@ -21,6 +21,13 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/tt_pause.hpp>
 
+#if defined(__x86_64__)
+#include <emmintrin.h>
+#endif
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
+
 namespace tt::tt_metal {
 
 /**
@@ -64,13 +71,21 @@ public:
      */
     explicit BroadcastRing(size_t capacity) :
         capacity_(capacity ? std::bit_ceil(capacity) : 1),
-        slots_(std::make_unique<Slot[]>(capacity_)),
+        storage_(allocate_slots(capacity_)),
         writer_(&shared_state_, view()) {}
 
     ~BroadcastRing() {
         TT_FATAL(
             active_readers_.load(std::memory_order_relaxed) == 0,
             "BroadcastRing readers must be destroyed before the ring");
+#if defined(__linux__)
+        if (storage_.map_base != nullptr) {
+            for (size_t i = 0; i < capacity_; i++) {
+                storage_.slots[i].~Slot();
+            }
+            ::munmap(storage_.map_base, storage_.map_bytes);
+        }
+#endif
     }
 
     [[nodiscard]] size_t capacity() const noexcept { return capacity_; }
@@ -100,6 +115,75 @@ public:
         {
             static_assert(kMoveStoreNoexcept, "T must be nothrow-movable");
             publish_impl(items);
+        }
+
+        /**
+         * @brief Current stream position: the count of items ever published. The start of a
+         *        direct-emit region (see emit_reserve/emit_store/emit_commit).
+         */
+        [[nodiscard]] uint64_t position() const noexcept { return head_cache_; }
+
+        /**
+         * @brief Direct emit, step 1: raise the claim to @p upto before storing items into
+         *        [position(), upto). May be called repeatedly with a growing bound while a region
+         *        is open (e.g. a worst-case bump per input chunk); @p upto must never decrease
+         *        within the region. Readers treat claimed-but-uncommitted slots as potentially
+         *        overwritten, so keep the over-claim small relative to capacity.
+         */
+        void emit_reserve(uint64_t upto) noexcept {
+            shared_state_->claim.store(upto, std::memory_order_relaxed);
+            std::atomic_thread_fence(std::memory_order_release);
+        }
+
+        /** @brief Direct emit, step 2: store one item at @p pos, which must be below the reserved bound. */
+        void emit_store(uint64_t pos, const T& item) noexcept {
+#if defined(__x86_64__)
+            // Non-temporal stores for small trivially-copyable slots: the ring is written far beyond cache
+            // capacity and the writer never re-reads it, so the read-for-ownership a normal store pays is
+            // pure waste. Bypassing the slot's atomic words is outside the C++ abstract machine but sound
+            // here: x86 stores are not observed torn across the slot in practice worse than the
+            // claim-recheck already tolerates, and emit_commit's sfence orders every NT store before the
+            // head release. It also matters that EVERY writer path is non-temporal: mixing cached and NT
+            // stores into the same lines forces a WC-buffer flush + RFO per collision, which measured ~4x
+            // on the perf-debug decode when the 24 B record silently missed this path.
+            if constexpr (kTriviallyCopyable && sizeof(T) == 16 && sizeof(Slot) == 16) {
+                _mm_stream_si128(
+                    reinterpret_cast<__m128i*>(&view_.slot_at(pos)),
+                    _mm_loadu_si128(reinterpret_cast<const __m128i*>(&item)));
+                return;
+            }
+            // 8-byte-multiple slots (e.g. the 24 B perf-debug record): movnti per quadword. Slots are
+            // 8-aligned by AtomicSlot's layout, which is all movnti needs.
+            if constexpr (kTriviallyCopyable && sizeof(T) % 8 == 0 && sizeof(Slot) == sizeof(T)) {
+                auto* q = reinterpret_cast<long long*>(&view_.slot_at(pos));
+                const auto* src = reinterpret_cast<const long long*>(&item);
+#pragma GCC unroll 8
+                for (size_t k = 0; k < sizeof(T) / 8; k++) {
+                    _mm_stream_si64(q + k, src[k]);
+                }
+                return;
+            }
+#endif
+            view_.slot_at(pos).store(item);
+        }
+
+        /**
+         * @brief Address of the slot at @p pos, for direct-emit bulk stores built outside the ring
+         *        (same reserve/commit contract and the same non-temporal caveats as emit_store).
+         */
+        [[nodiscard]] void* emit_slot_ptr(uint64_t pos) noexcept { return &view_.slot_at(pos); }
+
+        /**
+         * @brief Direct emit, step 3: publish items [position(), pos) and settle the claim to the
+         *        committed position. Does not wake readers; see wake_readers().
+         */
+        void emit_commit(uint64_t pos) noexcept {
+#if defined(__x86_64__)
+            _mm_sfence();
+#endif
+            shared_state_->head.store(pos, std::memory_order_release);
+            shared_state_->claim.store(pos, std::memory_order_relaxed);
+            head_cache_ = pos;
         }
 
         /**
@@ -328,7 +412,10 @@ private:
         kTriviallyCopyable || (std::is_nothrow_move_constructible_v<T> && std::is_nothrow_move_assignable_v<T>);
     static constexpr bool kLoadNoexcept = kTriviallyCopyable || std::is_nothrow_copy_assignable_v<T>;
 
-    struct AtomicSlot {
+    // 16 B slots are 16-aligned so Writer::emit_store's non-temporal store path is usable on them.
+    static constexpr size_t kSlotAlign = (kTriviallyCopyable && sizeof(T) == 16) ? 16 : alignof(std::atomic<uint64_t>);
+
+    struct alignas(kSlotAlign) AtomicSlot {
         static constexpr size_t kWordCount = (sizeof(T) + sizeof(uint64_t) - 1) / sizeof(uint64_t);
 
         std::array<std::atomic<uint64_t>, kWordCount> words;
@@ -384,6 +471,44 @@ private:
         Slot& slot_at(uint64_t position) const noexcept { return slots[position & (capacity - 1)]; }
     };
 
+    struct SlotStorage {
+        Slot* slots = nullptr;
+        std::unique_ptr<Slot[]> owned;
+        void* map_base = nullptr;
+        size_t map_bytes = 0;
+    };
+
+    // Large slot arrays are walked far beyond TLB reach, so back them with 2 MiB pages. THP is
+    // madvise-opt-in on typical deployments, hence the explicit mmap + MADV_HUGEPAGE (over-mapped by one
+    // huge page to guarantee an aligned start, which the huge-page fault path requires).
+    static SlotStorage allocate_slots(size_t n) {
+        SlotStorage storage;
+#if defined(__linux__)
+        static constexpr size_t kHugePageSize = size_t{2} << 20;
+        static constexpr size_t kHugePageMinBytes = size_t{64} << 20;
+        const size_t bytes = n * sizeof(Slot);
+        if (bytes >= kHugePageMinBytes) {
+            const size_t map_bytes = bytes + kHugePageSize;
+            void* base = ::mmap(nullptr, map_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (base != MAP_FAILED) {
+                storage.map_base = base;
+                storage.map_bytes = map_bytes;
+                const uintptr_t aligned =
+                    (reinterpret_cast<uintptr_t>(base) + kHugePageSize - 1) & ~(kHugePageSize - 1);
+                ::madvise(reinterpret_cast<void*>(aligned), bytes, MADV_HUGEPAGE);
+                storage.slots = reinterpret_cast<Slot*>(aligned);
+                for (size_t i = 0; i < n; i++) {
+                    new (storage.slots + i) Slot();
+                }
+                return storage;
+            }
+        }
+#endif
+        storage.owned = std::make_unique<Slot[]>(n);
+        storage.slots = storage.owned.get();
+        return storage;
+    }
+
     // head/claim are accessed together so they share a cache line; wake_token is on its own line so a
     // reader spin-waiting on it in wait() can't steal the head/claim line from the writer
     struct SharedState {
@@ -392,10 +517,10 @@ private:
         alignas(kFalseSharingSize) WakeTokenAtomic wake_token{0};
     };
 
-    SlotsView view() const noexcept { return {slots_.get(), capacity_}; }
+    SlotsView view() const noexcept { return {storage_.slots, capacity_}; }
 
     const size_t capacity_;
-    const std::unique_ptr<Slot[]> slots_;
+    SlotStorage storage_;
     SharedState shared_state_;
     mutable std::atomic<uint32_t> active_readers_{0};
     Writer writer_;

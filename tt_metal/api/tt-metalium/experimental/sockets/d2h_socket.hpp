@@ -104,6 +104,19 @@ public:
      */
     struct ExternalConfigBuffer {
         uint32_t address;  // L1 address on the sender core
+        // Set when the sender core is NOT a Tensix worker (e.g. a Blackhole DRAM
+        // core / DRISC). The socket then targets the sender via physical->virtual NoC translation +
+        // the full L1 address, instead of worker_core_from_logical_core +
+        // worker-L1 semantics, for both the config write and the bytes_acked write-back.
+        //
+        // ADDRESSING ONLY -- this says nothing about how the bytes_acked write reaches the device.
+        // The socket picks static vs dynamic TLB by asking UMD whether the sender core has a static
+        // window spanning the config buffer (see init_sender_tlb), so a DRAM/DRISC sender gets the
+        // same fast static write a worker does. On Blackhole only one NoC port per DRAM channel is
+        // statically mapped at device init (ll_api::configure_static_tlbs), so a caller using a
+        // different port should configure a window for its core BEFORE constructing the socket --
+        // otherwise every read() pays a TLB reconfigure (~210 ns measured on bh-05).
+        bool sender_uses_physical_noc_addr = false;
     };
 
     /**
@@ -219,6 +232,28 @@ public:
     uint32_t get_fifo_curr_size() const { return fifo_curr_size_; }
 
     /**
+     * @brief True when the flow-control counter lives in a hugepage mapping (read via clflush+lfence)
+     *        rather than the IOMMU-mapped host buffer (read via mfence). The two paths have very
+     *        different per-poll costs, so which one is in use matters when comparing machines.
+     */
+    bool is_using_hugepage() const { return using_hugepage_; }
+
+    /**
+     * @brief True when this socket got a STATIC TLB window for its sender core, false when it fell back to
+     *        UMD's dynamic TLBs (which reconfigure the window per access). The ack write in
+     *        notify_sender() goes through that path once per read(), so the two differ by roughly the cost
+     *        of a window reconfigure -- the leading suspect for a fixed per-read overhead.
+     */
+    bool has_static_tlb() const { return sender_core_tlb_ != nullptr; }
+
+    /**
+     * @brief Diagnostic: perform one ack write (re-send the CURRENT bytes_acked to the sender core). This is
+     *        the same device write read() issues once per call, so timing it isolates the per-read device
+     *        access cost. Idempotent -- it re-sends a value the socket already holds.
+     */
+    void probe_ack_write() { notify_sender(); }
+
+    /**
      * @brief Returns the L1 address of the socket configuration buffer on the device.
      *
      * This address should be passed to the device kernel (typically as a compile-time
@@ -275,6 +310,36 @@ public:
      * @throws TT_FATAL if page_size has not been set or num_pages exceeds FIFO capacity.
      */
     void read(void* data, uint32_t num_pages, bool notify_sender = true);
+
+    /**
+     * @brief View into the FIFO's host memory returned by peek(): one span, or two when the
+     *        requested range wraps the FIFO end (`second` is then the FIFO base).
+     */
+    struct ReadView {
+        const uint32_t* first = nullptr;
+        uint32_t first_bytes = 0;
+        const uint32_t* second = nullptr;
+        uint32_t second_bytes = 0;
+    };
+
+    /**
+     * @brief Zero-copy read: returns spans into the FIFO's host memory instead of copying.
+     *
+     * Blocks until `num_pages` are available, so only request what pages_available() reported.
+     * The spans stay valid — the device cannot overwrite them — until the caller retires them
+     * with pop(): the device only reclaims FIFO space it has been notified of via `bytes_acked`.
+     * The read pointer advances only on pop(), so peeking again before pop() returns the same data.
+     *
+     * @throws TT_FATAL if page_size has not been set or num_pages exceeds FIFO capacity.
+     */
+    ReadView peek(uint32_t num_pages);
+
+    /**
+     * @brief Retires a prior peek(): advances the read pointer past `num_pages` and (optionally)
+     *        notifies the device that the space is reclaimable. Call with the same page count as
+     *        the peek(), after the caller has finished with the spans.
+     */
+    void pop(uint32_t num_pages, bool notify_sender = true);
 
     /**
      * @brief Blocks until all sent data has been acknowledged.
@@ -376,6 +441,7 @@ private:
     uint32_t read_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
     uint32_t config_buffer_address_ = 0;
+    bool sender_uses_physical_noc_addr_ = false;  // non-worker sender addressing (see ExternalConfigBuffer)
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
     tt::umd::TlbWindow* sender_core_tlb_ = nullptr;

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <thread>
@@ -11,6 +12,7 @@
 #include "hostdevcommon/profiler_common.h"
 #include "context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "tools/profiler/perf_debug_profiler.hpp"  // perf_debug_dram_region_bytes_per_risc
 #include "math.hpp"
 #include "tt_cluster.hpp"
 #include <tt-metalium/device.hpp>
@@ -78,10 +80,17 @@ uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rt
     // There are 2 DRAM buffers per risc when debug dump is enabled.
     // The size of each buffer returned by get_profiler_dram_bank_size_per_risc_bytes is half to maintain the same
     // total profiler size.
-    if (debug_dump_enabled) {
-        return per_buffer_size * 2;
-    }
-    return per_buffer_size;
+    const uint32_t old_profiler_size = debug_dump_enabled ? per_buffer_size * 2 : per_buffer_size;
+
+    // The perf-debug role split stages its DRAM frame rings INSIDE the HAL's per-bank profiler region instead of
+    // allocating a second DRAM buffer, so when it is on the region has to be ring-sized rather than marker-sized.
+    //
+    // This override belongs HERE and not in get_profiler_dram_bank_size_per_risc_bytes: this function feeds only
+    // the HAL region (metal_env.cpp), whereas that one also feeds the JIT define kernels compile against and
+    // tt_metal_profiler.cpp's `per_risc * max_processors * cores_per_dram_bank <= profiler_size` assert. Inflating
+    // it there rebuilt every kernel and left that assert with ~1% margin -- 672,000 * 5 * 20 = 67,200,000 against
+    // a 67,108,864 B region -- so it would have tripped on any board harvesting less than this one.
+    return std::max(old_profiler_size, perf_debug_dram_region_bytes_per_risc());
 }
 
 ProfilerStateManager::ProfilerStateManager(MetalEnvImpl& env) : env_(env), do_sync_on_close(true) {}
