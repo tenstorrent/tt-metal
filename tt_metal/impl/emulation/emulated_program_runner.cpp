@@ -2366,6 +2366,7 @@ constexpr uint32_t UNSET = 0, UNICAST_1D = 1, UNICAST_2D = 2, MCAST_1D = 3, MCAS
 struct EmuleRoute {
     uint32_t kind = 0, a = 0, b = 0, c = 0, d = 0, e = 0, f = 0;
     uint32_t dir_index = 0;  // 1D: which of the worker's connections (fwd=0/bwd=1), set at send time
+    uint32_t eth_channel = 0xFFFFFFFF;  // VC0 connection identity, set at send time
     // Mux-path direction hint (preferred over the range-match heuristic), set at send time:
     uint32_t mux_x = 0xFFFF, mux_y = 0xFFFF;   // worker's mux NOC (TRANSLATED) coords (fabric MUX path)
 };
@@ -2395,11 +2396,12 @@ extern "C" void __emule_fabric_set_route(
 // Record a 1D send's per-connection direction signals: the fwd/bwd conn_index (direct path) and the
 // worker's mux NOC coords (MUX path); 0xFFFF means unset. See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" void __emule_fabric_set_route_dir(
-    uint32_t hdr, uint32_t conn_index, uint32_t mux_x, uint32_t mux_y) {
+    uint32_t hdr, uint32_t conn_index, uint32_t eth_channel, uint32_t mux_x, uint32_t mux_y) {
     emule_require_self(__func__);  // keys through __emule_self->bridge_l1 via emule_route_key
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
     auto& r = g_route_meta[emule_route_key(hdr)];
     r.dir_index = conn_index;
+    r.eth_channel = eth_channel;
     r.mux_x = mux_x;
     r.mux_y = mux_y;
 }
@@ -2453,6 +2455,10 @@ static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
 // payloads to the wrong chip. Per-worker keying also removes the cross-thread append race, since one
 // worker's connections are recorded by one thread in order.
 static std::unordered_map<uint64_t, std::vector<ConnRoute>> g_worker_conns;
+// VC0 TENSIX senders receive the fabric Ethernet channel in their runtime args. Unlike a connection-slot
+// index, the channel identifies the actual host-selected forwarding link even when separate programs each
+// own one slot-0 connection on the same worker core. Keyed by (src chip, Ethernet channel).
+static std::unordered_map<uint64_t, ConnRoute> g_channel_conns;
 // Per-op UNDIRECTED ring adjacency. Each program captures and restores its own topology.
 static std::unordered_map<uint32_t, std::set<uint32_t>> g_ring_adj;
 // Per-op reset flag: cleared at each new op's first connection-record so a later op's different line
@@ -2470,11 +2476,16 @@ static std::unordered_map<uint64_t, uint32_t> g_mux_dir;
 static inline uint64_t __emule_worker_key(uint32_t src, uint32_t wx, uint32_t wy) {
     return (static_cast<uint64_t>(src) << 32) | (static_cast<uint64_t>(wx & 0xFFFF) << 16) | (wy & 0xFFFF);
 }
-extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor) {
+static inline uint64_t __emule_channel_key(uint32_t src, uint32_t eth_channel) {
+    return (static_cast<uint64_t>(src) << 32) | eth_channel;
+}
+extern "C" void __emule_fabric_record_conn(
+    uint32_t src, uint32_t wx, uint32_t wy, uint32_t eth_channel, uint32_t dir, uint32_t neighbor) {
     std::lock_guard<std::mutex> lk(g_conn_route_mu);
     if (g_conn_route_dirty.exchange(false)) {
         g_conn_route.clear();
         g_worker_conns.clear();
+        g_channel_conns.clear();
         g_worker_dir.clear();
         g_mux_dir.clear();
         g_ring_adj.clear();
@@ -2482,6 +2493,7 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     // Record the connection-owner core's (the mux core, on the MUX path) direction, keyed by its LOGICAL
     // coords — before the per-direction dedup below, which is for the src-keyed g_conn_route only.
     g_mux_dir[__emule_worker_key(src, wx, wy)] = dir;
+    g_channel_conns[__emule_channel_key(src, eth_channel)] = ConnRoute{dir, neighbor};
     // Accumulate the undirected ring edge for this op.
     g_ring_adj[src].insert(neighbor);
     g_ring_adj[neighbor].insert(src);
@@ -2672,7 +2684,16 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
         // fallback for senders whose connections were recorded under another core (MUX).
         const std::vector<ConnRoute>& idx_conns = wconns.empty() ? conns : wconns;
         int dir = -1;
-        // (1) Mux-core direction: translate the worker's mux NOC coords to the mux's LOGICAL core and look up
+        // (1) VC0 channel identity: this is the exact host-selected forwarding link and remains unambiguous
+        // when separate programs each expose their sole connection as slot 0 on the same worker core.
+        if (r.eth_channel != 0xFFFFFFFF) {
+            std::lock_guard<std::mutex> lk(g_conn_route_mu);
+            auto cit = g_channel_conns.find(__emule_channel_key(src_chip, r.eth_channel));
+            if (cit != g_channel_conns.end()) {
+                dir = static_cast<int>(cit->second.dir);
+            }
+        }
+        // (2) Mux-core direction: translate the worker's mux NOC coords to the mux's LOGICAL core and look up
         // the direction the mux→EDM append recorded. Resolves ring, where the range-match below cannot.
         if (dir < 0 && r.mux_x != 0xFFFF) {
             auto* src_obj = get_sw_emulated_chip(src_chip);
@@ -2690,7 +2711,7 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
                 }
             }
         }
-        // (2) Fallback — range-match heuristic (and its cached g_worker_dir / conn-index), used only when the
+        // (3) Fallback — range-match heuristic (and its cached g_worker_dir / conn-index), used only when the
         // mux signal above is absent. See tt-emule docs/fabric-ccl-emulation.md.
         if (dir < 0 && r.kind == emule_route_kind::MCAST_1D) {
             const uint32_t range = r.b ? r.b : 1;
@@ -3565,6 +3586,7 @@ static constexpr size_t kMaxResolvedPrograms = 256;
 struct ProgramRoutes {
     std::unordered_map<uint32_t, std::vector<ConnRoute>> conn_route;
     std::unordered_map<uint64_t, std::vector<ConnRoute>> worker_conns;
+    std::unordered_map<uint64_t, ConnRoute> channel_conns;
     std::unordered_map<uint64_t, uint32_t> mux_dir;
     std::unordered_map<uint32_t, std::set<uint32_t>> ring_adj;
 };
@@ -3872,7 +3894,7 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     {
         std::lock_guard<std::mutex> lk(g_conn_route_mu);
         if (g_program_routes.find(pid) == g_program_routes.end()) {
-            g_program_routes[pid] = ProgramRoutes{g_conn_route, g_worker_conns, g_mux_dir, g_ring_adj};
+            g_program_routes[pid] = ProgramRoutes{g_conn_route, g_worker_conns, g_channel_conns, g_mux_dir, g_ring_adj};
         }
     }
 
@@ -3941,6 +3963,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
         if (auto rit = g_program_routes.find(pid); rit != g_program_routes.end()) {
             g_conn_route = rit->second.conn_route;
             g_worker_conns = rit->second.worker_conns;
+            g_channel_conns = rit->second.channel_conns;
             g_mux_dir = rit->second.mux_dir;
             g_ring_adj = rit->second.ring_adj;
         }
