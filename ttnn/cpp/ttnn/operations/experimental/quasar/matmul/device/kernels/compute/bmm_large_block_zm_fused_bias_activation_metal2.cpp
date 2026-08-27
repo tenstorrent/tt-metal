@@ -15,7 +15,7 @@
 // is converted:
 //   - positional get_compile_time_arg_val(N) -> named get_arg(args::name)
 //   - named CB-index CTAs (get_named_compile_time_arg_val("cb_*")) -> dfb::* tokens
-//   - named non-CB CTAs (bias_ntiles, last_subblock_w_valid, activation_*) -> get_arg(args::name)
+//   - named non-CB CTAs (bias_ntiles, last_subblock_w_valid) -> get_arg(args::name)
 //   - the MATMUL_DRAM_SHARDED worker-core RTA -> get_arg(args::is_worker_core)
 //   - kernel_main-local CircularBuffer wrappers -> DataflowBuffer wrappers
 // The file-scope helper functions still take raw uint32_t cb ids (dfb::* converts implicitly) and
@@ -42,9 +42,6 @@
 #endif
 
 #include "api/compute/eltwise_binary.h"
-#ifdef SFPU_ACTIVATION
-#include "bmm_fused_activation.hpp"
-#endif
 
 /**
  * @brief Transposes a block of tiles from one circular buffer to another.
@@ -252,15 +249,6 @@ void kernel_main() {
 #endif
     constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
 
-#ifdef SFPU_ACTIVATION
-    constexpr KernelActivation activation_type = static_cast<KernelActivation>(get_arg(args::activation_type));
-    constexpr uint32_t activation_param0 = get_arg(args::activation_param0);
-    constexpr uint32_t activation_param1 = get_arg(args::activation_param1);
-    constexpr uint32_t activation_param2 = get_arg(args::activation_param2);
-
-    ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
-#endif
-
 #ifdef IN1_TRANSPOSE_TILE
     constexpr uint32_t in1_transpose_tile = true;
 #else
@@ -400,16 +388,7 @@ void kernel_main() {
                             if (last_out) {
                                 tile_regs_commit();
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
-
-#if defined SFPU_ACTIVATION and not defined FUSE_BIAS
-                                apply_activation_from_pack<
-                                    activation_type,
-                                    activation_param0,
-                                    activation_param1,
-                                    activation_param2>(out_subblock_num_tiles);
-#else
                                 tile_regs_wait();
-#endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                                 PACK((pack_reconfig_data_format(mm_out_cb_id)));
@@ -590,25 +569,7 @@ void kernel_main() {
 
                         // Pack out to output buffer
                         untilize_mode_out_cb.reserve_back(out_subblock_num_tiles);
-
-#ifdef SFPU_ACTIVATION
-                        PACK(TTI_SEMWAIT(
-                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                            semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO));
-
-                        // Flip destination register offset for PACKER access
-                        PACK(TT_SETC16(
-                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            ActivationApplyHelper<activation_type, activation_param0, activation_param1>::apply(i);
-                        }
-
-                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-#else
                         tile_regs_wait();
-#endif
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_cb_id);
                         }
