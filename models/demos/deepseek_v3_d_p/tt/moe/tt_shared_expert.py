@@ -71,11 +71,22 @@ MAX_IN0_BLOCK_W = 16
 
 
 def _in0_block_w(k_tiles: int) -> int:
-    """Largest K block that tiles k_tiles without a remainder."""
+    """Largest K block that tiles k_tiles without a remainder.
+
+    Full K is admissible past the cap when it costs no more L1 than the capped block would. The
+    matmul buffers the in0/in1 CBs one deep at a single K block and two deep at more than one, so a
+    full-K block that is at most twice the capped width occupies the same L1 while dropping the
+    block loop. Stated as that ratio rather than an L1 budget on purpose: it stays correct without
+    tracking the CB sizing, whose buffering depth, tile alignment and unreserved base all live in
+    the matmul factory.
+    """
+    assert k_tiles > 0, f"k_tiles must be positive, got {k_tiles}"
+    capped = 1
     for w in range(min(MAX_IN0_BLOCK_W, k_tiles), 0, -1):
         if k_tiles % w == 0:
-            return w
-    return 1
+            capped = w
+            break
+    return k_tiles if k_tiles <= 2 * capped else capped
 
 
 def _out_subblock(per_core_M: int, per_core_N: int, deep_k: bool) -> tuple[int, int]:
