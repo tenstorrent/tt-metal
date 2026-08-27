@@ -91,7 +91,7 @@ permissions:
   pull-requests: read
 network: defaults
 tools:
-  bash: ["cat", "ls", "find", "grep", "head", "tail", "wc"]
+  bash: ["cat", "ls", "find", "grep", "head", "tail", "wc", "gh", "python3"]
   github:
     toolsets: [pull_requests, repos]
     lockdown: false
@@ -111,20 +111,21 @@ safe-outputs:
     footer: "> 🔷 *Reviewed using [Tenstorrent domain skills](https://github.com/blozano-tt/skills) by [{workflow_name}]({run_url})*{ai_credits_suffix}{history_link}"
     run-failure: 🔷 [{workflow_name}]({run_url}) {status} during the Tenstorrent skills review.
 skills:
-- blozano-tt/skills/tt-review-core@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/tt-review-router@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/ttnn-op-kernel-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/tt-l1-memory-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/tt-model-bringup-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/tt-multichip-ccl-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/tt-trace-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/tt-precision-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/tt-test-coverage-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/llk-race-audit-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/llk-perf-audit-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/tt-vllm-serving-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/tt-perf-claim-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
-- blozano-tt/skills/tt-comment-hygiene-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/tt-review-core@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/tt-review-router@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/ttnn-op-kernel-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/tt-l1-memory-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/tt-model-bringup-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/tt-multichip-ccl-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/tt-trace-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/tt-precision-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/tt-test-coverage-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/llk-race-audit-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/llk-perf-audit-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/tt-vllm-serving-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/tt-perf-claim-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/tt-comment-hygiene-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/tt-split-pr-by-codeowners@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
 timeout-minutes: 15
 ---
 
@@ -159,6 +160,7 @@ Installed under `.github/skills/`. **`tt-review-core` is not optional** — it c
 | `/tt-vllm-serving-review` | Generator contracts, plugin registration, the `tt_data_parallel` ambiguity |
 | `/tt-perf-claim-review` | Whether a stated performance number is supported by its measurement |
 | `/tt-comment-hygiene-review` | Iteration-journey comments, tribal knowledge, magic values, op docstrings |
+| `/tt-split-pr-by-codeowners` | Whether a wide PR should be split so each piece needs fewer CODEOWNERS approvals. **Not a domain skill** — see Step 4b, and it does not count against the two. |
 
 ## Your mission
 
@@ -226,6 +228,18 @@ These describe **impact, not merge gates**. This workflow is advisory and cannot
 
 **"It passes today" is not evidence of correctness.** Races and UB pass intermittently; undefined behaviour that works at small tile counts fails non-deterministically at larger shapes. Say so rather than softening the severity.
 
+### Step 4b: Split check — wide PRs only
+
+**Gate: run this only when `pr-meta.json` reports `changedFiles >= 20`.** Below that a PR rarely spans enough CODEOWNERS rules for a split to save an approval, and the check costs a CODEOWNERS fetch plus a paginated file list. Skip silently when the gate is not met — do not mention it.
+
+When the gate is met, load `/tt-split-pr-by-codeowners` and follow it. Three deviations for this workflow:
+
+- **Do not use `pr-meta.json`'s `files` list.** It comes from `gh pr view --json files`, which builds `files(first: 100)` and does not paginate — it silently caps at 100 on exactly the PRs this check targets. Fetch the list yourself, as the skill directs: `gh api --paginate repos/${{ github.repository }}/pulls/<n>/files --jq '.[].filename'`, and pass `--expect-files` from `changedFiles` so a short list fails loudly.
+- **Skip the classic branch-protection call.** `repos/…/branches/<base>/protection` needs `administration: read`, which this workflow deliberately does not hold. Use `repos/${{ github.repository }}/rules/branches/<base>` alone — per the skill's own validation it is the reading that answers correctly on this repo, where two overlapping rulesets compose most-restrictive. Take `required_approving_review_count` from it and pass `--required-approvals`.
+- **Exclude the PR author** via `--exclude`: GitHub never accepts an author as a reviewer of their own PR, and leaving them in the pool can report a minimum that cannot occur.
+
+Report the result in Step 6 as a `CONSIDER`-level note in its own `<details>` block, never as an inline comment and never as a MUST-FIX — a split is a judgment call about review cost, not a defect. **Recommending no split is the expected outcome and must be stated plainly** when the cover is already small; say nothing at all rather than manufacturing a proposal. The skill plans only: propose the slices, never open or push anything.
+
 ### Step 5: Post inline review comments
 
 For each finding, create a `create-pull-request-review-comment`. Apply **progressive disclosure**: brief visible statement, then collapse detail.
@@ -271,7 +285,16 @@ Applied **`tt-review-core`** + **`ttnn-op-kernel-review`**, **`tt-l1-memory-revi
 - LLK changes in this PR were not audited; only two domain skills load per review.
 
 </details>
+
+<details>
+<summary>🪓 Reviewer load — 174 files, 7 approvals needed</summary>
+
+`tt-split-pr-by-codeowners`: 7 approvals cover all 174 files (exact, branch floor 1). A 3-way split by owner set would need 3 approvals for the largest slice but 9 in total across the chain, plus 3× CI and a rebase chain — **not worth it here**. The cover is already tight relative to the file count.
+
+</details>
 ```
+
+Include the split block **only** when Step 4b ran. Omit it entirely otherwise — its absence on a small PR is correct and needs no explanation.
 
 ### Step 7: Summary comment (optional)
 
