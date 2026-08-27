@@ -275,6 +275,17 @@ void kernel_main() {
         get_compile_time_arg_val(contract::reader_arg::volume_bricks_time),
         get_compile_time_arg_val(contract::reader_arg::volume_bricks_height),
         get_compile_time_arg_val(contract::reader_arg::volume_bricks_width)};
+    // Q lives on the query grid; K, V and the gather live on the resident grid above. Equal
+    // unless the host asked for a query sub-region.
+    constexpr contract::AxisExtents query_bricks{
+        get_compile_time_arg_val(contract::reader_arg::query_bricks_time),
+        get_compile_time_arg_val(contract::reader_arg::query_bricks_height),
+        get_compile_time_arg_val(contract::reader_arg::query_bricks_width)};
+    constexpr uint32_t query_brick_count = get_compile_time_arg_val(contract::reader_arg::query_brick_count);
+    constexpr contract::AxisExtents query_origin_bricks{
+        get_compile_time_arg_val(contract::reader_arg::query_origin_bricks_time),
+        get_compile_time_arg_val(contract::reader_arg::query_origin_bricks_height),
+        get_compile_time_arg_val(contract::reader_arg::query_origin_bricks_width)};
     constexpr contract::AxisExtents gather_bricks{
         get_compile_time_arg_val(contract::reader_arg::gather_bricks_time),
         get_compile_time_arg_val(contract::reader_arg::gather_bricks_height),
@@ -395,15 +406,15 @@ void kernel_main() {
             // A chunk on the far edge can hang off the volume. Those rows have no queries to
             // read; the writer drops them again, and flash rows are independent so whatever
             // stale L1 they carry cannot reach a real query.
-            if (!layout::brick_is_inside(brick, volume_bricks)) {
+            if (!layout::brick_is_inside(brick, query_bricks)) {
                 query_write_pointer += head_dim_tiles * tile_bytes;
                 continue;
             }
             const uint32_t first_tile = layout::tile_offset(
                 batch_index,
-                layout::brick_index(brick, volume_bricks),
+                layout::brick_index(brick, query_bricks),
                 head_index,
-                brick_count,
+                query_brick_count,
                 head_count,
                 head_dim_tiles);
             for (uint32_t head_dim_tile = 0; head_dim_tile < head_dim_tiles; ++head_dim_tile) {
@@ -445,10 +456,11 @@ void kernel_main() {
             static_cast<int32_t>(origin_row[column::shard_origin_height]),
             static_cast<int32_t>(origin_row[column::shard_origin_width])};
 
+        // RESIDENT-local, like query_origin_site below and like the gather table's key origins.
         const mask_gen::SiteInBrick chunk_origin_site{
-            chunk_origin.time * extents.brick_sites.time,
-            chunk_origin.height * extents.brick_sites.height,
-            chunk_origin.width * extents.brick_sites.width};
+            (chunk_origin.time + query_origin_bricks.time) * extents.brick_sites.time,
+            (chunk_origin.height + query_origin_bricks.height) * extents.brick_sites.height,
+            (chunk_origin.width + query_origin_bricks.width) * extents.brick_sites.width};
 
         // The relative table needs no regime: it is keyed on (key_brick - query_brick), which is
         // defined for every chunk. Only the per-brick clamping test below gates it.
@@ -577,10 +589,13 @@ void kernel_main() {
                 for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
                     const layout::BrickCoordinate query_brick =
                         layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
+                    // Into RESIDENT-local sites: the key origins this is compared against come
+                    // from the gather table, which addresses the resident tensor. Without the
+                    // shift a query sub-region would place every window a halo too low.
                     const mask_gen::SiteInBrick query_origin_site{
-                        query_brick.time * extents.brick_sites.time,
-                        query_brick.height * extents.brick_sites.height,
-                        query_brick.width * extents.brick_sites.width};
+                        (query_brick.time + query_origin_bricks.time) * extents.brick_sites.time,
+                        (query_brick.height + query_origin_bricks.height) * extents.brick_sites.height,
+                        (query_brick.width + query_origin_bricks.width) * extents.brick_sites.width};
                     const uint32_t brick_base = mask_write_pointer + brick_in_chunk * tiles_per_kv_chunk * tile_bytes;
                     // Resolved per brick, not per slot: the table describes a window that centres
                     // on its query, which stops being true once the window clamps at a volume edge.

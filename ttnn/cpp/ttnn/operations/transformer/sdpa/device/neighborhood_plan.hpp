@@ -122,6 +122,21 @@ struct NeighborhoodConfig {
     Extent3 shard_extent{{0, 0, 0}};  // zero means "same as volume"
     Offset3 shard_origin{{0, 0, 0}};
 
+    // The sub-box of the resident region this device actually produces OUTPUT for, and where it
+    // starts inside that region. Zero extent means "the whole resident region", which is what an
+    // unsharded run gets and what every caller predating this got.
+    //
+    // A query needs a widened KEY region -- its window reaches past the shard seam -- but never a
+    // widened QUERY region: the halo's own queries belong to the neighbour, which computes them
+    // itself. Without this split the halo's queries are computed and thrown away, which at the
+    // stage-5 W-shard is 16 of every 76 resident columns, and Q has to be widened by a halo
+    // exchange purely to satisfy a shape that is then discarded.
+    //
+    // Both must be brick-aligned: the query region is addressed in whole bricks, and a sub-box
+    // starting or ending mid-brick would put owned and neighbour sites in one tile row.
+    Extent3 query_extent{{0, 0, 0}};
+    Site query_origin{{0, 0, 0}};  // in RESIDENT-local sites, so always >= 0
+
     // The query chunk's extent in SITES.
     Extent3 query_chunk_sites() const {
         return Extent3::of(
@@ -133,6 +148,13 @@ struct NeighborhoodConfig {
 
     Extent3 resident_extent() const { return shard_extent.sites() == 0 ? volume : shard_extent; }
     bool is_sharded() const { return shard_extent.sites() != 0 && !(shard_extent == volume); }
+
+    // The region queries are drawn from. Defaults to the whole resident region, so a config that
+    // never sets query_extent behaves exactly as it did before the split existed.
+    Extent3 query_region() const { return query_extent.sites() == 0 ? resident_extent() : query_extent; }
+    bool has_query_subregion() const {
+        return query_extent.sites() != 0 && !(query_extent == resident_extent() && query_origin == Site{{0, 0, 0}});
+    }
 };
 
 // A placed context window. `extent` equals config.context_window except on an axis shorter
@@ -147,11 +169,20 @@ struct ContextWindow {
 struct NeighborhoodPlan {
     NeighborhoodConfig config;
 
-    Extent3 volume_bricks;  // the volume measured in bricks (rounded up)
+    Extent3 volume_bricks;  // the RESIDENT region measured in bricks (rounded up)
     uint32_t brick_count = 0;
 
-    // The volume measured in query chunks. One chunk is one unit of work: its bricks share a
-    // gather, a mask and a flash pass.
+    // The QUERY region measured in bricks, and where it starts inside the resident brick grid.
+    // K, V and the gather address the resident grid above; Q and the output address this one.
+    // They coincide unless the config asked for a query sub-region.
+    Extent3 query_bricks;
+    uint32_t query_brick_count = 0;
+    Extent3 query_origin_bricks;
+
+    // The QUERY region measured in query chunks. One chunk is one unit of work: its bricks share
+    // a gather, a mask and a flash pass. Chunks are counted over the query region, not the
+    // resident one -- computing a chunk for a brick whose output is discarded is the waste this
+    // whole split exists to remove.
     Extent3 volume_chunks;
     uint32_t chunk_count = 0;
 

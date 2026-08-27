@@ -54,6 +54,26 @@ uint32_t gather_extent_on_axis(
 }
 
 // Where one chunk starts, in sites, local to this device's tensor.
+// The query region in bricks, and where it starts inside the resident brick grid. Both are exact
+// divisions: validate_config requires the query origin and extent to be brick-aligned.
+Extent3 query_in_bricks(const NeighborhoodConfig& config) {
+    const Extent3 query = config.query_region();
+    Extent3 result;
+    for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
+        result.by_axis[axis_index] = ceil_div(query.by_axis[axis_index], config.brick.by_axis[axis_index]);
+    }
+    return result;
+}
+
+Extent3 query_origin_in_bricks(const NeighborhoodConfig& config) {
+    Extent3 result;
+    for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
+        result.by_axis[axis_index] = config.query_origin.by_axis[axis_index] / config.brick.by_axis[axis_index];
+    }
+    return result;
+}
+
+// A chunk's origin, in QUERY-region-local sites. Add config.query_origin for resident-local.
 Site chunk_index_to_origin(uint32_t chunk_index, const NeighborhoodPlan& plan) {
     const Extent3 chunk = plan.config.query_chunk_sites();
     const uint32_t chunks_per_time_slice = plan.volume_chunks.height() * plan.volume_chunks.width();
@@ -248,6 +268,32 @@ void validate_config(const NeighborhoodConfig& config) {
             "the shard must overlap the global volume");
         require(resident.by_axis[axis_index] > 0, "resident extent must be non-zero on every axis");
     }
+
+    // The query sub-region. Brick-aligned on both ends, and inside the resident region: it is
+    // addressed in whole bricks, so a sub-box starting or ending mid-brick would put owned and
+    // neighbour sites in the same tile row and there would be no way to write only the owned half.
+    if (config.query_extent.sites() != 0) {
+        const Extent3 query = config.query_region();
+        for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
+            const uint32_t brick_extent = config.brick.by_axis[axis_index];
+            require(query.by_axis[axis_index] > 0, "query extent must be non-zero on every axis");
+            // The ORIGIN must be brick-aligned: the query grid is a whole-brick sub-grid of the
+            // resident one, and an origin mid-brick would put owned and neighbour sites in one
+            // tile row with no way to address either half.
+            require(
+                config.query_origin.by_axis[axis_index] % brick_extent == 0,
+                "query_origin must be brick-aligned, or a tile row would straddle the query region's edge");
+            // The EXTENT need not be: an axis whose resident extent is not a whole number of
+            // bricks rounds up into ghost sites exactly as the resident grid already does (stage
+            // 5 at 145 frames is 77 or 78 deep against a 2-deep brick). What must hold is that
+            // the rounded-up query bricks still fit inside the rounded-up resident bricks.
+            const uint32_t query_bricks = ceil_div(query.by_axis[axis_index], brick_extent);
+            const uint32_t resident_bricks = ceil_div(resident.by_axis[axis_index], brick_extent);
+            require(
+                config.query_origin.by_axis[axis_index] / brick_extent + query_bricks <= resident_bricks,
+                "the query region must lie inside the resident region");
+        }
+    }
     for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
         require(config.volume.by_axis[axis_index] > 0, "volume extent must be non-zero on every axis");
         require(config.context_window.by_axis[axis_index] > 0, "context window must be non-zero on every axis");
@@ -267,9 +313,15 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
     plan.volume_bricks = volume_in_bricks(config);
     plan.brick_count = plan.volume_bricks.sites();
 
+    plan.query_bricks = query_in_bricks(config);
+    plan.query_brick_count = plan.query_bricks.sites();
+    plan.query_origin_bricks = query_origin_in_bricks(config);
+
+    // Over the QUERY bricks, not the resident ones: a chunk whose output is discarded is work
+    // that should never be scheduled.
     for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
         plan.volume_chunks.by_axis[axis_index] =
-            ceil_div(plan.volume_bricks.by_axis[axis_index], config.query_chunk_bricks.by_axis[axis_index]);
+            ceil_div(plan.query_bricks.by_axis[axis_index], config.query_chunk_bricks.by_axis[axis_index]);
     }
     plan.chunk_count = plan.volume_chunks.sites();
 
@@ -289,7 +341,8 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
     // Where each brick's gather starts, before rounding to a brick boundary. Window origins
     // are non-decreasing in the query group index, so the union of a brick's windows starts
     // at the window of the first query group inside it.
-    // `brick_origin` is LOCAL; window placement needs the GLOBAL position.
+    // `brick_origin` is QUERY-region-local; window placement needs the GLOBAL position, which is
+    // two hops away: + query_origin puts it in resident-local sites, + shard_origin in global ones.
     const auto union_origin_for = [&](const Site& brick_origin, uint32_t axis_index) {
         const uint32_t volume_extent_sites = config.volume.by_axis[axis_index];
         const uint32_t stride_extent_sites = config.stride.by_axis[axis_index];
@@ -297,8 +350,9 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
             window_extent_on_axis(config.context_window.by_axis[axis_index], volume_extent_sites);
         // Bricks below the volume belong to a halo that hangs off the low edge; clamp so the
         // group index stays sane. Their windows are never used -- see Offset3.
-        const int32_t signed_global =
-            static_cast<int32_t>(brick_origin.by_axis[axis_index]) + config.shard_origin.by_axis[axis_index];
+        const int32_t signed_global = static_cast<int32_t>(brick_origin.by_axis[axis_index]) +
+                                      static_cast<int32_t>(config.query_origin.by_axis[axis_index]) +
+                                      config.shard_origin.by_axis[axis_index];
         const uint32_t global_site = signed_global > 0 ? static_cast<uint32_t>(signed_global) : 0u;
         const uint32_t first_query_group_index = global_site / stride_extent_sites;
         // Snapping is only legal when the whole brick is one query group; otherwise the queries

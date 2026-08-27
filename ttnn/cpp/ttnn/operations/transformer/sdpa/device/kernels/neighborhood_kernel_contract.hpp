@@ -117,6 +117,18 @@ enum : uint32_t {
     gather_bricks_height,
     gather_bricks_width,
 
+    // The QUERY region, in bricks, and where it starts inside the resident brick grid. K, V and
+    // the gather address the resident grid (volume_bricks / brick_count); Q addresses this one.
+    // They coincide unless the host asked for a query sub-region, which is how a W-shard says
+    // "my queries are the columns I own, my keys are those plus the halo".
+    query_bricks_time,
+    query_bricks_height,
+    query_bricks_width,
+    query_brick_count,
+    query_origin_bricks_time,
+    query_origin_bricks_height,
+    query_origin_bricks_width,
+
     // Sites per brick, per axis. Their product is SITES_PER_BRICK.
     brick_sites_time,
     brick_sites_height,
@@ -195,6 +207,8 @@ enum : uint32_t {
     volume_chunks_height,
     volume_chunks_width,
 
+    // The writer drains the QUERY region: the output is query-sized, so these are the query
+    // brick grid, not the resident one. `brick_count` above is likewise the query brick count.
     volume_bricks_time,
     volume_bricks_height,
     volume_bricks_width,

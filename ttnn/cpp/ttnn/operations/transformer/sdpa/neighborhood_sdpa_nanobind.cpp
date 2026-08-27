@@ -38,7 +38,9 @@ neighborhood::NeighborhoodConfig to_config(
     const AxisTuple& brick,
     const std::optional<AxisTuple>& query_chunk_bricks = std::nullopt,
     const std::optional<AxisTuple>& shard_extent = std::nullopt,
-    const std::optional<SignedAxisTuple>& shard_origin = std::nullopt) {
+    const std::optional<SignedAxisTuple>& shard_origin = std::nullopt,
+    const std::optional<AxisTuple>& query_extent = std::nullopt,
+    const std::optional<AxisTuple>& query_origin = std::nullopt) {
     neighborhood::NeighborhoodConfig config{
         to_extent(volume), to_extent(context_window), to_extent(stride), to_extent(brick)};
     if (query_chunk_bricks.has_value()) {
@@ -50,6 +52,13 @@ neighborhood::NeighborhoodConfig to_config(
     if (shard_origin.has_value()) {
         const SignedAxisTuple& origin = *shard_origin;
         config.shard_origin = neighborhood::Offset3{{origin[0], origin[1], origin[2]}};
+    }
+    if (query_extent.has_value()) {
+        config.query_extent = to_extent(*query_extent);
+    }
+    if (query_origin.has_value()) {
+        const AxisTuple& origin = *query_origin;
+        config.query_origin = neighborhood::Site{{origin[0], origin[1], origin[2]}};
     }
     return config;
 }
@@ -77,9 +86,19 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
            const AxisTuple& brick,
            const std::optional<AxisTuple>& query_chunk_bricks,
            const std::optional<AxisTuple>& shard_extent,
-           const std::optional<SignedAxisTuple>& shard_origin) {
-            const neighborhood::NeighborhoodPlan plan = neighborhood::build_plan(
-                to_config(volume, context_window, stride, brick, query_chunk_bricks, shard_extent, shard_origin));
+           const std::optional<SignedAxisTuple>& shard_origin,
+           const std::optional<AxisTuple>& query_extent,
+           const std::optional<AxisTuple>& query_origin) {
+            const neighborhood::NeighborhoodPlan plan = neighborhood::build_plan(to_config(
+                volume,
+                context_window,
+                stride,
+                brick,
+                query_chunk_bricks,
+                shard_extent,
+                shard_origin,
+                query_extent,
+                query_origin));
 
             // Flattened gather origin table, GATHER_ORIGIN_COLUMNS wide so each chunk's entry is
             // one DRAM-aligned page. Columns carry this chunk's gather origin (local sites) and
@@ -105,6 +124,11 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
 
             nb::dict result;
             result["brick_count"] = plan.brick_count;
+            // The QUERY grid. Equal to brick_count / volume_bricks unless a query sub-region was
+            // asked for; the host sizes Q and the output from these, K and V from the pair above.
+            result["query_brick_count"] = plan.query_brick_count;
+            result["query_bricks"] =
+                AxisTuple{plan.query_bricks.time(), plan.query_bricks.height(), plan.query_bricks.width()};
             result["chunk_count"] = plan.chunk_count;
             result["volume_chunks"] =
                 AxisTuple{plan.volume_chunks.time(), plan.volume_chunks.height(), plan.volume_chunks.width()};
@@ -129,6 +153,8 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
         nb::arg("query_chunk_bricks") = nb::none(),
         nb::arg("shard_extent") = nb::none(),
         nb::arg("shard_origin") = nb::none(),
+        nb::arg("query_extent") = nb::none(),
+        nb::arg("query_origin") = nb::none(),
         R"doc(
         Build the neighborhood plan for one geometry. `volume` is always the GLOBAL grid;
         `shard_extent`/`shard_origin` say what this device holds and where it sits, so windows
@@ -159,6 +185,8 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
            const std::optional<AxisTuple>& query_chunk_bricks,
            const std::optional<AxisTuple>& shard_extent,
            const std::optional<SignedAxisTuple>& shard_origin,
+           const std::optional<AxisTuple>& query_extent,
+           const std::optional<AxisTuple>& query_origin,
            uint32_t head_count,
            float scale,
            uint32_t tiles_per_kv_chunk,
@@ -170,7 +198,16 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
                 value_tensor,
                 gather_origin_table,
                 interior_mask,
-                to_config(volume, context_window, stride, brick, query_chunk_bricks, shard_extent, shard_origin),
+                to_config(
+                    volume,
+                    context_window,
+                    stride,
+                    brick,
+                    query_chunk_bricks,
+                    shard_extent,
+                    shard_origin,
+                    query_extent,
+                    query_origin),
                 head_count,
                 scale,
                 tiles_per_kv_chunk,
@@ -190,6 +227,8 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
         nb::arg("query_chunk_bricks") = nb::none(),
         nb::arg("shard_extent") = nb::none(),
         nb::arg("shard_origin") = nb::none(),
+        nb::arg("query_extent") = nb::none(),
+        nb::arg("query_origin") = nb::none(),
         nb::arg("head_count"),
         nb::arg("scale") = 1.0f,
         nb::arg("tiles_per_kv_chunk") = 8,

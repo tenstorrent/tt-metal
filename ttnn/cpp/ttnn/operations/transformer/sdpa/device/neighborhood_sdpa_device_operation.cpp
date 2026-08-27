@@ -37,13 +37,21 @@ void NeighborhoodSDPAOperation::validate_on_program_cache_miss(
             query_tensor.device() == gather_origin_table.device(),
         "neighborhood_sdpa: all inputs must be on the same device");
 
+    // K and V must match each other, but Q need NOT match them: with a query sub-region Q spans
+    // only the sites this device produces output for, while K and V span those plus the halo the
+    // windows reach into. The site counts are checked against the plan below, which is what
+    // actually pins each tensor to its own brick grid.
     TT_FATAL(
-        query_tensor.logical_shape() == key_tensor.logical_shape() &&
-            query_tensor.logical_shape() == value_tensor.logical_shape(),
-        "neighborhood_sdpa: query, key and value must have the same shape, got {}, {} and {}",
-        query_tensor.logical_shape(),
+        key_tensor.logical_shape() == value_tensor.logical_shape(),
+        "neighborhood_sdpa: key and value must have the same shape, got {} and {}",
         key_tensor.logical_shape(),
         value_tensor.logical_shape());
+    TT_FATAL(
+        query_tensor.logical_shape()[0] == key_tensor.logical_shape()[0] &&
+            query_tensor.logical_shape()[3] == key_tensor.logical_shape()[3],
+        "neighborhood_sdpa: query and key must agree on batch and width, got {} and {}",
+        query_tensor.logical_shape(),
+        key_tensor.logical_shape());
 
     for (const Tensor* tensor : {&query_tensor, &key_tensor, &value_tensor}) {
         TT_FATAL(tensor->layout() == Layout::TILE, "neighborhood_sdpa: query/key/value must be TILE layout");
@@ -59,7 +67,16 @@ void NeighborhoodSDPAOperation::validate_on_program_cache_miss(
     const neighborhood::NeighborhoodPlan plan = neighborhood::build_plan(attributes.config);
     const auto query_shape = query_tensor.logical_shape();
     const uint32_t site_count = query_shape[2];
-    const uint32_t expected_site_count = plan.brick_count * neighborhood::SITES_PER_BRICK;
+    // Q is sized by the QUERY region, K and V by the resident one. They differ exactly when the
+    // caller asked for a query sub-region; otherwise both reduce to the resident brick count.
+    const uint32_t expected_key_site_count = plan.brick_count * neighborhood::SITES_PER_BRICK;
+    const uint32_t key_site_count = key_tensor.logical_shape()[2];
+    TT_FATAL(
+        key_site_count == expected_key_site_count,
+        "neighborhood_sdpa: key/value have {} sites but the resident region implies {} bricked sites",
+        key_site_count,
+        expected_key_site_count);
+    const uint32_t expected_site_count = plan.query_brick_count * neighborhood::SITES_PER_BRICK;
     TT_FATAL(
         site_count == expected_site_count,
         "neighborhood_sdpa: query has {} sites but volume {}x{}x{} with brick {}x{}x{} implies {} bricked sites",
@@ -152,6 +169,13 @@ ttsl::hash::hash_t NeighborhoodSDPAOperation::compute_program_hash(
         config.shard_extent.by_axis,
         // shard_origin is deliberately NOT hashed: it rides the gather origin table as runtime
         // data, so one compiled program serves every shard of the mesh.
+        //
+        // query_extent and query_origin ARE hashed, unlike shard_origin: both reach the reader as
+        // COMPILE-TIME arguments (query_bricks, query_origin_bricks), and query_extent also sets
+        // the chunk count. They are uniform across the mesh -- every shard owns the same-shaped
+        // region at the same offset in its resident box -- so hashing them costs no sharing.
+        config.query_extent.by_axis,
+        config.query_origin.by_axis,
         attributes.head_count,
         attributes.scale,
         attributes.tiles_per_kv_chunk,

@@ -191,6 +191,13 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     reader_compile_args[contract::reader_arg::gather_bricks_time] = plan.gather_bricks.time();
     reader_compile_args[contract::reader_arg::gather_bricks_height] = plan.gather_bricks.height();
     reader_compile_args[contract::reader_arg::gather_bricks_width] = plan.gather_bricks.width();
+    reader_compile_args[contract::reader_arg::query_bricks_time] = plan.query_bricks.time();
+    reader_compile_args[contract::reader_arg::query_bricks_height] = plan.query_bricks.height();
+    reader_compile_args[contract::reader_arg::query_bricks_width] = plan.query_bricks.width();
+    reader_compile_args[contract::reader_arg::query_brick_count] = plan.query_brick_count;
+    reader_compile_args[contract::reader_arg::query_origin_bricks_time] = plan.query_origin_bricks.time();
+    reader_compile_args[contract::reader_arg::query_origin_bricks_height] = plan.query_origin_bricks.height();
+    reader_compile_args[contract::reader_arg::query_origin_bricks_width] = plan.query_origin_bricks.width();
     reader_compile_args[contract::reader_arg::brick_sites_time] = config.brick.time();
     reader_compile_args[contract::reader_arg::brick_sites_height] = config.brick.height();
     reader_compile_args[contract::reader_arg::brick_sites_width] = config.brick.width();
@@ -227,7 +234,7 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
 
     std::vector<uint32_t> writer_compile_args(contract::writer_arg::COUNT);
     writer_compile_args[contract::writer_arg::head_count] = head_count;
-    writer_compile_args[contract::writer_arg::brick_count] = brick_count;
+    writer_compile_args[contract::writer_arg::brick_count] = plan.query_brick_count;
     writer_compile_args[contract::writer_arg::head_dim_tiles] = head_dim_tiles;
     writer_compile_args[contract::writer_arg::query_chunk_bricks_time] = config.query_chunk_bricks.time();
     writer_compile_args[contract::writer_arg::query_chunk_bricks_height] = config.query_chunk_bricks.height();
@@ -236,9 +243,10 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     writer_compile_args[contract::writer_arg::volume_chunks_time] = plan.volume_chunks.time();
     writer_compile_args[contract::writer_arg::volume_chunks_height] = plan.volume_chunks.height();
     writer_compile_args[contract::writer_arg::volume_chunks_width] = plan.volume_chunks.width();
-    writer_compile_args[contract::writer_arg::volume_bricks_time] = plan.volume_bricks.time();
-    writer_compile_args[contract::writer_arg::volume_bricks_height] = plan.volume_bricks.height();
-    writer_compile_args[contract::writer_arg::volume_bricks_width] = plan.volume_bricks.width();
+    // The output is query-sized, so the writer's brick grid is the QUERY grid.
+    writer_compile_args[contract::writer_arg::volume_bricks_time] = plan.query_bricks.time();
+    writer_compile_args[contract::writer_arg::volume_bricks_height] = plan.query_bricks.height();
+    writer_compile_args[contract::writer_arg::volume_bricks_width] = plan.query_bricks.width();
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_args);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_enabled, packer_l1_accumulate, dst_full_sync_enabled] =

@@ -12,6 +12,20 @@ compact 3D box rather than a pencil along width -- so one tile row is one brick 
 query tile's context window is a handful of long reads instead of 121 short ones. See
 ``neighborhood_permute``.
 
+Queries and keys span DIFFERENT regions on the W-sharded path, as they do in ``na3d.py``'s
+sharded executor: a query needs a widened KEY region -- its window reaches past the shard seam --
+but never a widened QUERY region, because the halo's own queries belong to the neighbour, which
+computes them itself. So K and V are halo-exchanged and Q is not, and the op is told the
+difference through ``query_extent``/``query_origin``. It addresses two brick grids: the resident
+one for K, V and the gather, the query one for Q and the output.
+
+Before that split Q was widened like K and V, and the op computed 76 resident columns to keep 60
+-- 21% of every query discarded -- with a halo exchange on Q purely to satisfy a shape that was
+then sliced away. Filling Q's halo locally instead of over the fabric was tried first and is
+SLOWER (75.6 ms against the exchange's 34.2, decode 9213 -> 9565 ms): the halo columns are dead,
+but ANY local fill copies the 60/76 the shard owns while the collective moves only the 16/76 that
+crosses a seam. Not filling it at all is the only thing that helps.
+
 This module converts in and out PER CALL, which is the honest but slow arrangement: the permute
 belongs once at stage entry, because everything between attentions is per-token and therefore
 permutation-equivariant. Hoisting it is what turns the reference implementation's ~325 ms/block
@@ -551,6 +565,12 @@ def _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_
     from ..utils.tensor import from_torch
 
     owned_width = resident[2] - 2 * halo_sites(min(context_window[2], volume[2]), brick[2])
+    # Queries are the columns this shard OWNS; keys are those plus the halo. Telling the op the
+    # difference is what stops it computing -- and Q from having to carry -- the halo's queries,
+    # which belong to the neighbour and were discarded after every call.
+    halo = (resident[2] - owned_width) // 2
+    query_extent = (resident[0], resident[1], owned_width)
+    query_origin = (0, 0, halo)
     plans = []
     for shard_index in range(shard_count):
         # The device at the low edge sits BELOW the volume by one halo. Those columns are real
@@ -565,12 +585,14 @@ def _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_
                 query_chunk_bricks=query_chunk_bricks,
                 shard_extent=resident,
                 shard_origin=(0, 0, origin_width),
+                query_extent=query_extent,
+                query_origin=query_origin,
             )
         )
 
     first = plans[0]
     for shard_index, plan in enumerate(plans[1:], start=1):
-        for field in ("chunk_count", "gather_brick_count", "gather_bricks", "volume_chunks"):
+        for field in ("chunk_count", "gather_brick_count", "gather_bricks", "volume_chunks", "query_brick_count"):
             assert plan[field] == first[field], (
                 f"shard {shard_index} plans a different {field} than shard 0 "
                 f"({plan[field]} vs {first[field]}); one program cannot serve both"
@@ -588,6 +610,8 @@ def _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_
         mesh_axes=[sp_axis, None, None, None],
     )
     first["query_chunk_bricks"] = query_chunk_bricks
+    first["query_extent"] = query_extent
+    first["query_origin"] = query_origin
 
     from loguru import logger
 
@@ -742,7 +766,15 @@ def neighborhood_attention_3d_bricked_w_sharded(
         volume, context_window, stride, brick, resident, shard_count, sp_axis, device, halo=halo
     )
     channels = head_count * head_dim
+    # K and V span the resident region (owned + halo); Q and the output span only what this shard
+    # OWNS. Two brick counts because the op now addresses two grids -- see the module note.
+    owned_volume = (time_extent, height_extent, width_local)
     bricked_sites = brick_count(resident, brick) * SITES_PER_BRICK
+    query_bricked_sites = brick_count(owned_volume, brick) * SITES_PER_BRICK
+    assert query_bricked_sites == plan["query_brick_count"] * SITES_PER_BRICK, (
+        f"host bricks the owned region into {query_bricked_sites} sites but the plan says "
+        f"{plan['query_brick_count'] * SITES_PER_BRICK}; the two must agree or Q is misaddressed"
+    )
     # DIFFVAE_NA_HALO_LINKS overrides the link count for THIS halo exchange only, leaving every
     # other collective on the ccl_manager's setting. The halo hangs at channels=64 (one head per
     # chip under TP) where it runs fine at 256, and a two-link split of a narrow transfer is the
@@ -751,9 +783,19 @@ def neighborhood_attention_3d_bricked_w_sharded(
     semaphore = ccl_manager.get_np_ping_pong_semaphore(sp_axis)
 
     def widened(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
-        """This chip's shard plus a halo of each neighbour's edge, in op layout."""
+        """This chip's shard plus a halo of each neighbour's edge, in op layout. K and V only:
+        Q is bricked over the owned region alone and never comes through here.
+
+        Three spans per lane, so the collective and the reorder can be read apart -- the whole
+        point of the split is that they have different fixes. The untilize is its own span rather
+        than folded into either one: both the halo exchange and ``to_bricked`` need ROW_MAJOR, so
+        it is a prerequisite of both, and charging it to one would make that one look like the
+        cost. Under DEEP these spans also serialize q, k and v against each other, so the parent's
+        total inflates a little against a plain DIFFVAE_STAGE_TIMING run.
+        """
         _tp_trace(device, f"{lane}: untilize in (channels={channels})")
-        rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+        with _deep_prof(device, f"{lane}: untilize", category=decode_tree.RESHAPE):
+            rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
         # The exchange hangs at a 128-byte stick (channels=64, i.e. one head per chip under TP)
         # where it runs fine at 512 (channels=256, four heads). Neither the link count nor the
         # persistent buffer is behind it -- both were ruled out by measurement.
@@ -774,39 +816,55 @@ def neighborhood_attention_3d_bricked_w_sharded(
         if os.environ.get("DIFFVAE_NA_HALO_FOLD") == "0":
             fold = 1
         exchange_channels, exchange_width, exchange_halo = channels * fold, width_local // fold, halo // fold
-        volume_form = ttnn.reshape(rows, (batch, time_extent, height_extent, exchange_width, exchange_channels))
         _tp_trace(
             device,
             f"{lane}: about to neighbor_pad halo={exchange_halo} links={num_links} "
             f"fold={fold} stick={exchange_channels * 2}B",
         )
-        # DIFFVAE_NA_HALO_PERSISTENT=0 drops the persistent output buffer for this exchange. The
-        # buffer is keyed on the tensor shape, and TP narrows the channels from 256 to 64 -- a
-        # 128-byte stick -- so the pooled buffer is the next suspect after link count.
-        exchanged = _halo_exchange(
-            ccl_manager,
-            volume_form,
-            dims=[3],
-            pad_left=[exchange_halo],
-            pad_right=[exchange_halo],
-            axes=[sp_axis],
-            neighbor_sems=[semaphore],
-            num_links=[num_links],
-        )
+        # The fold reshape rides in the halo span: the fold exists only to widen this exchange's
+        # stick, so its cost belongs to the exchange it serves.
+        with _deep_prof(device, f"{lane}: halo-exchange", category=decode_tree.ALLGATHER):
+            volume_form = ttnn.reshape(rows, (batch, time_extent, height_extent, exchange_width, exchange_channels))
+            # DIFFVAE_NA_HALO_PERSISTENT=0 drops the persistent output buffer for this exchange.
+            # The buffer is keyed on the tensor shape, and TP narrows the channels from 256 to
+            # 64 -- a 128-byte stick -- so the pooled buffer is the next suspect after links.
+            exchanged = _halo_exchange(
+                ccl_manager,
+                volume_form,
+                dims=[3],
+                pad_left=[exchange_halo],
+                pad_right=[exchange_halo],
+                axes=[sp_axis],
+                neighbor_sems=[semaphore],
+                num_links=[num_links],
+            )
         _tp_trace(device, f"{lane}: neighbor_pad done -> {tuple(exchanged.shape)}")
-        if fold > 1:  # unfold back to real columns; the same memory, read the other way
-            exchanged = ttnn.reshape(exchanged, (batch, time_extent, height_extent, width_local + 2 * halo, channels))
-        bricked = to_bricked(exchanged, volume=resident, brick=brick)
-        _tp_trace(device, f"{lane}: to_bricked done -> {tuple(bricked.shape)}")
-        site_major = ttnn.reshape(bricked, (batch, 1, bricked_sites, channels))
-        out = ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
+        with _deep_prof(device, f"{lane}: brick-permute", category=decode_tree.RESHAPE):
+            if fold > 1:  # unfold back to real columns; the same memory, read the other way
+                exchanged = ttnn.reshape(
+                    exchanged, (batch, time_extent, height_extent, width_local + 2 * halo, channels)
+                )
+            bricked = to_bricked(exchanged, volume=resident, brick=brick)
+            _tp_trace(device, f"{lane}: to_bricked done -> {tuple(bricked.shape)}")
+            site_major = ttnn.reshape(bricked, (batch, 1, bricked_sites, channels))
+            out = ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
         _tp_trace(device, f"{lane}: tilized -> {tuple(out.shape)}")
         return out
 
-    with _deep_prof(device, "halo+brick-permute (q,k,v)", category=decode_tree.RESHAPE):
-        query_op = widened(query, "q")
+    with _deep_prof(device, "halo+brick-permute (k,v)", category=decode_tree.RESHAPE):
         key_op = widened(key, "k")
         value_op = widened(value, "v")
+
+    # Q is NOT widened: the halo's queries belong to the neighbour, which computes them itself,
+    # and the op is told so via query_extent/query_origin below. So this is the brick permute
+    # alone -- no exchange, and over 60 columns rather than 76.
+    with _deep_prof(device, "q-to-seq", category=decode_tree.RESHAPE):
+        rows = ttnn.to_layout(query, ttnn.ROW_MAJOR_LAYOUT)
+        volume_form = ttnn.reshape(rows, (batch, time_extent, height_extent, width_local, channels))
+        bricked = to_bricked(volume_form, volume=owned_volume, brick=brick)
+        site_major = ttnn.reshape(bricked, (batch, 1, query_bricked_sites, channels))
+        query_op = ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
+        _tp_trace(device, f"q: bricked owned region -> {tuple(query_op.shape)}")
 
     with _deep_prof(device, "neighborhood-sdpa", category=decode_tree.SDPA):
         attended = ttnn.transformer.neighborhood_scaled_dot_product_attention(
@@ -824,6 +882,11 @@ def neighborhood_attention_3d_bricked_w_sharded(
             # Representative only: the plan's SHAPES are uniform across shards, and each device
             # reads its own origin out of the sharded table above.
             shard_origin=(0, 0, -halo),
+            # The queries this shard owns, as a sub-box of the resident region. Uniform across
+            # the mesh -- every shard owns the same-shaped box at the same offset -- so unlike
+            # shard_origin these are compile-time and one program still serves the whole mesh.
+            query_extent=plan["query_extent"],
+            query_origin=plan["query_origin"],
             head_count=head_count,
             scale=scale,
             tiles_per_kv_chunk=_tiles_per_kv_chunk(plan["gather_brick_count"]),
@@ -832,16 +895,10 @@ def neighborhood_attention_3d_bricked_w_sharded(
     _tp_trace(device, f"op returned -> {tuple(attended.shape)}")
     with _deep_prof(device, "unbrick-permute", category=decode_tree.RESHAPE):
         rows = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
-        merged = ttnn.reshape(rows, (batch, bricked_sites, channels))
-        natural = to_natural(merged, volume=resident, brick=brick)
-        _tp_trace(device, "unbricked, about to drop halo")
-        # Drop the halo: those columns belong to a neighbour, which computed them itself.
-        owned = ttnn.slice(
-            natural,
-            [0, 0, 0, halo, 0],
-            [batch, time_extent, height_extent, halo + width_local, channels],
-        )
-        ttnn.deallocate(natural)
+        merged = ttnn.reshape(rows, (batch, query_bricked_sites, channels))
+        # Already the owned region: the op wrote only the queries this shard owns, so there is no
+        # halo left to slice off -- that slice, and the queries behind it, are what this bought.
+        owned = to_natural(merged, volume=owned_volume, brick=brick)
 
     if tp_axis is not None:
         # Rebuild the full head width from the tp shards. Device order along tp_axis IS head
