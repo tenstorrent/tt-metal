@@ -31,6 +31,14 @@ training_config:
   # raise it to trade freshness for wall-clock.
   weight_sync_every: 1
 
+  # Which cross-rank weight transport to use for WeightSyncCallback / MPIRolloutClient.
+  #   host        : HostWeightBridge -- MPI (torch.save over distributed_context_send_bytes).
+  #                 Works on any MGD; no fabric intermesh cable required.
+  #   mesh_socket : MeshSocketWeightBridge -- fabric (ttnn.MeshSocket over FABRIC_2D).
+  #                 Requires the MGD to declare an intermesh connection between the two
+  #                 [1, 1] meshes and for the two chosen chips to be physically wired.
+  weight_bridge: "mesh_socket"
+
   # Reproducibility knob picked up by the training example's dataset shuffle.
   seed: 0
 

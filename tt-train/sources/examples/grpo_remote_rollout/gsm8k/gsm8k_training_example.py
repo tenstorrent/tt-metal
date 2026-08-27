@@ -35,11 +35,12 @@ import ttnn
 from datasets import load_dataset
 from ttml.common.config import DeviceConfig, get_model_config, load_config
 from ttml.trainers import GRPOTrainer, get_grpo_config
+from utils.mesh_socket_bridge import MeshSocketWeightBridge
 from utils.mpi_rollout import MPIRolloutClient, MPIRolloutServer
 from utils.qwen3_grpo_completer import Qwen3CompleterRemoteRollout, Qwen3CompletionCtx
 from utils.qwen3_ttt_presets import bf16_attn_bfp8_mlp_optimizations, qwen3_stop_and_pad
 from utils.ttt_generation_worker import TttGenerationWorker
-from utils.weight_bridge import HostWeightBridge, TTML_RANK, TTT_RANK
+from utils.weight_bridge import HostWeightBridge, TTML_RANK, TTT_RANK, WeightBridge
 
 CONFIG_REL = "tt-train/configs/training_configs/grpo_gsm8k_qwen3_p6b_remote_rollout.yaml"
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -174,6 +175,32 @@ def get_output_dir() -> str:
     )
 
 
+_VALID_WEIGHT_BRIDGES = ("host", "mesh_socket")
+
+
+def _resolve_weight_bridge_kind(raw: dict) -> str:
+    kind = str(raw["training_config"].get("weight_bridge", "host")).lower()
+    if kind not in _VALID_WEIGHT_BRIDGES:
+        raise ValueError(f"training_config.weight_bridge must be one of {_VALID_WEIGHT_BRIDGES}, got {kind!r}")
+    return kind
+
+
+def _make_sender_bridge(kind: str, *, mesh: Any, peer_rank: int) -> WeightBridge:
+    if kind == "host":
+        return HostWeightBridge.init_sender(mesh=mesh, peer_rank=peer_rank)
+    if kind == "mesh_socket":
+        return MeshSocketWeightBridge.init_sender(mesh=mesh, peer_rank=peer_rank)
+    raise ValueError(f"training_config.weight_bridge must be one of {_VALID_WEIGHT_BRIDGES}, got {kind!r}")
+
+
+def _make_receiver_bridge(kind: str, *, mesh: Any, peer_rank: int, submeshes: List[Any]) -> WeightBridge:
+    if kind == "host":
+        return HostWeightBridge.init_receiver(mesh=mesh, peer_rank=peer_rank, submeshes=submeshes)
+    if kind == "mesh_socket":
+        return MeshSocketWeightBridge.init_receiver(mesh=mesh, peer_rank=peer_rank, submeshes=submeshes)
+    raise ValueError(f"training_config.weight_bridge must be one of {_VALID_WEIGHT_BRIDGES}, got {kind!r}")
+
+
 class WeightSyncCallback:
     def __init__(self, completer: Any, every: int = 1) -> None:
         if every < 1:
@@ -226,7 +253,8 @@ def _ttml_main() -> None:
     completer: Any = None
     client: Any = None
     try:
-        bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
+        weight_bridge_kind = _resolve_weight_bridge_kind(raw)
+        bridge = _make_sender_bridge(weight_bridge_kind, mesh=mesh_device, peer_rank=TTT_RANK)
         client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
 
         dataset = build_dataset(seed=int(raw["training_config"].get("seed", 0)))
@@ -307,7 +335,13 @@ def _ttt_main() -> None:
             seed=None,
         )
 
-        bridge = HostWeightBridge.init_receiver(mesh=parent_mesh, peer_rank=TTML_RANK, submeshes=worker.submeshes)
+        weight_bridge_kind = _resolve_weight_bridge_kind(raw)
+        bridge = _make_receiver_bridge(
+            weight_bridge_kind,
+            mesh=parent_mesh,
+            peer_rank=TTML_RANK,
+            submeshes=worker.submeshes,
+        )
 
         server = MPIRolloutServer(
             peer_rank=TTML_RANK,
