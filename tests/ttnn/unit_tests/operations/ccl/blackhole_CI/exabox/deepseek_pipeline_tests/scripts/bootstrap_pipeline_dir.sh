@@ -334,7 +334,7 @@ if [ "$GALAXY_REV" = "rev_c" ]; then
     echo "[bootstrap] Rev C correction done."
 fi
 
-# Workaround for an OpenMPI 5.0.7 parser quirk: --map-by rankfile:file=PATH
+# Workaround for an OpenMPI 5.0.10 parser quirk: --map-by rankfile:file=PATH
 # treats `-` as a qualifier separator. Any rankfile path containing a hyphen
 # (e.g. anything under TT_METAL_HOME=/.../tt-metal/) gets rejected with
 # "unrecognized qualifier". tt-run's resolve_path() dereferences symlinks

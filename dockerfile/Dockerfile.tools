@@ -66,8 +66,8 @@ ARG OPENSSL_SHA256=2db3f3a0d6ea4b59e1f094ace2c8cd536dffb87cdc39084c5afa1e6f7f37d
 # A mismatch will be caught at build time by a validation step in Dockerfile.
 # OMPI_COMMIT_SHA is the dereferenced commit for the tag, used to verify
 # clone integrity in install-openmpi.sh.
-ARG OMPI_VERSION=v5.0.7
-ARG OMPI_COMMIT_SHA=29341e55efaabf7a6968444b4bb6f1f1fb40d664
+ARG OMPI_VERSION=v5.0.10
+ARG OMPI_COMMIT_SHA=0d48030d410ae8f56790933135b28be1b3920ba1
 
 ARG ORAS_VERSION=1.3.3
 ARG ORAS_SHA256=9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
