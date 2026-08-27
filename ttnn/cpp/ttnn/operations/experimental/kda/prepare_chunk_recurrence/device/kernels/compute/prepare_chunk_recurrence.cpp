@@ -288,14 +288,13 @@ inline void invert_doubling(
     DataflowBuffer& identity,
 
     // intermediate
-    DataflowBuffer& power_workspace,
-    DataflowBuffer& sum_workspace,
-    DataflowBuffer& next_power_workspace,
-    DataflowBuffer& product_workspace) {
-    DataflowBuffer* power = &power_workspace;
-    DataflowBuffer* sum = &sum_workspace;
-    DataflowBuffer* next_power = &next_power_workspace;
-    DataflowBuffer& product = product_workspace;
+    DataflowBuffer& scratch_0,
+    DataflowBuffer& scratch_1,
+    DataflowBuffer& scratch_2,
+    DataflowBuffer& product) {
+    DataflowBuffer* power = &scratch_0;
+    DataflowBuffer* sum = &scratch_1;
+    DataflowBuffer* next_power = &scratch_2;
 
     copy_tile_to_buffer(negative_strict_lower_akk, tile, *power);
     power->wait_front(1);
@@ -305,7 +304,7 @@ inline void invert_doubling(
     next_power->wait_front(1);
     power->pop_front(1);
     power = next_power;
-    next_power = &power_workspace;
+    next_power = &scratch_0;
 
     for (uint32_t step = 0; step < 4; ++step) {
         matmul_blocks<1, 1, 1, false>(*power, *sum, product);
@@ -358,79 +357,48 @@ inline void transpose_tile_row_to_column(DataflowBuffer& in, DataflowBuffer& o, 
     o.push_back(row_tiles);
 }
 
-// Exact fp32 row sum for q/k L2 normalization. The shared SFPU reducer avoids four full-tile
-// matrix multiplies and preserves the input for the caller-managed scratch lifetime.
-inline void rowsum_k(uint32_t Mt, uint32_t Kt) {
-    compute_kernel_lib::reduce<
-        ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dfb::scratch_one,
-        dfb::ones,
-        dfb::scratch_two,
-        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ReduceFp32Mode::Accurate>(compute_kernel_lib::ReduceInputBlockShape::of(Mt, Kt));
-}
-
-// o[i] = rsqrt(in[i] + eps) [* scale]. in holds per-row sum-of-squares (rowsum_k output);
-// out is the per-row inverse-L2 factor (optionally pre-scaled, for folding q's scale into the norm).
-// eps/scale arrive as fp32-bit-cast uint32 compile args.
-template <bool Scale>
-inline void inverse_rms_tiles(
-    DataflowBuffer& in, DataflowBuffer& o, uint32_t n, uint32_t eps_bits, uint32_t scale_bits) {
-    const uint32_t in_id = in.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(n);
-    pack_reconfig_data_format(o_id);
-    reconfig_data_format_srca(in_id);
-    copy_tile_to_dst_init_short(in_id);
-    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
-        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            copy_tile(in_id, block_start + tile, tile);
-        }
+// Reduce each row of squared values directly to its inverse-L2 factor. Applying epsilon, rsqrt,
+// and optional scaling in DST avoids materializing row sums in a separate intermediate DFB.
+template <bool Scale, uint32_t SquaredDfb, uint32_t InverseNormsDfb>
+inline void reduce_squared_rows_to_inverse_norms(
+    uint32_t row_tiles, uint32_t column_tiles, uint32_t eps_bits, uint32_t scale_bits) {
+    auto inverse_norm = [eps_bits, scale_bits](uint32_t dst) {
         binop_with_scalar_tile_init();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            add_unary_tile(tile, eps_bits);
-        }
+        add_unary_tile(dst, eps_bits);
         rsqrt_tile_init();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            rsqrt_tile(tile);
-        }
+        rsqrt_tile(dst);
         if constexpr (Scale) {
             binop_with_scalar_tile_init();
-            for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-                mul_unary_tile(tile, scale_bits);
-            }
+            mul_unary_tile(dst, scale_bits);
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
-        tile_regs_release();
-    }
-    o.push_back(n);
+    };
+
+    compute_kernel_lib::
+        reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, SquaredDfb, dfb::ones, InverseNormsDfb>(
+            compute_kernel_lib::ReduceInputBlockShape::of(row_tiles, column_tiles),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            inverse_norm);
 }
 
-template <uint32_t RowTiles, uint32_t ColumnTiles, bool Scale>
+template <uint32_t RowTiles, uint32_t ColumnTiles, bool Scale, uint32_t SquaredDfb, uint32_t InverseNormsDfb>
 inline void normalize_l2_rows(
     DataflowBuffer& input,
     DataflowBuffer& normalized,
-    DataflowBuffer& squared,
-    DataflowBuffer& row_sums,
-    DataflowBuffer& inverse_norms,
     uint32_t eps_bits,
-    uint32_t scale_bits) {
+    uint32_t scale_bits,
+
+    // intermediate
+    DataflowBuffer& squared,
+    DataflowBuffer& inverse_norms) {
     constexpr uint32_t matrix_tiles = RowTiles * ColumnTiles;
+
     square_tiles(input, squared, matrix_tiles);
-    rowsum_k(RowTiles, ColumnTiles);
-    row_sums.wait_front(RowTiles);
-    inverse_rms_tiles<Scale>(row_sums, inverse_norms, RowTiles, eps_bits, scale_bits);
+
+    reduce_squared_rows_to_inverse_norms<Scale, SquaredDfb, InverseNormsDfb>(
+        RowTiles, ColumnTiles, eps_bits, scale_bits);
+
     inverse_norms.wait_front(RowTiles);
-    row_sums.pop_front(RowTiles);
     multiply_by_column(input, inverse_norms, normalized, RowTiles, ColumnTiles);
     normalized.wait_front(matrix_tiles);
     inverse_norms.pop_front(RowTiles);
@@ -456,7 +424,7 @@ inline void prepare_gate_factors(
     DataflowBuffer& anchor_decay,
 
     // intermediate
-    DataflowBuffer& scratch_0) {
+    DataflowBuffer& anchor_g) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
     // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
@@ -471,18 +439,12 @@ inline void prepare_gate_factors(
     g_last.wait_front(chunk_key_tiles);
     g.pop_front(chunk_key_tiles);
 
-    {
-        DataflowBuffer& anchor_g = scratch_0;
-        multiply_by_half(g_last, anchor_g, chunk_key_tiles);  // anchor = G_last/2
-        anchor_g.wait_front(chunk_key_tiles);
-    }
+    multiply_by_half(g_last, anchor_g, chunk_key_tiles);  // anchor = G_last/2
+    anchor_g.wait_front(chunk_key_tiles);
 
     {
         DataflowBuffer& centered_g = anchor_decay;
-        {
-            DataflowBuffer& anchor_g = scratch_0;
-            elementwise_binary<ElementwiseBinaryOp::Subtract>(centered_decay, anchor_g, centered_g, chunk_key_tiles);
-        }
+        elementwise_binary<ElementwiseBinaryOp::Subtract>(centered_decay, anchor_g, centered_g, chunk_key_tiles);
         centered_g.wait_front(chunk_key_tiles);
         centered_decay.pop_front(chunk_key_tiles);
         exponential_tiles(centered_g, centered_decay, chunk_key_tiles);
@@ -492,23 +454,18 @@ inline void prepare_gate_factors(
         centered_g.pop_front(chunk_key_tiles);
     }
 
-    {
-        DataflowBuffer& anchor_g = scratch_0;
-        exponential_tiles(anchor_g, anchor_decay, chunk_key_tiles);  // exp(G_last/2)
-        anchor_decay.wait_front(chunk_key_tiles);
-        anchor_g.pop_front(chunk_key_tiles);
-    }
+    exponential_tiles(anchor_g, anchor_decay, chunk_key_tiles);  // exp(G_last/2)
+    anchor_decay.wait_front(chunk_key_tiles);
+    anchor_g.pop_front(chunk_key_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt>
-inline void prepare_scan_and_pairwise_factors(
-    DataflowBuffer& q,
-    DataflowBuffer& k,
+inline void prepare_scan_and_pairwise_inputs(
+    DataflowBuffer& normalized_q,
+    DataflowBuffer& normalized_k,
     DataflowBuffer& beta,
     DataflowBuffer& decay,
-    DataflowBuffer& centered_decay_to_final_decay,
-    DataflowBuffer& centered_inverse_decay,
-    DataflowBuffer& g_last_to_k_pairwise,
+    DataflowBuffer& centered_decay,
     DataflowBuffer& q_decay,
     DataflowBuffer& kd,
     DataflowBuffer& k_beta_pairwise,
@@ -517,35 +474,45 @@ inline void prepare_scan_and_pairwise_factors(
 
     {
         DataflowBuffer& beta_k = q_pairwise;
-        multiply_by_column(k, beta, beta_k, Ct, Kt);
+        multiply_by_column(normalized_k, beta, beta_k, Ct, Kt);
         beta_k.wait_front(chunk_key_tiles);
     }
     beta.pop_front(Ct);
 
     // Preserve exact scan-facing factors, and use anchored factors only for pairwise products.
-    elementwise_binary<ElementwiseBinaryOp::Multiply>(q, decay, q_decay, chunk_key_tiles);
+    elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_q, decay, q_decay, chunk_key_tiles);
     {
         DataflowBuffer& beta_k = q_pairwise;
         elementwise_binary<ElementwiseBinaryOp::Multiply>(beta_k, decay, kd, chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(
-            beta_k, centered_decay_to_final_decay, k_beta_pairwise, chunk_key_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(beta_k, centered_decay, k_beta_pairwise, chunk_key_tiles);
         k_beta_pairwise.wait_front(chunk_key_tiles);  // beta*k*exp(G-anchor)
         beta_k.pop_front(chunk_key_tiles);
     }
-    elementwise_binary<ElementwiseBinaryOp::Multiply>(q, centered_decay_to_final_decay, q_pairwise, chunk_key_tiles);
+    elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_q, centered_decay, q_pairwise, chunk_key_tiles);
     q_pairwise.wait_front(chunk_key_tiles);  // q*exp(G-anchor)
-    q.pop_front(chunk_key_tiles);
-    centered_decay_to_final_decay.pop_front(chunk_key_tiles);
+    normalized_q.pop_front(chunk_key_tiles);
+    centered_decay.pop_front(chunk_key_tiles);
     decay.pop_front(chunk_key_tiles);
-    exponential_tiles(
-        g_last_to_k_pairwise,
-        centered_decay_to_final_decay,
-        chunk_key_tiles);  // exp(G_last), for final decay
-    centered_decay_to_final_decay.wait_front(chunk_key_tiles);
-    g_last_to_k_pairwise.pop_front(chunk_key_tiles);
-    elementwise_binary<ElementwiseBinaryOp::Multiply>(k, centered_inverse_decay, g_last_to_k_pairwise, chunk_key_tiles);
-    g_last_to_k_pairwise.wait_front(chunk_key_tiles);  // k*exp(anchor-G)
-    k.pop_front(chunk_key_tiles);
+}
+
+template <uint32_t Ct, uint32_t Kt>
+inline void prepare_final_decay_rows(DataflowBuffer& g_last, DataflowBuffer& final_decay_rows) {
+    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+
+    exponential_tiles(g_last, final_decay_rows, chunk_key_tiles);  // exp(G_last)
+    final_decay_rows.wait_front(chunk_key_tiles);
+    g_last.pop_front(chunk_key_tiles);
+}
+
+template <uint32_t Ct, uint32_t Kt>
+inline void prepare_k_pairwise(
+    DataflowBuffer& normalized_k, DataflowBuffer& centered_inverse_decay, DataflowBuffer& k_pairwise) {
+    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+
+    elementwise_binary<ElementwiseBinaryOp::Multiply>(
+        normalized_k, centered_inverse_decay, k_pairwise, chunk_key_tiles);
+    k_pairwise.wait_front(chunk_key_tiles);  // k*exp(anchor-G)
+    normalized_k.pop_front(chunk_key_tiles);
     centered_inverse_decay.pop_front(chunk_key_tiles);
 }
 
@@ -588,7 +555,7 @@ inline void prepare_t_inv(
     DataflowBuffer& scratch_0,
     DataflowBuffer& scratch_1,
     DataflowBuffer& scratch_2,
-    DataflowBuffer& scratch_3) {
+    DataflowBuffer& product) {
     constexpr uint32_t chunk_matrix_tiles = Ct * Ct;
 
     {
@@ -607,15 +574,15 @@ inline void prepare_t_inv(
         lower_akk.pop_front(chunk_matrix_tiles);
     }
 
-    {
-        DataflowBuffer& power_workspace = scratch_0;
-        DataflowBuffer& sum_workspace = scratch_1;
-        DataflowBuffer& next_power_workspace = scratch_2;
-        DataflowBuffer& product_workspace = scratch_3;
-
-        invert_doubling(
-            akk, 0, t_inv, identity, power_workspace, sum_workspace, next_power_workspace, product_workspace);
-    }
+    invert_doubling(
+        akk,
+        0,
+        t_inv,
+        identity,
+        /*power_workspace=*/scratch_0,
+        /*sum_workspace=*/scratch_1,
+        /*next_power_workspace=*/scratch_2,
+        product);
     akk.pop_front(chunk_matrix_tiles);
 }
 
@@ -666,27 +633,27 @@ TT_KERNEL void compute(uint32_t work_item_count) {
     // Writer-consumed outputs.
     DataflowBuffer v_beta(dfb::v_beta);
     DataflowBuffer t_inv(dfb::t_inv);
-    DataflowBuffer kd(dfb::w);
+    DataflowBuffer kd(dfb::kd);
     DataflowBuffer q_decay(dfb::q_decay);
     DataflowBuffer intra(dfb::intra);
     DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
-    DataflowBuffer v_new(dfb::v_new);
+    DataflowBuffer final_decay(dfb::final_decay);
 
-    // Compute-only intermediates.
-    DataflowBuffer decay(dfb::decay);
-    DataflowBuffer decay_exp(dfb::decay_exp);
-    DataflowBuffer decay_factor(dfb::decay_factor);
-    DataflowBuffer lower_mask(dfb::lower_mask);
-    DataflowBuffer state_two(dfb::state_two);
-    DataflowBuffer state_update(dfb::state_update);
-    DataflowBuffer state_temporary(dfb::state_temporary);
-    DataflowBuffer final_state(dfb::final_state);
-    DataflowBuffer scratch_one(dfb::scratch_one);
-    DataflowBuffer scratch_two(dfb::scratch_two);
-    DataflowBuffer scratch_three(dfb::scratch_three);
-    DataflowBuffer state_three(dfb::state_three);
+    // Semantic intermediates.
+    DataflowBuffer scan_decay(dfb::scan_decay);
+    DataflowBuffer centered_inverse_decay(dfb::centered_inverse_decay);
+    DataflowBuffer anchor_decay(dfb::anchor_decay);
+    DataflowBuffer normalized_q(dfb::normalized_q);
+    DataflowBuffer normalized_k(dfb::normalized_k);
+    DataflowBuffer akk(dfb::akk);
 
-    compute_kernel_hw_startup(dfb::q, dfb::k, dfb::scratch_one);
+    // Reusable physical storage. Live values crossing helper boundaries are named below.
+    DataflowBuffer workspace_0(dfb::workspace_0);
+    DataflowBuffer workspace_1(dfb::workspace_1);
+    DataflowBuffer workspace_2(dfb::workspace_2);
+    DataflowBuffer workspace_3(dfb::workspace_3);
+
+    compute_kernel_hw_startup(dfb::q, dfb::k, dfb::workspace_3);
     eye.wait_front(chunk_matrix_tiles);
     tril.wait_front(chunk_matrix_tiles);
     ones.wait_front(chunk_matrix_tiles);
@@ -698,28 +665,62 @@ TT_KERNEL void compute(uint32_t work_item_count) {
         g.wait_front(chunk_key_tiles);
         beta.wait_front(Ct);
 
-        normalize_l2_rows<Ct, Kt, true>(
-            q, state_temporary, scratch_one, scratch_two, scratch_three, EPS_BITS, SCALE_BITS);
-        normalize_l2_rows<Ct, Kt, false>(k, final_state, scratch_one, scratch_two, scratch_three, EPS_BITS, SCALE_BITS);
+        normalize_l2_rows<Ct, Kt, true, dfb::workspace_3, dfb::workspace_1>(
+            q,
+            normalized_q,
+            EPS_BITS,
+            SCALE_BITS,
+            /*squared=*/workspace_3,
+            /*inverse_norms=*/workspace_1);
+
+        normalize_l2_rows<Ct, Kt, false, dfb::workspace_3, dfb::workspace_1>(
+            k,
+            normalized_k,
+            EPS_BITS,
+            SCALE_BITS,
+            /*squared=*/workspace_3,
+            /*inverse_norms=*/workspace_1);
 
         prepare_v_beta<Ct, Vt>(v, beta, v_beta);
+
+        DataflowBuffer& centered_decay = workspace_0;
+        DataflowBuffer& g_last = workspace_3;
         prepare_gate_factors<Ct, Kt>(
-            g, tril, ones, decay_exp, decay, decay_factor, scratch_one, state_update, scratch_two);
-        prepare_scan_and_pairwise_factors<Ct, Kt>(
-            state_temporary,
-            final_state,
-            beta,
-            decay_exp,
-            decay,
-            decay_factor,
-            scratch_one,
-            q_decay,
-            kd,
-            state_two,
-            state_three);
-        prepare_pairwise_matrices<Ct, Kt>(state_two, state_three, scratch_one, tril, lower_mask, intra);
-        prepare_t_inv<Ct>(lower_mask, tril, eye, t_inv, scratch_two, scratch_three, state_two, state_three);
-        prepare_decay_outputs<Ct, Kt>(scratch_one, state_update, decay, k_decay_transposed, v_new);
+            g,
+            tril,
+            ones,
+            scan_decay,
+            centered_decay,
+            centered_inverse_decay,
+            g_last,
+            anchor_decay,
+            /*anchor_g=*/workspace_2);
+
+        DataflowBuffer& k_beta_pairwise = workspace_1;
+        DataflowBuffer& q_pairwise = workspace_2;
+        prepare_scan_and_pairwise_inputs<Ct, Kt>(
+            normalized_q, normalized_k, beta, scan_decay, centered_decay, q_decay, kd, k_beta_pairwise, q_pairwise);
+
+        DataflowBuffer& final_decay_rows = workspace_0;
+        prepare_final_decay_rows<Ct, Kt>(g_last, final_decay_rows);
+
+        DataflowBuffer& k_pairwise = workspace_3;
+        prepare_k_pairwise<Ct, Kt>(normalized_k, centered_inverse_decay, k_pairwise);
+
+        prepare_pairwise_matrices<Ct, Kt>(k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra);
+
+        // normalized_q and normalized_k are fully consumed and popped; reuse their empty DFBs as local scratch.
+        prepare_t_inv<Ct>(
+            akk,
+            tril,
+            eye,
+            t_inv,
+            /*scratch_0=*/workspace_1,
+            /*scratch_1=*/workspace_2,
+            /*scratch_2=*/normalized_q,
+            /*product=*/normalized_k);
+
+        prepare_decay_outputs<Ct, Kt>(k_pairwise, anchor_decay, final_decay_rows, k_decay_transposed, final_decay);
         // v_beta, kd, q_decay, intra, k_dec_t, dl, T_inv stay pushed for the writer.
     }
 }

@@ -24,11 +24,11 @@ TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count) {
     const auto final_decay_accessor = TensorAccessor(tensor::final_decay_output);
     const auto t_inv_accessor = TensorAccessor(tensor::t_inv_output);
     DataflowBuffer v_beta(dfb::v_beta);
-    DataflowBuffer kd(dfb::w);
+    DataflowBuffer kd(dfb::kd);
     DataflowBuffer q_decay(dfb::q_decay);
     DataflowBuffer intra(dfb::intra);
     DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
-    DataflowBuffer final_decay(dfb::v_new);
+    DataflowBuffer final_decay(dfb::final_decay);
     DataflowBuffer t_inv(dfb::t_inv);
     Noc noc;
 
