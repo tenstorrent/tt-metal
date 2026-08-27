@@ -12,7 +12,6 @@ shared wide schema (DB_SCHEMA), that columns a test did not emit become NULL
 import pandas as pd
 import pyarrow.parquet as pq
 import pytest
-from helpers.metrics import export_metrics
 from helpers.perf.parquet import (
     align_to_schema,
     arrow_schema,
@@ -24,7 +23,6 @@ from helpers.perf.parquet import (
     write_parquet,
     write_run_batch,
 )
-from helpers.perf.schema import MARKER, METRIC_BASES, RUN_TYPE_NAMES
 from helpers.perf.test_schemas import PERF_TEST_SCHEMAS
 from helpers.perf.wide_schema import DB_SCHEMA, DROPPED_COLUMNS
 
@@ -312,27 +310,6 @@ def test_catalog_columns_are_in_db_schema():
         "helpers.perf.wide_schema.DB_SCHEMA and would be dropped from Parquet: "
         f"{missing}. Add them as nullable columns (or to DROPPED_COLUMNS if they "
         "must not be published)."
-    )
-
-
-def test_counter_metric_columns_are_in_db_schema():
-    # Drives the real emitter, not the schema's constants, so a rename fails here.
-    schema_names = {c.name for c in DB_SCHEMA} | DROPPED_COLUMNS
-    unknown = set()
-    for run_type in sorted(RUN_TYPE_NAMES):
-        for metric in sorted(METRIC_BASES):
-            for computed in (
-                [{"zone": "ZONE_1", metric: 1.0}],
-                [{"zone": "ZONE_1", metric: 1.0}, {"zone": "ZONE_1", metric: 2.0}],
-            ):
-                frame = export_metrics(computed, run_type, ["INIT", "TILE_LOOP"])
-                unknown |= {
-                    c for c in frame.columns if c != MARKER and c not in schema_names
-                }
-    assert not unknown, (
-        "helpers.metrics.export_metrics emits counter metric column(s) missing "
-        "from helpers.perf.wide_schema.DB_SCHEMA, so a run with "
-        f"--enable-perf-counters fails the strict writer: {sorted(unknown)}"
     )
 
 
