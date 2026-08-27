@@ -48,6 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     reset_fused_ring_host_timing,
     resolve_has_indexer,
 )
+from models.demos.deepseek_v3_d_p.tt.mla.rope import write_chunk_metadata
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_cache_host,
     blockcyclic_positions,
@@ -1450,12 +1451,15 @@ def run_chunked_transformer_updated(
     if use_trace:
         rep = ttnn.ReplicateTensorToMesh(mesh_device)
 
-        def _meta1(val, on_device=True):
-            t = torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1)
-            kw = dict(dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
-            if on_device:
-                kw.update(device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            return ttnn.from_torch(t, **kw)
+        def _meta1(val):
+            return ttnn.from_torch(
+                torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=rep,
+            )
 
         trace_input = ttnn.from_torch(
             chunk_tok_host[0],
@@ -1473,10 +1477,6 @@ def run_chunked_transformer_updated(
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
             )
-            for c in range(n_chunks)
-        ]
-        host_meta = [
-            (_meta1(0, False), _meta1(preload_isl + c * CHUNK, False), _meta1(preload_isl + (c + 1) * CHUNK, False))
             for c in range(n_chunks)
         ]
 
@@ -1516,8 +1516,17 @@ def run_chunked_transformer_updated(
             kv_actual = preload_isl + c * CHUNK
             if use_trace:
                 ttnn.copy_host_to_device_tensor(host_tok[c], trace_input)
-                for src, dst in zip(host_meta[c], trace_metadata):
-                    ttnn.copy_host_to_device_tensor(src, dst)
+                # One call: on Mistral this also refreshes the llama4 scale buffer the replay reads.
+                # Writing the scalars alone leaves it at ones -- no temperature, and no PCC gate here
+                # would see it. No-op for variants without one.
+                write_chunk_metadata(
+                    trace_metadata,
+                    (0, kv_actual, kv_actual + CHUNK),
+                    hf_config=config,
+                    mesh_device=mesh_device,
+                    chunk_size_global=CHUNK,
+                    sp_axis=sp_axis,
+                )
                 chunk_start = time.time()
                 trace_controller.replay()
                 ttnn.synchronize_device(mesh_device)
@@ -2289,20 +2298,11 @@ def run_chunked_transformer_padded_trace(
             mesh_mapper=rep_mapper,
         )
 
-    def _meta1_host(val):
-        return ttnn.from_torch(
-            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=rep_mapper,
-        )
-
     trace_metadata = (_meta1_dev(0), _meta1_dev(starts[0][0]), _meta1_dev(starts[0][1]))
     tok_host_tt = [
         ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=sp_mapper)
         for t in chunk_tok_host
     ]
-    meta_host_tt = [(_meta1_host(0), _meta1_host(ks), _meta1_host(e)) for (ks, e) in starts]
 
     def _fwd_meta():
         transformer.forward(
@@ -2338,8 +2338,14 @@ def run_chunked_transformer_padded_trace(
 
         for c, (ks, e) in enumerate(starts):
             ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
-            for src, dst in zip(meta_host_tt[c], trace_metadata):
-                ttnn.copy_host_to_device_tensor(src, dst)
+            write_chunk_metadata(
+                trace_metadata,
+                (0, ks, e),
+                hf_config=config,
+                mesh_device=mesh_device,
+                chunk_size_global=CHUNK,
+                sp_axis=sp_axis,
+            )
             controller.replay()
         ttnn.synchronize_device(mesh_device)
         controller.release()
@@ -2348,8 +2354,14 @@ def run_chunked_transformer_padded_trace(
         logger.info("[padded-trace] EAGER metadata (eager mode): per-split forward, no capture")
         for c, (ks, e) in enumerate(starts):
             ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
-            for src, dst in zip(meta_host_tt[c], trace_metadata):
-                ttnn.copy_host_to_device_tensor(src, dst)
+            write_chunk_metadata(
+                trace_metadata,
+                (0, ks, e),
+                hf_config=config,
+                mesh_device=mesh_device,
+                chunk_size_global=CHUNK,
+                sp_axis=sp_axis,
+            )
             _fwd_meta()
         ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(trace_input)

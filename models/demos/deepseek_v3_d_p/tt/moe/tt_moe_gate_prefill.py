@@ -1001,7 +1001,9 @@ class TtMoEGatePrefill(LightweightModule):
                 ),
             )
 
-        _, actual_start, actual_end = metadata
+        # Index, do not unpack: ChunkMetadata carries an optional 4th field (tt/mla/rope.py), so a
+        # strict 3-way unpack breaks as soon as a variant sets one. Fields 0-2 are the stable contract.
+        actual_start, actual_end = metadata[1], metadata[2]
         return ttnn.experimental.deepseek_prefill.moe_padding_config(
             self._padding_config_device,
             actual_start,
