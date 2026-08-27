@@ -346,6 +346,28 @@ def _tid_int(tid):
     return int(tid) if isinstance(tid, str) else tid
 
 
+def _in_flight_operation_frame(function_stack: list, error_operation: str):
+    """Return the reported stack frame that should own a leftover JSON error node.
+
+    Matches ``error_operation`` against the innermost frame of that name, then walks
+    out to the enclosing non-nested operation (the row the Visualizer lists). Returns
+    ``None`` when nothing on the stack matches, so the caller can keep a standalone row.
+    """
+    if not error_operation:
+        return None
+    match_index = None
+    for i in range(len(function_stack) - 1, -1, -1):
+        if function_stack[i].get("name") == error_operation:
+            match_index = i
+            break
+    if match_index is None:
+        return None
+    for i in range(match_index, -1, -1):
+        if not function_stack[i].get("nested"):
+            return function_stack[i]
+    return None
+
+
 def _build_operation_subgraph(nodes: list) -> list:
     """Wrap an operation's trace nodes in capture_start/capture_end and renumber them."""
     capture_start = {
@@ -1315,6 +1337,19 @@ def import_graph(
                         rank,
                     )
                 )
+            elif start_node and start_node.get("deferred_error"):
+                deferred = start_node["deferred_error"]
+                errors_batch.append(
+                    (
+                        operation_id,
+                        name,
+                        deferred.get("type", "exception"),
+                        deferred.get("message", ""),
+                        "\n".join(py_io.get("python_stack_trace", [])) if py_io else "",
+                        "",
+                        rank,
+                    )
+                )
             pending_abort = None
 
             if py_io and py_io.get("arguments"):
@@ -1584,10 +1619,19 @@ def import_graph(
             error_type = params.get("error_type", "unknown")
             error_message = params.get("error_message", "")
             error_operation = params.get("error_operation", "")
-            errors_batch.append((base_operation_id, error_operation, error_type, error_message, "", "", rank))
+            owner = _in_flight_operation_frame(function_stack, error_operation)
+            if owner is not None:
+                # Bind to the in-flight operation so the Visualizer can join on operation_id.
+                # Emitted when that start is closed (function_end) or imported as an orphan.
+                if "deferred_error" not in owner:
+                    owner["deferred_error"] = {"type": error_type, "message": error_message}
+            else:
+                errors_batch.append((base_operation_id, error_operation, error_type, error_message, "", "", rank))
 
     # Orphan function_start (started, never ended): record the operation that died, with its error.
-    already_errored = {e[1] for e in errors_batch}
+    # Deduplicate by (operation_id, rank), never by operation name: a retried ttnn.conv2d is a
+    # different row from the earlier failure of the same name.
+    already_errored = {(e[0], e[6]) for e in errors_batch}
     for orphan in function_stack:
         if orphan.get("nested"):
             continue
@@ -1595,6 +1639,7 @@ def import_graph(
         op_name = orphan.get("name", "unknown")
         py_io = orphan.get("python_io") or {}
         error = py_io.get("error") or {}
+        deferred_error = orphan.get("deferred_error") or {}
         operation_id = base_operation_id + operation_counter
         operation_counter += 1
         graph_counter_to_op_id[orphan["counter"]] = operation_id
@@ -1621,13 +1666,26 @@ def import_graph(
         if stack_trace:
             stack_traces_batch.append((operation_id, stack_trace, rank))
 
-        if op_name not in already_errored:
+        if (operation_id, rank) not in already_errored:
+            if error:
+                error_type = error.get("type", "incomplete_operation")
+                error_message = error.get(
+                    "message", f"Operation '{op_name}' started but never completed (likely crashed)"
+                )
+            elif deferred_error:
+                error_type = deferred_error.get("type", "incomplete_operation")
+                error_message = deferred_error.get(
+                    "message", f"Operation '{op_name}' started but never completed (likely crashed)"
+                )
+            else:
+                error_type = "incomplete_operation"
+                error_message = f"Operation '{op_name}' started but never completed (likely crashed)"
             errors_batch.append(
                 (
                     operation_id,
                     op_name,
-                    error.get("type", "incomplete_operation"),
-                    error.get("message", f"Operation '{op_name}' started but never completed (likely crashed)"),
+                    error_type,
+                    error_message,
                     stack_trace,
                     "",
                     rank,
