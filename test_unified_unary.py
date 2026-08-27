@@ -29,7 +29,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import dfb_input, dfb_output, run_unified_spec, single_core, unified_program_spec
+from unified_harness import dfb, run_unified_spec, single_core, unified_program_spec
 
 KERNEL = "unified_kernels/unary.cpp"
 
@@ -71,8 +71,8 @@ def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, fidelity=None, buff
         kernel_source=KERNEL,
         nodes=core_ranges,
         dfbs=[
-            dfb_input("in", thread=0, num_pages=pages),
-            dfb_output("out", thread=1, num_pages=pages),
+            dfb("in", pages),
+            dfb("out", pages),
         ],
         tensors={"in": ta, "out": tout},
         named_compile_time_args=named_ct_args,

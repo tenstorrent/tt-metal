@@ -23,15 +23,13 @@
 // The whole rotation then lands in one SFPU pass: `x * cos + rot * sin` is a four-leaf
 // tree, the deepest in this model so far.
 //
-// Compile-time args:
-//   0        tiles per chunk (at most 8)
-//   1        chunks
-//   2..      TensorAccessorArgs for x, cos, sin, trans_mat, then out
+// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+//   tiles per chunk (at most 8)
+//   chunks
 //
-// Runtime args (identical on all three kernels):
-//   0..4     x, cos, sin, trans_mat, out base addresses
-//   5        chunk_begin    first chunk this core owns
-//   6        chunk_count    how many it owns
+// Runtime args, named and identical on all three kernels:
+//   chunk_begin    first chunk this core owns
+//   chunk_count    how many it owns
 //
 // Chunks are the unit of partitioning and split with no coordination: the rotation is
 // per-tile, so chunk c depends on nothing outside its own tiles of x, cos and sin and
@@ -39,34 +37,22 @@
 // the host divides, not what a core walks. The rotation tile is read by every core.
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
-constexpr uint32_t kCbX = 0;
-constexpr uint32_t kCbCos = 1;
-constexpr uint32_t kCbSin = 2;
-constexpr uint32_t kCbM = 3;
-constexpr uint32_t kCbRot = 4;
-constexpr uint32_t kCbOut = 16;
-
 void kernel_main() {
     constexpr uint32_t chunk = get_named_compile_time_arg_val("chunk");
+
+    constexpr uint32_t kCbX = TT_U_CB(x);
+    constexpr uint32_t kCbCos = TT_U_CB(cos);
+    constexpr uint32_t kCbSin = TT_U_CB(sin);
+    constexpr uint32_t kCbM = TT_U_CB(m);
+    constexpr uint32_t kCbRot = TT_U_CB(rot);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
     [[maybe_unused]] constexpr uint32_t num_chunks = get_named_compile_time_arg_val("num_chunks");
-
-    constexpr auto x_args = TensorAccessorArgs<0>();
-    constexpr auto cos_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
-    constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
-    constexpr auto m_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<m_args.next_compile_time_args_offset()>();
-
-    const uint32_t x_addr = get_arg_val<uint32_t>(0);
-    const uint32_t cos_addr = get_arg_val<uint32_t>(1);
-    const uint32_t sin_addr = get_arg_val<uint32_t>(2);
-    const uint32_t m_addr = get_arg_val<uint32_t>(3);
-    const uint32_t out_addr = get_arg_val<uint32_t>(4);
-    const uint32_t chunk_begin = get_arg_val<uint32_t>(5);
-    const uint32_t chunk_count = get_arg_val<uint32_t>(6);
-    u::check_runtime_args<7>();
+    const uint32_t chunk_begin = get_arg(args::chunk_begin);
+    const uint32_t chunk_count = get_arg(args::chunk_count);
 
     using Blk = u::Shape<chunk, 1>;  // N tiles, shape irrelevant to a per-tile op
     using M = u::Shape<1, 1>;
@@ -80,11 +66,11 @@ void kernel_main() {
     u::Storage<Blk> rot_storage(kCbRot);
     u::Storage<Blk> out_storage(kCbOut);
 
-    const auto x_acc = TensorAccessor(x_args, x_addr);
-    const auto cos_acc = TensorAccessor(cos_args, cos_addr);
-    const auto sin_acc = TensorAccessor(sin_args, sin_addr);
-    const auto m_acc = TensorAccessor(m_args, m_addr);
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto x_acc = TensorAccessor(tensor::x);
+    const auto cos_acc = TensorAccessor(tensor::cos);
+    const auto sin_acc = TensorAccessor(tensor::sin);
+    const auto m_acc = TensorAccessor(tensor::m);
+    const auto out = TensorAccessor(tensor::out);
 
     // KERNEL SCOPE: every chunk's matmul re-reads the same rotation tile, so it must not be
     // popped until the kernel ends -- the same rule the reduce scaler and a fused bias obey.

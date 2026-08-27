@@ -24,13 +24,9 @@
 // The accessors stay POSITIONAL and now start at 0, which is the larger half of the win:
 // they were at 2, and every scalar added ahead of them used to shift all three.
 //
-// Runtime args (identical on all three kernels):
-//   0            in0 base address
-//   1            in1 base address
-//   2            out base address
-//   3            block_begin    first block this core owns
-//   4            block_count    how many it owns
-//   5            the sentinel the harness appends -- see check_runtime_args below
+// Runtime args, named and identical on all three kernels:
+//   block_begin    first block this core owns
+//   block_count    how many it owns
 //
 // Blocks are the unit of partitioning and need no coordination to split: block b reads
 // pages [b*tiles_per_block, +tiles_per_block) of each input and writes the same range of
@@ -41,12 +37,9 @@
 // Defines: one of BN_SUB, BN_MUL, BN_DIV, BN_MAX, BN_CHAIN; add is the default.
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
-
-constexpr uint32_t kCbIn0 = 0;
-constexpr uint32_t kCbIn1 = 1;
-constexpr uint32_t kCbOut = 16;
 
 #if defined(BN_SUB)
 #define BN_APPLY(a, b) ((a) - (b))
@@ -67,19 +60,13 @@ constexpr uint32_t kCbOut = 16;
 #endif
 
 void kernel_main() {
+    constexpr uint32_t kCbIn0 = TT_U_CB(in0);
+    constexpr uint32_t kCbIn1 = TT_U_CB(in1);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
     [[maybe_unused]] constexpr uint32_t num_blocks = get_named_compile_time_arg_val("num_blocks");
     constexpr uint32_t tiles_per_block = get_named_compile_time_arg_val("tiles_per_block");
-
-    constexpr auto in0_args = TensorAccessorArgs<0>();
-    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
-
-    const uint32_t in0_addr = get_arg_val<uint32_t>(0);
-    const uint32_t in1_addr = get_arg_val<uint32_t>(1);
-    const uint32_t out_addr = get_arg_val<uint32_t>(2);
-    const uint32_t block_begin = get_arg_val<uint32_t>(3);
-    const uint32_t block_count = get_arg_val<uint32_t>(4);
-    u::check_runtime_args<5>();
+    const uint32_t block_begin = get_arg(args::block_begin);
+    const uint32_t block_count = get_arg(args::block_count);
 
     u::compute_init(kCbIn0, kCbOut);
 
@@ -88,9 +75,9 @@ void kernel_main() {
     u::Storage<Block1D> in1_storage(kCbIn1);
     u::Storage<Block1D> out_storage(kCbOut);
 
-    const auto in0 = TensorAccessor(in0_args, in0_addr);
-    const auto in1 = TensorAccessor(in1_args, in1_addr);
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto in0 = TensorAccessor(tensor::in0);
+    const auto in1 = TensorAccessor(tensor::in1);
+    const auto out = TensorAccessor(tensor::out);
 
     for (uint32_t n = 0; n < block_count; ++n) {
         const uint32_t b = block_begin + n;

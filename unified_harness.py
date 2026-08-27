@@ -23,6 +23,7 @@ is a property of the model, not a limitation of the harness.
 """
 
 import os
+import re
 
 import ttnn
 
@@ -319,37 +320,130 @@ DM_THREAD_PROCESSOR = {
 
 
 class Dfb:
-    """A dataflow buffer, plus which projections stand at its two ends.
+    """A dataflow buffer: its name, its depth, and which projections stand at its two ends.
 
     `kind` is one of the three columns of the api.h table; `thread` is the DM thread at the
     data-movement end, and is None for an INTERMED buffer, which has no data-movement end.
+    Both are DERIVED FROM THE KERNEL by default -- see derive_roles() for why.
     """
 
     INPUT = "input"
     OUTPUT = "output"
     INTERMED = "intermed"
 
-    def __init__(self, name, kind, thread, dtype, num_pages):
+    def __init__(self, name, num_pages=2, *, dtype=ttnn.bfloat16, kind=None, thread=None):
         self.name = name
+        self.num_pages = num_pages
+        self.dtype = dtype
         self.kind = kind
         self.thread = thread
-        self.dtype = dtype
-        self.num_pages = num_pages
+
+
+def dfb(name, num_pages=2, *, dtype=ttnn.bfloat16):
+    """A buffer whose endpoints the harness reads off the kernel. The usual form."""
+    return Dfb(name, num_pages, dtype=dtype)
 
 
 def dfb_input(name, thread, *, dtype=ttnn.bfloat16, num_pages=2):
-    """Filled by DM thread `thread`, read by compute."""
-    return Dfb(name, Dfb.INPUT, thread, dtype, num_pages)
+    """Filled by DM thread `thread`, read by compute. Stated rather than derived."""
+    return Dfb(name, num_pages, dtype=dtype, kind=Dfb.INPUT, thread=thread)
 
 
 def dfb_output(name, thread, *, dtype=ttnn.bfloat16, num_pages=2):
-    """Filled by compute, drained by DM thread `thread`."""
-    return Dfb(name, Dfb.OUTPUT, thread, dtype, num_pages)
+    """Filled by compute, drained by DM thread `thread`. Stated rather than derived."""
+    return Dfb(name, num_pages, dtype=dtype, kind=Dfb.OUTPUT, thread=thread)
 
 
 def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_pages=2):
     """Compute on both ends: an accumulator, a retained value, a scratch block."""
-    return Dfb(name, Dfb.INTERMED, None, dtype, num_pages)
+    return Dfb(name, num_pages, dtype=dtype, kind=Dfb.INTERMED, thread=None)
+
+
+# tt/unified/api.h's Storage declarations and data-movement calls, as patterns. The kernel is
+# the only place that knows which projection stands at which end of a buffer, so it is the
+# place to read it from.
+_RE_CB_CONST = re.compile(r"(\w+)\s*=\s*TT_U_CB\(\s*(\w+)\s*\)")
+_RE_STORAGE = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*(\w+)\s*\)")
+_RE_PRODUCED = re.compile(
+    r"(?:u::Block[\w<>: ]*|u::RetainedBlock[\w<>: ]*|auto)\s+(\w+)\s*=\s*(\w+)\.(?:store|accumulate)\("
+)
+_RE_FILLS = re.compile(r"(?:noc_load|fill_reduce_scaler|noc_core_write|noc_core_read)<([^>(]*)>\(\s*(\w+)")
+_RE_DRAINS = re.compile(r"noc_store<([^>(]*)>\(\s*std::move\((\w+)\)")
+_RE_DRAINS_C2C = re.compile(r"noc_core_write<([^>(]*)>\(\s*\w+\s*,\s*std::move\((\w+)\)")
+# The inline form, which is the commoner one: noc_store<1>(out_storage.store(...), out, c).
+_RE_DRAINS_INLINE = re.compile(r"noc_store<([^>(]*)>\(\s*(\w+)\.(?:store|accumulate)\(")
+# An Accumulator's finishing Block belongs to its OUTPUT storage, which is its second
+# constructor argument -- the first is the accumulation buffer the next call re-consumes.
+_RE_ACCUM = re.compile(r"u::Accumulator<[^;]*?>\s+(\w+)\s*\(\s*\w+\s*,\s*(\w+)\s*\)")
+# custom_compute's escape hatch: the routine did the reserve/pack/push itself and hands the
+# harness a bare handle. u::Block<Blk>{out_storage} names its Storage directly.
+_RE_DRAINS_BARE = re.compile(r"noc_store<([^>(]*)>\(\s*u::Block<\w+>\s*\{\s*(\w+)\s*\}")
+
+
+def _thread_of(text, defines, kernel_source):
+    """The `thread` template argument of a data-movement call, as an int.
+
+    It is often a define -- MC_DM_THREAD, MMB_IN0_THREAD -- because which thread drives a
+    transfer is a thing launchers tune. The harness is passing those defines, so it can
+    resolve them; anything it cannot resolve is an error rather than a guess.
+    """
+    tok = text.split(",")[0].strip()
+    if tok.isdigit():
+        return int(tok)
+    if tok in defines:
+        return int(defines[tok])
+    raise ValueError(
+        f"{kernel_source} names its data-movement thread as `{tok}`, which is not a literal and "
+        f"not among the defines this launcher passes, so the buffer's endpoint cannot be resolved."
+    )
+
+
+def derive_roles(kernel_source, defines):
+    """Work out each buffer's endpoints by reading the kernel.
+
+    WHY THIS IS NOT A LAUNCHER'S JOB. Metal 2.0 wants a producer and a consumer named per
+    buffer, and the DM half of that is a thread number the KERNEL already states, in the
+    `thread` argument of every noc_load / noc_store. Having a launcher restate it creates a
+    contract with two ends and nothing between them -- and the mismatch is SILENT on Gen1.
+    Verified: binding `out` to thread 0 while the kernel stores it on thread 1 runs, and
+    passes, bit-identical. Gen1 circular-buffer state is per core rather than per RISC, so
+    either data-movement kernel can drive it whatever the host declared; the endpoint masks
+    only become load-bearing on Gen2, where they drive the tile counters.
+
+    So a wrong thread here is invisible today and a hang on the next architecture, which is
+    the worst shape a hazard can have. Deriving it removes the second end of the contract
+    rather than trying to check it.
+
+    Returns {buffer name: (kind, thread)}. Raises on anything it cannot read.
+    """
+    src = open(os.path.join(TT_METAL_HOME, kernel_source)).read()
+    # kCbFoo -> "foo", then Storage variable -> "foo".
+    cb_const = dict(_RE_CB_CONST.findall(src))
+    storages = {}
+    for var, cb in _RE_STORAGE.findall(src):
+        if cb in cb_const:
+            storages[var] = cb_const[cb]
+    # Block variable -> every Storage it could have come from. A name is reused across
+    # preprocessor branches (`u::Block result` in each), so this is one-to-many rather than
+    # one-to-one, and every candidate gets the role: they all drain the same way.
+    accum_out = dict(_RE_ACCUM.findall(src))
+    produced = {}
+    for block, holder in _RE_PRODUCED.findall(src):
+        produced.setdefault(block, set()).add(accum_out.get(holder, holder))
+
+    roles = {}
+    for thread, var in _RE_FILLS.findall(src):
+        roles.setdefault(var, (Dfb.INPUT, _thread_of(thread, defines, kernel_source)))
+    for thread, storage in _RE_DRAINS_BARE.findall(src):
+        roles.setdefault(storage, (Dfb.OUTPUT, _thread_of(thread, defines, kernel_source)))
+    for thread, holder in _RE_DRAINS_INLINE.findall(src):
+        roles.setdefault(accum_out.get(holder, holder), (Dfb.OUTPUT, _thread_of(thread, defines, kernel_source)))
+    for pattern in (_RE_DRAINS, _RE_DRAINS_C2C):
+        for thread, block in pattern.findall(src):
+            for src_storage in produced.get(block, ()):
+                roles.setdefault(src_storage, (Dfb.OUTPUT, _thread_of(thread, defines, kernel_source)))
+
+    return {name: roles.get(var, (Dfb.INTERMED, None)) for var, name in storages.items()}
 
 
 def unified_program_spec(
@@ -539,7 +633,16 @@ def unified_program_spec(
 
     # The endpoint bindings: the api.h table, applied.
     dfb_specs = []
+    derived = derive_roles(kernel_source, dict(all_defines))
     for d in dfbs:
+        if d.kind is None:
+            if d.name not in derived:
+                raise ValueError(
+                    f"{kernel_source} declares no u::Storage on TT_U_CB({d.name}), so its endpoints "
+                    f"cannot be read off the kernel. Name it as the kernel does, or state the role "
+                    f"explicitly with dfb_input/dfb_output/dfb_intermed."
+                )
+            d.kind, d.thread = derived[d.name]
         spec = ps.DataflowBufferSpec()
         spec.unique_id = d.name
         spec.entry_size = DTYPE_TILE_BYTES[d.dtype]

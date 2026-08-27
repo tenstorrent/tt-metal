@@ -13,30 +13,28 @@
 // case the axis has to be DECLARED for: against a Shape<Ht, 1> block, both Axis::Both and
 // Axis::Rows want a Shape<1, 1> vector, so no shape could tell them apart.
 //
-// Compile-time args:
-//   0        rows in tiles
-//   1        cols in tiles
-//   2..      TensorAccessorArgs for x, weight, then out
+// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+//   rows in tiles
+//   cols in tiles
 //
-// Runtime args (identical on all three kernels):
-//   0..2     x, weight, out base addresses
-//   3        eps as a packed bfloat16 pair
+// Runtime args, named and identical on all three kernels:
+//   eps as a packed bfloat16 pair
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
-constexpr uint32_t kCbX = 0;
-constexpr uint32_t kCbW = 1;
-constexpr uint32_t kCbEps = 2;
-constexpr uint32_t kCbInvN = 3;  // 1/N for the mean
-constexpr uint32_t kCbSq = 4;
-constexpr uint32_t kCbMean = 5;
-constexpr uint32_t kCbRsqrt = 6;
-constexpr uint32_t kCbNormed = 7;
-constexpr uint32_t kCbOut = 16;
-
 void kernel_main() {
+    constexpr uint32_t kCbX = TT_U_CB(x);
+    constexpr uint32_t kCbW = TT_U_CB(w);
+    constexpr uint32_t kCbEps = TT_U_CB(eps);
+    constexpr uint32_t kCbInvN = TT_U_CB(inv_n);
+    constexpr uint32_t kCbSq = TT_U_CB(sq);
+    constexpr uint32_t kCbMean = TT_U_CB(mean);
+    constexpr uint32_t kCbRsqrt = TT_U_CB(rsqrt);
+    constexpr uint32_t kCbNormed = TT_U_CB(normed);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
     // ht is the ROW-CHUNK height, not the whole tensor's: rows are normalised
     // independently -- each one's RMS depends on that row alone -- so the tensor is walked
     // in chunks of ht rows and only ht*wt tiles are ever resident. Which chunks this core
@@ -44,18 +42,9 @@ void kernel_main() {
     // L1 at once, which is 1024 tiles at S=512 by d_model 2048.
     constexpr uint32_t ht = get_named_compile_time_arg_val("ht");
     constexpr uint32_t wt = get_named_compile_time_arg_val("wt");
-
-    constexpr auto x_args = TensorAccessorArgs<0>();
-    constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
-
-    const uint32_t x_addr = get_arg_val<uint32_t>(0);
-    const uint32_t w_addr = get_arg_val<uint32_t>(1);
-    const uint32_t out_addr = get_arg_val<uint32_t>(2);
-    const uint32_t eps_bits = get_arg_val<uint32_t>(3);
-    const uint32_t chunk_begin = get_arg_val<uint32_t>(4);
-    const uint32_t chunk_count = get_arg_val<uint32_t>(5);
-    u::check_runtime_args<6>();
+    const uint32_t eps_bits = get_arg(args::eps_bits);
+    const uint32_t chunk_begin = get_arg(args::chunk_begin);
+    const uint32_t chunk_count = get_arg(args::chunk_count);
 
     constexpr auto kAxis = u::Axis::Cols;  // each row is normalised independently
 
@@ -76,9 +65,9 @@ void kernel_main() {
     u::Storage<X> normed_storage(kCbNormed);
     u::Storage<X> out_storage(kCbOut);
 
-    const auto x_acc = TensorAccessor(x_args, x_addr);
-    const auto w_acc = TensorAccessor(w_args, w_addr);
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto x_acc = TensorAccessor(tensor::x);
+    const auto w_acc = TensorAccessor(tensor::w);
+    const auto out = TensorAccessor(tensor::out);
 
     // A mean divides by the number of ELEMENTS folded into one output, which for a Cols
     // collapse is wt * 32. Feeding a reduce_mean a scaler of 1 makes it a sum, silently.

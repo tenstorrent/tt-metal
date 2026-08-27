@@ -15,29 +15,23 @@
 // Compile-time args, by name:
 //   tiles      how many tiles the block holds
 //
-// Runtime args:
-//   0..2       a, b, out base addresses
-//   3          the sentinel
+// Runtime args, named and identical on all three kernels:
+//   the sentinel
 
 #include <tt/unified/core>
 
 namespace u = tt::unified;
 
-constexpr uint32_t kCbA = 0;
-constexpr uint32_t kCbB = 1;
-constexpr uint32_t kCbOut = 16;
-
 void kernel_main() {
     constexpr uint32_t tiles = get_named_compile_time_arg_val("tiles");
 
-    constexpr auto a_args = TensorAccessorArgs<0>();
-    constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
+    constexpr uint32_t kCbA = TT_U_CB(a);
+    constexpr uint32_t kCbB = TT_U_CB(b);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
 
-    const auto a_acc = TensorAccessor(a_args, get_arg_val<uint32_t>(0));
-    const auto b_acc = TensorAccessor(b_args, get_arg_val<uint32_t>(1));
-    const auto out = TensorAccessor(out_args, get_arg_val<uint32_t>(2));
-    u::check_runtime_args<3>();
+    const auto a_acc = TensorAccessor(tensor::a));
+    const auto b_acc = TensorAccessor(tensor::b));
+    const auto out = TensorAccessor(tensor::out));
 
     using Blk = u::Shape<1, tiles>;
 

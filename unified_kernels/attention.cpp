@@ -19,54 +19,40 @@
 // every row keeps at least its diagonal, so no row sums to zero and the reciprocal is
 // finite.
 //
-// Compile-time args:
-//   0        Sq in tiles
-//   1        Sk in tiles
-//   2        D  in tiles
-//   3..      TensorAccessorArgs for q, k, v, mask, then out
+// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+//   Sq in tiles
+//   Sk in tiles
+//   D  in tiles
 //
-// Runtime args (identical on all three kernels):
-//   0..4     q, k, v, mask, out base addresses
-//   5        1/sqrt(head dim) as a packed bfloat16 pair. Computed on the host: the
+// Runtime args, named and identical on all three kernels:
+//   1/sqrt(head dim) as a packed bfloat16 pair. Computed on the host: the
 //            kernel toolchain has no sqrtf, and the host knows the head dim exactly.
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
-
-constexpr uint32_t kCbQ = 0;
-constexpr uint32_t kCbK = 1;
-constexpr uint32_t kCbV = 2;
-constexpr uint32_t kCbMask = 3;
-constexpr uint32_t kCbOne = 4;    // reduce scaler, 1.0
-constexpr uint32_t kCbScale = 5;  // 1/sqrt(head dim), broadcast as a scalar
-constexpr uint32_t kCbScores = 6;
-constexpr uint32_t kCbScaled = 7;
-constexpr uint32_t kCbMasked = 8;
-constexpr uint32_t kCbRowMax = 9;
-constexpr uint32_t kCbExp = 10;
-constexpr uint32_t kCbRecip = 11;
-constexpr uint32_t kCbProb = 12;
-constexpr uint32_t kCbOut = 16;
 
 void kernel_main() {
     constexpr uint32_t sq = get_named_compile_time_arg_val("sq");
     constexpr uint32_t sk = get_named_compile_time_arg_val("sk");
     constexpr uint32_t dt = get_named_compile_time_arg_val("dt");
 
-    constexpr auto q_args = TensorAccessorArgs<0>();
-    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
-    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
-    constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
-
-    const uint32_t q_addr = get_arg_val<uint32_t>(0);
-    const uint32_t k_addr = get_arg_val<uint32_t>(1);
-    const uint32_t v_addr = get_arg_val<uint32_t>(2);
-    const uint32_t mask_addr = get_arg_val<uint32_t>(3);
-    const uint32_t out_addr = get_arg_val<uint32_t>(4);
-    const uint32_t scale_bits = get_arg_val<uint32_t>(5);
-    u::check_runtime_args<6>();
+    constexpr uint32_t kCbQ = TT_U_CB(q);
+    constexpr uint32_t kCbK = TT_U_CB(k);
+    constexpr uint32_t kCbV = TT_U_CB(v);
+    constexpr uint32_t kCbMask = TT_U_CB(mask);
+    constexpr uint32_t kCbOne = TT_U_CB(one);
+    constexpr uint32_t kCbScale = TT_U_CB(scale);
+    constexpr uint32_t kCbScores = TT_U_CB(scores);
+    constexpr uint32_t kCbScaled = TT_U_CB(scaled);
+    constexpr uint32_t kCbMasked = TT_U_CB(masked);
+    constexpr uint32_t kCbRowMax = TT_U_CB(row_max);
+    constexpr uint32_t kCbExp = TT_U_CB(exp);
+    constexpr uint32_t kCbRecip = TT_U_CB(recip);
+    constexpr uint32_t kCbProb = TT_U_CB(prob);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
+    const uint32_t scale_bits = get_arg(args::scale_bits);
 
     using Q = u::Shape<sq, dt>;                          // Sq x D
     using Kt = u::Shape<dt, sk>;                         // D x Sk -- K, grid-transposed by the host
@@ -96,11 +82,11 @@ void kernel_main() {
     u::Storage<Scores> prob_storage(kCbProb);
     u::Storage<Out> out_storage(kCbOut);
 
-    const auto q_acc = TensorAccessor(q_args, q_addr);
-    const auto k_acc = TensorAccessor(k_args, k_addr);
-    const auto v_acc = TensorAccessor(v_args, v_addr);
-    const auto mask_acc = TensorAccessor(mask_args, mask_addr);
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto q_acc = TensorAccessor(tensor::q);
+    const auto k_acc = TensorAccessor(tensor::k);
+    const auto v_acc = TensorAccessor(tensor::v);
+    const auto mask_acc = TensorAccessor(tensor::mask);
+    const auto out = TensorAccessor(tensor::out);
 
     // 1.0 for max and sum alike -- metal folds the scaler into every reduce_tile, and
     // neither of these reductions is an average.

@@ -19,37 +19,23 @@
 //            cb_push(out), cb_pop(in1), cb_pop(in0)
 //   BRISC    cb_wait(out) -> noc_write x N -> cb_pop(out)
 //
-// Compile-time args:
-//   0            num_blocks
-//   1            tiles_per_block
-//   2..          TensorAccessorArgs for in0, then in1, then out
+// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+//   num_blocks
+//   tiles_per_block
 //
-// Runtime args (identical on all three kernels):
-//   0            in0 base address
-//   1            in1 base address
-//   2            out base address
+// No runtime args: the tensors are bound, so their addresses ride with the accessors.
 
 #include <tt/unified/core>
 
 namespace u = tt::unified;
 
-constexpr uint32_t kCbIn0 = 0;
-constexpr uint32_t kCbIn1 = 1;
-constexpr uint32_t kCbOut = 16;
-
 void kernel_main() {
     constexpr uint32_t num_blocks = get_named_compile_time_arg_val("num_blocks");
     constexpr uint32_t tiles_per_block = get_named_compile_time_arg_val("tiles_per_block");
 
-    // TensorAccessor compile-time args, laid out in0, in1, out.
-    constexpr auto in0_args = TensorAccessorArgs<0>();
-    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
-
-    const uint32_t in0_addr = get_arg_val<uint32_t>(0);
-    const uint32_t in1_addr = get_arg_val<uint32_t>(1);
-    const uint32_t out_addr = get_arg_val<uint32_t>(2);
-    u::check_runtime_args<3>();
+    constexpr uint32_t kCbIn0 = TT_U_CB(in0);
+    constexpr uint32_t kCbIn1 = TT_U_CB(in1);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
 
     u::compute_init(kCbIn0, kCbOut);
 
@@ -58,9 +44,9 @@ void kernel_main() {
     u::Storage<Block1D> in1_storage(kCbIn1);
     u::Storage<Block1D> out_storage(kCbOut);
 
-    const auto in0 = TensorAccessor(in0_args, in0_addr);
-    const auto in1 = TensorAccessor(in1_args, in1_addr);
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto in0 = TensorAccessor(tensor::in0);
+    const auto in1 = TensorAccessor(tensor::in1);
+    const auto out = TensorAccessor(tensor::out);
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
 #if defined(EA_CUSTOM_LOAD)

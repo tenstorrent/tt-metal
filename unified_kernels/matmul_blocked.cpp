@@ -39,12 +39,12 @@
 //   TRISC    matmul per k-block into the accumulator, then the mt x nt block in subblocks
 //   BRISC    drain cb_out (mt * nt tiles) per output block
 //
-// Compile-time args:
-//   0        mt          rows per M-block, in tiles
-//   1        ktot        K in tiles
-//   2        ntot        N in tiles
-//   3        kt          tiles per k-block; kt == ktot means no k-loop
-//   4        nt          tiles per output-column block; nt == ntot means the full width
+// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+//   mt          rows per M-block, in tiles
+//   ktot        K in tiles
+//   ntot        N in tiles
+//   kt          tiles per k-block; kt == ktot means no k-loop
+//   nt          tiles per output-column block; nt == ntot means the full width
 //
 // Defines:
 //   MMB_ACC_DST                 carry the partial in DST instead of L1 (slower here)
@@ -55,7 +55,6 @@
 //                               operand. NOT symmetric: NOC 0 is measurably better for
 //                               these DRAM reads, so the BIG operand belongs on it. See
 //                               unified_llama_prefill.md.
-//   0..      TensorAccessorArgs for A, then B, then out -- at 0, and staying there, now
 //            that the scalars above are named rather than positional
 //
 //   MMB_SHARE_PAIR              TEST ONLY. Put BOTH collectives on handshake pair 0
@@ -70,12 +69,12 @@
 //                               ready counter for the COLUMN collective while (0,0) is
 //                               still counting ROW receivers.
 //
-// Runtime args (identical on all three kernels):
-//   0        A base address, an [M, K] tensor
-//   1        B base address, a [K, N] tensor
-//   2        out base address, an [M, N] tensor
-//   3        first output BLOCK this core owns, as a flat (m, n) index
-//   4        how many output blocks this core owns
+// Runtime args, named and identical on all three kernels:
+//   A base address, an [M, K] tensor
+//   B base address, a [K, N] tensor
+//   out base address, an [M, N] tensor
+//   first output BLOCK this core owns, as a flat (m, n) index
+//   how many output blocks this core owns
 
 // A DM thread is bound to a NOC by its index, so choosing the thread chooses the NOC, and
 // the two are NOT interchangeable for DRAM reads. B is the big operand and wants NOC 0; A
@@ -88,13 +87,9 @@
 #endif
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
-
-constexpr uint32_t kCbIn = 0;
-constexpr uint32_t kCbWo = 1;
-constexpr uint32_t kCbOut = 16;
-constexpr uint32_t kCbAcc = 24;  // running total; a separate CB from kCbOut
 
 void kernel_main() {
     constexpr uint32_t mt = get_named_compile_time_arg_val("mt");
@@ -103,18 +98,15 @@ void kernel_main() {
     constexpr uint32_t kt = get_named_compile_time_arg_val("kt");
     constexpr uint32_t nt = get_named_compile_time_arg_val("nt");
 
+    constexpr uint32_t kCbIn = TT_U_CB(in);
+    constexpr uint32_t kCbWo = TT_U_CB(wo);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbAcc = TT_U_CB(acc);
+
     static_assert(kt > 0 && ktot % kt == 0, "the k-block width must divide K");
     static_assert(nt > 0 && ntot % nt == 0, "the output-column block width must divide N");
     constexpr uint32_t kb = ktot / kt;
     constexpr uint32_t nb = ntot / nt;
-
-    constexpr auto attn_args = TensorAccessorArgs<0>();
-    constexpr auto wo_args = TensorAccessorArgs<attn_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<wo_args.next_compile_time_args_offset()>();
-
-    const uint32_t a_addr = get_arg_val<uint32_t>(0);
-    const uint32_t b_addr = get_arg_val<uint32_t>(1);
-    const uint32_t out_addr = get_arg_val<uint32_t>(2);
     // The unit of work across cores is one OUTPUT BLOCK -- an (m, n) tile -- indexed flat as
     // m*nb + n. Both dimensions are split, and neither needs a reduction: two cores holding
     // different m or different n write disjoint parts of the output. Only K would need one,
@@ -126,9 +118,8 @@ void kernel_main() {
     // 3710.7us for ONE core at mt=8 -- the extra cores bought almost nothing. Splitting the
     // output both ways gives mb*nb units instead of mb, so a large mt and a high core count
     // stop being alternatives.
-    const uint32_t block_begin = get_arg_val<uint32_t>(3);
-    const uint32_t block_count = get_arg_val<uint32_t>(4);
-    u::check_runtime_args<5>();
+    const uint32_t block_begin = get_arg(args::block_begin);
+    const uint32_t block_count = get_arg(args::block_count);
 
     using A = u::Shape<mt, kt>;    // one (m, k) tile of A
     using W = u::Shape<kt, nt>;    // one (k, n) tile of B
@@ -141,9 +132,9 @@ void kernel_main() {
     u::Storage<Out> acc_storage(kCbAcc);
     u::Storage<Out> out_storage(kCbOut);
 
-    const auto a_acc = TensorAccessor(attn_args, a_addr);
-    const auto b_acc = TensorAccessor(wo_args, b_addr);
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto a_acc = TensorAccessor(tensor::attn);
+    const auto b_acc = TensorAccessor(tensor::wo);
+    const auto out = TensorAccessor(tensor::out);
 
     // Dst mode reloads the running total into DST before every k-block and packs it back
     // after, which costs O(output block) per k-block -- and that block is mt*nt tiles, 128

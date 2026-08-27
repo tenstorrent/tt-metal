@@ -41,13 +41,9 @@
 // indexed c*K + k, and the output is R*C blocks of rt x ct in row-major core
 // order.
 //
-// Compile-time args:
-//   0..      TensorAccessorArgs for in0, then in1, then out
+// Compile-time args: a cb_<name> per buffer, which TT_U_CB reads.
 //
 // Runtime args (identical on every core):
-//   0        in0 base address
-//   1        in1 base address
-//   2        out base address
 //
 // A core's row and column are not passed in: it asks where it is. Note that
 // LogicalCoord::this_core() is relative to the SUB-DEVICE origin while
@@ -66,20 +62,11 @@
 
 namespace u = tt::unified;
 
-constexpr uint32_t kCbIn0 = 0;
-constexpr uint32_t kCbIn1 = 1;
-constexpr uint32_t kCbAcc = 24;  // partials, per the reference's mm_partials
-constexpr uint32_t kCbOut = 16;
-
 void kernel_main() {
-    constexpr auto in0_args = TensorAccessorArgs<0>();
-    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
-
-    const uint32_t in0_addr = get_arg_val<uint32_t>(0);
-    const uint32_t in1_addr = get_arg_val<uint32_t>(1);
-    const uint32_t out_addr = get_arg_val<uint32_t>(2);
-    u::check_runtime_args<3>();
+    constexpr uint32_t kCbIn0 = TT_U_CB(in0);
+    constexpr uint32_t kCbIn1 = TT_U_CB(in1);
+    constexpr uint32_t kCbAcc = TT_U_CB(acc);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
 
     const u::LogicalCoord me = u::LogicalCoord::this_core();
     const uint32_t out_block = me.y * MM_GRID_W + me.x;
@@ -97,9 +84,9 @@ void kernel_main() {
     u::Storage<Out> acc_storage(kCbAcc);
     u::Storage<Out> out_storage(kCbOut);
 
-    const auto in0 = TensorAccessor(in0_args, in0_addr);
-    const auto in1 = TensorAccessor(in1_args, in1_addr);
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto in0 = TensorAccessor(tensor::in0);
+    const auto in1 = TensorAccessor(tensor::in1);
+    const auto out = TensorAccessor(tensor::out);
 
     // The row this core sits in, and the column it sits in. Every core in a row
     // runs the same row statement; which side of the handshake it takes is a

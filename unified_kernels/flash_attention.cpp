@@ -58,52 +58,51 @@
 // A rectangular score block cannot express the half-masked diagonal chunk, but it can skip
 // the wholly-masked ones, and that is what the loop bound does.
 //
-// Compile-time args:
-//   0        Sq per query CHUNK, in tiles
-//   1        Sk per key CHUNK, in tiles
-//   2        D in tiles
-//   3        number of query chunks
-//   4        key tiles already behind the first query chunk (history; 0 for a fresh prefill)
-//   5        total key tiles -- read only under FLASH_NONCAUSAL
-//   6..      TensorAccessorArgs for q, k, v, mask, col_ones, then out
+// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+//   Sq per query CHUNK, in tiles
+//   Sk per key CHUNK, in tiles
+//   D in tiles
+//   number of query chunks
+//   key tiles already behind the first query chunk (history; 0 for a fresh prefill)
+//   total key tiles -- read only under FLASH_NONCAUSAL
 //
 // Define FLASH_NONCAUSAL to make every query chunk sweep the whole key range.
 //
-// Runtime args (identical on all three kernels):
-//   0..4     q, k, v, mask, out base addresses
+// No runtime args: the tensors are bound, so their addresses ride with the accessors.
 //
 // Q arrives ALREADY scaled by 1/sqrt(head dim): folding it into the operand costs the host one
 // multiply and saves a broadcast pass per chunk on device.
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
-
-constexpr uint32_t kCbQ = 0;
-constexpr uint32_t kCbK = 1;
-constexpr uint32_t kCbV = 2;
-constexpr uint32_t kCbMask = 3;
-constexpr uint32_t kCbOne = 4;
-constexpr uint32_t kCbColOnes = 23;
-constexpr uint32_t kCbMasked = 8;
-constexpr uint32_t kCbRowMax = 9;
-constexpr uint32_t kCbProb = 10;
-constexpr uint32_t kCbRowSum = 12;
-constexpr uint32_t kCbPV = 13;
-constexpr uint32_t kCbOScaled = 14;
-constexpr uint32_t kCbCorrOld = 15;
-constexpr uint32_t kCbOut = 16;
-constexpr uint32_t kCbM = 18;  // state, 2x pages
-constexpr uint32_t kCbL = 19;  // state, 2x pages
-constexpr uint32_t kCbO = 20;  // state, 2x pages
-constexpr uint32_t kCbRecipL = 21;
-constexpr uint32_t kCbMNow = 22;  // this chunk's new maximum, before it becomes state
 
 void kernel_main() {
     constexpr uint32_t sq = get_named_compile_time_arg_val("sq");
     constexpr uint32_t sk = get_named_compile_time_arg_val("sk");
     constexpr uint32_t dt = get_named_compile_time_arg_val("dt");
     constexpr uint32_t num_q_chunks = get_named_compile_time_arg_val("num_q_chunks");
+
+    constexpr uint32_t kCbQ = TT_U_CB(q);
+    constexpr uint32_t kCbK = TT_U_CB(k);
+    constexpr uint32_t kCbV = TT_U_CB(v);
+    constexpr uint32_t kCbMask = TT_U_CB(mask);
+    constexpr uint32_t kCbOne = TT_U_CB(one);
+    constexpr uint32_t kCbColOnes = TT_U_CB(col_ones);
+    constexpr uint32_t kCbMasked = TT_U_CB(masked);
+    constexpr uint32_t kCbRowMax = TT_U_CB(row_max);
+    constexpr uint32_t kCbProb = TT_U_CB(prob);
+    constexpr uint32_t kCbRowSum = TT_U_CB(row_sum);
+    constexpr uint32_t kCbPV = TT_U_CB(p_v);
+    constexpr uint32_t kCbOScaled = TT_U_CB(o_scaled);
+    constexpr uint32_t kCbCorrOld = TT_U_CB(corr_old);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbM = TT_U_CB(m);
+    constexpr uint32_t kCbL = TT_U_CB(l);
+    constexpr uint32_t kCbO = TT_U_CB(o);
+    constexpr uint32_t kCbRecipL = TT_U_CB(recip_l);
+    constexpr uint32_t kCbMNow = TT_U_CB(m_now);
     // Key tiles already behind the first query chunk. Zero is a fresh prefill; a positive
     // value is prefill-with-history, where the queries see context they did not produce.
     constexpr uint32_t k_offset = get_named_compile_time_arg_val("k_offset");
@@ -120,20 +119,6 @@ void kernel_main() {
     // thirty-two, or it would map its heads onto the wrong KV heads entirely.
     constexpr uint32_t n_heads = get_named_compile_time_arg_val("n_heads");
     constexpr uint32_t n_kv_heads = get_named_compile_time_arg_val("n_kv_heads");
-
-    constexpr auto q_args = TensorAccessorArgs<0>();
-    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
-    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
-    constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
-    constexpr auto colones_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<colones_args.next_compile_time_args_offset()>();
-
-    const uint32_t q_addr = get_arg_val<uint32_t>(0);
-    const uint32_t k_addr = get_arg_val<uint32_t>(1);
-    const uint32_t v_addr = get_arg_val<uint32_t>(2);
-    const uint32_t mask_addr = get_arg_val<uint32_t>(3);
-    const uint32_t colones_addr = get_arg_val<uint32_t>(4);
-    const uint32_t out_addr = get_arg_val<uint32_t>(5);
     // This core's slice of the heads. Runtime rather than compile-time because it is the
     // one thing that differs per core, and RUNTIME ARGS rather than a coordinate because
     // every projection reads the same values from them: a head range derived from
@@ -142,9 +127,8 @@ void kernel_main() {
     // many blocks exist and the circular buffers would deadlock. See the warning on
     // PhysicalCoord::this_core() in api.h. LogicalCoord::this_core() would be safe, but
     // the partition is a host policy and this keeps it there.
-    const uint32_t head_begin = get_arg_val<uint32_t>(6);
-    const uint32_t head_count = get_arg_val<uint32_t>(7);
-    u::check_runtime_args<8>();
+    const uint32_t head_begin = get_arg(args::head_begin);
+    const uint32_t head_count = get_arg(args::head_count);
 
     using Q = u::Shape<sq, dt>;
     using Kt = u::Shape<dt, sk>;
@@ -218,12 +202,12 @@ void kernel_main() {
     u::Storage<Vec> mnow_storage(kCbMNow);
     u::Storage<Out> out_storage(kCbOut);
 
-    const auto q_acc = TensorAccessor(q_args, q_addr);
-    const auto k_acc = TensorAccessor(k_args, k_addr);
-    const auto v_acc = TensorAccessor(v_args, v_addr);
-    const auto mask_acc = TensorAccessor(mask_args, mask_addr);
-    const auto colones_acc = TensorAccessor(colones_args, colones_addr);
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto q_acc = TensorAccessor(tensor::q);
+    const auto k_acc = TensorAccessor(tensor::k);
+    const auto v_acc = TensorAccessor(tensor::v);
+    const auto mask_acc = TensorAccessor(tensor::mask);
+    const auto colones_acc = TensorAccessor(tensor::colones);
+    const auto out = TensorAccessor(tensor::out);
 
     // Kernel scope, and this is the whole point of the q-loop: the scaler fill and the
     // column of ones happen ONCE for the head rather than once per query chunk, as does
