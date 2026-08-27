@@ -277,6 +277,10 @@ struct FabricEriscDatamoverConfig {
     // Code profiling buffer address (16B aligned)
     std::size_t code_profiling_buffer_address = 0;
 
+    // Fabric debug-mode buffer address (16B aligned). Carved off the TOP of erisc L1 so all other
+    // structures keep identical addresses whether debug is on or off. 0 when debug mode is disabled.
+    std::size_t fabric_debug_buffer_address = 0;
+
     std::vector<FabricRiscConfig> risc_configs;
     // ----------- Sender Channels
     std::array<std::size_t, builder_config::num_max_sender_channels> sender_channels_buffer_index_address = {};

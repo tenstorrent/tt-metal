@@ -330,6 +330,11 @@ class RunTimeOptions {
     // Enable fabric performance telemetry
     bool enable_fabric_bw_telemetry = false;
 
+    // Enable the fabric-only diagnostic ("debug") router build: RX packet validation, TX/RX counters,
+    // and stall detection, with errors surfaced via postcode + graceful self-termination. Independent
+    // of Watcher. Off by default; zero footprint when off.
+    bool enable_fabric_debug = false;
+
     /// When true, topology mapping prefers the SAT backend (same rule as TT_TOPOLOGY_SOLVER_ENGINE / Auto in
     /// solve_topology_mapping). Set from env at RunTimeOptions construction.
     bool topology_mapping_use_sat_engine_ = false;
@@ -792,6 +797,9 @@ public:
     //
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
     bool get_enable_fabric_bw_telemetry() const { return enable_fabric_bw_telemetry; }
+
+    bool get_enable_fabric_debug() const { return enable_fabric_debug; }
+    void set_enable_fabric_debug(bool enable) { enable_fabric_debug = enable; }
 
     bool get_topology_mapping_use_sat_engine() const { return topology_mapping_use_sat_engine_; }
     void set_enable_fabric_bw_telemetry(bool enable) { enable_fabric_bw_telemetry = enable; }

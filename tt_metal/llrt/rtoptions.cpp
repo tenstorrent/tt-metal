@@ -97,6 +97,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
     TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
     TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
+    TT_METAL_FABRIC_DEBUG,                              // Enable fabric-only diagnostic router build
     TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
     TT_FABRIC_PROFILE_RX_CH_FWD,                        // Enable fabric RX channel forwarding profiling
     TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,           // Enable channel trimming resource usage capture
@@ -250,9 +251,9 @@ enum class EnvVarID {
     // ========================================
     // ALLOCATOR CONFIGURATION
     // ========================================
-    TT_METAL_ALLOCATOR_MODE_HYBRID,  // Enable hybrid lockstep + per-core L1 allocator mode
-    TT_METAL_TRACE_ALLOC_TRACKING,  // Enable per-trace unsafe allocation accounting
-    TT_METAL_TRACE_ALLOC_TRACEBACKS,  // Capture diagnostics for unsafe trace allocations
+    TT_METAL_ALLOCATOR_MODE_HYBRID,           // Enable hybrid lockstep + per-core L1 allocator mode
+    TT_METAL_TRACE_ALLOC_TRACKING,            // Enable per-trace unsafe allocation accounting
+    TT_METAL_TRACE_ALLOC_TRACEBACKS,          // Capture diagnostics for unsafe trace allocations
     TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE,  // Exclude program-cache buffers from trace accounting
 
     // ========================================
@@ -675,6 +676,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (telemetry disabled)
         // Usage: export TT_METAL_FABRIC_BW_TELEMETRY=1
         case EnvVarID::TT_METAL_FABRIC_BW_TELEMETRY: this->enable_fabric_bw_telemetry = true; break;
+
+        // TT_METAL_FABRIC_DEBUG
+        // Enable the fabric-only diagnostic ("debug") router build (RX validation, TX/RX counters,
+        // stall detection). Independent of Watcher. Default: false.
+        // Usage: export TT_METAL_FABRIC_DEBUG=1
+        case EnvVarID::TT_METAL_FABRIC_DEBUG: this->enable_fabric_debug = true; break;
 
         // TT_METAL_FABRIC_TELEMETRY
         // Enable fabric telemetry data collection (supports structured spec).

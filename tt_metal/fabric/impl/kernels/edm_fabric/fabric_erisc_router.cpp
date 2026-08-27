@@ -14,6 +14,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_eth_handshake.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_debug.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
@@ -3244,6 +3245,13 @@ void kernel_main() {
 #endif
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
     asm volatile("nop");
+
+    // Fabric debug mode: mark the diagnostic router active so the host can confirm it was swapped in.
+    // Also validates the tail-allocated debug buffer address end-to-end. Compiled out when debug is off.
+    if constexpr (tt::tt_fabric::fabric_debug) {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tt::tt_fabric::fabric_debug_buffer_addr)[0] =
+            tt::tt_fabric::FABRIC_DEBUG_ACTIVE_SENTINEL;
+    }
 
     //////////////////////////////
     //////////////////////////////

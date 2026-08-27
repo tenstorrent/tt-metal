@@ -371,6 +371,18 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     // Channel Allocations
     this->max_l1_loading_size =
         tt::tt_metal::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+
+    // Fabric debug buffer: allocated LAST, carved off the TOP of erisc L1, so every other structure --
+    // fixed metadata and the channel packet buffers alike -- keeps an identical address whether debug is
+    // on or off. Only the channel buffering headroom shrinks. Zero footprint when disabled.
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_debug()) {
+        constexpr size_t fabric_debug_buffer_size = 256;  // per-channel TX/RX counters + snapshot + postcode
+        this->max_l1_loading_size -= fabric_debug_buffer_size;
+        this->fabric_debug_buffer_address = this->max_l1_loading_size;
+    } else {
+        this->fabric_debug_buffer_address = 0;
+    }
+
     auto buffer_region_start = (buffer_address + buffer_alignment) & ~(buffer_alignment - 1);  // Align
     auto available_channel_buffering_space = max_l1_loading_size - buffer_region_start;
     this->available_buffer_memory_regions.emplace_back(buffer_region_start, available_channel_buffering_space);
@@ -858,6 +870,10 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
 
     uint32_t bw_telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_bw_telemetry() ? 1 : 0);
     named_args["PERF_TELEMETRY_MODE"] = bw_telemetry_mode;
+
+    // Fabric debug mode (always emitted so the named arg is defined for every router build).
+    named_args["ENABLE_FABRIC_DEBUG"] = static_cast<uint32_t>(rtoptions.get_enable_fabric_debug() ? 1 : 0);
+    named_args["FABRIC_DEBUG_BUFFER_ADDR"] = static_cast<uint32_t>(config.fabric_debug_buffer_address);
 
     // Add telemetry buffer address (16B aligned)
     named_args["PERF_TELEMETRY_BUFFER_ADDR"] = static_cast<uint32_t>(config.perf_telemetry_buffer_address);
