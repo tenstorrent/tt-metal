@@ -84,48 +84,56 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ub
     }
 }
 
-void validate_fabric_config_ring_extents(
-    tt::tt_fabric::FabricConfig fabric_config, const MeshShape& mesh_shape, std::string_view mesh_graph_desc_path) {
-    // A ring/torus wrap is only meaningful with more than two devices along the wrapped dimension.
-    // Reject configs that request one on a smaller extent instead of silently degrading to a line.
-    // FABRIC_1D_RING exempts single-chip meshes (they carry no links at all, e.g. the 1x1 gateway
-    // meshes of a TG MGD) and checks the ring length rather than a specific axis, because on UBB
-    // galaxy its blanket TORUS_XY mapping declares a wrap on the trivial axis of a 1xN mesh that the
-    // mesh never realizes. Explicit 2D torus configs are strict: every requested axis needs more
-    // than 2 devices.
-    const std::string mgd_hint =
-        mesh_graph_desc_path.empty() ? std::string{} : fmt::format(" (mesh graph descriptor: {})", mesh_graph_desc_path);
+tt::tt_fabric::FabricConfig coerce_fabric_config_to_realized_ring_extents(
+    tt::tt_fabric::FabricConfig fabric_config, const std::vector<MeshShape>& mesh_shapes) {
+    // A ring/torus wrap only realizes a distinct link with more than two devices along the wrapped
+    // dimension. A requested torus axis that no mesh realizes must not stay in the effective config:
+    // deadlock avoidance (bubble flow / first-level ACK) is derived from the config per direction,
+    // and enabling it for an unrealized axis produces mismatched credit protocols on inter-mesh
+    // links between rotated meshes (issue #54650). Downgrade such axes to the non-ring equivalent.
+    if (mesh_shapes.empty()) {
+        return fabric_config;
+    }
+    auto any_mesh_has_genuine_axis = [&](uint32_t axis) {
+        return std::any_of(mesh_shapes.begin(), mesh_shapes.end(), [axis](const MeshShape& shape) {
+            return is_genuine_torus_dim(shape[axis]);
+        });
+    };
+    auto downgrade = [&](tt::tt_fabric::FabricConfig to) {
+        log_warning(
+            tt::LogFabric,
+            "FabricConfig {} requests a ring/torus along a dimension where no mesh has more than 2 devices; a ring "
+            "needs at least 3, using {} instead",
+            enchantum::to_string(fabric_config),
+            enchantum::to_string(to));
+        return to;
+    };
     switch (fabric_config) {
-        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING:
-            TT_FATAL(
-                mesh_shape.mesh_size() == 1 || std::max(mesh_shape[0], mesh_shape[1]) > 2,
-                "FabricConfig FABRIC_1D_RING requires a ring of more than 2 devices, but mesh shape {} has no "
-                "dimension larger than 2. Change the requested fabric config (e.g. FABRIC_1D) or use a mesh graph "
-                "descriptor with a longer dimension{}",
-                mesh_shape,
-                mgd_hint);
-            break;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: {
-            const FabricType requested_type = get_fabric_type(fabric_config, /*is_ubb_galaxy=*/false);
-            for (uint32_t axis = 0; axis < 2; ++axis) {
-                if (has_flag(requested_type, torus_flag_for_axis(axis))) {
-                    TT_FATAL(
-                        is_genuine_torus_dim(mesh_shape[axis]),
-                        "FabricConfig {} requests a torus wrap along axis {} of mesh shape {}, but a ring requires "
-                        "more than 2 devices along the wrapped dimension. Change the requested fabric config (e.g. "
-                        "FABRIC_2D) or use a mesh graph descriptor whose axis {} has more than 2 devices{}",
-                        enchantum::to_string(fabric_config),
-                        axis,
-                        mesh_shape,
-                        axis,
-                        mgd_hint);
-                }
-            }
-            break;
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
+            const bool any_ring = std::any_of(mesh_shapes.begin(), mesh_shapes.end(), [](const MeshShape& shape) {
+                return std::max(shape[0], shape[1]) > 2;
+            });
+            return any_ring ? fabric_config : downgrade(tt::tt_fabric::FabricConfig::FABRIC_1D);
         }
-        default: break;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
+            return any_mesh_has_genuine_axis(1) ? fabric_config : downgrade(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
+            return any_mesh_has_genuine_axis(0) ? fabric_config : downgrade(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: {
+            const bool x = any_mesh_has_genuine_axis(1);
+            const bool y = any_mesh_has_genuine_axis(0);
+            if (x && y) {
+                return fabric_config;
+            }
+            if (x) {
+                return downgrade(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);
+            }
+            if (y) {
+                return downgrade(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y);
+            }
+            return downgrade(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        }
+        default: return fabric_config;
     }
 }
 

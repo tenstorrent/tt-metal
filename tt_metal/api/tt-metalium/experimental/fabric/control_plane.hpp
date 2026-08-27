@@ -556,6 +556,11 @@ private:
     // This method performs validation through assertions and exceptions.
     void validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;
     std::string get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const;
+
+    // Downgrades ring/torus fabric configs whose wrapped dimension no mesh realizes (extent <= 2) to
+    // their line/mesh equivalents, so deadlock avoidance is never derived from an unrealized torus
+    // axis (#54650). Must run after mesh_graph_ is created and before anything consumes fabric_config_.
+    void coerce_fabric_config_to_mesh_graph_extents();
 };
 
 }  // namespace tt::tt_fabric

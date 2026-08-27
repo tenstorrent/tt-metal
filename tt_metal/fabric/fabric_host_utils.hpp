@@ -48,13 +48,14 @@ inline bool has_genuine_torus_axis(FabricType fabric_type, const MeshShape& mesh
     return has_flag(fabric_type, torus_flag_for_axis(axis)) && is_genuine_torus_dim(mesh_shape[axis]);
 }
 
-// Validates that a FabricConfig requesting a ring/torus is applied to a mesh whose wrapped
-// dimension has more than two devices. Throws instead of letting the wrap silently degrade to a
-// line. FABRIC_2D_TORUS_X/Y/XY require every requested axis to have more than 2 devices;
-// FABRIC_1D_RING requires a dimension larger than 2 (single-chip meshes exempt). When provided,
-// mesh_graph_desc_path names the descriptor file in the error message.
-void validate_fabric_config_ring_extents(
-    tt::tt_fabric::FabricConfig fabric_config, const MeshShape& mesh_shape, std::string_view mesh_graph_desc_path = {});
+// Returns the effective FabricConfig after dropping ring/torus requests that no mesh realizes: a
+// wrapped dimension needs more than 2 devices to form a ring. FABRIC_2D_TORUS_X/Y/XY keep a torus
+// axis only if some mesh has extent > 2 along it (TORUS_XY may downgrade to TORUS_X/TORUS_Y/2D);
+// FABRIC_1D_RING downgrades to FABRIC_1D when no mesh has a dimension larger than 2. Keeping an
+// unrealized torus axis in the config would enable deadlock avoidance (bubble flow / first-level
+// ACK) on links whose peer may label the axis differently, hanging inter-mesh traffic (#54650).
+tt::tt_fabric::FabricConfig coerce_fabric_config_to_realized_ring_extents(
+    tt::tt_fabric::FabricConfig fabric_config, const std::vector<MeshShape>& mesh_shapes);
 
 // Helper to validate that requested FabricType doesn't require more connectivity than available FabricType provides
 // Returns true if requested_type requires more connections than available_type provides

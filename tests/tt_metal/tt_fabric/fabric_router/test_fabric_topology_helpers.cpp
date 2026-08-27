@@ -66,28 +66,36 @@ TEST(FabricTopologyHelpers, GenuineTorusAxesRequireDistinctWrapPeers) {
     EXPECT_FALSE(has_genuine_torus_axis(FabricType::TORUS_XY, MeshShape{2, 2}, 1));
 }
 
-// Each 2D torus config must gate exactly its own axis: TORUS_X wraps mesh_shape[1] (columns),
-// TORUS_Y wraps mesh_shape[0] (rows). A short extent on the *other* axis must not throw.
-TEST(FabricTopologyHelpers, RingExtentValidationChecksCorrespondingAxisOnly) {
-    // TORUS_X wraps axis 1: extent-2 rows are fine, extent-2 columns are not.
-    EXPECT_NO_THROW(validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_X, MeshShape{2, 4}));
-    EXPECT_THROW(
-        validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_X, MeshShape{4, 2}), std::runtime_error);
+// Each 2D torus config keeps its axis only if some mesh realizes a ring there (extent > 2):
+// TORUS_X wraps mesh_shape[1] (columns), TORUS_Y wraps mesh_shape[0] (rows). Unrealized axes are
+// coerced away so deadlock avoidance is never derived from them (#54650).
+TEST(FabricTopologyHelpers, CoercesUnrealizedRingAxesInFabricConfig) {
+    using FC = FabricConfig;
+    // TORUS_X wraps axis 1: extent-2 rows are fine, extent-2 columns coerce to plain 2D.
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_2D_TORUS_X, {MeshShape{2, 4}}), FC::FABRIC_2D_TORUS_X);
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_2D_TORUS_X, {MeshShape{4, 2}}), FC::FABRIC_2D);
     // TORUS_Y wraps axis 0: mirrored expectations.
-    EXPECT_NO_THROW(validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_Y, MeshShape{4, 2}));
-    EXPECT_THROW(
-        validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_Y, MeshShape{2, 4}), std::runtime_error);
-    // TORUS_XY requires both axes to exceed 2.
-    EXPECT_NO_THROW(validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_XY, MeshShape{4, 4}));
-    EXPECT_THROW(
-        validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_XY, MeshShape{2, 4}), std::runtime_error);
-    EXPECT_THROW(
-        validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D_TORUS_XY, MeshShape{4, 2}), std::runtime_error);
-    // 1D ring checks ring length; non-ring configs are never gated.
-    EXPECT_NO_THROW(validate_fabric_config_ring_extents(FabricConfig::FABRIC_1D_RING, MeshShape{1, 8}));
-    EXPECT_THROW(
-        validate_fabric_config_ring_extents(FabricConfig::FABRIC_1D_RING, MeshShape{1, 2}), std::runtime_error);
-    EXPECT_NO_THROW(validate_fabric_config_ring_extents(FabricConfig::FABRIC_2D, MeshShape{2, 2}));
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_2D_TORUS_Y, {MeshShape{4, 2}}), FC::FABRIC_2D_TORUS_Y);
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_2D_TORUS_Y, {MeshShape{2, 4}}), FC::FABRIC_2D);
+    // TORUS_XY keeps only the realized axes.
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_2D_TORUS_XY, {MeshShape{4, 4}}), FC::FABRIC_2D_TORUS_XY);
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_2D_TORUS_XY, {MeshShape{2, 4}}), FC::FABRIC_2D_TORUS_X);
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_2D_TORUS_XY, {MeshShape{4, 2}}), FC::FABRIC_2D_TORUS_Y);
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_2D_TORUS_XY, {MeshShape{2, 2}}), FC::FABRIC_2D);
+    // An axis realized by ANY mesh keeps the torus (the 2x2 stage meshes ride along).
+    EXPECT_EQ(
+        coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_2D_TORUS_Y, {MeshShape{2, 2}, MeshShape{4, 4}}),
+        FC::FABRIC_2D_TORUS_Y);
+    // 1D ring needs a dimension longer than 2 somewhere; 1x1 gateway meshes don't disable it.
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_1D_RING, {MeshShape{1, 8}}), FC::FABRIC_1D_RING);
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_1D_RING, {MeshShape{1, 2}}), FC::FABRIC_1D);
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_1D_RING, {MeshShape{2, 2}}), FC::FABRIC_1D);
+    EXPECT_EQ(
+        coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_1D_RING, {MeshShape{1, 1}, MeshShape{8, 4}}),
+        FC::FABRIC_1D_RING);
+    // Non-ring configs pass through untouched.
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_2D, {MeshShape{2, 2}}), FC::FABRIC_2D);
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_1D, {MeshShape{1, 2}}), FC::FABRIC_1D);
 }
 
 TEST(FabricTopologyHelpers, ConnectivityValidationComparesRealizedAxes) {

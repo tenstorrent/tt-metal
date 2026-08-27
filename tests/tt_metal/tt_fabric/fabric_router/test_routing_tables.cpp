@@ -241,33 +241,22 @@ TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3)));
 }
 
-TEST(MeshGraphValidation, TestT3kTorusYOnTwoRowMeshThrows) {
+TEST(MeshGraphValidation, TestT3kCollapsedTorusYRetainsMeshDirections) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
+    auto mesh_graph = make_mesh_graph(t3k_mesh_graph_desc_path, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y);
+    const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(0);
 
-    // In a two-row mesh, a torus wrap along Y would connect the same pair of chips twice. Requesting
-    // a ring on a dimension of 2 or fewer devices is an error rather than a silent degrade to mesh.
-    EXPECT_THROW(
-        {
-            auto mesh_graph =
-                make_mesh_graph(t3k_mesh_graph_desc_path, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y);
-        },
-        std::runtime_error);
-}
+    // In a two-row mesh, the torus wrap neighbor is the same chip as the ordinary vertical neighbor. It must retain
+    // normal mesh directionality rather than collapsing both ends of the link onto NORTH.
+    EXPECT_EQ(connectivity.at(0).at(4).port_direction, RoutingDirection::S);
+    EXPECT_EQ(connectivity.at(4).at(0).port_direction, RoutingDirection::N);
 
-TEST(MeshGraphValidation, TestFabric1DRingOnTwoDeviceMeshThrows) {
-    const std::filesystem::path n300_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto";
-
-    // A 1D ring needs more than 2 devices; a 1x2 mesh cannot realize one.
-    EXPECT_THROW(
-        {
-            auto mesh_graph =
-                make_mesh_graph(n300_mesh_graph_desc_path, tt::tt_fabric::FabricConfig::FABRIC_1D_RING);
-        },
-        std::runtime_error);
+    // A collapsed torus axis has no wrap cable, so its boundary ports remain available for inter-mesh connections.
+    const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(0);
+    EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
+    EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 4);
 }
 
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {

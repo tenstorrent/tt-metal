@@ -237,9 +237,6 @@ void MeshGraph::initialize_from_mgd(
         {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
     };
 
-    const std::string mgd_path_for_errors =
-        mesh_graph_desc_file_path_.has_value() ? mesh_graph_desc_file_path_->string() : std::string{};
-
     // TODO: need to fix
     chip_spec_ = ChipSpec{
         .arch = proto_arch_to_arch.at(mgd.get_arch()),
@@ -408,8 +405,6 @@ void MeshGraph::initialize_from_mgd(
 
         if (fabric_config.has_value()) {
             FabricType requested_fabric_type = get_fabric_type(*fabric_config, is_ubb_galaxy);
-            // Disallow ring/torus requests whose wrapped dimension has 2 or fewer devices
-            validate_fabric_config_ring_extents(*fabric_config, mesh_shape, mgd_path_for_errors);
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, mesh_shape)) {
                 TT_THROW(
@@ -543,8 +538,6 @@ void MeshGraph::initialize_from_mgd(
 
         if (fabric_config.has_value()) {
             FabricType requested_fabric_type = get_fabric_type(*fabric_config, is_ubb_galaxy);
-            // Disallow ring/torus requests whose wrapped dimension has 2 or fewer devices
-            validate_fabric_config_ring_extents(*fabric_config, switch_shape, mgd_path_for_errors);
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, switch_shape)) {
                 TT_THROW(

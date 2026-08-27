@@ -431,6 +431,8 @@ void ControlPlane::init_control_plane(
     // Create mesh_graph first
     this->mesh_graph_ = std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
 
+    this->coerce_fabric_config_to_mesh_graph_extents();
+
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
     auto psd =
         tt::tt_metal::run_physical_system_discovery(*driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
@@ -572,6 +574,8 @@ void ControlPlane::init_control_plane_auto_discovery() {
             *this->physical_system_descriptor_,
             this->fabric_config_,
             this->fabric_reliability_mode_));
+
+    this->coerce_fabric_config_to_mesh_graph_extents();
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
@@ -732,6 +736,14 @@ ControlPlane::ControlPlane(
     fabric_manager_(fabric_manager) {
     init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
     initialize_fabric_context();
+}
+
+void ControlPlane::coerce_fabric_config_to_mesh_graph_extents() {
+    std::vector<MeshShape> mesh_shapes;
+    for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
+        mesh_shapes.push_back(this->mesh_graph_->get_mesh_shape(mesh_id));
+    }
+    this->fabric_config_ = coerce_fabric_config_to_realized_ring_extents(this->fabric_config_, mesh_shapes);
 }
 
 void ControlPlane::initialize_fabric_context() {

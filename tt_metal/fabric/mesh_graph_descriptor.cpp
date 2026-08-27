@@ -370,6 +370,32 @@ void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
             }
         }
     }
+
+    // A RING dimension only realizes a distinct wrap edge at extent three or larger. Coerce RING on
+    // smaller dimensions to LINE so nothing downstream (connection building, fabric-type inference,
+    // deadlock-avoidance selection) treats the axis as a torus. See issue #54650: a declared-but-
+    // degenerate torus axis enables bubble-flow/first-level-ACK on links that a rotated neighbor
+    // mesh labels differently, hanging inter-mesh traffic.
+    auto coerce_degenerate_rings = [](proto::TorusTopology& device_topology, const std::string& name) {
+        for (int i = 0; i < device_topology.dim_types_size() && i < device_topology.dims_size(); i++) {
+            if (device_topology.dim_types(i) == proto::TorusTopology::RING && device_topology.dims(i) <= 2) {
+                log_warning(
+                    tt::LogFabric,
+                    "MeshGraphDescriptor: '{}' declares RING on dimension {} of extent {}; a ring needs more than 2 "
+                    "devices, treating this dimension as LINE",
+                    name,
+                    i,
+                    device_topology.dims(i));
+                device_topology.set_dim_types(i, proto::TorusTopology::LINE);
+            }
+        }
+    };
+    for (auto& mesh : *proto.mutable_mesh_descriptors()) {
+        coerce_degenerate_rings(*mesh.mutable_device_topology(), mesh.name());
+    }
+    for (auto& switch_desc : *proto.mutable_switch_descriptors()) {
+        coerce_degenerate_rings(*switch_desc.mutable_device_topology(), switch_desc.name());
+    }
 }
 
 std::vector<std::string> MeshGraphDescriptor::static_validate(
@@ -524,22 +550,6 @@ void MeshGraphDescriptor::validate_mesh_topology(
                     fmt::format("Device topology dimensions and types must be the same size (Mesh: {})", mesh.name()));
                 continue;
             }
-
-            // A RING dimension only realizes a distinct wrap edge at extent three or larger;
-            // declaring RING on a smaller dimension is disallowed — use LINE instead.
-            for (int i = 0; i < mesh.device_topology().dims_size(); i++) {
-                if (mesh.device_topology().dim_types(i) == proto::TorusTopology::RING &&
-                    mesh.device_topology().dims(i) <= 2) {
-                    error_messages.push_back(fmt::format(
-                        "Device topology dimension {} has type RING but extent {}; RING requires an extent of at "
-                        "least 3 — change device_topology.dim_types[{}] to LINE in this mesh graph descriptor "
-                        "(Mesh: {})",
-                        i,
-                        mesh.device_topology().dims(i),
-                        i,
-                        mesh.name()));
-                }
-            }
         }
 
         // Check that the device and host topology dimensions are the same size
@@ -641,22 +651,6 @@ void MeshGraphDescriptor::validate_switch_descriptors(
                 error_messages.push_back(fmt::format(
                     "Device topology dimensions and types must be the same size (Switch: {})", switch_desc.name()));
                 continue;
-            }
-
-            // A RING dimension only realizes a distinct wrap edge at extent three or larger;
-            // declaring RING on a smaller dimension is disallowed — use LINE instead.
-            for (int i = 0; i < switch_desc.device_topology().dims_size(); i++) {
-                if (switch_desc.device_topology().dim_types(i) == proto::TorusTopology::RING &&
-                    switch_desc.device_topology().dims(i) <= 2) {
-                    error_messages.push_back(fmt::format(
-                        "Device topology dimension {} has type RING but extent {}; RING requires an extent of at "
-                        "least 3 — change device_topology.dim_types[{}] to LINE in this mesh graph descriptor "
-                        "(Switch: {})",
-                        i,
-                        switch_desc.device_topology().dims(i),
-                        i,
-                        switch_desc.name()));
-                }
             }
         }
 
