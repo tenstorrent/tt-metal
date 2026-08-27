@@ -9,6 +9,7 @@ derivation is allowed to claim a pass and when it must refuse.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import textwrap
 from pathlib import Path
@@ -18,7 +19,7 @@ import pytest
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from file_rtl_sim_jira import parse_failed  # noqa: E402
+from create_jira import parse_failed  # noqa: E402
 from release_test_report import (  # noqa: E402
     FAILED,
     INCONCLUSIVE,
@@ -312,3 +313,54 @@ def test_results_block_wins_even_when_the_summary_is_truncated(expected):
     verdict, passed, failed = classify(expected, parse_failed(detail), "failure", detail)
     assert verdict == FAILED
     assert [r["filter"] for r in passed] == ["*Alpha*"] and len(failed) == 1
+
+
+def test_evidence_carries_no_test_counts(mapping):
+    """Counts drift whenever a test lands; the map must not assert them.
+
+    Inverted on purpose: strip the numeric forms that are immutable (PR refs,
+    release versions, ticket keys, PR tallies for a closed window) and flag what is left,
+    rather than trying to enumerate every way a count can be phrased.
+    """
+    allowed = re.compile(r"(?:PR\s*)?#\d+|\bPR\s+\d+|\bv\d+(?:\.\d+)+|\b\d+\s+PRs\b|\bAIIPSW-\d+\b", re.IGNORECASE)
+    offenders = []
+    for r in mapping["requirements"]:
+        residue = allowed.sub("", r.get("evidence", ""))
+        found = re.findall(r"\b\d+\b", residue)
+        if found:
+            offenders.append((r["key"], found))
+    assert not offenders, f"hard-coded counts will go stale: {offenders}"
+
+
+def test_out_of_scope_requirements_leave_the_ratio_alone(mapping):
+    """A platform this gate cannot test must not inflate the denominator."""
+    rows = load_expected(SIM_YAML, "1x3")
+    report = build(mapping, rows, rows, [], PASSED)
+    scoped = [r for r in report["requirements"] if r.get("in_scope", True)]
+    oos = [r for r in report["requirements"] if not r.get("in_scope", True)]
+    assert oos, "fixture expects at least one out-of-scope requirement"
+
+    md = render_markdown(report, META)
+    assert f"of {len(scoped)} requirements" in md
+    assert f"of {len(report['requirements'])} requirements" not in md, "denominator must exclude out-of-scope"
+
+    # they are still named once, so nothing looks forgotten
+    for r in oos:
+        assert r["key"] in md and r["key"] in render_plain(report, META)
+    # ...but not as a row in the no-evidence table
+    assert md.count(oos[0]["key"]) == 1
+
+
+def test_the_count_guard_actually_catches_a_violation(mapping):
+    """Guards that scan the wrong key pass silently; prove this one bites."""
+    import copy
+
+    allowed = re.compile(r"(?:PR\s*)?#\d+|\bPR\s+\d+|\bv\d+(?:\.\d+)+|\b\d+\s+PRs\b|\bAIIPSW-\d+\b", re.IGNORECASE)
+
+    def offenders(m):
+        return [r["key"] for r in m["requirements"] if re.findall(r"\b\d+\b", allowed.sub("", r.get("evidence", "")))]
+
+    assert offenders(mapping) == [], "the shipped map must be clean"
+    bad = copy.deepcopy(mapping)
+    bad["requirements"][0]["evidence"] = "NOT EXECUTED. 50 op tests in models/x/"
+    assert offenders(bad), "an injected count must be caught"

@@ -20,6 +20,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "llrt/get_platform_architecture.hpp"
 #include "llrt/rtoptions.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -71,7 +72,31 @@ bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh
 }
 }  // namespace unit_tests_common::basic::test_device_init
 
-INSTANTIATE_TEST_SUITE_P(DeviceInit, DeviceParamFixture, ::testing::Values(1, tt::tt_metal::GetNumAvailableDevices()));
+namespace {
+// gtest evaluates INSTANTIATE_TEST_SUITE_P generators at test-registration time
+// (inside InitGoogleTest), BEFORE --gtest_filter is applied. Calling
+// GetNumAvailableDevices() directly here forces full MetalContext/Cluster creation
+// at process startup, which throws on hosts without silicon and would abort the
+// whole binary — including the host-only CPU_* tests that run on the device-less
+// github_hosted_cpu CI runner.
+//
+// Probe for silicon first via PCI enumeration only (get_physical_architecture()
+// does not create a MetalContext and returns ARCH::Invalid when no devices are
+// present). Fall back to a single-device parameterization only in that genuinely
+// hardware-less case; on a device runner any discovery failure from
+// GetNumAvailableDevices() (malformed cluster descriptor, UMD errors, ...) must
+// propagate and fail loudly rather than silently shrink the parameterization.
+// The DeviceParamFixture tests themselves are device tests and are excluded on
+// the CPU-only leg by the CPU_-filter split anyway.
+unsigned int num_available_devices_or_one() {
+    if (get_physical_architecture() == tt::ARCH::Invalid) {
+        return 1;
+    }
+    return tt::tt_metal::GetNumAvailableDevices();
+}
+}  // namespace
+
+INSTANTIATE_TEST_SUITE_P(DeviceInit, DeviceParamFixture, ::testing::Values(1, num_available_devices_or_one()));
 
 TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     unsigned int num_devices = GetParam();
@@ -134,7 +159,7 @@ private:
     std::optional<std::string> prev_;
 };
 
-TEST_F(TdpLimitEnvFixture, ParsesEnvVar) {
+TEST_F(TdpLimitEnvFixture, CPU_ParsesEnvVar) {
     unsetenv(kTdpLimitEnvVar);
     EXPECT_FALSE(llrt::RunTimeOptions().get_tdp_limit_watts().has_value());
 
@@ -156,7 +181,7 @@ TEST_F(TdpLimitEnvFixture, ParsesEnvVar) {
 
 // A typo must not quietly leave the run at full power, so parsing is strict. Neither of these is
 // usable as a watt count: one is not a number, the other does not fit the uint32_t that holds it.
-TEST_F(TdpLimitEnvFixture, MalformedEnvVarThrows) {
+TEST_F(TdpLimitEnvFixture, CPU_MalformedEnvVarThrows) {
     setenv(kTdpLimitEnvVar, "abc", /*overwrite=*/1);
     EXPECT_ANY_THROW(llrt::RunTimeOptions());
 

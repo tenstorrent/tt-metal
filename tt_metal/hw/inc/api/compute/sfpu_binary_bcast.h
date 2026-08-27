@@ -75,6 +75,7 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
 // `_llk_math_eltwise_sfpu_start_(0)` / `_llk_math_eltwise_sfpu_done_()` brackets
 // the standalone helper used to set up by hand, plus the dst-bound LLK_ASSERTs in
 // `_sfpu_binary_check_`.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -86,6 +87,7 @@ ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
         VectorMode::None)));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -97,6 +99,7 @@ ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
         VectorMode::None)));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -160,6 +163,7 @@ ALWI void sfpu_mul_bcast_row_init() { sfpu_bcast_row_init(); }
  * | dst_row_vec_idx  | The index of the row-vector tile in DST (row 0 is broadcast)        | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sub_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -171,6 +175,7 @@ ALWI void sfpu_sub_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
         VectorMode::None)));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_add_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -182,6 +187,7 @@ ALWI void sfpu_add_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
         VectorMode::None)));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_mul_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
