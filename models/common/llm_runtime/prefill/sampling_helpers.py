@@ -5,13 +5,12 @@
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Literal
 
 import torch
 
 import ttnn
-from models.common.sampling import format_sampling_params
+from models.common.modules.sampling.params import prepare_sampling_params, slice_sampling_params
 
 _TILE_SIZE = 32
 
@@ -21,45 +20,25 @@ SamplingPath = Literal["logits", "argmax", "topk"]
 def _slice_sampling_params(sampling_params, source_rows):
     if sampling_params is None:
         return None
-    if not dataclasses.is_dataclass(sampling_params):
-        raise TypeError("sampling_params must be a dataclass")
-
-    def slice_value(value):
-        if isinstance(value, torch.Tensor):
-            if value.ndim == 0:
-                return value
-            selected_rows = (0,) * len(source_rows) if int(value.shape[0]) == 1 else source_rows
-            indices = torch.tensor(selected_rows, dtype=torch.long, device=value.device)
-            return value.index_select(0, indices)
-        if isinstance(value, list):
-            return [value[0] for _ in source_rows] if len(value) == 1 else [value[row] for row in source_rows]
-        if isinstance(value, tuple):
-            return tuple(value[0] for _ in source_rows) if len(value) == 1 else tuple(value[row] for row in source_rows)
-        return value
-
-    updates = {
-        field.name: slice_value(getattr(sampling_params, field.name)) for field in dataclasses.fields(sampling_params)
-    }
-    return dataclasses.replace(sampling_params, **updates)
+    return slice_sampling_params(sampling_params, source_rows)
 
 
-def _formatted_sampling_values(sampling_params, batch_size):
-    updates = {}
-    for field in dataclasses.fields(sampling_params):
-        value = getattr(sampling_params, field.name)
-        if isinstance(value, torch.Tensor):
-            updates[field.name] = value.item() if value.ndim == 0 else value.tolist()
-    if updates:
-        sampling_params = dataclasses.replace(sampling_params, **updates)
-    formatted_size = ((int(batch_size) + _TILE_SIZE - 1) // _TILE_SIZE) * _TILE_SIZE
-    formatted = format_sampling_params(sampling_params, formatted_size)
-    k = tuple(int(value) for value in formatted.top_k[:batch_size])
-    p = tuple(float(value) for value in formatted.top_p[:batch_size])
-    temperature = tuple(float(value) for value in formatted.temperature[:batch_size])
-    greedy = (
-        all(value == 1 for value in k) and all(value == 0 for value in p) and all(value == 1 for value in temperature)
+def _formatted_sampling_values(
+    sampling_params,
+    batch_size,
+    *,
+    max_device_top_k=32,
+    allow_force_argmax=True,
+):
+    """Compatibility test helper backed by the native exact formatter."""
+
+    prepared = prepare_sampling_params(
+        sampling_params,
+        batch_size,
+        max_device_top_k=max_device_top_k,
+        allow_force_argmax=allow_force_argmax,
     )
-    return k, p, temperature, greedy
+    return prepared.top_k, prepared.top_p, prepared.temperature, prepared.all_active_rows_greedy
 
 
 def _select_sample_log_prob(value, row):
@@ -74,14 +53,35 @@ def _select_sample_log_prob(value, row):
 def _merge_log_probs(row_payloads, batch_size):
     if not row_payloads:
         return None
-    if len(row_payloads) == 1 and row_payloads[0][0] == tuple(range(batch_size)):
-        return row_payloads[0][1]
-    ordered = [None] * batch_size
+    ordered = torch.ones(int(batch_size), dtype=torch.float32)
     for rows, payload in row_payloads:
-        if isinstance(payload, torch.Tensor) and payload.shape[0] == len(rows):
-            for local_row, source_row in enumerate(rows):
-                ordered[source_row] = payload[local_row]
-        else:
-            for source_row in rows:
-                ordered[source_row] = payload
+        values = _sampled_log_probs_for_rows(payload, len(rows))
+        indices = torch.tensor(tuple(int(row) for row in rows), dtype=torch.long)
+        ordered.index_copy_(0, indices, values)
     return ordered
+
+
+def _sampled_log_probs_for_rows(value, row_count):
+    """Flatten Sampling1D's replicated sampled-token logprob output."""
+
+    if isinstance(value, torch.Tensor):
+        output = value
+    elif isinstance(value, ttnn.Tensor):
+        replicas = ttnn.get_device_tensors(value)
+        output = ttnn.to_torch(replicas[0] if replicas else value)
+    elif isinstance(value, (float, int)):
+        return torch.full((int(row_count),), float(value), dtype=torch.float32)
+    elif isinstance(value, (list, tuple)):
+        output = torch.as_tensor(value)
+    else:
+        raise TypeError(
+            "sampled-token logprobs must be a TT tensor, Torch tensor, or numeric sequence"
+        )
+    flat = output.reshape(-1)
+    if int(flat.numel()) == 1 and int(row_count) > 1:
+        flat = flat.expand(int(row_count))
+    if int(flat.numel()) < int(row_count):
+        raise ValueError(
+            f"sampled-token logprobs contain {flat.numel()} rows, expected at least {row_count}"
+        )
+    return flat[: int(row_count)].to(torch.float32)

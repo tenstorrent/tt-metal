@@ -24,7 +24,14 @@ from models.common.llm_runtime.tensor_resources import (
     raise_cleanup_failures,
     release_orphans,
 )
-from models.common.sampling import SamplingParams, SeedManager, format_sampling_params
+from models.common.modules.sampling.params import (
+    PreparedSamplingParams,
+    place_prepared_sampling_params,
+    prepare_sampling_params,
+    slice_sampling_params,
+)
+from models.common.modules.sampling.seed_manager_1d import SeedManager1D, SeedState
+from models.common.sampling.sampling_params import SamplingParams
 
 
 @dataclass(frozen=True)
@@ -35,15 +42,22 @@ class DecodeProgramSignature:
     page_table_width: int
     sampling_path: str
     device_feedback: bool
+    penalties_enabled: bool = False
+    logprobs_enabled: bool = False
 
     def key_material(self) -> tuple[tuple[str, Any], ...]:
-        return (
+        material = [
             ("operation", "decode"),
             ("batch_size", self.batch_size),
             ("page_table_width", self.page_table_width),
             ("sampling_path", self.sampling_path),
             ("device_feedback", self.device_feedback),
-        )
+        ]
+        if self.penalties_enabled:
+            material.append(("penalties_enabled", True))
+        if self.logprobs_enabled:
+            material.append(("logprobs_enabled", True))
+        return tuple(material)
 
 
 @dataclass(frozen=True)
@@ -54,15 +68,22 @@ class DecodeTraceSignature:
     page_table_width: int
     sampling_path: str
     device_feedback: bool
+    penalties_enabled: bool = False
+    logprobs_enabled: bool = False
 
     def key_material(self) -> tuple[tuple[str, Any], ...]:
-        return (
+        material = [
             ("operation", "decode"),
             ("batch_size", self.batch_size),
             ("page_table_width", self.page_table_width),
             ("sampling_path", self.sampling_path),
             ("device_feedback", self.device_feedback),
-        )
+        ]
+        if self.penalties_enabled:
+            material.append(("penalties_enabled", True))
+        if self.logprobs_enabled:
+            material.append(("logprobs_enabled", True))
+        return tuple(material)
 
 
 @dataclass(frozen=True)
@@ -98,12 +119,29 @@ class PreparedDecode:
     start_pos: torch.Tensor
     page_table: torch.Tensor
     sampling_params: SamplingParams | None
-    sampling_values: tuple[tuple[int, ...], tuple[float, ...], tuple[float, ...], bool] | None
-    sampling_seeds: tuple[int | None, ...] | None
+    prepared_sampling: PreparedSamplingParams | None
     sampling_path: str
     reset_batch: bool
     device_feedback: bool
     page_table_changed: bool
+
+    @property
+    def sampling_values(self):
+        """Compatibility view over the native prepared structure."""
+
+        sampling = self.prepared_sampling
+        if sampling is None:
+            return None
+        return (
+            sampling.top_k,
+            sampling.top_p,
+            sampling.temperature,
+            sampling.all_active_rows_greedy,
+        )
+
+    @property
+    def sampling_seeds(self):
+        return None if self.prepared_sampling is None else self.prepared_sampling.seeds
 
 
 @dataclass(frozen=True)
@@ -168,7 +206,11 @@ class DecodeRuntimeConfig:
     device_sampling_enabled: bool
     force_greedy_top_k: bool
     allow_force_argmax: bool
+    max_device_top_k: int
+    sampling_batch_size: int
     position_feedback_capable: bool
+    sampling_state_controller: Any
+    sampling_state: Any
 
     def __post_init__(self) -> None:
         _validate_resolved_decode_config(self)
@@ -183,6 +225,8 @@ class DecodeRuntimeConfig:
         page_table_layout: PageTableLayout,
         device_sampling_enabled: bool,
         force_greedy_top_k: bool = False,
+        sampling_state_controller: Any = None,
+        sampling_state: Any = None,
     ) -> "DecodeRuntimeConfig":
         if not isinstance(output_reader, OutputReader):
             raise TypeError("output_reader must be an OutputReader")
@@ -221,13 +265,29 @@ class DecodeRuntimeConfig:
         sampling = getattr(model, "sampling", None)
         sampling_config = getattr(sampling, "config", None)
         allow_force_argmax = getattr(sampling_config, "allow_force_argmax", False)
+        max_device_top_k = getattr(sampling_config, "max_top_k", 0)
+        sampling_batch_size = getattr(sampling_config, "max_batch_size", lane_capacity)
         if device_sampling_enabled:
             if not callable(getattr(sampling, "decode_forward", None)):
                 raise TypeError("device sampling requires model.sampling.decode_forward()")
             if not isinstance(allow_force_argmax, bool):
                 raise TypeError("model sampling allow_force_argmax must be bool")
+            if (
+                not isinstance(max_device_top_k, int)
+                or isinstance(max_device_top_k, bool)
+                or max_device_top_k <= 0
+            ):
+                raise ValueError("model sampling max_top_k must be a positive integer")
+            if (
+                not isinstance(sampling_batch_size, int)
+                or isinstance(sampling_batch_size, bool)
+                or sampling_batch_size < lane_capacity
+            ):
+                raise ValueError("model sampling max_batch_size must cover the decode lane capacity")
         else:
             allow_force_argmax = False
+            max_device_top_k = 0
+            sampling_batch_size = lane_capacity
 
         return cls(
             model=model,
@@ -241,7 +301,11 @@ class DecodeRuntimeConfig:
             device_sampling_enabled=device_sampling_enabled,
             force_greedy_top_k=force_greedy_top_k,
             allow_force_argmax=allow_force_argmax,
+            max_device_top_k=max_device_top_k,
+            sampling_batch_size=sampling_batch_size,
             position_feedback_capable=callable(getattr(model, "increment_positions", None)),
+            sampling_state_controller=sampling_state_controller,
+            sampling_state=sampling_state,
             page_table_layout_ceiling=page_table_layout,
         )
 
@@ -290,17 +354,29 @@ class DecodeRuntime:
         self._external_by_raw_id: dict[int, DecodeOutputLease] = {}
         self._external_by_host_id: dict[int, DecodeOutputLease] = {}
         self._transient_orphans: list[TensorResourceOrphan] = []
-        seed_buffer = getattr(getattr(config.model, "sampling", None), "config", None)
-        seed_buffer = getattr(seed_buffer, "seeds", None)
-        seed_source = getattr(seed_buffer, "source", None)
-        seed_capacity = int(seed_source.numel()) if callable(getattr(seed_source, "numel", None)) else None
-        if seed_capacity is not None and seed_capacity < config.lane_capacity:
-            raise ValueError("model sampling seed buffer is smaller than the decode lane capacity")
+        self._sampling_state_controller = config.sampling_state_controller
+        self._sampling_state = config.sampling_state
+        sampling_config = getattr(getattr(config.model, "sampling", None), "config", None)
+        seed_buffer = getattr(sampling_config, "seeds", None)
+        has_mutable_seed_buffer = all(
+            callable(getattr(seed_buffer, name, None)) for name in ("update", "get_device_buffer")
+        ) and isinstance(getattr(seed_buffer, "source", None), torch.Tensor)
         self._seed_manager = (
-            SeedManager(max_batch_size=seed_capacity or config.lane_capacity, seed_buffer=seed_buffer)
-            if config.device_sampling_enabled and callable(getattr(seed_buffer, "update", None))
+            self._sampling_state_controller.seed_manager
+            if self._sampling_state_controller is not None
+            else SeedManager1D(sampling_config)
+            if config.device_sampling_enabled and has_mutable_seed_buffer
             else None
         )
+        self._seed_state = (
+            self._sampling_state.seed_state
+            if self._sampling_state is not None
+            else self._seed_manager.create_state()
+            if self._seed_manager is not None
+            else None
+        )
+        if self._seed_state is not None and self._seed_state.capacity < config.lane_capacity:
+            raise ValueError("model sampling seed buffer is smaller than the decode lane capacity")
 
     # Public API
 
@@ -322,6 +398,9 @@ class DecodeRuntime:
         page_table: torch.Tensor,
         *,
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         reset_batch: bool = False,  # ↓ State transition
     ) -> PreparedDecode:
         """Normalize one host decode request into an immutable prepared value."""
@@ -330,15 +409,41 @@ class DecodeRuntime:
         self._validate_inputs(tokens, start_pos, page_table)
         self._validate_sampling_request(sampling_params)
         feedback = self._classify_feedback(sampling_params)
-        sampling_values = (
-            None if sampling_params is None else _formatted_sampling_values(sampling_params, self.config.lane_capacity)
-        )
-        sampling_seeds = (
-            None if sampling_params is None else _formatted_sampling_seeds(sampling_params, self.config.lane_capacity)
-        )
-        if sampling_seeds is not None and any(seed is not None for seed in sampling_seeds):
-            if self._seed_manager is None:
-                raise TypeError("explicit request seeds require model.sampling.config.seeds to be a mutable LazyBuffer")
+        prepared_sampling = None
+        if sampling_params is not None:
+            active_slots = tuple(
+                slot
+                for slot, position in enumerate(start_pos)
+                if int(position) >= 0
+            )
+            if not active_slots:
+                raise ValueError("decode sampling requires at least one active slot")
+            request_sampling = slice_sampling_params(sampling_params, active_slots)
+            prepared_sampling = prepare_sampling_params(
+                request_sampling,
+                self.config.sampling_batch_size,
+                max_device_top_k=self.config.max_device_top_k,
+                allow_force_argmax=self.config.allow_force_argmax and not self.config.force_greedy_top_k,
+                prompt_tokens=_select_decode_request_state(
+                    prompt_tokens,
+                    active_slots=active_slots,
+                    lane_capacity=self.config.lane_capacity,
+                ),
+                output_tokens=_select_decode_request_state(
+                    output_tokens,
+                    active_slots=active_slots,
+                    lane_capacity=self.config.lane_capacity,
+                ),
+                slot_remap=_normalize_decode_slot_remap(
+                    slot_remap,
+                    lane_capacity=self.config.lane_capacity,
+                    sampling_batch_size=self.config.sampling_batch_size,
+                ),
+            )
+            prepared_sampling = place_prepared_sampling_params(
+                prepared_sampling,
+                active_slots,
+            )
         normalized = self._normalize_page_table(
             page_table,
             start_pos,
@@ -349,9 +454,8 @@ class DecodeRuntime:
             start_pos=start_pos,
             page_table=normalized,
             sampling_params=sampling_params,
-            sampling_values=sampling_values,
-            sampling_seeds=sampling_seeds,
-            sampling_path=self._classify_sampling_path(sampling_values),
+            prepared_sampling=prepared_sampling,
+            sampling_path=self._classify_sampling_path(prepared_sampling),
             reset_batch=bool(reset_batch),
             device_feedback=feedback,
             page_table_changed=(
@@ -374,10 +478,18 @@ class DecodeRuntime:
             batch_size=program.batch_size,
             page_table_width=program.page_table_width,
             sampling_path=program.sampling_path,
+            penalties_enabled=program.penalties_enabled,
+            logprobs_enabled=program.logprobs_enabled,
             device_feedback=program.device_feedback,
         )
 
-    def invoke(self, prepared: PreparedDecode, *, device_feedback: bool = False) -> InvocationResult:
+    def invoke(
+        self,
+        prepared: PreparedDecode,
+        *,
+        device_feedback: bool = False,
+        count_tokens: bool = True,
+    ) -> InvocationResult:
         """Stage and execute one prepared request eagerly."""
 
         self._ensure_usable()
@@ -385,19 +497,37 @@ class DecodeRuntime:
         host_inputs = self._prepare_inputs_host(prepared)
         device_inputs, kpt = self._stage_inputs_and_kpt(host_inputs, prepared)
         owned = (device_inputs, kpt)
+        compile_only_state = self._sampling_state_controller is not None and not count_tokens
         try:
-            self._refresh_sampling_seeds(prepared)
+            if compile_only_state:
+                sampling = prepared.prepared_sampling
+                if sampling is not None:
+                    self._sampling_state_controller.reset(
+                        self._sampling_state,
+                        dataclasses.replace(sampling, slot_remap=None),
+                    )
+            else:
+                self._refresh_sampling_seeds(prepared)
             with _validate_module_inputs(self.config.model):
                 output = self._run_body(
                     device_inputs,
-                    prepared.sampling_params,
+                    prepared,
                     kpt,
                     device_feedback=device_feedback and prepared.device_feedback,
+                    count_tokens=count_tokens,
+                    advance_seeds=count_tokens,
                 )
         except BaseException as primary:
+            if compile_only_state:
+                try:
+                    self._sampling_state_controller.reset(self._sampling_state)
+                except BaseException as cleanup_error:
+                    attach_cleanup_failures(primary, (cleanup_error,))
             failures = self._release_or_retain_transient(owned)
             attach_cleanup_failures(primary, failures)
             raise
+        if compile_only_state:
+            self._sampling_state_controller.reset(self._sampling_state)
         self._note_submitted(prepared)
         return InvocationResult(
             value=output,
@@ -411,9 +541,15 @@ class DecodeRuntime:
         self._require_prepared(prepared)
 
         def prepare_inputs() -> DecodePersistentInputs:
+            if self._sampling_state_controller is not None and prepared.prepared_sampling is not None:
+                self._sampling_state_controller.reset(
+                    self._sampling_state,
+                    dataclasses.replace(prepared.prepared_sampling, slot_remap=None),
+                )
             host_inputs = self._prepare_inputs_host(prepared)
             device_inputs, kpt = self._stage_inputs_and_kpt(host_inputs, prepared)
-            signature = [prepared.sampling_values[:3]] if kpt is not None else None
+            sampling = prepared.prepared_sampling
+            signature = [(sampling.top_k, sampling.top_p, sampling.temperature)] if kpt is not None else None
             return DecodePersistentInputs(
                 device_inputs=device_inputs,
                 kpt=kpt,
@@ -425,9 +561,10 @@ class DecodeRuntime:
             values = _persistent_values(persistent)
             return self._run_body(
                 values.device_inputs,
-                prepared.sampling_params,
+                prepared,
                 values.kpt,
                 device_feedback=prepared.device_feedback,
+                advance_seeds=False,
             )
 
         return DecodeCapturePlan(prepare_inputs=prepare_inputs, capture=capture)
@@ -452,7 +589,10 @@ class DecodeRuntime:
             host_inputs = self._prepare_inputs_host(prepared)
             ttnn.copy_host_to_device_tensor(host_inputs.page_table, values.device_inputs.page_table)
         if prepared.sampling_path == "topk":
-            signature = prepared.sampling_values[:3]
+            sampling = prepared.prepared_sampling
+            if sampling is None:
+                raise RuntimeError("top-k decode trace is missing prepared sampling parameters")
+            signature = sampling.top_k, sampling.top_p, sampling.temperature
             if values.kpt_signature is None or values.kpt_signature[0] != signature:
                 self._refresh_kpt(values.kpt, prepared)
                 if values.kpt_signature is not None:
@@ -538,13 +678,10 @@ class DecodeRuntime:
         if sampling_params is not None and not self.config.device_sampling_enabled:
             raise ValueError("sampling parameters were supplied while device sampling is disabled")
 
-    def _classify_sampling_path(self, sampling_values: Any) -> str:
-        if sampling_values is None:
+    def _classify_sampling_path(self, prepared_sampling: PreparedSamplingParams | None) -> str:
+        if prepared_sampling is None:
             return "logits"
-        config = self.config
-        if config.allow_force_argmax and not config.force_greedy_top_k and sampling_values[3]:
-            return "argmax"
-        return "topk"
+        return prepared_sampling.sampling_path
 
     def _classify_feedback(self, sampling_params: SamplingParams | None) -> bool:
         return sampling_params is not None and self.config.position_feedback_capable
@@ -567,6 +704,12 @@ class DecodeRuntime:
             batch_size=self.config.lane_capacity,
             page_table_width=int(prepared.page_table.shape[-1]),
             sampling_path=prepared.sampling_path,
+            penalties_enabled=(
+                prepared.prepared_sampling.penalties_enabled if prepared.prepared_sampling is not None else False
+            ),
+            logprobs_enabled=(
+                prepared.prepared_sampling.log_probs_enabled if prepared.prepared_sampling is not None else False
+            ),
             device_feedback=prepared.device_feedback,
         )
 
@@ -582,7 +725,7 @@ class DecodeRuntime:
             output, log_probs = host_output, None
         if is_tokens:
             tokens = _process_output_tokens(output, self.config.lane_capacity, self.config.cluster_shape)
-            return tokens.to(torch.int64), log_probs
+            return tokens.to(torch.int64), _process_sampled_log_probs(log_probs, self.config.lane_capacity)
         return self._convert_logits(output), log_probs
 
     def _normalize_page_table(self, page_table, start_pos, *, allow_one_step_feedback_lag):
@@ -661,7 +804,16 @@ class DecodeRuntime:
             raise
         return device_inputs, kpt
 
-    def _run_body(self, inputs, sampling_params, kpt, *, device_feedback):
+    def _run_body(
+        self,
+        inputs,
+        prepared,
+        kpt,
+        *,
+        device_feedback,
+        count_tokens=True,
+        advance_seeds=True,
+    ):
         model = self.config.model
         rot_mats = model.rope_setup.get_rot_mats(inputs.rotary_indices)
         logits = model.decode_forward(
@@ -670,24 +822,45 @@ class DecodeRuntime:
             rot_mats,
             page_table=inputs.page_table,
         )
-        if sampling_params is None:
+        sampling = prepared.prepared_sampling
+        if sampling is None:
             return model.gather_and_untilize_logits(logits), None
-        output = self._sample_device(logits, kpt)
+        if self._sampling_state_controller is not None:
+            sampling = dataclasses.replace(sampling, slot_remap=None)
+            output = self._sampling_state_controller.decode_forward(
+                logits,
+                self._sampling_state,
+                sampling,
+                k=None if kpt is None else kpt[0],
+                p=None if kpt is None else kpt[1],
+                temp=None if kpt is None else kpt[2],
+                positions=prepared.start_pos,
+                tt_out_tok=None,
+                count_tokens=count_tokens,
+                advance_seeds=advance_seeds,
+            )
+        else:
+            output = self._sample_device(logits, kpt, sampling)
         if device_feedback:
             sampled_tokens = ttnn.reshape(output[0], inputs.tokens.shape)
             ttnn.copy(input_a=sampled_tokens, input_b=inputs.tokens)
             model.increment_positions(inputs.positions, inputs.rotary_indices)
         return output
 
-    def _sample_device(self, logits, kpt):
+    def _sample_device(self, logits, kpt, sampling: PreparedSamplingParams):
         if kpt is None:
-            return self.config.model.sampling.decode_forward(logits, tt_out_tok=None)
+            return self.config.model.sampling.decode_forward(
+                logits,
+                tt_out_tok=None,
+                enable_log_probs=sampling.enable_log_probs,
+            )
         return self.config.model.sampling.decode_forward(
             logits,
             k=kpt[0],
             p=kpt[1],
             temp=kpt[2],
             tt_out_tok=None,
+            enable_log_probs=sampling.enable_log_probs,
         )
 
     def _seed_device_handle(self):
@@ -705,31 +878,48 @@ class DecodeRuntime:
             raise RuntimeError("decode trace seed buffer handle changed after capture")
 
     def _refresh_sampling_seeds(self, prepared: PreparedDecode) -> None:
-        manager = self._seed_manager
-        seeds = prepared.sampling_seeds
-        active_slots = [slot for slot, position in enumerate(prepared.start_pos) if int(position) >= 0]
-        if prepared.sampling_path != "topk":
-            if manager is not None:
-                manager.refresh_absolute_request_seeds(
-                    None,
-                    active_slots,
-                    prepared.start_pos,
-                    reset_batch=prepared.reset_batch,
+        if self._sampling_state_controller is not None:
+            sampling = prepared.prepared_sampling
+            if sampling is None:
+                self._sampling_state_controller.seed_manager.restore_defaults(
+                    self._sampling_state.seed_state
                 )
+                return
+            sampling = self._sampling_state_controller.synchronize_decode(
+                self._sampling_state,
+                sampling,
+                reset_batch=prepared.reset_batch,
+            )
+            self._sampling_state_controller.refresh_dynamic_inputs(
+                self._sampling_state,
+                sampling,
+                positions=prepared.start_pos,
+            )
             return
-        has_explicit_seed = seeds is not None and any(
-            seeds[slot] is not None for slot in active_slots if slot < len(seeds)
-        )
-        if manager is None:
-            if has_explicit_seed:
-                raise TypeError("explicit request seeds require a mutable model-owned seed buffer")
+        manager = self._seed_manager
+        state = self._seed_state
+        sampling = prepared.prepared_sampling
+        active_slots = [slot for slot, position in enumerate(prepared.start_pos) if int(position) >= 0]
+        if manager is None or state is None:
+            if sampling is not None and any(sampling.seeds[slot] is not None for slot in active_slots):
+                raise TypeError("explicit request seeds require a native mutable Sampling1D seed buffer")
             return
-        manager.refresh_absolute_request_seeds(
-            seeds,
+        if sampling is None:
+            manager.cleanup(state, active_slots)
+            manager.restore_defaults(state)
+            return
+        if sampling.slot_remap is not None:
+            manager.apply_slot_remap(state, sampling.slot_remap)
+        manager.synchronize(
+            state,
+            sampling.seeds,
             active_slots,
-            prepared.start_pos,
             reset_batch=prepared.reset_batch,
         )
+        if prepared.sampling_path == "topk":
+            manager.refresh(state, active_slots, positions=prepared.start_pos)
+        else:
+            manager.restore_defaults(state)
 
     def _make_device_kpt(self, prepared):
         host = self._make_host_kpt(prepared)
@@ -738,9 +928,10 @@ class DecodeRuntime:
         return tuple(_copy_host_to_device(host, mesh_device=self.config.mesh_device))
 
     def _make_host_kpt(self, prepared):
-        if prepared.sampling_values is None or prepared.sampling_path == "argmax":
+        sampling = prepared.prepared_sampling
+        if sampling is None or prepared.sampling_path == "argmax":
             return None
-        k, p, temperature, _ = prepared.sampling_values
+        k, p, temperature = sampling.top_k, sampling.top_p, sampling.temperature
         mapper = ttnn.ReplicateTensorToMesh(self.config.mesh_device)
         return (
             ttnn.from_torch(
@@ -836,6 +1027,84 @@ def _persistent_values(value: Any) -> DecodePersistentInputs:
             seed_buffer=values.get("seed_buffer"),
         )
     raise TypeError("decode persistent inputs have an unsupported representation")
+
+
+def _select_decode_request_state(
+    value: Any,
+    *,
+    active_slots: tuple[int, ...],
+    lane_capacity: int,
+) -> Any:
+    """Convert slot-indexed decode history into active request order."""
+
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        if value.ndim == 0:
+            raise ValueError("decode sampling history must have a leading request dimension")
+        length = int(value.shape[0])
+    elif isinstance(value, (list, tuple)):
+        length = len(value)
+    else:
+        raise TypeError("decode sampling history must be a tensor or sequence")
+    if length in (1, len(active_slots)):
+        return value
+    if length < int(lane_capacity):
+        raise ValueError(
+            f"decode sampling history has {length} rows, expected 1, {len(active_slots)}, "
+            f"or at least lane capacity {lane_capacity}"
+        )
+    rows = (
+        torch.tensor(active_slots, dtype=torch.long, device=value.device)
+        if isinstance(value, torch.Tensor)
+        else None
+    )
+    if rows is not None:
+        return value.index_select(0, rows)
+    selected = [value[slot] for slot in active_slots]
+    return tuple(selected) if isinstance(value, tuple) else selected
+
+
+def _normalize_decode_slot_remap(
+    value: Any,
+    *,
+    lane_capacity: int,
+    sampling_batch_size: int,
+) -> Any:
+    """Extend a lane-local remap with identity rows for sampler-only padding."""
+
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        if value.ndim == 0:
+            raise ValueError("decode slot_remap must have a leading slot dimension")
+        flat = value.reshape(-1)
+        length = int(flat.numel())
+    elif isinstance(value, (list, tuple)):
+        flat = list(value)
+        length = len(flat)
+    else:
+        raise TypeError("decode slot_remap must be a tensor or sequence")
+    if length == int(sampling_batch_size):
+        return value
+    if length != int(lane_capacity):
+        raise ValueError(
+            f"decode slot_remap has {length} rows, expected lane capacity {lane_capacity} "
+            f"or sampler capacity {sampling_batch_size}"
+        )
+    sources = [int(source) for source in flat]
+    if any(source < 0 or source >= int(lane_capacity) for source in sources):
+        raise ValueError("decode slot_remap contains a source outside the lane capacity")
+    tail = list(range(int(lane_capacity), int(sampling_batch_size)))
+    if isinstance(value, torch.Tensor):
+        return torch.cat(
+            [
+                flat,
+                torch.tensor(tail, dtype=value.dtype, device=value.device),
+            ]
+        )
+    extended = sources + tail
+    return tuple(extended) if isinstance(value, tuple) else extended
 
 
 @contextlib.contextmanager
@@ -937,6 +1206,23 @@ def _validate_resolved_decode_config(config: DecodeRuntimeConfig) -> None:
             raise TypeError("model sampling allow_force_argmax must be bool")
     if config.allow_force_argmax is not expected_argmax:
         raise ValueError("allow_force_argmax must match the resolved model capability")
+    expected_top_k = getattr(sampling_config, "max_top_k", 0) if config.device_sampling_enabled else 0
+    if config.max_device_top_k != expected_top_k:
+        raise ValueError("max_device_top_k must match the resolved model sampler capability")
+    expected_sampling_batch_size = (
+        getattr(sampling_config, "max_batch_size", config.lane_capacity)
+        if config.device_sampling_enabled
+        else config.lane_capacity
+    )
+    if config.sampling_batch_size != expected_sampling_batch_size:
+        raise ValueError("sampling_batch_size must match the resolved model sampler capacity")
+    if (config.sampling_state_controller is None) != (config.sampling_state is None):
+        raise ValueError("sampling_state_controller and sampling_state must be supplied together")
+    if config.sampling_state_controller is not None:
+        if getattr(config.sampling_state_controller, "sampling", None) is not sampling:
+            raise ValueError("sampling state controller must borrow model.sampling")
+        if not callable(getattr(config.sampling_state_controller, "decode_forward", None)):
+            raise TypeError("sampling state controller must provide decode_forward()")
     if config.position_feedback_capable != callable(getattr(config.model, "increment_positions", None)):
         raise ValueError("position_feedback_capable must match the resolved model capability")
     if not isinstance(config.page_table_layout_ceiling, PageTableLayout):
@@ -971,41 +1257,28 @@ def _copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
     return device_tensors
 
 
-def _formatted_sampling_values(sampling_params, batch_size):
-    updates = {}
-    for field in dataclasses.fields(sampling_params):
-        value = getattr(sampling_params, field.name)
-        if isinstance(value, torch.Tensor):
-            updates[field.name] = value.item() if value.ndim == 0 else value.tolist()
-    if updates:
-        sampling_params = dataclasses.replace(sampling_params, **updates)
+def _formatted_sampling_values(
+    sampling_params,
+    batch_size,
+    *,
+    max_device_top_k=32,
+    allow_force_argmax=True,
+):
+    """Compatibility test helper backed by native exact preparation."""
+
     formatted_size = ((int(batch_size) + 31) // 32) * 32
-    formatted = format_sampling_params(sampling_params, formatted_size)
-    k = tuple(int(value) for value in formatted.top_k)
-    p = tuple(float(value) for value in formatted.top_p)
-    temperature = tuple(float(value) for value in formatted.temperature)
-    greedy = (
-        all(value == 1 for value in k) and all(value == 0 for value in p) and all(value == 1 for value in temperature)
+    prepared = prepare_sampling_params(
+        sampling_params,
+        formatted_size,
+        max_device_top_k=max_device_top_k,
+        allow_force_argmax=allow_force_argmax,
     )
-    return k, p, temperature, greedy
-
-
-def _formatted_sampling_seeds(sampling_params, batch_size):
-    """Return slot-indexed request seeds without mutating caller parameters."""
-
-    seed = getattr(sampling_params, "seed", None)
-    if seed is None:
-        return None
-    if isinstance(seed, torch.Tensor):
-        if seed.ndim == 0:
-            seed = seed.item()
-        else:
-            seed = seed.reshape(-1).tolist()
-    if not isinstance(seed, (list, tuple)):
-        return (int(seed),) * int(batch_size)
-    values = [None if value is None else int(value) for value in seed[:batch_size]]
-    values.extend([None] * (int(batch_size) - len(values)))
-    return tuple(values)
+    return (
+        prepared.top_k,
+        prepared.top_p,
+        prepared.temperature,
+        prepared.all_active_rows_greedy,
+    )
 
 
 def _concat_host_output(value, cluster_shape):
@@ -1025,6 +1298,28 @@ def _process_output_tokens(value, batch_size, cluster_shape):
         elif int(output.shape[3]) >= batch_size:
             output = output[0, 0, 0, :batch_size]
     return output.reshape(-1)[:batch_size].to(torch.int64)
+
+
+def _process_sampled_log_probs(value, batch_size):
+    """Normalize replicated sampled-token logprobs to one row-major tensor."""
+
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        output = value
+    elif isinstance(value, ttnn.Tensor):
+        replicas = ttnn.get_device_tensors(value)
+        output = ttnn.to_torch(replicas[0] if replicas else value)
+    else:
+        # Preserve opaque compatibility payloads used by callers that own their
+        # own logprob representation. Native Sampling1D returns a TT tensor.
+        return value
+    flat = output.reshape(-1)
+    if int(flat.numel()) < int(batch_size):
+        raise ValueError(
+            f"sampled-token logprobs contain {flat.numel()} rows, expected at least {batch_size}"
+        )
+    return flat[: int(batch_size)].to(torch.float32)
 
 
 def _num_blocks(sequence_length, block_size):

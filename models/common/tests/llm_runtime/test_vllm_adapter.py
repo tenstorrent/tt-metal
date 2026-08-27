@@ -201,6 +201,9 @@ def test_normalized_typed_dicts_have_stable_required_key_order():
         "empty_slots",
         "kv_cache",
         "sampling_params",
+        "prompt_tokens",
+        "output_tokens",
+        "slot_remap",
     )
     assert NormalizedPrefillKwargs.__required_keys__ == frozenset(NormalizedPrefillKwargs.__annotations__)
     assert tuple(NormalizedDecodeKwargs.__annotations__) == (
@@ -209,6 +212,9 @@ def test_normalized_typed_dicts_have_stable_required_key_order():
         "page_table",
         "kv_cache",
         "sampling_params",
+        "prompt_tokens",
+        "output_tokens",
+        "slot_remap",
         "reset_batch",
     )
     assert NormalizedDecodeKwargs.__required_keys__ == frozenset(NormalizedDecodeKwargs.__annotations__)
@@ -242,8 +248,10 @@ def test_normalize_prefill_positional_call_without_mutating_caller_kwargs():
     assert normalized["empty_slots"] is None
     assert normalized["kv_cache"] is None
     assert normalized["sampling_params"] == "sampling"
+    assert normalized["prompt_tokens"] is compatibility_kwargs["prompt_tokens"]
+    assert normalized["output_tokens"] is compatibility_kwargs["output_tokens"]
+    assert normalized["slot_remap"] is compatibility_kwargs["slot_remap"]
     assert enable_trace is True
-    assert compatibility_kwargs.keys().isdisjoint(normalized)
     assert tuple(compatibility_kwargs) == (
         "page_tables_per_layer",
         "prompt_tokens",
@@ -271,9 +279,11 @@ def test_normalize_decode_converts_existing_tensors_and_flattens_column_tokens()
     assert normalized["page_table"].dtype == torch.int32
     assert normalized["kv_cache"] is None
     assert normalized["sampling_params"] is None
+    assert normalized["prompt_tokens"] is None
+    assert normalized["output_tokens"] is None
+    assert normalized["slot_remap"] == [0, 1]
     assert normalized["reset_batch"] is False
     assert enable_trace is True
-    assert "slot_remap" not in normalized
 
 
 @pytest.mark.parametrize(

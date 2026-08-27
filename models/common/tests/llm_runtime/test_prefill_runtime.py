@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import inspect
 import math
@@ -61,6 +62,7 @@ class FakeModel:
         self.sampling = SimpleNamespace(
             config=SimpleNamespace(
                 max_batch_size=sampling_batch_size,
+                max_top_k=32,
                 allow_force_argmax=allow_force_argmax,
             )
         )
@@ -241,6 +243,18 @@ def test_sampling_values_accept_vector_tensor_fields_for_full_batch():
     assert values[2] == (1.0,) * 32
 
 
+def test_prefill_tokens_supply_masked_prompt_history_when_plugin_history_is_absent():
+    tokens = torch.tensor([[11, 12, 0, 0], [21, 22, 23, 0]])
+
+    history = prefill_module._prompt_history_from_prefill_tokens(
+        tokens,
+        torch.tensor([2, 3]),
+    )
+
+    assert torch.equal(history, torch.tensor([[11, 12, -1, -1], [21, 22, 23, -1]]))
+    assert torch.equal(tokens, torch.tensor([[11, 12, 0, 0], [21, 22, 23, 0]]))
+
+
 def test_single_greedy_prefill_uses_argmax_without_changing_batched_sampling():
     runtime = _runtime(allow_force_argmax=True)
     greedy = SamplingParams(temperature=0.0, top_k=32, top_p=0.08)
@@ -290,6 +304,7 @@ def test_trace_finish_reuses_trace_owned_sample_output(monkeypatch):
         *,
         sampled_output=None,
         owned=None,
+        count_tokens=True,
     ):
         seen.append(((prepared, hidden, kpt, position_inputs), {"sampled_output": sampled_output, "owned": owned}))
         return "tokens", None
@@ -423,6 +438,7 @@ def test_eager_sampled_prefill_uses_preallocated_output(monkeypatch):
         *,
         sampled_output=None,
         owned=None,
+        count_tokens=True,
     ):
         events.append("finish")
         seen.append(
@@ -1166,6 +1182,16 @@ def test_prefill_signature_keys_and_trace_fingerprints_have_stable_goldens():
         True,
     )
 
+    assert ProgramKey.from_signature(
+        dataclasses.replace(program_signature, penalties_enabled=True)
+    ) != ProgramKey.from_signature(program_signature)
+    assert ProgramKey.from_signature(
+        dataclasses.replace(program_signature, logprobs_enabled=True)
+    ) != ProgramKey.from_signature(program_signature)
+    assert TraceKey.from_signature(
+        dataclasses.replace(trace_signature, sampling_path="topk")
+    ) != TraceKey.from_signature(trace_signature)
+
 
 def test_cached_offsets_share_one_chunk_trace_identity_and_can_trace_contract():
     runtime = _runtime()
@@ -1440,7 +1466,8 @@ def test_static_q128_single_topk_uses_tile_output_and_exact_host_row(monkeypatch
     monkeypatch.setattr(
         runtime.postprocessor,
         "sample_device",
-        lambda logits, kpt, sampled_output=None: sampled.append((logits, sampled_output)) or sampled_output,
+        lambda logits, kpt, sampling, sampled_output=None, **kwargs: sampled.append((logits, sampled_output))
+        or sampled_output,
     )
 
     assert runtime.postprocessor.sampling_output_rows(prepared) == 32
@@ -1583,13 +1610,13 @@ def test_prepare_classifies_once_and_invoke_uses_only_sequence_runner(monkeypatc
     seen = []
     expected = InvocationResult("value", "owned")
 
-    def run_sequence(received):
-        seen.append(received)
+    def run_sequence(received, *, count_tokens=True):
+        seen.append((received, count_tokens))
         return expected
 
     monkeypatch.setattr(runtime.sequence_runner, "run", run_sequence)
     assert runtime.invoke(prepared) is expected
-    assert seen == [prepared]
+    assert seen == [(prepared, True)]
     assert not hasattr(runtime, "_run_regular_prefill")
     assert not hasattr(runtime, "_run_chunked_prefill")
 
@@ -1917,7 +1944,7 @@ def test_regular_logits_and_argmax_preserve_operation_order(
     monkeypatch.setattr(
         runtime.postprocessor,
         "sample_device",
-        lambda logits, kpt, sampled_output=None: events.append("sample") or "sampled",
+        lambda logits, kpt, sampling, sampled_output=None, **kwargs: events.append("sample") or "sampled",
     )
     # ttnn.untilize is overloaded; this test only checks operation order.
     monkeypatch.setattr(
@@ -2173,7 +2200,7 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
     monkeypatch.setattr(
         runtime.postprocessor,
         "sample_device",
-        lambda logits, kpt, sampled_output=None: sampled_regular,
+        lambda logits, kpt, sampling, sampled_output=None, **kwargs: sampled_regular,
     )
 
     assert (
@@ -2204,7 +2231,7 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
     monkeypatch.setattr(
         runtime.postprocessor,
         "sample_device",
-        lambda logits, kpt, sampled_output=None: sampled_chunked,
+        lambda logits, kpt, sampling, sampled_output=None, **kwargs: sampled_chunked,
     )
 
     assert (
@@ -2230,7 +2257,7 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
     monkeypatch.setattr(
         runtime.postprocessor,
         "sample_device",
-        lambda logits, kpt, sampled_output=None: raw_regular,
+        lambda logits, kpt, sampling, sampled_output=None, **kwargs: raw_regular,
     )
     assert (
         runtime.postprocessor.finish_regular_prefill(
@@ -2378,7 +2405,7 @@ def test_finalization_failure_releases_every_resource_acquired_before_failure(mo
             raise RuntimeError("pad failed")
         return padded
 
-    def sample(logits, kpt, sampled_output=None):
+    def sample(logits, kpt, sampling, sampled_output=None, **kwargs):
         if failure_point == "sample":
             raise RuntimeError("sample failed")
         return object()
@@ -2874,6 +2901,9 @@ def test_prefill_runtime_request_signatures_are_exact():
                 ("start_pos", keyword_only, None, "torch.Tensor | None"),
                 ("empty_slots", keyword_only, None, "Sequence[int] | None"),
                 ("sampling_params", keyword_only, None, "SamplingParams | None"),
+                ("prompt_tokens", keyword_only, None, "Any"),
+                ("output_tokens", keyword_only, None, "Any"),
+                ("slot_remap", keyword_only, None, "Any"),
             ),
             "tuple[PreparedPrefill, ...]",
         ),

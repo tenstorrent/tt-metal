@@ -413,6 +413,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     def __init__(self, *args, **kwargs):
@@ -630,6 +631,7 @@ class LlamaForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     @classmethod
@@ -715,6 +717,7 @@ class QwenForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     @classmethod
@@ -794,6 +797,7 @@ class MistralForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     @classmethod
@@ -892,6 +896,7 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
         "supports_prefix_caching": False,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     @classmethod
@@ -1031,6 +1036,7 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
         "supports_prefix_caching": False,  # Sliding window => no prefix caching
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     def __init__(self, *args, **kwargs):

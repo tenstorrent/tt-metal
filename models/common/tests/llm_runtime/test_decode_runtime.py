@@ -24,7 +24,8 @@ from models.common.llm_runtime.decode import (
     InvocationResult,
 )
 from models.common.llm_runtime.output_reader import OutputReader, PendingRead
-from models.common.sampling import SamplingParams
+from models.common.modules.sampling.params import PreparedSamplingParams
+from models.common.sampling.sampling_params import SamplingParams
 
 
 class FakeMesh:
@@ -33,9 +34,19 @@ class FakeMesh:
 
 class FakeSampling:
     def __init__(self, seed_buffer=None):
-        self.config = SimpleNamespace(allow_force_argmax=True, max_batch_size=2, seeds=seed_buffer)
+        self.config = SimpleNamespace(allow_force_argmax=True, max_batch_size=2, max_top_k=32, seeds=seed_buffer)
 
-    def decode_forward(self, logits, *, k=None, p=None, temp=None, tt_out_tok=None):
+    def decode_forward(
+        self,
+        logits,
+        *,
+        k=None,
+        p=None,
+        temp=None,
+        seeds=None,
+        tt_out_tok=None,
+        enable_log_probs=False,
+    ):
         return logits, None
 
 
@@ -104,36 +115,52 @@ def greedy_sampling():
     return SamplingParams(temperature=[0.0, 0.0], top_k=[1, 1], top_p=[1.0, 1.0])
 
 
-def test_sampling_values_keep_tile_padded_device_contract_for_partial_lane():
-    values = decode_module._formatted_sampling_values(
-        SamplingParams(temperature=1.0, top_k=32, top_p=0.08),
-        2,
-    )
+def test_prepare_uses_resolved_sampler_capacity_and_neutral_inactive_rows():
+    prepared = prepare(
+        make_runtime(),
+        positions=(0, -1),
+        sampling_params=SamplingParams(temperature=1.0, top_k=32, top_p=0.08),
+    ).prepared_sampling
 
-    assert tuple(len(field) for field in values[:3]) == (32, 32, 32)
-    assert values[0][0] == 32
-    assert values[1][0] == pytest.approx(0.08)
-    assert values[2][0] == 1.0
-    assert (values[0][-1], values[1][-1], values[2][-1]) == (1, 0.0, 1.0)
+    assert isinstance(prepared, PreparedSamplingParams)
+    assert prepared.batch_size == 2
+    assert prepared.active_rows == 1
+    assert prepared.active_mask == (True, False)
+    assert prepared.top_k == (32, 1)
+    assert prepared.top_p == pytest.approx((0.08, 0.0))
+    assert prepared.temperature == (1.0, 1.0)
+    assert prepared.row_paths == ("topk", "inactive")
 
 
-def test_sampling_values_accept_vector_tensor_fields_for_full_lane():
-    values = decode_module._formatted_sampling_values(
-        SamplingParams(
-            temperature=torch.ones(32),
-            top_k=torch.full((32,), 32, dtype=torch.int32),
-            top_p=torch.full((32,), 0.08),
+def test_prepare_accepts_vector_tensor_fields_for_full_lane():
+    prepared = prepare(
+        make_runtime(),
+        positions=(0, 0),
+        sampling_params=SamplingParams(
+            temperature=torch.ones(2),
+            top_k=torch.full((2,), 32, dtype=torch.int32),
+            top_p=torch.full((2,), 0.08),
         ),
-        32,
-    )
+    ).prepared_sampling
 
-    assert tuple(len(field) for field in values[:3]) == (32, 32, 32)
-    assert values[0] == (32,) * 32
-    assert values[1] == pytest.approx((0.08,) * 32)
-    assert values[2] == (1.0,) * 32
+    assert isinstance(prepared, PreparedSamplingParams)
+    assert prepared.active_mask == (True, True)
+    assert prepared.top_k == (32, 32)
+    assert prepared.top_p == pytest.approx((0.08, 0.08))
+    assert prepared.temperature == (1.0, 1.0)
 
 
-def prepare(runtime, *, positions=(0, -1), page_table=None, sampling_params=None, reset=False):
+def prepare(
+    runtime,
+    *,
+    positions=(0, -1),
+    page_table=None,
+    sampling_params=None,
+    prompt_tokens=None,
+    output_tokens=None,
+    slot_remap=None,
+    reset=False,
+):
     if page_table is None:
         page_table = torch.tensor([[3, 4, 5], [6, 7, 8]], dtype=torch.int32)
     return runtime.prepare(
@@ -141,8 +168,45 @@ def prepare(runtime, *, positions=(0, -1), page_table=None, sampling_params=None
         torch.tensor(positions),
         page_table,
         sampling_params=sampling_params,
+        prompt_tokens=prompt_tokens,
+        output_tokens=output_tokens,
+        slot_remap=slot_remap,
         reset_batch=reset,
     )
+
+
+def test_prepare_places_only_start_pos_active_rows_and_neutralizes_gap_sentinels():
+    runtime = make_runtime()
+    sampling = SamplingParams(
+        temperature=[0.8, 0.8],
+        top_k=[999, 7],
+        top_p=[0.9, 0.8],
+        seed=[-1, -1],
+        enable_log_probs=[False, False],
+        num_logprobs=[-2, -2],
+    )
+
+    prepared = prepare(
+        runtime,
+        positions=(-1, 4),
+        sampling_params=sampling,
+        prompt_tokens=torch.tensor([[10, -1], [20, 21]]),
+        output_tokens=[[30, -1], [40, 41]],
+        slot_remap=torch.tensor([1, 0]),
+        reset=True,
+    ).prepared_sampling
+
+    assert prepared is not None
+    assert prepared.active_mask == (False, True)
+    assert prepared.row_paths == ("inactive", "topk")
+    assert prepared.top_k == (1, 7)
+    assert prepared.top_p == pytest.approx((0.0, 0.8))
+    assert prepared.seeds == (None, None)
+    assert prepared.enable_log_probs == (False, False)
+    assert prepared.num_logprobs == (0, 0)
+    assert prepared.prompt_tokens.tolist() == [[-1, -1], [20, 21]]
+    assert prepared.output_tokens == [[-1, -1], [40, 41]]
+    assert prepared.slot_remap.tolist() == [1, 0]
 
 
 def seeded_sampling(seed0, seed1=None):
@@ -180,11 +244,12 @@ def test_runtime_seed_same_request_and_absolute_position_are_cardinality_indepen
     remapped._refresh_sampling_seeds(remapped_prepared)
 
     assert int(first_buffer.updates[-1][0]) == int(remapped_buffer.updates[-1][1])
-    assert int(first_buffer.updates[-1][0]) != int(first_buffer.updates[-1][1])
+    assert first._seed_state.snapshot().active == (True, False)
+    assert remapped._seed_state.snapshot().active == (False, True)
 
 
 @pytest.mark.parametrize("seed", [1234, torch.tensor(1234)])
-def test_runtime_scalar_seed_broadcasts_to_every_active_lane(seed):
+def test_runtime_scalar_seed_belongs_to_one_request_and_is_not_broadcast(seed):
     seed_buffer = FakeLazySeedBuffer()
     runtime = make_runtime(seed_buffer=seed_buffer)
     sampling_params = SamplingParams(
@@ -197,8 +262,12 @@ def test_runtime_scalar_seed_broadcasts_to_every_active_lane(seed):
     prepared = prepare(runtime, positions=(17, 17), sampling_params=sampling_params, reset=True)
     runtime._refresh_sampling_seeds(prepared)
 
-    assert prepared.sampling_seeds == (1234, 1234)
-    assert int(seed_buffer.updates[-1][0]) == int(seed_buffer.updates[-1][1])
+    assert prepared.prepared_sampling.seeds == (1234, None)
+    snapshot = runtime._seed_state.snapshot()
+    assert snapshot.request_seeds == (1234, None)
+    assert snapshot.active == (True, True)
+    assert snapshot.current_device_seeds[0] is not None
+    assert snapshot.current_device_seeds[1] is not None
 
 
 @pytest.mark.parametrize("seed", [[111, 222], torch.tensor([111, 222])])
@@ -213,7 +282,53 @@ def test_runtime_vector_seed_remains_slot_indexed(seed):
 
     prepared = prepare(runtime, positions=(5, 5), sampling_params=sampling_params, reset=True)
 
-    assert prepared.sampling_seeds == (111, 222)
+    assert prepared.prepared_sampling.seeds == (111, 222)
+
+
+def test_runtime_simultaneous_equal_request_seeds_receive_distinct_salts():
+    runtime = make_runtime(seed_buffer=FakeLazySeedBuffer())
+    prepared = prepare(
+        runtime,
+        positions=(5, 5),
+        sampling_params=seeded_sampling(77, 77),
+        reset=True,
+    )
+
+    runtime._refresh_sampling_seeds(prepared)
+
+    snapshot = runtime._seed_state.snapshot()
+    assert snapshot.request_seeds == (77, 77)
+    assert snapshot.salts == (0, 1)
+    assert snapshot.current_device_seeds[0] != snapshot.current_device_seeds[1]
+
+
+def test_runtime_slot_remap_moves_complete_seed_stream_before_refresh():
+    seed_buffer = FakeLazySeedBuffer()
+    runtime = make_runtime(seed_buffer=seed_buffer)
+    initial = prepare(
+        runtime,
+        positions=(5, -1),
+        sampling_params=seeded_sampling(77),
+        reset=True,
+    )
+    runtime._refresh_sampling_seeds(initial)
+    original_device_seed = int(seed_buffer.updates[-1][0])
+    original_state = runtime._seed_state.snapshot()
+
+    moved = prepare(
+        runtime,
+        positions=(-1, 5),
+        sampling_params=seeded_sampling(None, 77),
+        slot_remap=torch.tensor([0, 0]),
+        reset=False,
+    )
+    runtime._refresh_sampling_seeds(moved)
+
+    state = runtime._seed_state.snapshot()
+    assert state.active == (False, True)
+    assert state.request_seeds == (None, 77)
+    assert state.token_counters[1] == original_state.token_counters[0]
+    assert int(seed_buffer.updates[-1][1]) == original_device_seed
 
 
 def test_runtime_seed_changes_with_request_seed_and_decode_position():
@@ -236,7 +351,7 @@ def test_runtime_seed_changes_with_request_seed_and_decode_position():
     assert len({position_7, position_8, different_request}) == 3
 
 
-def test_runtime_seed_reset_restart_and_resume_use_absolute_position():
+def test_runtime_explicit_seed_absolute_position_is_stable_across_reset_boundaries():
     seed_buffer = FakeLazySeedBuffer()
     runtime = make_runtime(seed_buffer=seed_buffer)
     request = seeded_sampling(909)
@@ -281,7 +396,9 @@ def test_runtime_seed_refreshes_before_eager_model_invocation(monkeypatch):
 
     runtime.invoke(prepared)
 
-    assert events == ["seed", "invoke"]
+    assert events[-1] == "invoke"
+    assert events[:-1]
+    assert set(events[:-1]) == {"seed"}
 
 
 def test_runtime_trace_captures_stable_seed_handle_and_refreshes_before_replay(monkeypatch):
@@ -305,11 +422,18 @@ def test_runtime_trace_captures_stable_seed_handle_and_refreshes_before_replay(m
 
     persistent = runtime.capture_plan(prepared).prepare_inputs()
     assert persistent.seed_buffer is seed_buffer.get_device_buffer()
-    persistent = dataclasses.replace(persistent, kpt_signature=[prepared.sampling_values[:3]])
+    sampling = prepared.prepared_sampling
+    assert sampling is not None
+    persistent = dataclasses.replace(
+        persistent,
+        kpt_signature=[(sampling.top_k, sampling.top_p, sampling.temperature)],
+    )
     runtime.refresh_trace(persistent, prepared, SimpleNamespace(full=False, page_table=False))
     events.append("replay")
 
-    assert events == ["seed", "replay"]
+    assert events[-1] == "replay"
+    assert events[:-1]
+    assert set(events[:-1]) == {"seed"}
 
 
 def test_runtime_seed_handling_does_not_mutate_sampling_params():
@@ -324,34 +448,38 @@ def test_runtime_seed_handling_does_not_mutate_sampling_params():
     assert dataclasses.asdict(sampling_params) == before
 
 
-def test_runtime_seed_none_preserves_and_restores_exact_legacy_buffer_defaults():
+def test_runtime_unseeded_stream_varies_and_same_absolute_position_is_idempotent():
     seed_buffer = FakeLazySeedBuffer()
     defaults = seed_buffer.source.clone()
     runtime = make_runtime(seed_buffer=seed_buffer)
 
     unseeded = prepare(runtime, positions=(5, -1), sampling_params=stochastic_sampling(), reset=True)
     runtime._refresh_sampling_seeds(unseeded)
-    assert seed_buffer.updates == []
-    assert torch.equal(seed_buffer.source, defaults)
+    first = seed_buffer.updates[-1].clone()
+    first_state = runtime._seed_state.snapshot()
+    assert int(first[0]) != int(defaults[0])
+    assert int(first[1]) == int(defaults[1])
 
-    runtime._refresh_sampling_seeds(
-        prepare(runtime, positions=(5, -1), sampling_params=seeded_sampling(313), reset=True)
-    )
-    assert not torch.equal(seed_buffer.updates[-1], defaults)
-    runtime._refresh_sampling_seeds(unseeded)
-
-    assert torch.equal(seed_buffer.updates[-1], defaults)
-    assert torch.equal(seed_buffer.source, defaults)
-
-    update_count = len(seed_buffer.updates)
     runtime._refresh_sampling_seeds(dataclasses.replace(unseeded, reset_batch=False))
-    assert len(seed_buffer.updates) == update_count
-    assert torch.equal(seed_buffer.source, defaults)
+    repeated = seed_buffer.updates[-1].clone()
+    assert torch.equal(repeated, first)
+
+    advanced = prepare(
+        runtime,
+        positions=(6, -1),
+        sampling_params=stochastic_sampling(),
+        reset=False,
+    )
+    runtime._refresh_sampling_seeds(advanced)
+    snapshot = runtime._seed_state.snapshot()
+    assert snapshot.request_seeds == (None, None)
+    assert snapshot.active == (True, False)
+    assert snapshot.token_counters[0] == 2
+    assert snapshot.unseeded_rng_states[0] != first_state.unseeded_rng_states[0]
 
 
-def test_runtime_mixed_seeded_peer_does_not_reset_continuing_unseeded_lane():
+def test_runtime_seed_change_requires_reset_and_preserves_unseeded_survivor(expect_error):
     seed_buffer = FakeLazySeedBuffer()
-    defaults = seed_buffer.source.clone()
     runtime = make_runtime(seed_buffer=seed_buffer)
     unseeded = prepare(
         runtime,
@@ -360,7 +488,7 @@ def test_runtime_mixed_seeded_peer_does_not_reset_continuing_unseeded_lane():
         reset=True,
     )
     runtime._refresh_sampling_seeds(unseeded)
-    assert seed_buffer.updates == []
+    initial = runtime._seed_state.snapshot()
 
     mixed = prepare(
         runtime,
@@ -368,57 +496,48 @@ def test_runtime_mixed_seeded_peer_does_not_reset_continuing_unseeded_lane():
         sampling_params=stochastic_sampling(seed=[None, 42]),
         reset=False,
     )
-    runtime._refresh_sampling_seeds(mixed)
-    entered = seed_buffer.updates[-1].clone()
-    assert int(entered[0]) == int(defaults[0])
-    assert int(entered[1]) != int(defaults[1])
+    with expect_error(RuntimeError, "reset_batch=True"):
+        runtime._refresh_sampling_seeds(mixed)
+
+    runtime._refresh_sampling_seeds(dataclasses.replace(mixed, reset_batch=True))
+    admitted = runtime._seed_state.snapshot()
+    assert admitted.request_seeds == (None, 42)
+    assert admitted.active == (True, True)
+    assert admitted.token_counters[0] == initial.token_counters[0] + 1
 
     continued = dataclasses.replace(mixed, start_pos=torch.tensor([12, 12]))
     runtime._refresh_sampling_seeds(continued)
-    continued_values = seed_buffer.updates[-1].clone()
-    assert int(continued_values[0]) == int(defaults[0])
-    assert int(continued_values[1]) != int(entered[1])
-
-    peer_left = prepare(
-        runtime,
-        positions=(13, 13),
-        sampling_params=stochastic_sampling(seed=[None, None]),
-        reset=False,
-    )
-    runtime._refresh_sampling_seeds(peer_left)
-    leave_values = seed_buffer.updates[-1].clone()
-    assert torch.equal(leave_values, defaults)
-
-    update_count = len(seed_buffer.updates)
-    runtime._refresh_sampling_seeds(dataclasses.replace(peer_left, start_pos=torch.tensor([14, 14])))
-    assert len(seed_buffer.updates) == update_count
-    assert torch.equal(seed_buffer.source, defaults)
+    continued_state = runtime._seed_state.snapshot()
+    assert continued_state.token_counters[0] == admitted.token_counters[0] + 1
+    assert continued_state.request_seeds == (None, 42)
 
 
-def test_runtime_mixed_seeded_peer_honors_explicit_batch_reset_for_unseeded_lane():
+def test_runtime_inactive_peer_is_cleaned_up_without_readmitting_survivor():
     seed_buffer = FakeLazySeedBuffer()
     defaults = seed_buffer.source.clone()
     runtime = make_runtime(seed_buffer=seed_buffer)
     initial = prepare(
         runtime,
         positions=(20, 20),
-        sampling_params=stochastic_sampling(seed=[None, None]),
-        reset=True,
-    )
-    runtime._refresh_sampling_seeds(initial)
-    assert seed_buffer.updates == []
-
-    reset_with_peer = prepare(
-        runtime,
-        positions=(21, 21),
         sampling_params=stochastic_sampling(seed=[None, 42]),
         reset=True,
     )
-    runtime._refresh_sampling_seeds(reset_with_peer)
+    runtime._refresh_sampling_seeds(initial)
+    initial_state = runtime._seed_state.snapshot()
 
-    values = seed_buffer.updates[-1]
-    assert int(values[0]) == int(defaults[0])
-    assert int(values[1]) != int(defaults[1])
+    peer_left = prepare(
+        runtime,
+        positions=(21, -1),
+        sampling_params=stochastic_sampling(seed=[None, 42]),
+        reset=False,
+    )
+    runtime._refresh_sampling_seeds(peer_left)
+
+    state = runtime._seed_state.snapshot()
+    assert state.active == (True, False)
+    assert state.request_seeds == (None, None)
+    assert state.token_counters[0] == initial_state.token_counters[0] + 1
+    assert int(seed_buffer.updates[-1][1]) == int(defaults[1])
 
 
 @pytest.mark.parametrize(
@@ -432,6 +551,9 @@ def test_runtime_mixed_seeded_peer_honors_explicit_batch_reset_for_unseeded_lane
                 ("start_pos", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
                 ("page_table", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
                 ("sampling_params", inspect.Parameter.KEYWORD_ONLY, None),
+                ("prompt_tokens", inspect.Parameter.KEYWORD_ONLY, None),
+                ("output_tokens", inspect.Parameter.KEYWORD_ONLY, None),
+                ("slot_remap", inspect.Parameter.KEYWORD_ONLY, None),
                 ("reset_batch", inspect.Parameter.KEYWORD_ONLY, False),
             ),
         ),
@@ -492,6 +614,10 @@ def test_config_resolves_canonical_static_capabilities_and_is_frozen(expect_erro
     assert config.num_devices == 1
     assert config.vocab_size == 8
     assert config.allow_force_argmax
+    assert config.max_device_top_k == 32
+    assert config.sampling_batch_size == 2
+    assert config.sampling_state_controller is None
+    assert config.sampling_state is None
     assert config.position_feedback_capable
     with expect_error(dataclasses.FrozenInstanceError, "cannot assign to field"):
         config.lane_capacity = 1
@@ -622,10 +748,36 @@ def test_signatures_expose_ordered_material_and_separate_types():
         ("batch_size", 2),
         ("page_table_width", 8),
         ("sampling_path", "argmax"),
+        ("penalties_enabled", False),
+        ("logprobs_enabled", False),
         ("device_feedback", True),
     )
     assert trace.key_material() == program.key_material()
     assert runtime.program_signature(prepare(runtime)).sampling_path == "logits"
+
+
+def test_signature_tracks_native_penalty_and_sampled_logprob_program_modes():
+    runtime = make_runtime()
+    sampling = SamplingParams(
+        temperature=[0.0, 0.0],
+        top_k=[1, 1],
+        top_p=[1.0, 1.0],
+        presence_penalty=[0.5, 0.0],
+        enable_log_probs=[True, False],
+        num_logprobs=[0, -2],
+    )
+
+    prepared = prepare(runtime, sampling_params=sampling)
+    native = prepared.prepared_sampling
+    signature = runtime.program_signature(prepared)
+
+    assert native is not None
+    assert native.logprob_modes == ("sampled_token", "none")
+    assert native.penalties_enabled
+    assert native.log_probs_enabled
+    assert prepared.sampling_path == "topk"
+    assert signature.penalties_enabled
+    assert signature.logprobs_enabled
 
 
 def test_configured_topk_policy_is_not_collapsed_to_argmax_by_greedy_temperature():
@@ -644,21 +796,18 @@ def test_unconfigured_topk_values_use_argmax_for_greedy_temperature():
     assert prepare(runtime, sampling_params=sampling).sampling_path == "argmax"
 
 
-def test_sampling_values_are_formatted_once_during_prepare(monkeypatch):
+def test_sampling_params_are_prepared_once_and_reused_for_kpt(monkeypatch):
     runtime = make_runtime(force_greedy_top_k=True)
     calls = []
-    formatter = decode_module._formatted_sampling_values
+    formatter = decode_module.prepare_sampling_params
 
-    def formatter_spy(
-        sampling_params: SamplingParams,
-        batch_size: int,
-    ) -> tuple[tuple[int, ...], tuple[float, ...], tuple[float, ...], bool]:
-        calls.append((sampling_params, batch_size))
-        return formatter(sampling_params, batch_size)
+    def formatter_spy(*args, **kwargs):
+        calls.append((args, kwargs))
+        return formatter(*args, **kwargs)
 
     monkeypatch.setattr(
         decode_module,
-        "_formatted_sampling_values",
+        "prepare_sampling_params",
         formatter_spy,
     )
     prepared = prepare(runtime, sampling_params=greedy_sampling())
@@ -807,7 +956,15 @@ def test_capture_plan_describes_full_step_refresh_and_typed_persistent_inputs(mo
     monkeypatch.setattr(runtime, "_prepare_inputs_host", lambda request: "host")
     monkeypatch.setattr(runtime, "_stage_inputs_and_kpt", lambda host, request: (device, "kpt"))
 
-    def run_body(inputs, sampling_params, kpt, *, device_feedback):
+    def run_body(
+        inputs,
+        prepared,
+        kpt,
+        *,
+        device_feedback,
+        count_tokens=True,
+        advance_seeds=True,
+    ):
         return "captured"
 
     monkeypatch.setattr(runtime, "_run_body", run_body)
@@ -817,7 +974,11 @@ def test_capture_plan_describes_full_step_refresh_and_typed_persistent_inputs(mo
 
     assert persistent.device_inputs is device
     assert persistent.kpt == "kpt"
-    assert persistent.kpt_signature == [prepared.sampling_values[:3]]
+    sampling = prepared.prepared_sampling
+    assert sampling is not None
+    assert persistent.kpt_signature == [
+        (sampling.top_k, sampling.top_p, sampling.temperature)
+    ]
     assert plan.capture(persistent) == "captured"
     assert plan.refresh_policy.every_replay == ("sampling",)
     assert plan.refresh_policy.full_on_batch_reset
@@ -829,10 +990,12 @@ def test_capture_plan_describes_full_step_refresh_and_typed_persistent_inputs(mo
 def test_trace_refresh_skips_unchanged_sampling_values(monkeypatch):
     runtime = make_runtime(force_greedy_top_k=True)
     prepared = prepare(runtime, sampling_params=greedy_sampling())
+    sampling = prepared.prepared_sampling
+    assert sampling is not None
     persistent = DecodePersistentInputs(
         device_inputs=DecodeDeviceInputs("tokens", "positions", "rotary", "page_table"),
         kpt="kpt",
-        kpt_signature=[prepared.sampling_values[:3]],
+        kpt_signature=[(sampling.top_k, sampling.top_p, sampling.temperature)],
     )
 
     def fail_refresh_kpt(device_kpt, prepared):
@@ -857,7 +1020,8 @@ def test_eager_invoke_returns_owned_result_and_advances_submission_state(monkeyp
     monkeypatch.setattr(
         runtime,
         "_run_body",
-        lambda inputs, sampling, kpt, *, device_feedback: calls.append(device_feedback) or ("raw", None),
+        lambda inputs, prepared, kpt, *, device_feedback, **kwargs: calls.append(device_feedback)
+        or ("raw", None),
     )
 
     result = runtime.invoke(prepared)
@@ -883,6 +1047,22 @@ def test_blocking_consume_normalizes_logits_and_releases_owned_values(monkeypatc
     assert logits.shape == (2, 1, 8)
     assert log_probs == "probs"
     assert released == ["owned"]
+
+
+def test_sampled_token_logprobs_are_flattened_to_lane_row_order():
+    runtime = make_runtime()
+    host_tokens = torch.tensor([[[[7], [8]]]], dtype=torch.int32)
+    host_log_probs = torch.tensor([[[[-0.25, -0.75]]]], dtype=torch.bfloat16)
+
+    tokens, log_probs = runtime._normalize_host_output(
+        (host_tokens, host_log_probs),
+        is_tokens=True,
+    )
+
+    assert tokens.tolist() == [7, 8]
+    assert tokens.dtype == torch.int64
+    assert log_probs.tolist() == pytest.approx([-0.25, -0.75])
+    assert log_probs.dtype == torch.float32
 
 
 def test_raw_blocking_and_async_leases_release_exact_records(monkeypatch):

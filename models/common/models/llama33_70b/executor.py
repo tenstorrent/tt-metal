@@ -23,7 +23,8 @@ from models.common.llm_runtime.trace_compiler import TraceCompiler
 from models.common.llm_runtime.warmup import WarmupCoordinator, WarmupCoordinatorConfig
 from models.common.models.llama33_70b.hf_adaptor import Llama33_70BForCausalLM
 from models.common.modules.sampling.sampling_1d import Sampling1D
-from models.common.sampling import SamplingParams
+from models.common.modules.sampling.sampling_state_1d import SamplingState1D
+from models.common.sampling.sampling_params import SamplingParams
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,10 @@ class Llama33_70BExecutor:
             is_resolved = getattr(getattr(sampling, "config", None), "is_resolved", None)
             if not callable(is_resolved) or not is_resolved():
                 raise ValueError("model.sampling must have a resolved Sampling1DConfig")
+        self.sampling_state_controller = SamplingState1D(sampling) if config.device_sampling_enabled else None
+        self.sampling_state = (
+            self.sampling_state_controller.create_state() if self.sampling_state_controller is not None else None
+        )
 
         self.kv_cache_manager = PagedKVCacheManager(model, config.paged_kv_cache)
         self.page_table_layout = self._resolve_page_table_layout()
@@ -112,9 +117,13 @@ class Llama33_70BExecutor:
                 device_sampling_enabled=config.device_sampling_enabled,
                 can_enable_trace=runtime_config.can_enable_trace,
                 supports_batched_prefill=bool(runtime_config.supports_batched_prefill),
-                disable_batched_prefill=bool(runtime_config.disable_batched_prefill),
+                disable_batched_prefill=(
+                    bool(runtime_config.disable_batched_prefill) or config.device_sampling_enabled
+                ),
                 max_prefill_batch_size=int(runtime_config.max_prefill_batch_size),
                 batched_prefill_batched_extract=bool(runtime_config.batched_prefill_batched_extract),
+                sampling_state_controller=self.sampling_state_controller,
+                sampling_state=self.sampling_state,
             )
         )
         self.decode_runtime = DecodeRuntime(
@@ -125,6 +134,8 @@ class Llama33_70BExecutor:
                 page_table_layout=self.page_table_layout,
                 device_sampling_enabled=config.device_sampling_enabled,
                 force_greedy_top_k=config.warmup.include_decode_top_k,
+                sampling_state_controller=self.sampling_state_controller,
+                sampling_state=self.sampling_state,
             )
         )
         self.program_compiler = ProgramCompiler(mesh_device, lambda: self.kv_cache_manager.bound_context)
@@ -270,6 +281,9 @@ class Llama33_70BExecutor:
         empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
         kv_cache: Any = None,  # ↓ Borrowed resources
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
     ) -> None:
         """Compile prefill on the supplied eager or traced execution target."""
@@ -284,6 +298,9 @@ class Llama33_70BExecutor:
             start_pos=start_pos,
             empty_slots=empty_slots,
             sampling_params=sampling_params,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
         )
 
     def compile_decode(
@@ -294,6 +311,9 @@ class Llama33_70BExecutor:
         page_table: torch.Tensor,
         kv_cache: Any = None,  # ↓ Borrowed resources
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         reset_batch: bool = False,  # ↓ State transition
         execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
     ) -> None:
@@ -307,6 +327,9 @@ class Llama33_70BExecutor:
             start_pos=start_pos,
             page_table=page_table,
             sampling_params=sampling_params,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
             reset_batch=reset_batch,
         )
 
@@ -320,6 +343,9 @@ class Llama33_70BExecutor:
         empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
         kv_cache: Any = None,  # ↓ Borrowed resources
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
     ) -> Any:
         """Validate ownership and execute one prefill call."""
@@ -334,6 +360,9 @@ class Llama33_70BExecutor:
             start_pos=start_pos,
             empty_slots=empty_slots,
             sampling_params=sampling_params,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
         )
 
     def decode_forward(
@@ -344,6 +373,9 @@ class Llama33_70BExecutor:
         *,
         kv_cache: Any = None,  # ↓ Borrowed resources
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         reset_batch: bool = False,  # ↓ State transition
         read_from_device: bool = True,  # ↓ Output policy
         execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
@@ -358,6 +390,9 @@ class Llama33_70BExecutor:
             start_pos=start_pos,
             page_table=page_table,
             sampling_params=sampling_params,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
             reset_batch=reset_batch,
             read_from_device=read_from_device,
         )
@@ -450,6 +485,7 @@ class Llama33_70BExecutor:
             actions.append(self.trace_compiler.cleanup)
         actions.append(self.program_compiler.cleanup)
         if self.config.device_sampling_enabled:
+            actions.append(lambda: self.sampling_state_controller.release(self.sampling_state))
             actions.append(self.model.sampling.release)
         actions.append(self.kv_cache_manager.release)
 

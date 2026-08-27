@@ -662,6 +662,7 @@ def _device_sampling_executor(binding, monkeypatch, *, runtime_disable: bool):
             is_resolved=lambda: True,
             allow_force_argmax=False,
             max_batch_size=32,
+            max_top_k=32,
         )
 
         def decode_forward(self):
@@ -670,6 +671,25 @@ def _device_sampling_executor(binding, monkeypatch, *, runtime_disable: bool):
     monkeypatch.setattr(binding.executor_module, "Sampling1D", FakeSampling1D)
     model = binding.make_model()
     model.sampling = FakeSampling1D()
+    if binding.executor_module in (llama33_70b_executor, qwen3_32b_executor):
+        class FakeSamplingState1D:
+            def __init__(self, sampling):
+                self.sampling = sampling
+                self.seed_manager = SimpleNamespace()
+
+            def create_state(self):
+                return SimpleNamespace(seed_state=SimpleNamespace(capacity=32))
+
+            def admit(self, *args, **kwargs):
+                return None
+
+            def decode_forward(self, *args, **kwargs):
+                return None
+
+            def release(self, *args, **kwargs):
+                return None
+
+        monkeypatch.setattr(binding.executor_module, "SamplingState1D", FakeSamplingState1D)
     runtime_config = binding.make_runtime_config()
     runtime_config.disable_batched_prefill = runtime_disable
     config = replace(
@@ -688,7 +708,7 @@ def _device_sampling_executor(binding, monkeypatch, *, runtime_disable: bool):
     ],
     ids=("device-sampled-batched", "runtime-disabled", "environment-disabled"),
 )
-def test_device_sampling_does_not_implicitly_disable_batched_prefill(
+def test_device_sampling_prefill_batch_policy_is_model_owned(
     binding,
     monkeypatch,
     runtime_disable,
@@ -712,6 +732,8 @@ def test_device_sampling_does_not_implicitly_disable_batched_prefill(
         empty_slots=[0, 1],
     )
 
+    if binding.executor_module in (llama33_70b_executor, qwen3_32b_executor):
+        expected_kinds = ("single", "single")
     assert tuple(item.request.kind for item in prepared) == expected_kinds
     if expected_kinds == ("batched",):
         assert prepared[0].request.source_rows == (0, 1)
@@ -765,23 +787,56 @@ def test_llama32_1b_warms_every_q128_topk_tile_start_once_per_execution_mode():
                 "empty_slots",
                 "kv_cache",
                 "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
                 "execution",
             ],
         ),
         (
             "compile_decode",
             ["self"],
-            ["tokens", "start_pos", "page_table", "kv_cache", "sampling_params", "reset_batch", "execution"],
+            [
+                "tokens",
+                "start_pos",
+                "page_table",
+                "kv_cache",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+                "reset_batch",
+                "execution",
+            ],
         ),
         (
             "prefill_forward",
             ["self", "tokens", "page_table"],
-            ["prompt_lens", "start_pos", "empty_slots", "kv_cache", "sampling_params", "execution"],
+            [
+                "prompt_lens",
+                "start_pos",
+                "empty_slots",
+                "kv_cache",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+                "execution",
+            ],
         ),
         (
             "decode_forward",
             ["self", "tokens", "start_pos", "page_table"],
-            ["kv_cache", "sampling_params", "reset_batch", "read_from_device", "execution"],
+            [
+                "kv_cache",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+                "reset_batch",
+                "read_from_device",
+                "execution",
+            ],
         ),
         ("read_decode_output", ["self", "tt_out"], ["async_read"]),
         ("process_decode_output_host", ["self", "tt_out"], ["is_tokens"]),
@@ -795,6 +850,10 @@ def test_llama32_1b_warms_every_q128_topk_tile_start_once_per_execution_mode():
     ],
 )
 def test_executor_call_contract(binding, method, positional, keyword_only):
+    if binding.executor_module not in (llama33_70b_executor, qwen3_32b_executor):
+        keyword_only = [
+            name for name in keyword_only if name not in {"prompt_tokens", "output_tokens", "slot_remap"}
+        ]
     signature = inspect.signature(getattr(binding.executor_class, method))
     parameters = signature.parameters
     required = {
@@ -1349,7 +1408,7 @@ def test_executor_cleanup_is_ordered_retryable_and_idempotent(binding, expect_er
         def __init__(self, name):
             self.name = name
 
-        def cleanup(self):
+        def cleanup(self, *args):
             calls.append(self.name)
             if self.name in failures:
                 raise RuntimeError(self.name)
@@ -1369,6 +1428,8 @@ def test_executor_cleanup_is_ordered_retryable_and_idempotent(binding, expect_er
     executor.program_compiler = _Owner("program")
     executor.config = SimpleNamespace(device_sampling_enabled=True)
     executor.model = SimpleNamespace(sampling=_Owner("sampling"))
+    executor.sampling_state_controller = _Owner("sampling-state")
+    executor.sampling_state = object()
     executor.kv_cache_manager = _Owner("kv")
 
     with expect_error(RuntimeError, "reader") as raised:
@@ -1381,9 +1442,10 @@ def test_executor_cleanup_is_ordered_retryable_and_idempotent(binding, expect_er
         "decode-external",
         "trace",
         "program",
-        "sampling",
-        "kv",
     ]
+    if binding.executor_module in (llama33_70b_executor, qwen3_32b_executor):
+        expected_order.append("sampling-state")
+    expected_order.extend(["sampling", "kv"])
     assert calls == expected_order
     assert tuple(error.args[0] for error in raised.value.cleanup_failures) == ("trace",)
     assert executor.terminal

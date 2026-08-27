@@ -69,6 +69,9 @@ class _Lane:
         empty_slots=None,
         kv_cache=None,
         sampling_params=None,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
         execution=None,
     ):
         self._call(
@@ -81,6 +84,9 @@ class _Lane:
                 "empty_slots": empty_slots,
                 "kv_cache": kv_cache,
                 "sampling_params": sampling_params,
+                "prompt_tokens": prompt_tokens,
+                "output_tokens": output_tokens,
+                "slot_remap": slot_remap,
                 "execution": execution,
             },
         )
@@ -93,6 +99,9 @@ class _Lane:
         page_table,
         kv_cache=None,
         sampling_params=None,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
         reset_batch=False,
         execution=None,
     ):
@@ -104,6 +113,9 @@ class _Lane:
                 "page_table": page_table,
                 "kv_cache": kv_cache,
                 "sampling_params": sampling_params,
+                "prompt_tokens": prompt_tokens,
+                "output_tokens": output_tokens,
+                "slot_remap": slot_remap,
                 "reset_batch": reset_batch,
                 "execution": execution,
             },
@@ -150,6 +162,9 @@ class _Lane:
         empty_slots=None,
         kv_cache=None,
         sampling_params=None,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
         execution=None,
     ):
         kwargs = {
@@ -160,6 +175,9 @@ class _Lane:
             "empty_slots": empty_slots,
             "kv_cache": kv_cache,
             "sampling_params": sampling_params,
+            "prompt_tokens": prompt_tokens,
+            "output_tokens": output_tokens,
+            "slot_remap": slot_remap,
             "execution": execution,
         }
         self._call("prefill", kwargs)
@@ -176,6 +194,9 @@ class _Lane:
         *,
         kv_cache=None,
         sampling_params=None,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
         reset_batch=False,
         read_from_device=True,
         execution=None,
@@ -186,6 +207,9 @@ class _Lane:
             "page_table": page_table,
             "kv_cache": kv_cache,
             "sampling_params": sampling_params,
+            "prompt_tokens": prompt_tokens,
+            "output_tokens": output_tokens,
+            "slot_remap": slot_remap,
             "reset_batch": reset_batch,
             "read_from_device": read_from_device,
             "execution": execution,
@@ -255,6 +279,9 @@ _PUBLIC_SIGNATURES = {
         ("empty_slots", _KEYWORD_ONLY, None),
         ("kv_cache", _KEYWORD_ONLY, None),
         ("sampling_params", _KEYWORD_ONLY, None),
+        ("prompt_tokens", _KEYWORD_ONLY, None),
+        ("output_tokens", _KEYWORD_ONLY, None),
+        ("slot_remap", _KEYWORD_ONLY, None),
         ("execution", _KEYWORD_ONLY, None),
     ),
     "compile_decode": (
@@ -263,6 +290,9 @@ _PUBLIC_SIGNATURES = {
         ("page_table", _POSITIONAL, _REQUIRED),
         ("kv_cache", _KEYWORD_ONLY, None),
         ("sampling_params", _KEYWORD_ONLY, None),
+        ("prompt_tokens", _KEYWORD_ONLY, None),
+        ("output_tokens", _KEYWORD_ONLY, None),
+        ("slot_remap", _KEYWORD_ONLY, None),
         ("reset_batch", _KEYWORD_ONLY, False),
         ("execution", _KEYWORD_ONLY, None),
     ),
@@ -286,6 +316,9 @@ _PUBLIC_SIGNATURES = {
         ("empty_slots", _KEYWORD_ONLY, None),
         ("kv_cache", _KEYWORD_ONLY, None),
         ("sampling_params", _KEYWORD_ONLY, None),
+        ("prompt_tokens", _KEYWORD_ONLY, None),
+        ("output_tokens", _KEYWORD_ONLY, None),
+        ("slot_remap", _KEYWORD_ONLY, None),
         ("execution", _KEYWORD_ONLY, None),
     ),
     "can_trace_prefill": (
@@ -300,6 +333,9 @@ _PUBLIC_SIGNATURES = {
         ("page_table", _POSITIONAL, _REQUIRED),
         ("kv_cache", _KEYWORD_ONLY, None),
         ("sampling_params", _KEYWORD_ONLY, None),
+        ("prompt_tokens", _KEYWORD_ONLY, None),
+        ("output_tokens", _KEYWORD_ONLY, None),
+        ("slot_remap", _KEYWORD_ONLY, None),
         ("reset_batch", _KEYWORD_ONLY, False),
         ("read_from_device", _KEYWORD_ONLY, True),
         ("execution", _KEYWORD_ONLY, None),
@@ -337,6 +373,9 @@ def test_prefill_routes_global_slots_and_restores_source_row_order():
         empty_slots=[3, 0, 2],
         prompt_lens=torch.tensor([1, 1, 1]),
         sampling_params=_sampling(),
+        prompt_tokens=torch.tensor([[100], [101], [102], [103]]),
+        output_tokens=[[200], [201], [202], [203]],
+        slot_remap=torch.tensor([0, 1, 2, 3]),
         kv_cache=["kv-0", "kv-1"],
     )
 
@@ -356,8 +395,46 @@ def test_prefill_routes_global_slots_and_restores_source_row_order():
     assert lane0_kwargs["sampling_params"].top_k.tolist() == [2]
     assert lane1_kwargs["sampling_params"].top_k.tolist() == [1, 3]
     assert lane0_kwargs["sampling_params"].top_p == 0.9
+    assert lane0_kwargs["prompt_tokens"].flatten().tolist() == [100, -1]
+    assert lane1_kwargs["prompt_tokens"].flatten().tolist() == [102, 103]
+    assert lane0_kwargs["output_tokens"] == [[200], [-1]]
+    assert lane1_kwargs["output_tokens"] == [[202], [203]]
+    assert lane0_kwargs["slot_remap"].tolist() == [0, 1]
+    assert lane1_kwargs["slot_remap"].tolist() == [0, 1]
     assert lane0_kwargs["kv_cache"] == "kv-0"
     assert lane1_kwargs["kv_cache"] == "kv-1"
+
+
+def test_prefill_log_probs_restore_source_rows_and_fill_nonrequesting_lane():
+    lanes = [_Lane(0), _Lane(1)]
+
+    def prefill_with_log_probs(
+        tokens,
+        page_table,
+        *,
+        prompt_lens=None,
+        start_pos=None,
+        empty_slots=None,
+        kv_cache=None,
+        sampling_params=None,
+        execution=None,
+    ):
+        assert tokens.shape[0] == 2
+        return torch.zeros(2, dtype=torch.int64), torch.tensor([0.25, 0.75])
+
+    lanes[1].prefill_forward = prefill_with_log_probs
+    group = LaneGroupExecutor(lanes)
+
+    output, log_probs = group.prefill_forward(
+        tokens=torch.tensor([[10], [11], [12]]),
+        page_table=torch.tensor([[0], [1], [2]], dtype=torch.int32),
+        empty_slots=[3, 0, 2],
+        sampling_params=_sampling(),
+    )
+
+    assert output.tolist() == [0, 11, 0]
+    assert isinstance(log_probs, torch.Tensor)
+    assert log_probs.tolist() == [0.25, 1.0, 0.75]
 
 
 def test_decode_slices_fixed_lane_capacity_and_normalizes_sampled_tokens():
@@ -369,6 +446,9 @@ def test_decode_slices_fixed_lane_capacity_and_normalizes_sampled_tokens():
         torch.tensor([1, 2, 3, 4]),
         torch.arange(4, dtype=torch.int32).view(4, 1),
         sampling_params=_sampling(),
+        prompt_tokens=torch.tensor([[100], [101], [102], [103]]),
+        output_tokens=[[200], [201], [202], [203]],
+        slot_remap=torch.tensor([1, 0, 3, 2]),
         kv_cache=["kv-0", "kv-1"],
         reset_batch=True,
     )
@@ -382,6 +462,12 @@ def test_decode_slices_fixed_lane_capacity_and_normalizes_sampled_tokens():
     assert lane1_kwargs["tokens"].tolist() == [12, 13]
     assert lane0_kwargs["sampling_params"].temperature == [0.1, 0.2]
     assert lane1_kwargs["sampling_params"].temperature == [0.3, 0.4]
+    assert lane0_kwargs["prompt_tokens"].flatten().tolist() == [100, 101]
+    assert lane1_kwargs["prompt_tokens"].flatten().tolist() == [102, 103]
+    assert lane0_kwargs["output_tokens"] == [[200], [201]]
+    assert lane1_kwargs["output_tokens"] == [[202], [203]]
+    assert lane0_kwargs["slot_remap"].tolist() == [1, 0]
+    assert lane1_kwargs["slot_remap"].tolist() == [1, 0]
     assert lane0_kwargs["reset_batch"] is lane1_kwargs["reset_batch"] is True
 
 
@@ -948,7 +1034,7 @@ def test_operation_failure_is_primary_group_becomes_terminal_and_all_lanes_clean
         group.allocate_kv_cache()
 
 
-def test_non_null_lane_log_probs_fail_explicitly_and_cleanup_group(expect_error):
+def test_non_null_lane_log_probs_are_aggregated_in_global_row_order():
     lanes = [_Lane(0), _Lane(1)]
 
     def decode_with_log_probs(
@@ -962,20 +1048,21 @@ def test_non_null_lane_log_probs_fail_explicitly_and_cleanup_group(expect_error)
         read_from_device=True,
         execution=None,
     ):
-        return torch.zeros(2, dtype=torch.int64), torch.ones(2)
+        return torch.zeros(2, dtype=torch.int64), torch.tensor([0.25, 0.75])
 
     lanes[1].decode_forward = decode_with_log_probs
     group = LaneGroupExecutor(lanes)
 
-    with expect_error(NotImplementedError, "log probabilities"):
-        group.decode_forward(
-            tokens=torch.tensor([0, 1, 2, 3]),
-            start_pos=torch.tensor([0, 0, 0, 0]),
-            page_table=torch.zeros((4, 1), dtype=torch.int32),
-            sampling_params=_sampling(),
-        )
+    output, log_probs = group.decode_forward(
+        tokens=torch.tensor([0, 1, 2, 3]),
+        start_pos=torch.tensor([0, 0, 0, 0]),
+        page_table=torch.zeros((4, 1), dtype=torch.int32),
+        sampling_params=_sampling(),
+    )
 
-    assert [lane.cleanup_calls for lane in lanes] == [1, 1]
+    assert output.tolist() == [0, 1, 102, 103]
+    assert isinstance(log_probs, torch.Tensor)
+    assert log_probs.tolist() == [1.0, 1.0, 0.25, 0.75]
 
 
 def test_cleanup_is_idempotent_and_terminal(expect_error):

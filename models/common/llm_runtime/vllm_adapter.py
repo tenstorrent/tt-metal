@@ -16,18 +16,16 @@ from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig
 from models.common.llm_runtime.paged_kv_cache import torch_dtype_for_ttnn
 
 # These plugin fields are meaningful to other model families, but the registered
-# text-only TTTv2 Llama path does not implement their hybrid-cache, penalty-state,
-# batch-remap, or mRoPE semantics. Preserve the pre-refactor behavior by accepting
-# and discarding only this reviewed set at the external boundary.
+# text-only TTTv2 paths do not implement their hybrid-cache or mRoPE semantics.
+# Sampling history and slot-remap fields are intentionally *not* ignored: they
+# carry request-owned penalty and RNG lifecycle state through the common runtime.
 _IGNORED_VLLM_KWARGS = frozenset(
     {
         "page_tables_per_layer",
-        "prompt_tokens",
-        "output_tokens",
-        "slot_remap",
         "rope_deltas_all_users",
     }
 )
+_SAMPLING_STATE_VLLM_KWARGS = frozenset({"prompt_tokens", "output_tokens", "slot_remap"})
 
 
 class NormalizedPrefillKwargs(TypedDict):
@@ -38,6 +36,9 @@ class NormalizedPrefillKwargs(TypedDict):
     empty_slots: Sequence[int] | None  # ↓ Lane routing
     kv_cache: Any  # ↓ Borrowed resources
     sampling_params: Any  # ↓ Sampling
+    prompt_tokens: Any  # ↓ Request-owned sampling state
+    output_tokens: Any
+    slot_remap: Any
 
 
 class NormalizedDecodeKwargs(TypedDict):
@@ -46,6 +47,9 @@ class NormalizedDecodeKwargs(TypedDict):
     page_table: torch.Tensor
     kv_cache: Any  # ↓ Borrowed resources
     sampling_params: Any  # ↓ Sampling
+    prompt_tokens: Any  # ↓ Request-owned sampling state
+    output_tokens: Any
+    slot_remap: Any
     reset_batch: bool  # ↓ State transition
 
 
@@ -146,6 +150,9 @@ class VLLMAdapter:
             "empty_slots": empty_slots,
             "kv_cache": kv_cache,
             "sampling_params": sampling_params,
+            "prompt_tokens": _compatibility_value(compatibility_kwargs, "prompt_tokens"),
+            "output_tokens": _compatibility_value(compatibility_kwargs, "output_tokens"),
+            "slot_remap": _compatibility_value(compatibility_kwargs, "slot_remap"),
         }
         _normalize_tensor(normalized, "tokens", torch.long)
         _normalize_tensor(normalized, "page_table", torch.int32)
@@ -175,6 +182,9 @@ class VLLMAdapter:
             "page_table": page_table,
             "kv_cache": kv_cache,
             "sampling_params": sampling_params,
+            "prompt_tokens": _compatibility_value(compatibility_kwargs, "prompt_tokens"),
+            "output_tokens": _compatibility_value(compatibility_kwargs, "output_tokens"),
+            "slot_remap": _compatibility_value(compatibility_kwargs, "slot_remap"),
             "reset_batch": reset_batch,
         }
         _normalize_tensor(normalized, "tokens", torch.long)
@@ -250,7 +260,8 @@ class VLLMAdapter:
             return
         if not isinstance(compatibility_kwargs, Mapping):
             raise TypeError("compatibility_kwargs must be a mapping")
-        unknown_keys = sorted(key for key in compatibility_kwargs if key not in _IGNORED_VLLM_KWARGS)
+        supported_keys = _IGNORED_VLLM_KWARGS | _SAMPLING_STATE_VLLM_KWARGS
+        unknown_keys = sorted(key for key in compatibility_kwargs if key not in supported_keys)
         if unknown_keys:
             raise TypeError(f"{operation} got an unexpected keyword argument {unknown_keys[0]!r}")
 
@@ -322,6 +333,12 @@ def _validate_resolved_adapter_config(config: VLLMAdapterConfig) -> None:
 def _require_resolved_positive_int(name: str, value: Any) -> None:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
+
+
+def _compatibility_value(compatibility_kwargs: Mapping[str, Any] | None, name: str) -> Any:
+    if compatibility_kwargs is None:
+        return None
+    return compatibility_kwargs.get(name)
 
 
 def _normalize_tensor(kwargs: dict[str, Any], name: str, dtype: torch.dtype) -> None:

@@ -23,7 +23,6 @@ from models.common.llm_runtime.prefill.postprocess import (
     without_borrowed,
 )
 from models.common.llm_runtime.prefill.result_collector import InvocationResult
-from models.common.llm_runtime.prefill.sampling_helpers import _formatted_sampling_values
 from models.common.llm_runtime.prefill.signatures import (
     PrefillTraceSignature,
     PreparedPrefill,
@@ -249,11 +248,12 @@ class PrefillTraceLifecycle:
             )
             position_inputs = PrefillPositionInputs(*position_values)
             kpt = self.hooks.postprocessor.make_device_kpt(
-                prepared.sampling_params,
+                self.hooks.postprocessor.prepared_sampling(prepared),
                 sampling_batch_size,
                 force_topk=prepared.sampling_path == "topk",
             )
-            if prepared.sampling_params is not None:
+            prepared_sampling = self.hooks.postprocessor.prepared_sampling(prepared)
+            if prepared_sampling is not None:
                 sampled_output = self.hooks.postprocessor.make_sampling_output(
                     self.hooks.postprocessor.sampling_output_rows(prepared)
                 )
@@ -262,9 +262,8 @@ class PrefillTraceLifecycle:
             attach_cleanup_failures(primary, failures)
             raise
         kpt_signature = None
-        if prepared.sampling_params is not None:
-            k, p, temperature, _ = _formatted_sampling_values(prepared.sampling_params, sampling_batch_size)
-            kpt_signature = k, p, temperature
+        if prepared_sampling is not None:
+            kpt_signature = self.hooks.postprocessor.kpt_values(prepared_sampling, sampling_batch_size)
         return PrefillReplayState(
             position_inputs=position_inputs,
             kpt=kpt,

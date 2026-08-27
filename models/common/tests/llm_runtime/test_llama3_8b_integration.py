@@ -125,9 +125,32 @@ def test_executor_resolves_batched_prefill_policy(
         class _Sampling:
             pass
 
+        class _SamplingState:
+            def __init__(self, sampling):
+                self.sampling = sampling
+                self.seed_manager = SimpleNamespace()
+
+            def create_state(self):
+                return SimpleNamespace(seed_state=SimpleNamespace(capacity=32))
+
+            def admit(self, *args, **kwargs):
+                return None
+
+            def decode_forward(self, *args, **kwargs):
+                return None
+
+            def release(self, *args, **kwargs):
+                return None
+
         monkeypatch.setattr(llama_executor, "Sampling1D", _Sampling)
+        monkeypatch.setattr(llama_executor, "SamplingState1D", _SamplingState)
         sampler = _Sampling()
-        sampler.config = SimpleNamespace(is_resolved=lambda: True, allow_force_argmax=True, max_batch_size=32)
+        sampler.config = SimpleNamespace(
+            is_resolved=lambda: True,
+            allow_force_argmax=True,
+            max_batch_size=32,
+            max_top_k=32,
+        )
         model.sampling = sampler
 
     executor = llama_executor.Llama3Executor(model, runtime_config, config)
@@ -192,6 +215,9 @@ def test_model_owned_executor_constructs_exact_composition(mode):
                 "empty_slots",
                 "kv_cache",
                 "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
                 "execution",
             ),
         ),
@@ -204,6 +230,9 @@ def test_model_owned_executor_constructs_exact_composition(mode):
                 "page_table",
                 "kv_cache",
                 "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
                 "reset_batch",
                 "execution",
             ),
@@ -217,13 +246,25 @@ def test_model_owned_executor_constructs_exact_composition(mode):
                 "empty_slots",
                 "kv_cache",
                 "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
                 "execution",
             ),
         ),
         (
             "decode_forward",
             ("self", "tokens", "start_pos", "page_table"),
-            ("kv_cache", "sampling_params", "reset_batch", "read_from_device", "execution"),
+            (
+                "kv_cache",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+                "reset_batch",
+                "read_from_device",
+                "execution",
+            ),
         ),
         ("read_decode_output", ("self", "tt_out"), ("async_read",)),
         ("process_decode_output_host", ("self", "tt_out"), ("is_tokens",)),
@@ -351,19 +392,58 @@ def test_model_owned_executor_validates_cache_then_omits_it_from_execution():
     for target, expected_names in (
         (
             execution.compile_prefill,
-            ("tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "sampling_params"),
+            (
+                "tokens",
+                "page_table",
+                "prompt_lens",
+                "start_pos",
+                "empty_slots",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+            ),
         ),
         (
             execution.compile_decode,
-            ("tokens", "start_pos", "page_table", "sampling_params", "reset_batch"),
+            (
+                "tokens",
+                "start_pos",
+                "page_table",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+                "reset_batch",
+            ),
         ),
         (
             execution.prefill_forward,
-            ("tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "sampling_params"),
+            (
+                "tokens",
+                "page_table",
+                "prompt_lens",
+                "start_pos",
+                "empty_slots",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+            ),
         ),
         (
             execution.decode_forward,
-            ("tokens", "start_pos", "page_table", "sampling_params", "reset_batch", "read_from_device"),
+            (
+                "tokens",
+                "start_pos",
+                "page_table",
+                "sampling_params",
+                "prompt_tokens",
+                "output_tokens",
+                "slot_remap",
+                "reset_batch",
+                "read_from_device",
+            ),
         ),
     ):
         assert target.call_count == 1
@@ -601,7 +681,7 @@ def test_model_owned_cleanup_is_ordered_best_effort_retryable_and_idempotent(exp
         def __init__(self, name):
             self.name = name
 
-        def cleanup(self):
+        def cleanup(self, *args):
             calls.append(self.name)
             if self.name in failures:
                 raise RuntimeError(self.name)
@@ -621,6 +701,8 @@ def test_model_owned_cleanup_is_ordered_best_effort_retryable_and_idempotent(exp
     executor.program_compiler = _Owner("program")
     executor.config = SimpleNamespace(device_sampling_enabled=True)
     executor.model = SimpleNamespace(sampling=_Owner("sampling"))
+    executor.sampling_state_controller = _Owner("sampling-state")
+    executor.sampling_state = object()
     executor.kv_cache_manager = _Owner("kv")
 
     with expect_error(RuntimeError, "reader") as raised:
@@ -633,6 +715,7 @@ def test_model_owned_cleanup_is_ordered_best_effort_retryable_and_idempotent(exp
         "decode-external",
         "trace",
         "program",
+        "sampling-state",
         "sampling",
         "kv",
     ]
@@ -828,6 +911,9 @@ class _RecordingTarget:
         empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
         kv_cache: Any = None,  # ↓ Borrowed resources
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch
     ) -> str:
         return self._record("prefill_forward", locals())
@@ -840,6 +926,9 @@ class _RecordingTarget:
         *,
         kv_cache: Any = None,  # ↓ Borrowed resources
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         reset_batch: bool = False,  # ↓ State transition
         read_from_device: bool = True,  # ↓ Output policy
         execution: EagerExecutor | TracedExecutor | None = None,  # ↓ Internal dispatch

@@ -75,6 +75,7 @@ class Llama33_70BGenerator:
         "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
         "accepts_trace_mode": True,
     }
     requires_prefill_trace_warmup = True

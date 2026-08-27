@@ -42,7 +42,8 @@ from models.common.llm_runtime.tensor_resources import (
     raise_cleanup_failures,
     release_orphans,
 )
-from models.common.sampling import SamplingParams
+from models.common.modules.sampling.params import prepare_sampling_params
+from models.common.sampling.sampling_params import SamplingParams
 
 
 class PrefillRuntime:
@@ -63,6 +64,8 @@ class PrefillRuntime:
         if not isinstance(config, PrefillRuntimeConfig):
             raise TypeError("config must be a PrefillRuntimeConfig")
         self.config = config
+        self._sampling_state_controller = config.sampling_state_controller
+        self._sampling_state = config.sampling_state
         self._transient_orphans: list[TensorResourceOrphan] = []
         self.inputs = PrefillInputStager(
             model=config.model,
@@ -165,6 +168,9 @@ class PrefillRuntime:
         start_pos: torch.Tensor | None = None,
         empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
         sampling_params: SamplingParams | None = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
     ) -> tuple[PreparedPrefill, ...]:
         """Plan host inputs once and return immutable requests for execution.
 
@@ -201,22 +207,61 @@ class PrefillRuntime:
             canonical_page_table_width=layout.prefill_width,
         )
         prepared = []
+        pending_slot_remap = slot_remap
+        input_slots = list(range(int(tokens.shape[0]))) if empty_slots is None else [int(slot) for slot in empty_slots]
+        fallback_prompt_tokens = _prompt_history_from_prefill_tokens(tokens, prompt_lens)
+        input_prompt_tokens = _select_prefill_state_rows(
+            fallback_prompt_tokens if prompt_tokens is None else prompt_tokens,
+            input_slots=input_slots,
+            input_batch_size=int(tokens.shape[0]),
+            lane_capacity=self.config.max_batch_size,
+        )
+        input_output_tokens = _select_prefill_state_rows(
+            output_tokens,
+            input_slots=input_slots,
+            input_batch_size=int(tokens.shape[0]),
+            lane_capacity=self.config.max_batch_size,
+        )
         for request in requests:
             request_sampling = _slice_sampling_params(sampling_params, request.source_rows)
-            sampling_path = self.postprocessor.classify_sampling_path(request, request_sampling)
+            request_prompt_tokens = _select_rows(input_prompt_tokens, request.source_rows)
+            request_output_tokens = _select_rows(input_output_tokens, request.source_rows)
+            prepared_sampling = (
+                None
+                if request_sampling is None
+                else prepare_sampling_params(
+                    request_sampling,
+                    self.config.sampling_batch_size,
+                    max_device_top_k=self.config.max_device_top_k,
+                    allow_force_argmax=self.config.allow_force_argmax,
+                    prompt_tokens=request_prompt_tokens,
+                    output_tokens=request_output_tokens,
+                    slot_remap=pending_slot_remap,
+                )
+            )
+            pending_slot_remap = None
+            sampling_path = self.postprocessor.classify_sampling_path(request, prepared_sampling)
+            penalties_enabled = prepared_sampling.penalties_enabled if prepared_sampling is not None else False
+            logprobs_enabled = prepared_sampling.log_probs_enabled if prepared_sampling is not None else False
             signatures = build_program_signatures(
                 request,
                 sampling_path,
                 static_q128_topk_supported=self.config.static_q128_topk_supported,
+                penalties_enabled=penalties_enabled,
+                logprobs_enabled=logprobs_enabled,
             )
             trace_signature = build_trace_signature(
                 request,
                 trace_enabled=self.config.can_enable_trace(request.chunks[0].chunk_size, 0),
+                sampling_path=sampling_path,
+                penalties_enabled=penalties_enabled,
+                logprobs_enabled=logprobs_enabled,
             )
             prepared.append(
                 PreparedPrefill(
                     request=request,
                     sampling_params=request_sampling,
+                    prepared_sampling=prepared_sampling,
                     sampling_path=sampling_path,
                     program_signatures=signatures,
                     trace_signature=trace_signature,
@@ -224,11 +269,22 @@ class PrefillRuntime:
             )
         return tuple(prepared)
 
-    def invoke(self, prepared: PreparedPrefill) -> prefill_result_collector.InvocationResult:
+    def invoke(
+        self,
+        prepared: PreparedPrefill,
+        *,
+        count_tokens: bool = True,
+    ) -> prefill_result_collector.InvocationResult:
         """Run a prepared request eagerly without replanning or reclassification."""
 
         self._ensure_usable()
-        return self.sequence_runner.run(prepared)
+        compile_only_state = self._sampling_state_controller is not None and not count_tokens
+        self._prepare_sampling_state(prepared, count_tokens=count_tokens)
+        try:
+            return self.sequence_runner.run(prepared, count_tokens=count_tokens)
+        finally:
+            if compile_only_state:
+                self._sampling_state_controller.reset(self._sampling_state)
 
     def capture_plan(self, prepared: PreparedPrefill) -> prefill_trace.PrefillCapturePlan:
         """Describe persistent inputs and capture work for one eligible request."""
@@ -255,6 +311,7 @@ class PrefillRuntime:
     ) -> prefill_result_collector.InvocationResult:
         """Post-process a replayed hidden-state tensor into a normal result."""
 
+        self._prepare_sampling_state(prepared, count_tokens=True)
         return self.trace.finish(prepared, hidden, workspace)
 
     def assemble(
@@ -280,6 +337,23 @@ class PrefillRuntime:
             raise_cleanup_failures(failures)
 
     # Private implementation
+
+    def _prepare_sampling_state(self, prepared: PreparedPrefill, *, count_tokens: bool) -> None:
+        controller = self._sampling_state_controller
+        if controller is None:
+            return
+        sampling = self.postprocessor.prepared_sampling(prepared)
+        if sampling is None:
+            return
+        if not count_tokens:
+            controller.reset(self._sampling_state, sampling)
+            return
+        controller.admit_prefill(
+            self._sampling_state,
+            sampling,
+            slots=prepared.request.slots,
+            positions=prepared.request.last_token_indices,
+        )
 
     def _run_chunk_body(
         self,
@@ -354,3 +428,60 @@ class PrefillRuntime:
     def _ensure_usable(self) -> None:
         if self._transient_orphans:
             raise RuntimeError("PrefillRuntime has unreleased transient resources; cleanup is required")
+
+
+def _select_prefill_state_rows(value: Any, *, input_slots: list[int], input_batch_size: int, lane_capacity: int):
+    if value is None:
+        return None
+    length = _leading_length(value)
+    if length == lane_capacity:
+        return _select_rows(value, input_slots)
+    if length == input_batch_size:
+        return value
+    if length == 1:
+        return _select_rows(value, [0] * input_batch_size)
+    raise ValueError(
+        f"prefill sampling state has {length} rows, expected 1, request batch {input_batch_size}, "
+        f"or lane capacity {lane_capacity}"
+    )
+
+
+def _prompt_history_from_prefill_tokens(
+    tokens: torch.Tensor,
+    prompt_lens: torch.Tensor | None,
+) -> torch.Tensor:
+    history = tokens.clone()
+    width = int(tokens.shape[1])
+    lengths = (
+        [width] * int(tokens.shape[0])
+        if prompt_lens is None
+        else [int(value) for value in prompt_lens]
+    )
+    for row, length in enumerate(lengths):
+        if length < 0 or length > width:
+            raise ValueError("prompt_lens must fit the prefill token width")
+        history[row, length:] = -1
+    return history
+
+
+def _select_rows(value: Any, rows: Sequence[int]):
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        indices = torch.tensor(tuple(int(row) for row in rows), dtype=torch.long, device=value.device)
+        return value.index_select(0, indices)
+    if isinstance(value, list):
+        return [value[int(row)] for row in rows]
+    if isinstance(value, tuple):
+        return tuple(value[int(row)] for row in rows)
+    raise TypeError(f"request-owned sampling state must be a tensor or sequence, got {type(value).__name__}")
+
+
+def _leading_length(value: Any) -> int:
+    if isinstance(value, torch.Tensor):
+        if value.ndim == 0:
+            return 1
+        return int(value.shape[0])
+    if isinstance(value, (list, tuple)):
+        return len(value)
+    raise TypeError(f"request-owned sampling state must be a tensor or sequence, got {type(value).__name__}")

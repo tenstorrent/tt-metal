@@ -92,6 +92,9 @@ class EagerExecutor:
         start_pos: torch.Tensor | None = None,
         empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
     ) -> tuple[CompiledProgram, ...]:
         """Prepare and compile every eager program needed by one prefill call."""
 
@@ -103,6 +106,9 @@ class EagerExecutor:
             start_pos=start_pos,
             empty_slots=empty_slots,
             sampling_params=sampling_params,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
         ):
             programs.extend(self._compile_prefill(prepared))
         return tuple(programs)
@@ -116,6 +122,9 @@ class EagerExecutor:
         start_pos: torch.Tensor | None = None,
         empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
     ):
         """Prepare, execute, and assemble one eager prefill call."""
 
@@ -126,6 +135,9 @@ class EagerExecutor:
             start_pos=start_pos,
             empty_slots=empty_slots,
             sampling_params=sampling_params,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
         )
         results = tuple((request, self._execute_prefill(request)) for request in prepared)
         return self.prefill.assemble(
@@ -141,6 +153,9 @@ class EagerExecutor:
         start_pos: torch.Tensor,
         page_table: torch.Tensor,
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         reset_batch: bool = False,  # ↓ State transition
     ) -> CompiledProgram:
         """Prepare and compile the eager program needed by one decode call."""
@@ -151,6 +166,9 @@ class EagerExecutor:
                 start_pos=start_pos,
                 page_table=page_table,
                 sampling_params=sampling_params,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
                 reset_batch=reset_batch,
             )
         )
@@ -162,6 +180,9 @@ class EagerExecutor:
         start_pos: torch.Tensor,
         page_table: torch.Tensor,
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         reset_batch: bool = False,  # ↓ State transition
         read_from_device: bool = True,  # ↓ Output policy
     ):
@@ -172,6 +193,9 @@ class EagerExecutor:
             start_pos=start_pos,
             page_table=page_table,
             sampling_params=sampling_params,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
             reset_batch=reset_batch,
         )
         return self._execute_decode(prepared, read_from_device=read_from_device)
@@ -187,15 +211,26 @@ class EagerExecutor:
         start_pos: torch.Tensor | None = None,
         empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
     ):
-        return self.prefill.prepare(
-            tokens=tokens,
-            page_table=page_table,
-            prompt_lens=prompt_lens,
-            start_pos=start_pos,
-            empty_slots=empty_slots,
-            sampling_params=sampling_params,
-        )
+        kwargs: dict[str, Any] = {
+            "tokens": tokens,
+            "page_table": page_table,
+            "prompt_lens": prompt_lens,
+            "start_pos": start_pos,
+            "empty_slots": empty_slots,
+            "sampling_params": sampling_params,
+        }
+        for name, value in (
+            ("prompt_tokens", prompt_tokens),
+            ("output_tokens", output_tokens),
+            ("slot_remap", slot_remap),
+        ):
+            if value is not None:
+                kwargs[name] = value
+        return self.prefill.prepare(**kwargs)
 
     def _compile_prefill(self, prepared: Any):
         programs = []
@@ -203,7 +238,7 @@ class EagerExecutor:
             programs.append(
                 self.program_compiler.compile(
                     signature,
-                    lambda _context, prepared=prepared: self.prefill.invoke(prepared),
+                    lambda _context, prepared=prepared: self.prefill.invoke(prepared, count_tokens=False),
                     output_spec=lambda result: OutputSpec.from_value(result.value),
                     release_output=lambda result: result.owned,
                 )
@@ -223,20 +258,35 @@ class EagerExecutor:
         start_pos: torch.Tensor,
         page_table: torch.Tensor,
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         reset_batch: bool = False,  # ↓ State transition
     ):
-        return self.decode.prepare(
-            tokens=tokens,
-            start_pos=start_pos,
-            page_table=page_table,
-            sampling_params=sampling_params,
-            reset_batch=reset_batch,
-        )
+        kwargs: dict[str, Any] = {
+            "tokens": tokens,
+            "start_pos": start_pos,
+            "page_table": page_table,
+            "sampling_params": sampling_params,
+            "reset_batch": reset_batch,
+        }
+        for name, value in (
+            ("prompt_tokens", prompt_tokens),
+            ("output_tokens", output_tokens),
+            ("slot_remap", slot_remap),
+        ):
+            if value is not None:
+                kwargs[name] = value
+        return self.decode.prepare(**kwargs)
 
     def _compile_decode(self, prepared: Any):
         return self.program_compiler.compile(
             self.decode.program_signature(prepared),
-            lambda _context: self.decode.invoke(prepared, device_feedback=prepared.device_feedback),
+            lambda _context: self.decode.invoke(
+                prepared,
+                device_feedback=prepared.device_feedback,
+                count_tokens=False,
+            ),
             output_spec=lambda result: OutputSpec.from_value(result.value),
             release_output=lambda result: result.owned,
         )
@@ -329,6 +379,9 @@ class TracedExecutor:
         start_pos: torch.Tensor | None = None,
         empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
     ) -> tuple[CompiledProgram, ...]:
         """Compile eager prefill programs and register their trace plans."""
 
@@ -340,6 +393,9 @@ class TracedExecutor:
             start_pos=start_pos,
             empty_slots=empty_slots,
             sampling_params=sampling_params,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
         ):
             programs.extend(self._compile_prefill(prepared))
         return tuple(programs)
@@ -353,6 +409,9 @@ class TracedExecutor:
         start_pos: torch.Tensor | None = None,
         empty_slots: Sequence[int] | None = None,  # ↓ Lane routing
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
     ):
         """Replay traced prefill and assemble the results."""
 
@@ -363,6 +422,9 @@ class TracedExecutor:
             start_pos=start_pos,
             empty_slots=empty_slots,
             sampling_params=sampling_params,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
         )
         preflighted = self.preflight_prefill(prepared)
         return self.execute_prepared_prefill(
@@ -380,6 +442,9 @@ class TracedExecutor:
         start_pos: torch.Tensor | None = None,
         empty_slots: Sequence[int] | None = None,
         sampling_params: Any = None,
+        prompt_tokens: Any = None,
+        output_tokens: Any = None,
+        slot_remap: Any = None,
     ) -> tuple[Any, ...]:
         """Prepare one traced public call without submitting device work."""
 
@@ -391,6 +456,9 @@ class TracedExecutor:
                 start_pos=start_pos,
                 empty_slots=empty_slots,
                 sampling_params=sampling_params,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
             )
         )
 
@@ -435,6 +503,9 @@ class TracedExecutor:
         start_pos: torch.Tensor,
         page_table: torch.Tensor,
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         reset_batch: bool = False,  # ↓ State transition
     ) -> CompiledProgram:
         """Compile the eager decode program and register its trace plan."""
@@ -445,6 +516,9 @@ class TracedExecutor:
                 start_pos=start_pos,
                 page_table=page_table,
                 sampling_params=sampling_params,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+                slot_remap=slot_remap,
                 reset_batch=reset_batch,
             )
         )
@@ -456,6 +530,9 @@ class TracedExecutor:
         start_pos: torch.Tensor,
         page_table: torch.Tensor,
         sampling_params: Any = None,  # ↓ Sampling
+        prompt_tokens: Any = None,  # ↓ Request-owned sampling state
+        output_tokens: Any = None,
+        slot_remap: Any = None,
         reset_batch: bool = False,  # ↓ State transition
         read_from_device: bool = True,  # ↓ Output policy
     ):
@@ -466,6 +543,9 @@ class TracedExecutor:
             start_pos=start_pos,
             page_table=page_table,
             sampling_params=sampling_params,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
             reset_batch=reset_batch,
         )
         return self._execute_decode(

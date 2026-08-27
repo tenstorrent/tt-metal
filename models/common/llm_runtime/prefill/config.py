@@ -35,8 +35,11 @@ class PrefillRuntimeConfig:
     can_enable_trace: Callable[[int, int], bool]
     trace_capture_prime_sequence_lengths: tuple[int, ...]
     allow_force_argmax: bool
+    max_device_top_k: int
     sampling_batch_size: int
     static_q128_topk_supported: bool
+    sampling_state_controller: Any
+    sampling_state: Any
 
     @classmethod
     def resolve(
@@ -54,6 +57,8 @@ class PrefillRuntimeConfig:
         device_sampling_enabled: bool,
         can_enable_trace: Callable[[int, int], bool],
         trace_capture_prime_sequence_lengths: tuple[int, ...] = (),
+        sampling_state_controller: Any = None,
+        sampling_state: Any = None,
     ) -> "PrefillRuntimeConfig":
         """Validate construction inputs and derive every static capability."""
 
@@ -92,6 +97,7 @@ class PrefillRuntimeConfig:
             raise ValueError("model and prefill runtime must use the same mesh device")
 
         allow_force_argmax = False
+        max_device_top_k = 0
         sampling_batch_size = int(max_batch_size)
         static_q128_topk_supported = False
         if device_sampling_enabled:
@@ -102,6 +108,8 @@ class PrefillRuntimeConfig:
             allow_force_argmax = getattr(sampler_config, "allow_force_argmax", None)
             if not isinstance(allow_force_argmax, bool):
                 raise TypeError("model.sampling.config.allow_force_argmax must be bool")
+            max_device_top_k = getattr(sampler_config, "max_top_k", None)
+            _require_positive_int("model.sampling.config.max_top_k", max_device_top_k)
             sampling_batch_size = getattr(sampler_config, "max_batch_size", None)
             _require_positive_int("model.sampling.config.max_batch_size", sampling_batch_size)
             static_q128_topk_supported = sampling_batch_size >= _TILE_SIZE
@@ -122,8 +130,11 @@ class PrefillRuntimeConfig:
             can_enable_trace=can_enable_trace,
             trace_capture_prime_sequence_lengths=trace_capture_prime_sequence_lengths,
             allow_force_argmax=allow_force_argmax,
+            max_device_top_k=max_device_top_k,
             sampling_batch_size=sampling_batch_size,
             static_q128_topk_supported=static_q128_topk_supported,
+            sampling_state_controller=sampling_state_controller,
+            sampling_state=sampling_state,
             page_table_layout_ceiling=page_table_layout,
         )
 
@@ -150,6 +161,10 @@ class PrefillRuntimeConfig:
             raise TypeError("device_sampling_enabled must be bool")
         if not isinstance(self.allow_force_argmax, bool):
             raise TypeError("allow_force_argmax must be bool")
+        if self.device_sampling_enabled:
+            _require_positive_int("max_device_top_k", self.max_device_top_k)
+        elif self.max_device_top_k != 0:
+            raise ValueError("max_device_top_k must be zero when device sampling is disabled")
         if not isinstance(self.static_q128_topk_supported, bool):
             raise TypeError("static_q128_topk_supported must be bool")
         _validate_trace_capture_prime_sequence_lengths(self.trace_capture_prime_sequence_lengths)
@@ -177,6 +192,7 @@ class PrefillRuntimeConfig:
             raise ValueError("output_reader and prefill runtime must use the same mesh device")
 
         expected_argmax = False
+        expected_max_top_k = 0
         expected_sampling_batch_size = self.max_batch_size
         expected_q128 = False
         if self.device_sampling_enabled:
@@ -186,15 +202,26 @@ class PrefillRuntimeConfig:
             expected_argmax = getattr(sampler_config, "allow_force_argmax", None)
             if not isinstance(expected_argmax, bool):
                 raise TypeError("model.sampling.config.allow_force_argmax must be bool")
+            expected_max_top_k = getattr(sampler_config, "max_top_k", None)
+            _require_positive_int("model.sampling.config.max_top_k", expected_max_top_k)
             expected_sampling_batch_size = getattr(sampler_config, "max_batch_size", None)
             _require_positive_int("model.sampling.config.max_batch_size", expected_sampling_batch_size)
             expected_q128 = expected_sampling_batch_size >= _TILE_SIZE
         if self.allow_force_argmax is not expected_argmax:
             raise ValueError("allow_force_argmax must match the resolved sampler capability")
+        if self.max_device_top_k != expected_max_top_k:
+            raise ValueError("max_device_top_k must match the resolved sampler capability")
         if self.sampling_batch_size != expected_sampling_batch_size:
             raise ValueError("sampling_batch_size must match the resolved sampler capacity")
         if self.static_q128_topk_supported is not expected_q128:
             raise ValueError("static_q128_topk_supported must match the resolved sampler capacity")
+        if (self.sampling_state_controller is None) != (self.sampling_state is None):
+            raise ValueError("sampling_state_controller and sampling_state must be supplied together")
+        if self.sampling_state_controller is not None:
+            if getattr(self.sampling_state_controller, "sampling", None) is not getattr(self.model, "sampling", None):
+                raise ValueError("sampling state controller must borrow model.sampling")
+            if not callable(getattr(self.sampling_state_controller, "admit", None)):
+                raise TypeError("sampling state controller must provide admit()")
 
     def with_page_table_layout(self, layout: PageTableLayout) -> "PrefillRuntimeConfig":
         """Return the same resolved policy with a smaller final KV geometry."""

@@ -10,7 +10,8 @@ from typing import Any, Literal
 
 from models.common.llm_runtime.prefill.plan import PrefillRequest
 from models.common.llm_runtime.prefill.sampling_helpers import _TILE_SIZE, SamplingPath
-from models.common.sampling import SamplingParams
+from models.common.modules.sampling.params import PreparedSamplingParams
+from models.common.sampling.sampling_params import SamplingParams
 
 PrefillVariant = Literal["regular-single", "regular-batched", "chunked"]
 
@@ -31,18 +32,25 @@ class PrefillProgramSignature:
     page_table_width: int
     chunk_page_table_width: int | None
     sampling_path: SamplingPath
+    penalties_enabled: bool = False
+    logprobs_enabled: bool = False
     last_token_tile_start: int | None = None
 
     def key_material(self) -> tuple[tuple[str, str | int | None], ...]:
-        return (
+        material = [
             ("operation_variant", self.operation_variant),
             ("padded_batch_size", self.padded_batch_size),
             ("invocation_sequence_length", self.invocation_sequence_length),
             ("page_table_width", self.page_table_width),
             ("chunk_page_table_width", self.chunk_page_table_width),
             ("sampling_path", self.sampling_path),
-            ("last_token_tile_start", self.last_token_tile_start),
-        )
+        ]
+        if self.penalties_enabled:
+            material.append(("penalties_enabled", True))
+        if self.logprobs_enabled:
+            material.append(("logprobs_enabled", True))
+        material.append(("last_token_tile_start", self.last_token_tile_start))
+        return tuple(material)
 
 
 @dataclass(frozen=True)
@@ -54,15 +62,25 @@ class PrefillTraceSignature:
     padded_sequence_length: int
     page_table_width: int
     chunk_page_table_width: int | None
+    sampling_path: SamplingPath = "logits"
+    penalties_enabled: bool = False
+    logprobs_enabled: bool = False
 
     def key_material(self) -> tuple[tuple[str, str | int | None], ...]:
-        return (
+        material = [
             ("operation_variant", self.operation_variant),
             ("padded_batch_size", self.padded_batch_size),
             ("padded_sequence_length", self.padded_sequence_length),
             ("page_table_width", self.page_table_width),
             ("chunk_page_table_width", self.chunk_page_table_width),
-        )
+        ]
+        if self.sampling_path != "logits":
+            material.append(("sampling_path", self.sampling_path))
+        if self.penalties_enabled:
+            material.append(("penalties_enabled", True))
+        if self.logprobs_enabled:
+            material.append(("logprobs_enabled", True))
+        return tuple(material)
 
 
 @dataclass(frozen=True)
@@ -74,6 +92,7 @@ class PreparedPrefill:
     sampling_path: SamplingPath
     program_signatures: tuple[PrefillProgramSignature, ...]
     trace_signature: PrefillTraceSignature | None
+    prepared_sampling: PreparedSamplingParams | None = None
 
 
 def build_program_signatures(
@@ -81,6 +100,8 @@ def build_program_signatures(
     sampling_path: SamplingPath,
     *,
     static_q128_topk_supported: bool,
+    penalties_enabled: bool = False,
+    logprobs_enabled: bool = False,
 ) -> tuple[PrefillProgramSignature, ...]:
     variant: PrefillVariant
     if request.uses_chunked_prefill:
@@ -117,6 +138,8 @@ def build_program_signatures(
                     int(chunk.chunk_page_table.shape[-1]) if chunk.chunk_page_table is not None else None
                 ),
                 sampling_path=sampling_path,
+                penalties_enabled=penalties_enabled,
+                logprobs_enabled=logprobs_enabled,
                 last_token_tile_start=last_token_tile_start,
             )
         )
@@ -127,6 +150,9 @@ def build_trace_signature(
     request: PrefillRequest,
     *,
     trace_enabled: bool,
+    sampling_path: SamplingPath = "logits",
+    penalties_enabled: bool = False,
+    logprobs_enabled: bool = False,
 ) -> PrefillTraceSignature | None:
     if not trace_enabled:
         return None
@@ -143,6 +169,9 @@ def build_trace_signature(
         padded_sequence_length=chunk.chunk_size,
         page_table_width=request.page_table_width,
         chunk_page_table_width=(int(chunk.chunk_page_table.shape[-1]) if chunk.chunk_page_table is not None else None),
+        sampling_path=sampling_path,
+        penalties_enabled=penalties_enabled,
+        logprobs_enabled=logprobs_enabled,
     )
 
 

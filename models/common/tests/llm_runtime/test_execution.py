@@ -104,6 +104,9 @@ def test_execution_request_signatures_are_exact_and_aligned():
         ("start_pos", keyword_only, None),
         ("empty_slots", keyword_only, None),
         ("sampling_params", keyword_only, None),
+        ("prompt_tokens", keyword_only, None),
+        ("output_tokens", keyword_only, None),
+        ("slot_remap", keyword_only, None),
     ]
     decode_contract = [
         ("self", positional, required),
@@ -111,6 +114,9 @@ def test_execution_request_signatures_are_exact_and_aligned():
         ("start_pos", keyword_only, required),
         ("page_table", keyword_only, required),
         ("sampling_params", keyword_only, None),
+        ("prompt_tokens", keyword_only, None),
+        ("output_tokens", keyword_only, None),
+        ("slot_remap", keyword_only, None),
         ("reset_batch", keyword_only, False),
     ]
     decode_forward_contract = [
