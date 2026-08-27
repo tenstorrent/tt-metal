@@ -372,38 +372,20 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T MoE perf 5k (384e/top-8)"
+- name: "Kimi-K2.6-1T & Kimi-K3-2.8T MoE perf 5k (384e/top-8, 896e/top-16)"
   fabric_profile: torus_xy
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k k2_6 -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -vvv --tb=short
     '
   test_type: kimi_moe_perf
-  test_tags: [kimi_k2_6, moe]
+  test_tags: [kimi_k2_6, kimi_k3, moe]
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 10
-  owner_id: U08RL15T4N8
-  team: models
-  sp_config: sc1
-
-- name: "Kimi-K3-2.8T MoE perf 5k (896e/top-16)"
-  fabric_profile: torus_xy
-  cmd: |
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k k3 -vvv --tb=short
-    '
-  test_type: kimi_k3_moe_perf
-  test_tags: [kimi_k3, moe]
-  test_group: module
-  skus:
-    bh_sc1_high_power:
-      timeout: 12
+      timeout: 22
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
