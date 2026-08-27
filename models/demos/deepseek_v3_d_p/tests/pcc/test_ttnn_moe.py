@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -808,6 +809,46 @@ def test_ds_moe(
     )
 
 
+def _run_moe_case(
+    *,
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    num_links,
+    gate_fallback_mode,
+    request,
+):
+    """Resolve topology from the fabric config, then run_model. Keyword-only: run_model takes 16
+    positional arguments, and a reordering slip in them is silent, so the per-variant entrypoints
+    pass names and this is the only place that maps them onto the positional call. test_ds_moe and
+    test_kimi_k3_moe still call run_model directly; converting them is a separate cleanup."""
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        num_links,
+        per_axis_topology(device_params["fabric_config"]),
+        gate_fallback_mode,
+        request,
+    )
+
+
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
@@ -863,23 +904,21 @@ def test_kimi_moe(
     gate_fallback_mode,
     request,
 ):
-    topology = per_axis_topology(device_params["fabric_config"])
-    run_model(
-        variant,
-        config_only,
-        mesh_device,
-        device_params,
-        seq_len_per_chip,
-        emb_dim,
-        hidden_dim,
-        num_routed_experts,
-        num_experts_per_tok,
-        dispatch_buffer_capacity_factor,
-        run_pcc_check,
-        num_links,
-        topology,
-        gate_fallback_mode,
-        request,
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=seq_len_per_chip,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
+        run_pcc_check=run_pcc_check,
+        num_links=num_links,
+        gate_fallback_mode=gate_fallback_mode,
+        request=request,
     )
 
 
@@ -986,4 +1025,82 @@ def test_kimi_k3_moe(
         final_output_pcc=0.965,
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
         shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
+    )
+
+
+# Mistral-Small-4-119B MoE. Own test function rather than a row on test_ds_moe because the upstream
+# reference is a different class; the shared run_model body is unchanged.
+#
+# 640 x dgs 8 = 5120 tokens, matching the rest of the mistral4 suite. 128 experts at top-4 exercises
+# the unfused extract -> FFN -> insert path that DSv3/Kimi/GLM only cover at top-8. Random weights
+# only: the checkpoint stacks the routed experts, so the pretrained fixture loads attention alone.
+#
+# The [reference_output] check sits at its threshold by construction, for two reasons that are both
+# about routing rather than device numerics: Mistral's router scores with softmax while the device op
+# only knows sigmoid, and the fixture emits an e_score_correction_bias that the device consumes but
+# Mistral's router does not have. Together those cap this comparison near 0.977, against the
+# moe_pcc_threshold of 0.971. A miss here is far more likely to be routing than arithmetic.
+@pytest.mark.parametrize(
+    (
+        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
+    ),
+    [
+        # fmt: off
+        pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-pcc"),
+        # fmt: on
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            # fabric2d, not torus_xy, and deliberately unlike the sibling 8x4 rows: measured on CI run
+            # 32567382271, every torus_xy mistral4 case SKIPPED ("Galaxy TorusXY ... requires an
+            # explicit ring/ring descriptor and a cabling-certified allocation"), and a skipped leg
+            # reports green. FABRIC_2D is what this test ran under on ssalice/mistral4-119b-prefill,
+            # where it genuinely passed on CI. Revert once bh_sc1 is ring-cabled.
+            fabric2d_device_params(
+                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
+            ),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral4"])
+def test_mistral4_moe(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    num_links,
+    gate_fallback_mode,
+    request,
+):
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=seq_len_per_chip,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
+        run_pcc_check=run_pcc_check,
+        num_links=num_links,
+        gate_fallback_mode=gate_fallback_mode,
+        request=request,
     )

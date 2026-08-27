@@ -162,16 +162,26 @@ def _pack_reference_moe_state_dict(moe, gate_weights, routed_expert_weights, sha
     """
     sd = {
         "gate.weight": gate_weights["weight"],
-        "gate.e_score_correction_bias": gate_weights["e_score_correction_bias"],
         "shared_experts.gate_proj.weight": shared_expert_weights["gate_proj"],
         "shared_experts.up_proj.weight": shared_expert_weights["up_proj"],
         "shared_experts.down_proj.weight": shared_expert_weights["down_proj"],
     }
-    src = ("gate_proj", "up_proj", "down_proj")
-    dst = ("w1", "w3", "w2") if hasattr(moe.experts[0], "w1") else src
-    for i, w in enumerate(routed_expert_weights):
-        for proj, name in zip(src, dst):
-            sd[f"experts.{i}.{name}.weight"] = w[proj]
+    # Softmax-router models (Mistral) have no correction bias; a strict load rejects the extra key.
+    if hasattr(getattr(moe, "gate", None), "e_score_correction_bias"):
+        sd["gate.e_score_correction_bias"] = gate_weights["e_score_correction_bias"]
+    if hasattr(moe.experts, "gate_up_proj"):
+        # Stacked experts (Mistral): one [n_experts, 2 * moe_intermediate, hidden] tensor with gate
+        # in the first half and up in the second, plus [n_experts, hidden, moe_intermediate] down.
+        sd["experts.gate_up_proj"] = torch.stack(
+            [torch.cat([w["gate_proj"], w["up_proj"]], dim=0) for w in routed_expert_weights]
+        )
+        sd["experts.down_proj"] = torch.stack([w["down_proj"] for w in routed_expert_weights])
+    else:
+        src = ("gate_proj", "up_proj", "down_proj")
+        dst = ("w1", "w3", "w2") if hasattr(moe.experts[0], "w1") else src
+        for i, w in enumerate(routed_expert_weights):
+            for proj, name in zip(src, dst):
+                sd[f"experts.{i}.{name}.weight"] = w[proj]
     if hasattr(moe, "routed_expert_down_proj"):
         sd["routed_expert_down_proj.weight"] = latent_weights["down_proj"]
         sd["routed_expert_up_proj.weight"] = latent_weights["up_proj"]
