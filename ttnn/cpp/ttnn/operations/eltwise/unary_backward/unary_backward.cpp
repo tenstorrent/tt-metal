@@ -251,8 +251,11 @@ std::vector<std::optional<Tensor>> pow_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
-    input_grad =
-        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
+    // Not value_or: its argument is evaluated even when input_grad already holds a
+    // tensor, which would allocate and immediately discard a device tensor.
+    if (!input_grad.has_value()) {
+        input_grad = ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
+    }
     const float ZERO_THRESHOLD = std::numeric_limits<float>::epsilon() * 10.0f;
     TT_FATAL(exponent >= 0.0, "negative exponents are not supported; use recip(pow(input,abs(exponent)))");
     if (std::abs(exponent) < ZERO_THRESHOLD) {
