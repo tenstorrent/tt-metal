@@ -526,12 +526,6 @@ def chunk_gated_delta_rule_seq(
         memory_config=_cmc,
     )
 
-    v_beta_sc = ttnn.multiply(D_inv_row, v_beta_c, memory_config=_cmc)
-    del v_beta_c
-    k_beta_decay = ttnn.multiply(k_beta_c, decay_exp, memory_config=_cmc)
-    k_bd_sc = _multiply_into_dead_rhs(D_inv_row, k_beta_decay, memory_config=_cmc)
-    ttnn.deallocate(D_inv_row)
-
     # ---- intra_attn = (q_decay @ k.T) * L_mask * lower_causal ----
     decay_3d = ttnn.reshape(decay, [BH, num_chunks, chunk_size], memory_config=None)
     decay_raw_3d = ttnn.reshape(decay_raw, [BH, num_chunks, chunk_size], memory_config=None)
@@ -595,6 +589,15 @@ def chunk_gated_delta_rule_seq(
     ttnn.deallocate(combined_mask_4d)
     k_decay_t_4d = ttnn.transpose(k_decay_4d, 2, 3, memory_config=_cmc)
     ttnn.deallocate(k_decay_4d)
+
+    # These row-scaled values are not inputs to qk. Delay materializing them
+    # until q/k preprocessing has consumed and recycled its source buffers, so
+    # the transpose does not compete with two unrelated full chunk matrices.
+    v_beta_sc = ttnn.multiply(D_inv_row, v_beta_c, memory_config=_cmc)
+    del v_beta_c
+    k_beta_decay = ttnn.multiply(k_beta_c, decay_exp, memory_config=_cmc)
+    k_bd_sc = _multiply_into_dead_rhs(D_inv_row, k_beta_decay, memory_config=_cmc)
+    ttnn.deallocate(D_inv_row)
 
     # ---- Reshape preprocessing outputs to 4D for the C++ kernel ----
     def _to4d_f32(t, d1, d2):

@@ -163,5 +163,8 @@ def test_qk_consumes_qk_inputs_before_decay_overwrites_them():
     qk = source.index("qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t")
     q_decay = source.index("q_decay_4d = _multiply_into_dead_lhs(q_c_4d")
     k_decay = source.index("k_decay_4d = _multiply_into_dead_lhs(k_c_4d")
+    k_transpose = source.index("k_c_4d_t = ttnn.transpose(k_c_4d")
+    v_beta_scaled = source.index("v_beta_sc = ttnn.multiply(D_inv_row")
     assert qk < q_decay
     assert qk < k_decay
+    assert k_transpose < v_beta_scaled
