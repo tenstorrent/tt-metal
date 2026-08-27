@@ -121,15 +121,13 @@ inline void llk_unpack_A_init(
  * format
  * @param operand: The logical dataflow buffer id
  * @param tile_index: The index in the input CB to read from
- * @param dst_tile_index: Tile index within the currently acquired destination section when unpacking to DEST
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
     [[maybe_unused]] bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
-inline void llk_unpack_A(
-    const std::uint32_t operand, const std::uint32_t tile_index, const std::uint32_t dst_tile_index = 0) {
+inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     WAYPOINT("UPAW");
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -140,7 +138,7 @@ inline void llk_unpack_A(
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
         if constexpr (unpack_to_dest) {
             _llk_unpack_unary_operand_<p_unpacr::UNP_DEST, binary_reuse_dest, true, DST_SYNC_MODE>(
-                l1_tile_idx, tensor_shape, dst_tile_index);
+                l1_tile_idx, tensor_shape);
         } else {
             _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest, false, DST_SYNC_MODE>(
                 l1_tile_idx, tensor_shape);
@@ -163,7 +161,6 @@ inline void llk_unpack_A(
  * @param operand: The logical dataflow buffer id
  * @param start_tile_index: The starting tile index within the input buffer
  * @param ntiles: The number of consecutive tiles to unpack
- * @param start_dst_tile_index: The first tile index within the currently acquired destination section
  */
 // TODO: AM; Optimize block calls by using ntiles per unpack, issue #40798
 template <
@@ -172,10 +169,7 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
-    const std::uint32_t operand,
-    const std::uint32_t start_tile_index,
-    const std::uint32_t ntiles,
-    const std::uint32_t start_dst_tile_index = 0) {
+    const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
     LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
@@ -186,7 +180,7 @@ inline void llk_unpack_A_block(
         if constexpr (BType == BroadcastType::NONE) {
             if constexpr (unpack_to_dest) {
                 _llk_unpack_unary_operand_<p_unpacr::UNP_DEST, binary_reuse_dest, true, DST_SYNC_MODE>(
-                    rd_entry_idx + tile_index, tensor_shape, start_dst_tile_index + tile_index - start_tile_index);
+                    rd_entry_idx + tile_index, tensor_shape);
             } else {
                 _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest, false, DST_SYNC_MODE>(
                     rd_entry_idx + tile_index, tensor_shape);

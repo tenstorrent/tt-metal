@@ -373,7 +373,6 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
  * @tparam unpack_to_dest: When true, writes the operand directly to DEST; requires UNP_SEL == UNP_DEST, values = <true/false>
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
- * @param dst_tile_idx: Tile index within the currently acquired destination section.
  * @note Call @ref _llk_unpack_unary_operand_init_ with matching template args before this function.
  */
 template <
@@ -381,15 +380,16 @@ template <
     EltwiseBinaryReuseDestType reuse_dest            = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                              = false,
     [[maybe_unused]] ckernel::DstSync DEST_SYNC_MODE = ckernel::DstSync::SyncFull>
-inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const TensorShape& tensor_shape, const std::uint32_t dst_tile_idx = 0)
+inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const TensorShape& tensor_shape)
 {
     if constexpr (unpack_to_dest)
     {
         static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
 
-        // UNP_DEST is driven off the UNP_A bank's counters.
+        // UNP_DEST is driven off the UNP_A bank's counters. Its destination
+        // counter is reset once at tile_regs_acquire and advances by one in
+        // the MOP, so direct-to-DEST copies must be issued sequentially.
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx);
-        TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, dst_tile_idx);
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
         return;
     }

@@ -70,43 +70,40 @@ FORCE_INLINE void process_sfpu_tiles(
     BINARY_SFPU_INIT;
 #endif
 
-    tile_regs_acquire();
-#ifdef ARCH_QUASAR
-    // Quasar's copy_tile_to_dst_init_short_with_dt is a no-op and cannot switch which operand the
-    // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor)
-    // to point at each operand before its copy_tile loop. matches_metal_v2_slice requires lhs and rhs
-    // to share a data format, so the data-format reconfig the WH/BH _with_dt path performs is not needed.
-    copy_tile_to_dst_init_short(dfb_post_lhs_id);
-#else
-    copy_tile_to_dst_init_short_with_dt(dfb_post_rhs_id, dfb_post_lhs_id);
-#endif
+    // Quasar cannot select an arbitrary UNP_DEST tile yet. Process one output
+    // at a time: the section starts at DEST 0, then the two copies advance
+    // sequentially through DEST 0 and 1 before SFPU overwrites DEST 0.
     for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(dfb_post_lhs_id, i, i * 2);
-    }
+        tile_regs_acquire();
 #ifdef ARCH_QUASAR
-    copy_tile_to_dst_init_short(dfb_post_rhs_id);
+        // Quasar's copy_tile_to_dst_init_short_with_dt is a no-op and cannot switch which operand the
+        // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor).
+        copy_tile_to_dst_init_short(dfb_post_lhs_id);
 #else
-    copy_tile_to_dst_init_short_with_dt(dfb_post_lhs_id, dfb_post_rhs_id);
+        copy_tile_to_dst_init_short_with_dt(dfb_post_rhs_id, dfb_post_lhs_id);
 #endif
-    for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
+        copy_tile(dfb_post_lhs_id, i, 0);
+#ifdef ARCH_QUASAR
+        copy_tile_to_dst_init_short(dfb_post_rhs_id);
+#else
+        copy_tile_to_dst_init_short_with_dt(dfb_post_lhs_id, dfb_post_rhs_id);
+#endif
+        copy_tile(dfb_post_rhs_id, i, 1);
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
 #endif
 #if ISCLOSE_OP
-        BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+        BINARY_SFPU_OP(0, 1, 0, rtol_bits, atol_bits);
 #else
-        BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+        BINARY_SFPU_OP(0, 1, 0);
 #endif
-        PROCESS_POST_ACTIVATIONS(i * 2);
-    }
-    tile_regs_commit();
+        PROCESS_POST_ACTIVATIONS(0);
+        tile_regs_commit();
 
-    tile_regs_wait();
-    for (uint32_t i = 0; i < n; ++i) {
-        pack_tile(i * 2, dfb_out_id);
+        tile_regs_wait();
+        pack_tile(0, dfb_out_id);
+        tile_regs_release();
     }
-    tile_regs_release();
 
     dfb_out.push_back(n);
     dfb_post_lhs.pop_front(n);

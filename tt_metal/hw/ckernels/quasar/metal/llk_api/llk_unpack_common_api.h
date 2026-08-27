@@ -47,6 +47,10 @@ inline void llk_unpack_wait_for_dest_available() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_wait_<p_stall::STALL_UNPACK | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::PACK_UNPACK);
         _llk_sync_get_(semaphore::PACK_UNPACK);
+        // Quasar UNP_DEST cannot select an arbitrary destination tile. Start
+        // each acquired section at tile zero and let UNPACR_DEST_TILE_INC
+        // advance sequentially for every direct-to-DEST copy in the section.
+        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
     }
 }
 
