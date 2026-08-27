@@ -603,3 +603,34 @@ def test_an_unparseable_stage_gets_no_count_rather_than_a_wrong_one():
     assert obs("zzz", None) == 0
     assert obs("zzz", {}) == 0
     assert obs(None, _prof(zzz=[{"shape": "8x8 @ 8x8", "count": 1}])) == 0
+
+
+def test_a_tile_padded_row_count_is_not_the_item_count():
+    """WHAT TRACY ACTUALLY WRITES. The shape fingerprint carries the PADDED dim -- _op_shape builds it
+    from _pad(), which keeps the kernel's computed size and drops the logical one. A step retiring one
+    row per user pads 8 rows to a 32-row tile, so EVERY matmul in it reads 32 and the stage would look
+    like it retires 32 items: not one per user, so not a per-user rate. The logical count rides beside
+    the fingerprint as `rows`, and that is what an item count means."""
+    from cc_optimize.summary import _stage_items_observed as obs
+
+    padded = _prof(
+        zzz_step=[
+            {"shape": "32x3072 @ 3072x8192", "rows": 8, "count": 30},
+            {"shape": "32x3072 @ 3072x131072", "rows": 8, "count": 1},
+        ]
+    )
+    assert obs("zzz_step", padded) == 8, "the padded tile height became the item count"
+    # a tower whose rows are not a tile multiple: 1500 asked for, 1504 computed
+    assert obs("zzz_tower", _prof(zzz_tower=[{"shape": "1504x1280 @ 1280x5120", "rows": 1500, "count": 32}])) == 1500
+    # a profile written before `rows` existed still parses, from the fingerprint
+    assert obs("zzz_old", _prof(zzz_old=[{"shape": "8x3072 @ 3072x8192", "count": 30}])) == 8
+
+
+def test_the_logical_dim_is_carried_out_of_the_raw_row():
+    """_pad and _logical split '32[8]' the two ways it is needed: the kernel's size for bytes and the
+    fingerprint, the asked-for size for counting items."""
+    from agent.tracy_tool import _logical, _pad
+
+    assert (_pad("32[8]"), _logical("32[8]")) == ("32", "8")
+    assert (_pad("4096"), _logical("4096")) == ("4096", "4096")
+    assert _logical("") == "?" and _logical(None) == "?"

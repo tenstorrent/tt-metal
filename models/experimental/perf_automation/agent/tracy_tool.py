@@ -589,6 +589,28 @@ def _pad(v: str) -> str:
     return s or "?"
 
 
+def _logical(v: str) -> str:
+    """'32[10]' -> '10' (the rows the stage ASKED for); '32' -> '32' when nothing was padded.
+
+    _pad keeps the other half -- the padded dim the kernel computes -- which is right for bytes and
+    for a shape fingerprint, and wrong for counting items. A decode step retiring one row per user
+    pads 8 rows to a 32-row tile, so every matmul in it reads 32 and the stage looks like it retires
+    32 items. The logical count is what the model asked for, and it is already in the field.
+    """
+    s = str(v or "").strip()
+    if "[" in s and "]" in s:
+        inner = s.split("[", 1)[1].split("]", 1)[0].strip()
+        if inner.isdigit():
+            return inner
+    return _pad(s)
+
+
+def _op_rows(raw: dict) -> int:
+    """LOGICAL rows of the left input -- how many items this op processed. 0 when unknown."""
+    v = _logical(raw.get("INPUT_0_Y_PAD[LOGICAL]"))
+    return int(v) if str(v).isdigit() else 0
+
+
 def _op_shape(raw: dict) -> str:
     """Compact matmul shape fingerprint from the per-op input dims (e.g. '32x1024 @ 1024x1024')."""
     m, k0 = _pad(raw.get("INPUT_0_Y_PAD[LOGICAL]")), _pad(raw.get("INPUT_0_X_PAD[LOGICAL]"))
@@ -655,6 +677,9 @@ def _top_ops(
             {
                 "op_code": op,
                 "shape": shape,
+                # The LOGICAL row count beside the padded fingerprint: `shape` is what the kernel
+                # computed, this is what the model asked for. Item counting needs the second.
+                "rows": _op_rows(raw),
                 "memory": mem,
                 "count": 0,
                 "device_ms": 0.0,

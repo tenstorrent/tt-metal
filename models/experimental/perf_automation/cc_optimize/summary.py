@@ -1243,10 +1243,16 @@ def _stage_items_observed(stage, profile) -> int:
     _rows: dict = {}
     for _b in ((profile or {}).get("stage_buckets") or {}).get(str(stage)) or []:
         for _o in (_b or {}).get("top_ops") or []:
-            _parsed = parse_matmul_shape(str((_o or {}).get("shape") or ""))
-            if not _parsed:
-                continue
-            _m, _k, _n = _parsed
+            # LOGICAL ROWS FIRST. `shape` carries the PADDED dim -- what the kernel computed -- so a
+            # decode step retiring one row per user reads 32 for a batch of 8, and the stage would
+            # look like it retires 32 items and stop being a per-user rate. `rows` is the count the
+            # model asked for. Falling back to the fingerprint keeps profiles written before it.
+            _m = int((_o or {}).get("rows") or 0)
+            if _m <= 0:
+                _parsed = parse_matmul_shape(str((_o or {}).get("shape") or ""))
+                if not _parsed:
+                    continue
+                _m = _parsed[0]
             if _m > 0:
                 _rows[_m] = _rows.get(_m, 0) + max(1, int((_o or {}).get("count") or 1))
     if not _rows:
