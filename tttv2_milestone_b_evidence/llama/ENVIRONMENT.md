@@ -1,0 +1,226 @@
+# `mb-llama` — environment
+
+Everything `mb-coverage` needs to make a paired comparison against this job's
+numbers, and everything `mb-qwen` needs to reproduce its setup.
+
+## Tree
+
+| | |
+| --- | --- |
+| Repository | `/proj_sw/user_dev/ctr-apbernal/tt-metal` |
+| Branch | `apbernal/tttv2_wh_glx_2d_modules_milestone_b` |
+| Commit at job start | `b350e51554470414d5a8b08f5ea9775c986145a4` |
+| Base this job built on | `52def65194c3938ed6e5cb6f52661ec3a3a15547` (last code-bearing commit before this job) |
+| Milestone A reference tip | `bc6ad03bfc21d6a26f88169cc87ea2d8176f0fbf` (read-only) |
+
+Commits added by this job are listed in `REPORT.md` §"Commits".
+
+## Host
+
+```text
+Linux 6.8.0-83-generic
+Python 3.10.21   (python_env/, pre-existing; not rebuilt)
+torch 2.11.0+cpu
+transformers 5.12.1
+pytest 9.0.3, pytest-timeout 2.4.0
+566 GB RAM total, ~309 GB available at job start
+```
+
+`build_Release/` was reused, not rebuilt:
+
+```text
+CMAKE_BUILD_TYPE   = Release
+CMAKE_CXX_COMPILER = /usr/bin/clang++-20
+CMAKE_CXX_FLAGS    = (empty)
+ENABLE_DISTRIBUTED = ON
+ENABLE_ASAN/DEBUG/DEBUG_LOG/COVERAGE/MEMORY_DEBUG/ALLOC_DEBUG = OFF
+ENABLE_CCACHE      = TRUE
+```
+
+Environment variables that matter:
+
+```sh
+TT_METAL_HOME=/proj_sw/user_dev/ctr-apbernal/tt-metal
+PYTHONPATH=/proj_sw/user_dev/ctr-apbernal/tt-metal
+TT_DEVICE_LOCK_PATH=/tmp/tt_device.lock
+TT_DEVICE_LOCK_TIMEOUT=3600
+VIRTUAL_ENV=/proj_sw/user_dev/ctr-apbernal/tt-metal/python_env
+```
+
+## Mesh
+
+```text
+32 boards, Wormhole, tt-galaxy, board series 010003510...
+/dev/tenstorrent : 32 entries
+KMD version      : 2.4.1
+IOMMU            : enabled
+mesh shape       : (8, 4), all 32 devices
+device_params    : dispatch_core_axis = COL, fabric_config = FABRIC_1D_RING
+compute_with_storage_grid_size : x=7, y=10   (measured on device, not assumed)
+AI clock at sync : ~0.9855 GHz
+```
+
+Full `tt-smi -ls` output: `logs/05_tt_smi_ls_baseline.log`.
+
+### The decode sub-device partition, as measured
+
+This is the single most load-bearing fact of the whole job, and it is not
+derivable from a mocked mesh. Measured by
+`models/common/tests/models/galaxy/test_partition_wh_galaxy.py`
+(`logs/39_partition_probe_run4.log`):
+
+```text
+compute grid            x=0..6, y=0..9          (70 cores)
+worker_cores()          {[1-0 - 3-9], [5-0 - 6-9]}   50 cores
+prefetch senders        x=0 and x=4, 12 cores
+in NO sub-device        {[0-1 - 0-3], [0-6 - 0-8], [4-3 - 4-3], [4-8 - 4-8]}   8 cores
+```
+
+Two consequences that cost this job most of its device time:
+
+1. The worker envelope is **not contiguous** — the `x=4` sender column splits it
+   — so its *bounding box* (`x=1..6`) is not a safe stand-in for it. Several ttnn
+   ops use the bounding box.
+2. The sender ∪ worker union does **not** cover the compute grid, so a program
+   built over the full grid touches cores owned by no sub-device.
+
+## Checkpoint
+
+```text
+meta-llama/Llama-3.3-70B-Instruct
+snapshot 6f6073b423013f6a7d4d9f39144961bfbfbc386b
+30 safetensors shards, 141.1 GB of tensors
+```
+
+**It is not in the default HF cache.** `~/.cache/huggingface/hub` holds
+config-only entries and no Llama at all. The real checkpoint is in the shared
+cache, so every run in this job exported:
+
+```sh
+export HF_HOME=/proj_sw/user_dev/hf_data
+```
+
+Without it, `from_pretrained` tries to download into `/home/ctr-apbernal`, which
+has a 9.4 GB quota.
+
+Config, verified against `LLAMA33_70B_CHECKPOINT_CONTRACT`:
+
+```text
+hidden_size 8192   num_attention_heads 64   num_key_value_heads 8   head_dim 128
+intermediate_size 28672   vocab_size 128256   num_hidden_layers 80
+rms_norm_eps 1e-05   rope_theta 500000.0
+rope_scaling: llama3, factor 8.0, low 1.0, high 4.0, original_max_position 8192
+attention_bias false   tie_word_embeddings false   torch_dtype bfloat16
+```
+
+Derived: `padded_vocab_size 128256`, `rope_table_len 8192`,
+`local_dim 2048`, `local_qkv_size 1280`, `local_hidden_dim 3584`,
+`local_attention_dim 1024`, `users_per_column 8`.
+
+### Loading only what is needed
+
+`models/common/tests/models/galaxy/galaxy_checkpoint.py` reads only the
+safetensors shards that hold the requested layers plus the embedding, final norm
+and LM head. For layer 0 that is 3 shards of 30, ~12 GB, ~12 GB peak RSS, about
+two minutes cold and well under one warm — against 141 GB of I/O and allocation
+for `from_pretrained`-then-truncate.
+
+Its tensors were verified **bitwise equal** to the shards
+(`q_proj`, `o_proj`, `down_proj`, `input_layernorm`, `embed_tokens`, `norm`,
+`lm_head`), and the rotary module is built from the checkpoint's own config, so
+Llama 3 scaling is the real one. It is the real checkpoint's layer 0, not a
+synthetic stand-in.
+
+Storage throughput measured on the shared cache: **~460 MB/s**.
+
+## Exact invocations
+
+Every device run went through `device_run.sh`, one node id per process, never
+piped:
+
+```sh
+export HF_HOME=/proj_sw/user_dev/hf_data
+python -u -m pytest -v -rA --color=no -p no:cacheprovider --timeout=900 <NODE_ID>
+```
+
+Host regression gate — `host_gate.sh`:
+
+```sh
+python -m pytest -q -rA --color=no -p no:cacheprovider \
+  --ignore-glob="*_wh_galaxy*.py" \
+  models/common/tests/modules/attention/test_attention_1d_arch_config.py \
+  models/common/tests/modules/attention/test_attention_2d.py \
+  models/common/tests/modules/embedding/test_embedding_2d.py \
+  models/common/tests/modules/lm_head/test_lm_head_2d.py \
+  models/common/tests/modules/mlp/test_mlp_1d_arch_config.py \
+  models/common/tests/modules/mlp/test_mlp_2d.py \
+  models/common/tests/modules/prefetcher/test_prefetcher_2d.py \
+  models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
+  models/common/tests/modules/rope/test_rope_2d.py \
+  models/common/tests/modules/sampling/test_sampling_1d_release.py \
+  models/common/tests/modules/sampling/test_sampling_2d.py \
+  models/common/tests/modules/test_tensor_utils.py \
+  models/common/tests/models/galaxy \
+  models/common/tests/models/llama33_70b_galaxy/test_model_host.py
+```
+
+Baseline at job start: **395 passed**. At the end of this job: **398 passed**
+(three tests added). No test was deleted, `xfail`ed, skipped or relaxed.
+
+### Three things about pytest here that are easy to lose a run to
+
+1. **`pytest.ini` sets `timeout = 300` globally.** Any device test that loads a
+   checkpoint blows through it and dies looking exactly like a hang. Every device
+   run in this job passes `--timeout=900` explicitly.
+2. **`pytest.ini` `addopts` already contains `-vvs`**, so output is uncaptured,
+   but Python still block-buffers stdout to a file. Device runs use `python -u`;
+   without it a `TT_FATAL` traceback is lost when the process is killed.
+3. **Two of the brief's own gate paths take the mesh** — job 0 recorded this.
+   `models/common/tests/models/galaxy` collects
+   `test_column_user_selector_wh_galaxy.py`, and `test_plans.py` opens the UMD
+   driver for all 32 chips when run as a whole file. So the host gate must never
+   run while a device session is live, and it uses `--ignore-glob`.
+
+## Scripts in this directory
+
+| Script | What it is for |
+| --- | --- |
+| `host_gate.sh` | the host regression selection above |
+| `device_run.sh` | one device run; reaps **its own child by PID** on timeout |
+| `ensure_mesh_free.sh` | reap processes that hold `/dev/tenstorrent` — and only those |
+| `after_device_run.sh` | reap, then `tt-smi -glx_reset` after any non-clean run |
+| `cycle.sh` | `device_run` + `after_device_run`; always run it in the background |
+
+Three harness bugs were hit and fixed while building these, all worth inheriting:
+
+* a reaper matching `pgrep -f pytest` killed the **next** run's pytest a second
+  after it started (empty log, exit 137). Reap your own child by PID.
+* the same reaper killed a concurrent **host-only** gate. Only reap a process
+  that has `/dev/tenstorrent` open.
+* `tt-smi -glx_reset` fails with `[Errno 19] No such device` if a holder is still
+  alive. Kill the holder first, then reset.
+
+## Infrastructure instability worth reporting
+
+Recurring, roughly every other device run in the second half of the session:
+
+```text
+RuntimeError: Timed out waiting for ETH heartbeat on device
+ASIC ID: 87032054158471220, ETH core e9-0 (NOC0) to advance. Stuck at 0xabcd....
+  tt::umd::TopologyDiscovery::eth_heartbeat_running
+  tt::umd::TopologyDiscovery::discover_remote_devices
+```
+
+Always the **same ASIC**, `87032054158471220`, on ETH core `e9-0` or `e8-0`, and
+always at mesh open during topology discovery. A `tt-smi -glx_reset` clears it;
+it then returns after the next aborted run. Once it hung topology discovery
+outright rather than erroring (`logs/70_decode_step_run21.log`).
+
+It correlates with a preceding `TT_FATAL` inside a multi-sub-device program,
+which leaves the mesh un-drainable, so the working theory is a dirty fabric that
+the reset does not always fully restore on that one board. Mitigation adopted:
+reset after *every* non-clean run, and health-check with the 13-second partition
+probe before spending a run that loads a checkpoint.
+
+Logs: `48_`, `52_`, `56_`, `61_glx_reset_eth*.log`, and the ETH failures in
+`47_`, `51_`, `55_`, `68_`, `70_`.

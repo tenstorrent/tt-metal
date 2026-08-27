@@ -623,3 +623,56 @@ Host-only. Full account in `tttv2_milestone_b_evidence/reconcile/REPORT.md`.
 - Still open: the 1D device matrix (Milestone A P4, not this host); five pre-existing host failures in
   packages neither milestone owns, proven independent of this job; and everything in Milestone B
   remains unqualified on hardware.
+
+## Checkpoint 14 — `mb-llama`: first silicon, nine defects, and a dead mesh (2026-08-27)
+
+Plan steps 1-3 for Llama-3.3-70B on WH Galaxy `(8, 4)`. Full account:
+`tttv2_milestone_b_evidence/llama/REPORT.md`; handoff:
+`tttv2_milestone_b_briefs/job1_completion_handoff.md`.
+
+- **Step 1 host: PASS.** New `test_hf_conversion_host.py`, 9 tests, 3 fresh processes. Proves
+  numerically - not by shape - that `reverse_permute` composed with the interleaved rotation the
+  device kernel performs is the *same operator* as the HF layout composed with `rotate_half`, at
+  `head_dim 128` against the real Llama-3.3 scaled rotary; that the Meta tables carry the scaled
+  frequencies pair-duplicated and that llama3 scaling is actually applied; and that converted
+  attention/MLP/LM-head weights reproduce the unmodified HF modules at PCC >= 0.9999. The rotation is
+  read out of `get_rot_transformation_mat`, the matrix the kernel is handed, so the host reference
+  cannot drift from the device one. **This closes the RoPE-convention half of the author's ranked
+  risk #1.**
+- **Step 1 device: PASS.** One-layer model with real layer-0 weights constructs, seals the
+  prefetcher, resolves both CCL contexts, binds/unbinds a KV cache and tears down cleanly in 109 s.
+  First Milestone B code ever to run on hardware. **C1/D1 holds at real scale** - it is a hard
+  `ValueError` at construction and it did not fire. Run once; reported as one pass, not as
+  three-run evidence.
+- **Steps 2 and 3: NOT REACHED. No PCC, no accuracy, no demo output exists.** The night went on
+  making the decode graph execute at all.
+- **Nine defects, eight fixed, all one root cause:** a decode-mode program touching cores the
+  sub-device manager does not own. Measured partition: workers `x=1..3` and `x=5..6`, senders `x=0`
+  and `x=4`, and **8 cores in no sub-device at all**. The worker envelope is **not contiguous**, so
+  its bounding box spans the sender column - and `ttnn.reduce_scatter` uses exactly that bounding
+  box. `ttnn::prim::copy`, `ttnn.typecast`'s fallback and the generic reshard use the whole grid.
+  Fixed: the rope prefill clone (rope_2d), the rope `batch_grid` (recipes), the embedding decode
+  placement (Llama model), `RMSNorm2D` **deallocating its own return value** (latent since A;
+  nanobind hands back a new wrapper for the same tensor, so `is not` could not tell "no copy" from
+  "copy"), `dense_matmul_program_config`'s missing `allowed_worker_cores`, the attention all-reduce
+  op choice, `_relocate`'s three unsafe spellings, and the shared all-reduce buffer dtype.
+- **L3 is NOT closed.** The brief's premise was half wrong: the Milestone B recipes moved the *MLP*
+  to the ring/`gather_in0` form and left **both attention decode matmuls on the dense `(7,1)` grid
+  L3 names**. Confining it with `allowed_worker_cores` makes it legal but leaves three worker
+  columns, and its circular buffers then clash with the decode activations there (D-B9, open). The
+  structural fix is the ring form; `attention_qkv_collective_input_memcfg` is already shaped for
+  those 24 cores, so the design anticipated it.
+- **L1 was NOT measured** - the 80-layer model was never built. Job 0's O5 stands unchanged.
+- **One change in the tree has never run on hardware**: `in0_block_w` halved in
+  `dense_matmul_program_config`, the candidate fix for D-B9. Host-green, device-unverified, flagged
+  in the report and handoff. Everything else here ran or is host-only.
+- **`BLOCKED (infra)`: the mesh died.** Recurring ETH heartbeat timeouts at mesh open on one ASIC
+  (`87032054158471220`), then `Read 0xffffffff over PCIe ID 17`, then `tt-smi -ls` aborting with zero
+  boards, then `tt-smi -glx_reset` failing with `[Errno 6] ... '/dev/tenstorrent/7'` - it cannot
+  reset the mesh because the node it needs is gone. Two recovery attempts used, both failed. Needs an
+  IPMI power cycle or a reboot. 25 device processes and 23 resets this session.
+- Host gate at the final code state, driver-free selection: **390 passed, 0 failures**. Standard
+  selection: `13 failed, 385 passed`, and all 13 are `test_plans.py` failing to open the dead driver
+  - it was **398 passed** one code change earlier on a working mesh. `test_plans.py` is recorded as
+  NOT RUN at the final state, by infrastructure failure. Boundary greps for `_1d.py`, `llm_runtime`
+  and `qwen` are all empty. No test was deleted, `xfail`ed, skipped or relaxed.
