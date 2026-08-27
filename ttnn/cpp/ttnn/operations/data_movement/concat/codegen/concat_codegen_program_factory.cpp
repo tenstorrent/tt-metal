@@ -49,9 +49,8 @@ namespace {
 // merges this anonymous namespace with theirs, and untilize and repeat declare their own
 // kKernelDir, kCbIn, CoreSplit and work_for_core in the same enclosing ttnn::prim.
 
-// Host half of the block-cycling cursor shared by ops/concat/spec.py's
-// build_concat_rm (N=2, inlined) and build_concat_rm_nonwidth_nway (N>2,
-// _rm_nway_reader_cursor). Maps a core's first output stick to the per-input
+// Host half of the block-cycling cursor the non-width readers share, inlined for two
+// inputs and factored out for N. Maps a core's first output stick to the per-input
 // reader cursor: inputs before the current one are advanced a full block,
 // inputs after remain at the current block, and the current input carries the
 // within-block offset.
@@ -89,8 +88,8 @@ RmNwayCursor rm_nway_reader_cursor(const std::vector<uint32_t>& sticks_per_block
     return cursor;
 }
 
-// ops/concat/spec.py's num_accum_sticks: how many output sticks correspond to
-// one unit of the concat dimension, for a non-width `dim` (dim < ndim - 1).
+// How many output sticks correspond to one unit of the concat dimension, for a
+// non-width `dim` (dim < ndim - 1).
 uint32_t num_accum_sticks(const ttnn::Shape& out_shape, uint32_t dim) {
     const uint32_t ndim = out_shape.rank();
     uint32_t accum = 1;
@@ -112,10 +111,8 @@ struct ConcatCoreSplit {
     uint32_t work_per_core_2 = 0;
 };
 
-// Matches ops/concat/spec.py's factory.assemble(), which drives
-// ttnn.split_work_to_cores / corerange_to_cores at their row_wise=False
-// default (the same shared common/codegen_common/factory library
-// repeat_codegen's port also matched).
+// split_work_to_cores / corerange_to_cores at their row_wise=False default, which is
+// the core ordering the sibling codegen data-movement ports also assume.
 ConcatCoreSplit concat_split_work(IDevice* device, uint32_t total_work) {
     const auto grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
@@ -252,10 +249,8 @@ ProgramDescriptor create_descriptor_rm_width(
     const uint32_t out_page = static_cast<uint32_t>(dst->aligned_page_size());
     const uint32_t in1_noc_alignment = src1->alignment();
 
-    // Scratch CB granularity headroom for corruption seen composing an
-    // unaligned second stick directly into the assembly CB; see
-    // ops/concat/spec.py's build_concat_rm_width comment on the
-    // 8+16+16+10 bf16 cascade.
+    // Scratch CB granularity headroom: composing an unaligned second stick directly
+    // into the assembly CB corrupts it, seen on an 8+16+16+10 B bf16 cascade.
     const uint32_t l1_cb_granularity = device->allocator()->get_alignment(BufferType::L1);
     const uint32_t scratch_page = std::max(in0_page, in1_page) + l1_cb_granularity;
 

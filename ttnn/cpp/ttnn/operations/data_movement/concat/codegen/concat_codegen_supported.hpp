@@ -12,10 +12,9 @@
 
 namespace ttnn::operations::data_movement::concat_codegen {
 
-// Correctness/feasibility gate, transcribed from ops/concat/spec.py's RM builders
-// (build_concat_rm / build_concat_rm_width / build_concat_rm_nonwidth_nway /
-// build_concat_rm_width_nway) plus the manifest's row-major-only port_scope.
-// `dim` is already normalized (0..rank-1).
+// Correctness/feasibility gate for the four row-major builders. Consulted by the free
+// function's routing, by concat_force_codegen, and by prim::concat_codegen's validate, so
+// all three agree on the supported scope. `dim` is already normalized (0..rank-1).
 bool supported_by_codegen(
     const std::vector<Tensor>& input_tensors, uint32_t dim, const tt::tt_metal::MemoryConfig& output_mem_config);
 

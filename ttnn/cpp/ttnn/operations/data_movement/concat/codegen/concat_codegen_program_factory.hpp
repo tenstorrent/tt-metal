@@ -22,11 +22,9 @@ inline constexpr uint32_t kConcatNonWidthBatch = 4;
 // with a separate, unscaled read_batch=1 (N-way), so only write_batch (and the
 // CB depth it drives) is scaled for L1 fit.
 inline constexpr uint32_t kConcatWidthWriteBatch = 4;
-// ops/concat/spec.py's MAX_RM_NONWIDTH_NWAY_INPUTS: the nonwidth N-way reader's
-// runtime-arg count is 3 + 3*N words, comfortably under the portable
-// runtime-argument bound at N=64. spec.py defines no separate bound for
-// build_concat_rm_width_nway (RT layout 2 + 3*N, the same order), so this
-// ceiling is reused for both N-way builders.
+// The non-width N-way reader spends 3 + 3*N runtime-arg words and the width N-way
+// reader 2 + 3*N in the same order, so at N=64 both sit comfortably under the
+// portable runtime-argument bound. One ceiling covers both N-way builders.
 inline constexpr uint32_t kConcatMaxNwayInputs = 64;
 
 struct ConcatCbPlan {
