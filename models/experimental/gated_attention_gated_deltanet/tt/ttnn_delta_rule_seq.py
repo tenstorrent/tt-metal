@@ -317,6 +317,30 @@ def _masked_gram_plus_identity(kk, mask, identity, *, memory_config):
     return result
 
 
+def _normalize_chunk_matrix(L_mat, identity, *, batch, chunk_size, memory_config):
+    """Normalize ``L_mat`` while reusing its full-matrix storage.
+
+    After the diagonal has been reduced, the original ``L_mat`` value is dead:
+    the strict-lower matrix, its row-scaled form, and the final unit-diagonal
+    matrix all have the same shape, dtype, and layout.  Supplying that buffer as
+    ``output_tensor`` avoids requiring a second contiguous chunk-matrix-sized
+    allocation at each of those transitions.
+    """
+    D_mat = ttnn.multiply(L_mat, identity, memory_config=memory_config)
+    D_diag = ttnn.sum(D_mat, dim=-1, memory_config=memory_config)
+    _ck("D_diag", D_diag)
+    D_inv = ttnn.reciprocal(D_diag, memory_config=memory_config)
+    _ck("D_inv", D_inv)
+    ttnn.deallocate(D_diag)
+    D_inv_row = ttnn.reshape(D_inv, [batch, chunk_size, 1], memory_config=memory_config)
+
+    L_strict = ttnn.subtract(L_mat, D_mat, memory_config=memory_config, output_tensor=L_mat)
+    ttnn.deallocate(D_mat)
+    N = ttnn.multiply(D_inv_row, L_strict, memory_config=memory_config, output_tensor=L_strict)
+    L_unit = ttnn.add(identity, N, memory_config=memory_config, output_tensor=N)
+    return L_unit, D_inv_row
+
+
 def chunk_gated_delta_rule_seq(
     q,  # [BH, T, K] float32 on mesh
     k,  # [BH, T, K] float32 on mesh
@@ -484,21 +508,13 @@ def chunk_gated_delta_rule_seq(
     _ck("L_mat", L_mat)
 
     # ---- Normalize to unit-diagonal: L_unit = D^{-1} L_mat ----
-    D_mat = ttnn.multiply(L_mat, _eye_1cc, memory_config=_cmc)
-    D_diag = ttnn.sum(D_mat, dim=-1, memory_config=_cmc)
-    _ck("D_diag", D_diag)
-    D_inv = ttnn.reciprocal(D_diag, memory_config=_cmc)
-    _ck("D_inv", D_inv)
-    ttnn.deallocate(D_diag)
-    D_inv_row = ttnn.reshape(D_inv, [batch, chunk_size, 1], memory_config=_cmc)
-
-    L_strict = ttnn.subtract(L_mat, D_mat, memory_config=_cmc)
-    ttnn.deallocate(D_mat)
-    ttnn.deallocate(L_mat)
-    N = ttnn.multiply(D_inv_row, L_strict, memory_config=_cmc)
-    ttnn.deallocate(L_strict)
-    L_unit = ttnn.add(_eye_1cc, N, memory_config=_cmc)
-    ttnn.deallocate(N)
+    L_unit, D_inv_row = _normalize_chunk_matrix(
+        L_mat,
+        _eye_1cc,
+        batch=batch,
+        chunk_size=chunk_size,
+        memory_config=_cmc,
+    )
 
     v_beta_sc = ttnn.multiply(D_inv_row, v_beta_c, memory_config=_cmc)
     del v_beta_c
