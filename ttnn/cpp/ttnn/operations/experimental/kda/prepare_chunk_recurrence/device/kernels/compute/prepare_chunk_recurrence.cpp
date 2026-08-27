@@ -282,41 +282,43 @@ inline void copy_tile_to_buffer(DataflowBuffer& src, uint32_t src_tile, Dataflow
 // the masked 16x16 Horner path's thirty full-tile matmuls; the shorter dependency chain is also
 // expected to improve fp32 stability, but that must be validated empirically.
 inline void invert_doubling(
-    DataflowBuffer& src,
+    DataflowBuffer& negative_strict_lower_akk,
     uint32_t tile,
-    DataflowBuffer& out,
-    DataflowBuffer& state,
-    DataflowBuffer& final_state,
-    DataflowBuffer& state_two,
-    DataflowBuffer& state_three,
-    DataflowBuffer& eye) {
-    DataflowBuffer* power = &state;
-    DataflowBuffer* sum = &final_state;
-    DataflowBuffer* next_power = &state_two;
-    DataflowBuffer* product = &state_three;
+    DataflowBuffer& inverse,
+    DataflowBuffer& identity,
 
-    copy_tile_to_buffer(src, tile, *power);
+    // intermediate
+    DataflowBuffer& power_workspace,
+    DataflowBuffer& sum_workspace,
+    DataflowBuffer& next_power_workspace,
+    DataflowBuffer& product_workspace) {
+    DataflowBuffer* power = &power_workspace;
+    DataflowBuffer* sum = &sum_workspace;
+    DataflowBuffer* next_power = &next_power_workspace;
+    DataflowBuffer& product = product_workspace;
+
+    copy_tile_to_buffer(negative_strict_lower_akk, tile, *power);
     power->wait_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(eye, *power, *sum, 1);
+    elementwise_binary<ElementwiseBinaryOp::Add>(identity, *power, *sum, 1);
     sum->wait_front(1);
     matmul_blocks<1, 1, 1, false>(*power, *power, *next_power);
     next_power->wait_front(1);
     power->pop_front(1);
     power = next_power;
-    next_power = &state;
+    next_power = &power_workspace;
 
     for (uint32_t step = 0; step < 4; ++step) {
-        matmul_blocks<1, 1, 1, false>(*power, *sum, *product);
-        product->wait_front(1);
+        matmul_blocks<1, 1, 1, false>(*power, *sum, product);
+        product.wait_front(1);
         if (step < 3) {
             matmul_blocks<1, 1, 1, false>(*power, *power, *next_power);
             next_power->wait_front(1);
         }
         power->pop_front(1);
-        elementwise_binary<ElementwiseBinaryOp::Add>(*sum, *product, *power, 1);
+        elementwise_binary<ElementwiseBinaryOp::Add>(*sum, product, *power, 1);
         power->wait_front(1);
         sum->pop_front(1);
-        product->pop_front(1);
+        product.pop_front(1);
         if (step < 3) {
             DataflowBuffer* old_sum = sum;
             sum = power;
@@ -326,7 +328,7 @@ inline void invert_doubling(
             sum = power;
         }
     }
-    copy_tile_to_buffer(*sum, 0, out);
+    copy_tile_to_buffer(*sum, 0, inverse);
     sum->pop_front(1);
 }
 
@@ -435,6 +437,214 @@ inline void normalize_l2_rows(
     input.pop_front(matrix_tiles);
 }
 
+template <uint32_t Ct, uint32_t Vt>
+inline void prepare_v_beta(DataflowBuffer& v, DataflowBuffer& beta, DataflowBuffer& v_beta) {
+    constexpr uint32_t chunk_value_tiles = Ct * Vt;
+    multiply_by_column(v, beta, v_beta, Ct, Vt);
+    v.pop_front(chunk_value_tiles);
+}
+
+template <uint32_t Ct, uint32_t Kt>
+inline void prepare_gate_factors(
+    DataflowBuffer& g,
+    DataflowBuffer& prefix_sum_mask,
+    DataflowBuffer& sum_broadcast_matrix,
+    DataflowBuffer& decay,
+    DataflowBuffer& centered_decay,
+    DataflowBuffer& centered_inverse_decay,
+    DataflowBuffer& g_last,
+    DataflowBuffer& anchor_decay,
+
+    // intermediate
+    DataflowBuffer& scratch_0) {
+    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+
+    // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
+    // exp(G-anchor) nor exp(anchor-G) spans the full chunk range. Their products are
+    // unchanged, while realistic KDA gates no longer overflow exp(-G).
+    matmul_blocks<Ct, Ct, Kt, false>(prefix_sum_mask, g, centered_decay);
+    centered_decay.wait_front(chunk_key_tiles);
+    exponential_tiles(centered_decay, decay, chunk_key_tiles);  // exp(G), for scan-facing q_decay/kd
+    decay.wait_front(chunk_key_tiles);
+
+    matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, g, g_last);  // replicated G_last
+    g_last.wait_front(chunk_key_tiles);
+    g.pop_front(chunk_key_tiles);
+
+    {
+        DataflowBuffer& anchor_g = scratch_0;
+        multiply_by_half(g_last, anchor_g, chunk_key_tiles);  // anchor = G_last/2
+        anchor_g.wait_front(chunk_key_tiles);
+    }
+
+    {
+        DataflowBuffer& centered_g = anchor_decay;
+        {
+            DataflowBuffer& anchor_g = scratch_0;
+            elementwise_binary<ElementwiseBinaryOp::Subtract>(centered_decay, anchor_g, centered_g, chunk_key_tiles);
+        }
+        centered_g.wait_front(chunk_key_tiles);
+        centered_decay.pop_front(chunk_key_tiles);
+        exponential_tiles(centered_g, centered_decay, chunk_key_tiles);
+        centered_decay.wait_front(chunk_key_tiles);
+        negated_exponential_tiles(centered_g, centered_inverse_decay, chunk_key_tiles);
+        centered_inverse_decay.wait_front(chunk_key_tiles);
+        centered_g.pop_front(chunk_key_tiles);
+    }
+
+    {
+        DataflowBuffer& anchor_g = scratch_0;
+        exponential_tiles(anchor_g, anchor_decay, chunk_key_tiles);  // exp(G_last/2)
+        anchor_decay.wait_front(chunk_key_tiles);
+        anchor_g.pop_front(chunk_key_tiles);
+    }
+}
+
+template <uint32_t Ct, uint32_t Kt>
+inline void prepare_scan_and_pairwise_factors(
+    DataflowBuffer& q,
+    DataflowBuffer& k,
+    DataflowBuffer& beta,
+    DataflowBuffer& decay,
+    DataflowBuffer& centered_decay_to_final_decay,
+    DataflowBuffer& centered_inverse_decay,
+    DataflowBuffer& g_last_to_k_pairwise,
+    DataflowBuffer& q_decay,
+    DataflowBuffer& kd,
+    DataflowBuffer& k_beta_pairwise,
+    DataflowBuffer& q_pairwise) {
+    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+
+    {
+        DataflowBuffer& beta_k = q_pairwise;
+        multiply_by_column(k, beta, beta_k, Ct, Kt);
+        beta_k.wait_front(chunk_key_tiles);
+    }
+    beta.pop_front(Ct);
+
+    // Preserve exact scan-facing factors, and use anchored factors only for pairwise products.
+    elementwise_binary<ElementwiseBinaryOp::Multiply>(q, decay, q_decay, chunk_key_tiles);
+    {
+        DataflowBuffer& beta_k = q_pairwise;
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(beta_k, decay, kd, chunk_key_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(
+            beta_k, centered_decay_to_final_decay, k_beta_pairwise, chunk_key_tiles);
+        k_beta_pairwise.wait_front(chunk_key_tiles);  // beta*k*exp(G-anchor)
+        beta_k.pop_front(chunk_key_tiles);
+    }
+    elementwise_binary<ElementwiseBinaryOp::Multiply>(q, centered_decay_to_final_decay, q_pairwise, chunk_key_tiles);
+    q_pairwise.wait_front(chunk_key_tiles);  // q*exp(G-anchor)
+    q.pop_front(chunk_key_tiles);
+    centered_decay_to_final_decay.pop_front(chunk_key_tiles);
+    decay.pop_front(chunk_key_tiles);
+    exponential_tiles(
+        g_last_to_k_pairwise,
+        centered_decay_to_final_decay,
+        chunk_key_tiles);  // exp(G_last), for final decay
+    centered_decay_to_final_decay.wait_front(chunk_key_tiles);
+    g_last_to_k_pairwise.pop_front(chunk_key_tiles);
+    elementwise_binary<ElementwiseBinaryOp::Multiply>(k, centered_inverse_decay, g_last_to_k_pairwise, chunk_key_tiles);
+    g_last_to_k_pairwise.wait_front(chunk_key_tiles);  // k*exp(anchor-G)
+    k.pop_front(chunk_key_tiles);
+    centered_inverse_decay.pop_front(chunk_key_tiles);
+}
+
+template <uint32_t Ct, uint32_t Kt>
+inline void prepare_pairwise_matrices(
+    DataflowBuffer& k_beta_pairwise,
+    DataflowBuffer& q_pairwise,
+    DataflowBuffer& k_pairwise,
+    DataflowBuffer& causal_mask,
+    DataflowBuffer& akk,
+    DataflowBuffer& intra) {
+    constexpr uint32_t chunk_matrix_tiles = Ct * Ct;
+    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+
+    // Materialize both anchored pairwise products, then release k_beta_pairwise/q_pairwise before
+    // the doubling inverse reuses those CBs as private scratch. Only the masked Aqk is published to
+    // writer-facing intra; publishing the raw matrix creates a second consumer race.
+    matmul_blocks<Ct, Kt, Ct, true>(k_beta_pairwise, k_pairwise, akk);
+    akk.wait_front(chunk_matrix_tiles);  // raw beta*k_i*k_j*exp(G_i-G_j)
+    k_beta_pairwise.pop_front(chunk_key_tiles);
+
+    {
+        DataflowBuffer& aqk = k_beta_pairwise;
+        matmul_blocks<Ct, Kt, Ct, true>(q_pairwise, k_pairwise, aqk);
+        aqk.wait_front(chunk_matrix_tiles);  // raw q_i*k_j*exp(G_i-G_j)
+        q_pairwise.pop_front(chunk_key_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(aqk, causal_mask, intra, chunk_matrix_tiles);
+        aqk.pop_front(chunk_matrix_tiles);
+    }
+}
+
+template <uint32_t Ct>
+inline void prepare_t_inv(
+    DataflowBuffer& akk,
+    DataflowBuffer& causal_mask,
+    DataflowBuffer& identity,
+    DataflowBuffer& t_inv,
+
+    // intermediate
+    DataflowBuffer& scratch_0,
+    DataflowBuffer& scratch_1,
+    DataflowBuffer& scratch_2,
+    DataflowBuffer& scratch_3) {
+    constexpr uint32_t chunk_matrix_tiles = Ct * Ct;
+
+    {
+        DataflowBuffer& lower_akk = scratch_0;
+        DataflowBuffer& diagonal_akk = scratch_1;
+
+        // T_inv = (I + strictly_lower(Akk))^-1.
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(akk, causal_mask, lower_akk, chunk_matrix_tiles);
+        lower_akk.wait_front(chunk_matrix_tiles);  // lower(A), including diagonal
+        akk.pop_front(chunk_matrix_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(lower_akk, identity, diagonal_akk, chunk_matrix_tiles);
+        diagonal_akk.wait_front(chunk_matrix_tiles);  // diag(A)
+        elementwise_binary<ElementwiseBinaryOp::Subtract>(diagonal_akk, lower_akk, akk, chunk_matrix_tiles);
+        akk.wait_front(chunk_matrix_tiles);  // -strictly_lower(A)
+        diagonal_akk.pop_front(chunk_matrix_tiles);
+        lower_akk.pop_front(chunk_matrix_tiles);
+    }
+
+    {
+        DataflowBuffer& power_workspace = scratch_0;
+        DataflowBuffer& sum_workspace = scratch_1;
+        DataflowBuffer& next_power_workspace = scratch_2;
+        DataflowBuffer& product_workspace = scratch_3;
+
+        invert_doubling(
+            akk, 0, t_inv, identity, power_workspace, sum_workspace, next_power_workspace, product_workspace);
+    }
+    akk.pop_front(chunk_matrix_tiles);
+}
+
+template <uint32_t Ct, uint32_t Kt>
+inline void prepare_decay_outputs(
+    DataflowBuffer& k_pairwise,
+    DataflowBuffer& anchor_decay,
+    DataflowBuffer& final_decay_rows,
+    DataflowBuffer& k_dec_t,
+    DataflowBuffer& final_decay) {
+    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+
+    // dl [K,1] is the transpose of any replicated exp(G_last) row.
+    transpose_tile_row_to_column(final_decay_rows, final_decay, Kt);
+    final_decay_rows.pop_front(chunk_key_tiles);
+
+    {
+        DataflowBuffer& k_dec = final_decay_rows;
+
+        // k_dec_t = (kr * exp(G_last))^T.
+        elementwise_binary<ElementwiseBinaryOp::Multiply>(k_pairwise, anchor_decay, k_dec, chunk_key_tiles);
+        k_dec.wait_front(chunk_key_tiles);
+        k_pairwise.pop_front(chunk_key_tiles);
+        anchor_decay.pop_front(chunk_key_tiles);
+        transpose_tile_row_to_column(k_dec, k_dec_t, Kt);
+        k_dec.pop_front(chunk_key_tiles);
+    }
+}
+
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t SCALE_BITS, uint32_t EPS_BITS>
 TT_KERNEL void compute(uint32_t work_item_count) {
     static_assert(Ct == 1, "chunk KDA currently requires chunk_size=32");
@@ -443,6 +653,7 @@ TT_KERNEL void compute(uint32_t work_item_count) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
 
+    // Reader-produced inputs and constants.
     DataflowBuffer q(dfb::q);
     DataflowBuffer k(dfb::k);
     DataflowBuffer v(dfb::v);
@@ -451,20 +662,22 @@ TT_KERNEL void compute(uint32_t work_item_count) {
     DataflowBuffer eye(dfb::eye);
     DataflowBuffer tril(dfb::tril);
     DataflowBuffer ones(dfb::ones);
-    DataflowBuffer state(dfb::state);
+
+    // Writer-consumed outputs.
+    DataflowBuffer v_beta(dfb::v_beta);
+    DataflowBuffer t_inv(dfb::t_inv);
+    DataflowBuffer kd(dfb::w);
+    DataflowBuffer q_decay(dfb::q_decay);
+    DataflowBuffer intra(dfb::intra);
+    DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
+    DataflowBuffer v_new(dfb::v_new);
+
+    // Compute-only intermediates.
     DataflowBuffer decay(dfb::decay);
     DataflowBuffer decay_exp(dfb::decay_exp);
     DataflowBuffer decay_factor(dfb::decay_factor);
     DataflowBuffer lower_mask(dfb::lower_mask);
-    DataflowBuffer t_inv(dfb::t_inv);
-    DataflowBuffer v_beta(dfb::v_beta);
-    DataflowBuffer kd(dfb::w);
-    DataflowBuffer q_decay(dfb::q_decay);
-    DataflowBuffer intra(dfb::intra);
     DataflowBuffer state_two(dfb::state_two);
-    DataflowBuffer v_new(dfb::v_new);
-    DataflowBuffer output_intermediate(dfb::output_intermediate);
-    DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
     DataflowBuffer state_update(dfb::state_update);
     DataflowBuffer state_temporary(dfb::state_temporary);
     DataflowBuffer final_state(dfb::final_state);
@@ -489,96 +702,24 @@ TT_KERNEL void compute(uint32_t work_item_count) {
             q, state_temporary, scratch_one, scratch_two, scratch_three, EPS_BITS, SCALE_BITS);
         normalize_l2_rows<Ct, Kt, false>(k, final_state, scratch_one, scratch_two, scratch_three, EPS_BITS, SCALE_BITS);
 
-        // v_beta.
-        multiply_by_column(v, beta, v_beta, Ct, Vt);
-        v.pop_front(chunk_value_tiles);
-
-        // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
-        // exp(G-anchor) nor exp(anchor-G) spans the full chunk range. Their products are
-        // unchanged, while realistic KDA gates no longer overflow exp(-G).
-        matmul_blocks<Ct, Ct, Kt, false>(tril, g, decay);
-        decay.wait_front(chunk_key_tiles);
-        exponential_tiles(decay, decay_exp, chunk_key_tiles);  // exp(G), for scan-facing q_decay/kd
-        decay_exp.wait_front(chunk_key_tiles);
-
-        matmul_blocks<Ct, Ct, Kt, false>(ones, g, scratch_one);  // replicated G_last
-        scratch_one.wait_front(chunk_key_tiles);
-        g.pop_front(chunk_key_tiles);
-        multiply_by_half(scratch_one, scratch_two, chunk_key_tiles);  // anchor = G_last/2
-        scratch_two.wait_front(chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Subtract>(decay, scratch_two, output_intermediate, chunk_key_tiles);
-        output_intermediate.wait_front(chunk_key_tiles);
-        decay.pop_front(chunk_key_tiles);
-        exponential_tiles(output_intermediate, decay, chunk_key_tiles);
-        decay.wait_front(chunk_key_tiles);
-        negated_exponential_tiles(output_intermediate, decay_factor, chunk_key_tiles);
-        decay_factor.wait_front(chunk_key_tiles);
-        output_intermediate.pop_front(chunk_key_tiles);
-
-        exponential_tiles(scratch_two, state_update, chunk_key_tiles);  // exp(G_last/2)
-        state_update.wait_front(chunk_key_tiles);
-        // The anchor in scratch_two is dead after state_update. Reuse the empty buffer for k_beta,
-        // then release it before the pairwise-product stages reuse scratch_two.
-        scratch_two.pop_front(chunk_key_tiles);
-        multiply_by_column(final_state, beta, scratch_two, Ct, Kt);
-        scratch_two.wait_front(chunk_key_tiles);
-        beta.pop_front(Ct);
-
-        // Preserve exact scan-facing factors, and use anchored factors only for pairwise products.
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(state_temporary, decay_exp, q_decay, chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(state_temporary, decay, state_three, chunk_key_tiles);
-        state_three.wait_front(chunk_key_tiles);  // q*exp(G-anchor)
-        state_temporary.pop_front(chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(scratch_two, decay_exp, kd, chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(scratch_two, decay, state_two, chunk_key_tiles);
-        state_two.wait_front(chunk_key_tiles);  // beta*k*exp(G-anchor)
-        scratch_two.pop_front(chunk_key_tiles);
-        decay.pop_front(chunk_key_tiles);
-        decay_exp.pop_front(chunk_key_tiles);
-        exponential_tiles(scratch_one, decay, chunk_key_tiles);  // exp(G_last), for state decay dl
-        decay.wait_front(chunk_key_tiles);
-        scratch_one.pop_front(chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(final_state, decay_factor, scratch_one, chunk_key_tiles);
-        scratch_one.wait_front(chunk_key_tiles);  // k*exp(anchor-G)
-        final_state.pop_front(chunk_key_tiles);
-        decay_factor.pop_front(chunk_key_tiles);
-
-        // Materialize both anchored pairwise products, then release state_two/state_three before
-        // the doubling inverse reuses those CBs as private scratch. Only the masked Aqk is published to
-        // writer-facing intra; publishing the raw matrix creates a second consumer race.
-        matmul_blocks<Ct, Kt, Ct, true>(state_two, scratch_one, lower_mask);
-        lower_mask.wait_front(chunk_matrix_tiles);  // raw beta*k_i*k_j*exp(G_i-G_j)
-        state_two.pop_front(chunk_key_tiles);
-        matmul_blocks<Ct, Kt, Ct, true>(state_three, scratch_one, scratch_two);
-        scratch_two.wait_front(chunk_matrix_tiles);  // raw q_i*k_j*exp(G_i-G_j)
-        state_three.pop_front(chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(scratch_two, tril, intra, chunk_matrix_tiles);
-        scratch_two.pop_front(chunk_matrix_tiles);
-
-        // T_inv = (I + strictly_lower(Akk))^-1.
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(lower_mask, tril, scratch_two, chunk_matrix_tiles);
-        scratch_two.wait_front(chunk_matrix_tiles);  // lower(A), including diagonal
-        lower_mask.pop_front(chunk_matrix_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(scratch_two, eye, scratch_three, chunk_matrix_tiles);
-        scratch_three.wait_front(chunk_matrix_tiles);  // diag(A)
-        elementwise_binary<ElementwiseBinaryOp::Subtract>(scratch_three, scratch_two, lower_mask, chunk_matrix_tiles);
-        lower_mask.wait_front(chunk_matrix_tiles);  // -strictly_lower(A)
-        scratch_three.pop_front(chunk_matrix_tiles);
-        scratch_two.pop_front(chunk_matrix_tiles);
-        invert_doubling(lower_mask, 0, t_inv, state, final_state, state_two, state_three, eye);
-        lower_mask.pop_front(chunk_matrix_tiles);
-
-        // k_dec_t = (kr * exp(G_last))^T.
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(scratch_one, state_update, scratch_two, chunk_key_tiles);
-        scratch_two.wait_front(chunk_key_tiles);
-        scratch_one.pop_front(chunk_key_tiles);
-        transpose_tile_row_to_column(scratch_two, k_decay_transposed, Kt);
-        scratch_two.pop_front(chunk_key_tiles);
-
-        // dl [K,1] is the transpose of any replicated exp(G_last) row.
-        transpose_tile_row_to_column(decay, v_new, Kt);
-        state_update.pop_front(chunk_key_tiles);
-        decay.pop_front(chunk_key_tiles);
+        prepare_v_beta<Ct, Vt>(v, beta, v_beta);
+        prepare_gate_factors<Ct, Kt>(
+            g, tril, ones, decay_exp, decay, decay_factor, scratch_one, state_update, scratch_two);
+        prepare_scan_and_pairwise_factors<Ct, Kt>(
+            state_temporary,
+            final_state,
+            beta,
+            decay_exp,
+            decay,
+            decay_factor,
+            scratch_one,
+            q_decay,
+            kd,
+            state_two,
+            state_three);
+        prepare_pairwise_matrices<Ct, Kt>(state_two, state_three, scratch_one, tril, lower_mask, intra);
+        prepare_t_inv<Ct>(lower_mask, tril, eye, t_inv, scratch_two, scratch_three, state_two, state_three);
+        prepare_decay_outputs<Ct, Kt>(scratch_one, state_update, decay, k_decay_transposed, v_new);
         // v_beta, kd, q_decay, intra, k_dec_t, dl, T_inv stay pushed for the writer.
     }
 }
