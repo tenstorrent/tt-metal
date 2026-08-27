@@ -1226,7 +1226,10 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         multi_device_global_semaphore,
         subdevice_id,
         cluster_axis,
-        core_allocation_strategy};
+        core_allocation_strategy,
+        // Windowed gather radius. PHASE-0 PROTOTYPE: hard-coded 1 for the sparse-frames path to prove the
+        // clamped-AG + reader-sequencer path stays balanced; will become the mask-derived window span W.
+        /*window_radius=*/sparse_frames ? 1u : 0u};
     std::vector<Tensor> all_gather_input_tensors = {input_tensor_k};
     std::vector<std::optional<Tensor>> all_gather_output_tensors = {persistent_output_buffer_k};
     if (input_tensor_v.has_value()) {

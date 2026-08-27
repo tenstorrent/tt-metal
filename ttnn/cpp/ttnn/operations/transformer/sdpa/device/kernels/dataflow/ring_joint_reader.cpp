@@ -708,7 +708,13 @@ void kernel_main() {
             fused_op_receiver.get_next_ring_id_and_consume_one_signal();
         }
     }
-    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
+    // Windowed gather delivers only 1 + fwd + bwd shards -- this equals ring_size for a full/dense gather
+    // (the split sums to ring_size-1) but is fewer when the AG num_targets are clamped to a window radius.
+    // Loop exactly what the sequencer will deliver so get_next_ring_id_and_sync() never waits on a shard
+    // the clamped all-gather did not send. The +-hop sequencer order means bits 0..2W of
+    // active_ring_iter_mask are the window shards, so the active check below stays valid unchanged.
+    const uint32_t sdpa_ring_iterations =
+        has_sliding_window ? 1u : (1u + fused_op_receiver.seq.expected[0] + fused_op_receiver.seq.expected[1]);
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const bool ring_iter_is_active = has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
         // Sliding already advanced/synchronized the sequencer above and uses a synthetic local

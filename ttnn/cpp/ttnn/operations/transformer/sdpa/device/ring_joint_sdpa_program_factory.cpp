@@ -486,6 +486,14 @@ RingWritePlan build_ring_write_plan(
         std::swap(num_targets_forward, num_targets_backward);
     }
 
+    // Windowed gather: mirror the AG helper's num_targets clamp so the reader-sequencer expects exactly
+    // the +-window_radius shards the clamped all-gather delivers (must stay in lockstep, else deadlock).
+    if (args.all_gather_operation_attributes.window_radius > 0) {
+        const uint32_t w = args.all_gather_operation_attributes.window_radius;
+        num_targets_forward = std::min<uint32_t>(num_targets_forward, w);
+        num_targets_backward = std::min<uint32_t>(num_targets_backward, w);
+    }
+
     if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear) {
         plan.forward_writes_expected = num_targets_backward;
         plan.backward_writes_expected = num_targets_forward;
@@ -3038,7 +3046,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
             // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
             args.kv_cache_num_layers,
-            args.kv_cache_layer_idx);
+            args.kv_cache_layer_idx,
+            // Windowed gather radius (0 = full ring). Set on the AG attributes for the sparse-frames path.
+            args.all_gather_operation_attributes.window_radius);
     }
 
     return desc;
