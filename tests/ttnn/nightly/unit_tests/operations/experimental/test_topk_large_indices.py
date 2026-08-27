@@ -144,6 +144,7 @@ def test_topk_large_indices_random_bfloat16_ties_return_distinct_indices(device)
     ],
 )
 def test_topk_large_indices_fused_segment_boundaries(device, k, num_chunks, tail_trim):
+    # The input has num_chunks K-wide chunks; tail_trim shortens the final chunk.
     n = num_chunks * k - tail_trim
     torch_input = _make_large_index_input(num_rows=1, n=n, k=k)
     tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
