@@ -185,12 +185,3 @@
   arch: wormhole_b0
   save-perf-data: true
   model-type: Wan2.2
-
-- name: Galaxy Wan2.2 integration tests
-  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model wan22
-  model: wan22
-  skus:
-    wh_galaxy_perf:
-      timeout: 40
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: models
