@@ -1,0 +1,2 @@
+420 400 a2_01_geometry models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_geometry_is_decoupled_8x4_qwen3_32b
+900 840 a2_02_qknorm models/common/tests/models/qwen3_32b_galaxy/test_model_wh_galaxy.py::test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill

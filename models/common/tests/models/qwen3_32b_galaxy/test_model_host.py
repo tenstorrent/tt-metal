@@ -139,8 +139,19 @@ def test_parameters_resolve_the_decoupled_head_geometry():
     assert geometry.attention_dim == 8192
     assert geometry.local_attention_dim == 1024
     assert geometry.local_dim == 1280
-    assert params.padded_vocab_size == 152064
-    assert geometry.local_padded_vocab_size == 152064 // 8
+    # 153600, not 152064. `galaxy_padded_vocab_size` pads to
+    # `GALAXY_ROWS * RING_ALIGNMENT` = 8 * 768 = 6144, which is what makes the
+    # LM head's `all_reduce_async` reduction exact: its kernel does
+    # `cb_in.wait_front(num_blocks * block_num_tiles)` on every output core with
+    # one uniform shard size, so a tensor whose width is not exactly
+    # `cores * shard_width` leaves the last core waiting for tiles the fabric
+    # never sends - no abort, no traceback, a host hang (D-B19). This assertion
+    # was written against the pre-D-B19 padding and has been stale since; the
+    # Qwen host suites are not in the Llama host gate, so nothing caught it.
+    #   151936 -> 153600, 19200/device, 600 tiles, 50 reduce cores x 12 tiles,
+    #   1664 masked columns.
+    assert params.padded_vocab_size == 153600
+    assert geometry.local_padded_vocab_size == 153600 // 8 == 19200
 
 
 def test_parameters_support_a_one_layer_model():
@@ -337,21 +348,32 @@ def test_prefetch_registration_is_ordered_per_layer():
     )
     registration = lazy.prefetch_registration()
 
-    assert QWEN3_32B_PREFETCHED_WEIGHT_NAMES == ("wqkv", "wo", "w1", "w3", "w2")
+    # Exactly the three MLP projections, in issue order, and **not** the
+    # attention ones. A prefetched matmul reads its weight from the global
+    # circular buffer in registration order, and only the 24 ring cores receive
+    # that buffer; `recipes.py` puts the MLP on the ring
+    # (`ring_matmul_program_config`) and the attention decode projections on a
+    # confined worker rectangle (`dense_matmul_program_config`, Milestone A's
+    # L3). Registering `wqkv`/`wo` anyway put two unconsumed entries per layer
+    # into the buffer and shifted every later consumer by one, so the MLP's `w1`
+    # read the entry meant for `wqkv` - measured for Llama as D-B25a at decode
+    # MLP PCC 0.096 with every configuration field correct.
+    assert QWEN3_32B_PREFETCHED_WEIGHT_NAMES == ("w1", "w3", "w2")
     assert [name for name, _ in registration] == [
         f"layer[{index}].{name}" for index in range(2) for name in QWEN3_32B_PREFETCHED_WEIGHT_NAMES
     ]
     # Decode weights carry the DRAM ring placement; prefill stays interleaved.
     first = lazy.layers[0]
-    assert registration[0][1] is first.wqkv
-    assert first.wqkv.memory_config != ttnn.DRAM_MEMORY_CONFIG
-    assert first.prefill_wqkv.memory_config == ttnn.DRAM_MEMORY_CONFIG
-    assert first.wqkv.dtype == first.prefill_wqkv.dtype
-    assert first.wqkv.mesh_mapper_config is first.prefill_wqkv.mesh_mapper_config
-    # The per-head Q/K norms are layer state, never prefetched ring operands.
+    assert registration[0][1] is first.w1
+    assert first.w1.memory_config != ttnn.DRAM_MEMORY_CONFIG
+    assert first.prefill_w1.memory_config == ttnn.DRAM_MEMORY_CONFIG
+    assert first.w1.dtype == first.prefill_w1.dtype
+    assert first.w1.mesh_mapper_config is first.prefill_w1.mesh_mapper_config
+    # The attention projections and the per-head Q/K norms are layer state,
+    # never prefetched ring operands.
     registered = {id(weight) for _, weight in registration}
-    assert id(first.q_norm) not in registered
-    assert id(first.k_norm) not in registered
+    for excluded in (first.wqkv, first.wo, first.q_norm, first.k_norm):
+        assert id(excluded) not in registered
 
 
 def test_qk_norms_resolve_to_head_local_geometry():
@@ -701,3 +723,117 @@ def test_relocate_never_uses_the_full_grid_copy_or_typecast_on_sharded_input():
     assert "sharded_to_interleaved" in source
     assert "interleaved_to_sharded" in source
     assert "ttnn.to_memory_config(tensor, memory_config, dtype)" not in source, "the three-argument form is full-grid"
+
+
+def test_attention_decode_context_names_the_worker_subdevice_but_carries_no_global_cb():
+    """The confined attention decode matmuls must not see the ring's buffer.
+
+    ``Attention2D`` reads ``global_cb`` and ``worker_sub_device_id`` off its
+    ``decode_prefetch_context`` at every call. Handing it the real prefetch
+    context does both: it names the sub-device (needed - without it a ttnn
+    matmul defaults to sub-device *zero*, the prefetch senders) **and** offers a
+    global circular buffer the worker rectangle cannot receive from. The
+    ``_UnprefetchedContext`` wrapper keeps the first and drops the second. See
+    ``QWEN3_32B_PREFETCHED_WEIGHT_NAMES``.
+    """
+
+    config = _transformer_config()
+    attention = config.block_configs[0].attention_config
+
+    assert attention.decode_prefetch_context.global_cb is None
+    assert attention.decode_prefetch_context.worker_sub_device_id == "decode-worker"
+    # Prefill is untouched: it is not partitioned the way decode is.
+    assert attention.prefill_prefetch_context.worker_sub_device_id == "prefill-worker"
+    # The MLP still receives the real context, because its three projections are
+    # exactly the ones the prefetcher registers.
+    mlp = config.block_configs[0].mlp_config
+    assert mlp.decode_prefetch_context.worker_sub_device_id == "decode-worker"
+    assert not isinstance(mlp.decode_prefetch_context, galaxy_model._UnprefetchedContext)
+
+
+def test_decode_lm_head_uses_the_ring_placement_and_the_bfloat8_reduction():
+    """The decode LM head is the 24-core gather-in0 ring, not interleaved L1.
+
+    Three omissions, each with its own measured symptom on `(8, 4)`:
+
+    * no ``decode_sub_device_id`` - the ring matmul defaults to sub-device 0,
+      the prefetch senders: ``TT_FATAL ... Kernel group cores do not match sub
+      device cores``;
+    * ``ttnn.L1_MEMORY_CONFIG`` for the input - interleaved, so the matmul
+      spreads over the whole compute grid the decode manager does not own;
+    * a bfloat16 reduction buffer - ``GALAXY_COLUMNS`` times the logits width,
+      ~96 kB per core, which clashes with the ring matmul's circular buffers on
+      the cores they share. No core count fixes it; bfloat16 cannot get below
+      ~82 kB.
+    """
+
+    config = _transformer_config()
+    lm_head = config.lm_head_config
+    decode = config.decode_placements
+
+    assert lm_head.decode_input_memcfg == decode.lm_head_input_memcfg
+    assert lm_head.decode_output_memcfg == decode.lm_head_output_memcfg
+    assert lm_head.decode_input_memcfg.is_sharded(), "an interleaved in0 spreads over the full grid"
+    assert lm_head.decode_program_configs == (decode.lm_head_program_config,)
+    assert lm_head.decode_output_dtype == ttnn.bfloat8_b == QWEN3_32B_GALAXY_ACCURACY.lm_head_output_dtype
+    # Both ids are lambdas over the *resources* manager's per-mode context, not
+    # the prefetcher's, because the collective and the matmul must name the same
+    # sub-device the loaded manager owns.
+    assert lm_head.decode_sub_device_id() is config.resources.context("decode").worker_sub_device_id
+    assert lm_head.prefill_sub_device_id() is config.resources.context("prefill").worker_sub_device_id
+    # Prefill keeps interleaved DRAM: many row tiles, and an unpartitioned grid.
+    assert lm_head.prefill_input_memcfg == ttnn.DRAM_MEMORY_CONFIG
+    assert lm_head.prefill_output_memcfg == ttnn.DRAM_MEMORY_CONFIG
+
+
+def test_the_fused_qk_rotary_is_the_default_everywhere_it_can_be_set():
+    """On a prefetcher mesh the non-fused pair is the Blackhole fallback.
+
+    It expects a different cos/sin layout, and choosing it silently writes a
+    corrupt K into the cache: measured for Llama as D-B25b, a decode K with
+    ``|max| = inf`` on user 0 and ``8.773e+37`` on user 8 - different garbage per
+    column, i.e. uninitialised memory - with V exact beside it, because V does
+    not pass through RoPE. Qwen has 64 heads against 8 KV heads, so the head-row
+    asymmetry that exposes it is larger here.
+    """
+
+    for function in (
+        galaxy_model.build_qwen3_32b_galaxy_transformer_2d_config,
+        galaxy_model.build_qwen3_32b_galaxy_model,
+        hf_adaptor.from_pretrained,
+    ):
+        default = inspect.signature(function).parameters["use_qk_fused_rotary"].default
+        assert default is True, f"{function.__name__} still defaults to the non-fused rotary pair"
+
+    config = _transformer_config()
+    assert config.rope_config.use_qk_fused is True
+
+
+def test_the_adaptor_exposes_a_checkpoint_loader_seam():
+    """``load_hf_model`` is what makes three fresh processes affordable.
+
+    The default materialises all 62 GB of the 64-layer checkpoint once per
+    process. A caller that only needs a layer subset injects a loader that reads
+    only the shards it needs; the module stays independent of the test tree
+    rather than importing from it.
+    """
+
+    parameter = inspect.signature(hf_adaptor.from_pretrained).parameters["load_hf_model"]
+    assert parameter.default is None
+    source = inspect.getsource(hf_adaptor.from_pretrained)
+    assert "load_hf_model()" in source
+
+
+def test_relocate_reaches_an_interleaved_target_in_one_hop():
+    """Sharded -> non-DRAM interleaved must not stage through DRAM first.
+
+    The two-hop form (``sharded_to_interleaved`` into DRAM, then
+    ``to_memory_config`` into the target) is an interleaved-to-interleaved move
+    for any target that is not DRAM, and therefore ``ttnn::prim::copy`` on the
+    full compute grid. That is defect D-B10, and it is latent for every
+    interleaved target that is not DRAM, in prefill as well as decode.
+    """
+
+    source = inspect.getsource(galaxy_model._relocate)
+    assert "ttnn.sharded_to_interleaved(tensor, target_memcfg, output_dtype=cast_to)" in source
+    assert "ttnn.to_memory_config(staged, target_memcfg)" not in source

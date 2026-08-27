@@ -272,8 +272,27 @@ def from_pretrained(
     n_layers: int | None = None,
     paged_attention_config: GalaxyPagedAttentionConfig | None = None,
     enable_device_sampling: bool = True,
-    use_qk_fused_rotary: bool = False,
+    # True, matching the production Galaxy model. The Galaxy attention decode
+    # path selects the fused op on exactly the prefetcher condition -
+    #     if self.use_prefetcher:
+    #         q, k = ttnn.experimental.rotary_embedding_llama_fused_qk(...)
+    #     else:
+    #         ... rotary_embedding_llama(q, ...); rotary_embedding_llama(k, ...)
+    # - so on a prefetcher mesh the non-fused pair is the *fallback* path, kept
+    # for Blackhole, and it expects a different cos/sin layout: `get_rot_mats`
+    # returns [1, 1, local_batch, head_dim] for the non-fused decode op, while
+    # `get_rm_rot_mats` expands to [1, expanded_batch, heads, head_dim] for the
+    # fused one.
+    #
+    # Measured for Llama on `(8, 4)` with the non-fused pair (D-B25b): the decode
+    # step wrote a K of |max| = inf into the cache at the current position while
+    # V, which does not pass through RoPE, was exact at PCC 0.99973 - and the
+    # prefix prefill wrote was still 0.99993. Qwen3-32B has 64 heads against 8 KV
+    # heads, so the head-row asymmetry that exposes this is larger here, not
+    # smaller.
+    use_qk_fused_rotary: bool = True,
     cache_dir: Path | str | None = None,
+    load_hf_model: Any = None,
 ) -> Qwen3_32BGalaxyForCausalLM:
     """Load `Qwen/Qwen3-32B` onto one WH Galaxy `(8, 4)` mesh.
 
@@ -298,7 +317,18 @@ def from_pretrained(
     cache_path = _cache_path(hf_model, cache_dir)
     paged = paged_attention_config or default_paged_attention_config(params)
 
-    hf = AutoModelForCausalLM.from_pretrained(hf_model, torch_dtype=torch.bfloat16, **load_kwargs)
+    # `load_hf_model` is a seam, not a convenience. The default loads all 62 GB
+    # of a 64-layer checkpoint eagerly, once per process, which is right for the
+    # accuracy gate and ruinous for anything that only needs a layer subset: the
+    # three-runs-in-fresh-processes rule costs three full loads. Callers that want
+    # a subset inject a loader that reads only the shards it needs - the tests use
+    # `galaxy_checkpoint.load_layer_subset_causal_lm` - and this module stays
+    # independent of the test tree rather than importing from it.
+    hf = (
+        load_hf_model()
+        if load_hf_model is not None
+        else AutoModelForCausalLM.from_pretrained(hf_model, torch_dtype=torch.bfloat16, **load_kwargs)
+    )
     hf.eval()
     try:
         weights = convert_hf_model_weights(hf, params=params)

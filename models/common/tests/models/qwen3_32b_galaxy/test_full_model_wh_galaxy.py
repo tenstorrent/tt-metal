@@ -103,6 +103,16 @@ def _load(mesh_device: ttnn.MeshDevice, **overrides: Any):
         n_layers=_layers(),
     )
     kwargs.update(overrides)
+    # A layer subset reads only the shards it needs instead of materialising the
+    # whole 64-layer checkpoint. Only for iteration: every gate in this file
+    # ignores `_layers()` and runs all 64.
+    layers = kwargs.get("n_layers")
+    if layers:
+        from models.common.tests.models.galaxy.galaxy_checkpoint import load_layer_subset_causal_lm
+
+        kwargs["load_hf_model"] = lambda: load_layer_subset_causal_lm(
+            hf_model, layer_indices=tuple(range(layers)), revision=_hf_revision()
+        )
     return from_pretrained(mesh_device, **kwargs)
 
 
@@ -179,6 +189,16 @@ def test_qwen3_32b_galaxy_teacher_forced_accuracy_batch1(mesh_device: ttnn.MeshD
             logits = runner.teacher_forced_decode(prompt, [int(value) for value in targets], slot=0)
         predictions = [int(value) for value in torch.argmax(logits, dim=-1)]
         top1, top5 = teacher_forcing_accuracy(predictions, aligned)
+        # The raw counts, not only the percentage: a passing gate that records no
+        # number is not evidence.
+        top1_hits = sum(1 for index, token in enumerate(predictions) if token == int(aligned[index, 0]))
+        top5_hits = sum(1 for index, token in enumerate(predictions) if token in aligned[index, :].tolist())
+        print(
+            f"[accuracy] reference={_REFERENCE_NAME} prompt={len(prompt)} decode={len(predictions)}\n"
+            f"[accuracy] top-1 {top1_hits}/{len(predictions)} = {top1:.4f} (gate >= {_TOP1_GATE})\n"
+            f"[accuracy] top-5 {top5_hits}/{len(predictions)} = {top5:.4f} (gate >= {_TOP5_GATE})",
+            flush=True,
+        )
         assert top1 >= _TOP1_GATE, f"top-1 {top1:.3f} below the {_TOP1_GATE:.2f} gate"
         assert top5 >= _TOP5_GATE, f"top-5 {top5:.3f} below the {_TOP5_GATE:.2f} gate"
     finally:

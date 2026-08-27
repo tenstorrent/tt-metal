@@ -121,9 +121,28 @@ QWEN3_32B_CHECKPOINT_CONTRACT = {
 }
 
 #: Decode weights streamed by the prefetcher, in the order a layer issues them.
-#: The per-head Q/K norms are not prefetched: they are 128-element vectors
-#: consumed by a head-local norm, not ring matmul operands.
-QWEN3_32B_PREFETCHED_WEIGHT_NAMES = ("wqkv", "wo", "w1", "w3", "w2")
+#:
+#: **The attention projections are not in this list, and that is a correctness
+#: requirement, not a performance choice.** The prefetcher's global circular
+#: buffer is received by the 24 ring cores (``galaxy_sender_receiver_mapping``),
+#: and a prefetched matmul reads its weight from that buffer in registration
+#: order. Only the MLP's three projections run on the ring: `recipes.py` builds
+#: `mlp_w1_w3_program_config` / `mlp_w2_program_config` with
+#: ``ring_matmul_program_config`` but `attention_qkv_program_config` /
+#: `attention_wo_program_config` with ``dense_matmul_program_config``, i.e. a
+#: confined worker rectangle (Milestone A limitation L3), and a matmul there
+#: cannot take its weight from a buffer whose receivers are the ring.
+#:
+#: Registering them anyway put two unconsumed entries per layer into the global
+#: CB, so every later consumer was shifted by one and the MLP's `w1` read the
+#: entry meant for `wqkv`. Measured for Llama on `(8, 4)` as D-B25a: decode
+#: attention PCC 0.737 and decode MLP 0.096 against Hugging Face, with the MLP
+#: wrong even as a *function* of its own input, and every configuration field
+#: correct. This package carried the same defect unchanged.
+#:
+#: The per-head Q/K norms were never prefetched either: they are 128-element
+#: vectors consumed by a head-local norm, not ring matmul operands.
+QWEN3_32B_PREFETCHED_WEIGHT_NAMES = ("w1", "w3", "w2")
 
 _MLP_PREFILL_RESHAPE_CUTOFF = 1024
 
@@ -162,6 +181,23 @@ class Qwen3_32BGalaxyPrecision:
     prefill_mlp_activation_dtype: Any = ttnn.bfloat8_b
     prefill_residual_dtype: Any = ttnn.bfloat16
     attention_collective_dtype: Any = ttnn.bfloat8_b
+    # The decode logits, and with them the LM head's column all-reduce buffer.
+    # bfloat8_b, not `decode_activation_dtype`, for two reasons that agree:
+    #
+    #  * it is the qualified precision. The production Galaxy LM head calls
+    #    `ttnn.linear(..., dtype=ttnn.bfloat8_b)` and allocates its buffer at
+    #    bfloat8_b, and the accuracy gates this milestone reuses were set
+    #    against that;
+    #  * the reduction buffer is `GALAXY_COLUMNS` times the width of the logits,
+    #    so at bfloat16 it is ~96 kB per core and clashes with the ring matmul's
+    #    circular buffers on the cores they share:
+    #        TT_THROW ... Statically allocated circular buffers in program N
+    #        clash with L1 buffers on core range [5-6 - 6-7]
+    #
+    # The *accumulation* is unaffected: the all-reduce runs `fp32_dest_acc=True`,
+    # because a bfloat16 cross-device sum of the logits is order-dependent on ETH
+    # ring arrival. Only the stored result is bfloat8_b, exactly as upstream.
+    lm_head_output_dtype: Any = ttnn.bfloat8_b
 
     attention_kernel_config: Any = field(default_factory=compute_kernel_config)
     mlp_ff1_ff3_kernel_config: Any = field(default_factory=lambda: compute_kernel_config(packer_l1_acc=True))
@@ -444,6 +480,41 @@ def _lazy(
 
 def _mesh_mapper(*placements: Any) -> ttnn.MeshMapperConfig:
     return ttnn.MeshMapperConfig(placements=list(placements), mesh_shape_override=ttnn.MeshShape(*GALAXY_MESH_SHAPE))
+
+
+class _UnprefetchedContext:
+    """A prefetch context that names the worker sub-device but no global CB.
+
+    `Attention2D` reads `global_cb` and `worker_sub_device_id` off its
+    `decode_prefetch_context` at every call. The confined attention decode
+    matmuls must still be told their sub-device - without it a ttnn matmul
+    defaults to sub-device *zero*, the prefetch senders (D-B13) - but they must
+    **not** be handed a global circular buffer they cannot receive from. See
+    `QWEN3_32B_PREFETCHED_WEIGHT_NAMES`.
+    """
+
+    def __init__(self, context: Any):
+        self._context = context
+
+    @property
+    def global_cb(self) -> None:
+        return None
+
+    @property
+    def worker_sub_device_id(self) -> Any:
+        return self._context.worker_sub_device_id
+
+    @property
+    def sub_device_id(self) -> Any:
+        return self._context.worker_sub_device_id
+
+    @property
+    def mesh_device(self) -> Any:
+        return self._context.mesh_device
+
+    @property
+    def mode(self) -> Any:
+        return getattr(self._context, "mode", None)
 
 
 def _row_output_mapper() -> ttnn.MeshMapperConfig:
@@ -854,7 +925,10 @@ def _build_block_config(
         decode_wo_kernel_config=precision.attention_kernel_config,
         decode_activation_dtype=precision.decode_activation_dtype,
         prefill_sequence_configs=_attention_sequence_configs(geometry, precision, prefill, chunked_lengths),
-        decode_prefetch_context=decode_context,
+        # No global circular buffer for the confined attention decode matmuls -
+        # they do not run on the ring that receives it - but still the worker
+        # sub-device id, without which ttnn defaults to the prefetch senders.
+        decode_prefetch_context=_UnprefetchedContext(decode_context),
         prefill_prefetch_context=prefill_context,
         intermediate_releaser=deallocate_if_allocated,
     )
@@ -956,7 +1030,25 @@ def build_qwen3_32b_galaxy_transformer_2d_config(
     prefetcher: Any,
     norm_eps: float,
     rope_theta: float,
-    use_qk_fused_rotary: bool = False,
+    # True, matching the production Galaxy model. The Galaxy attention decode
+    # path selects the fused op on exactly the prefetcher condition -
+    #     if self.use_prefetcher:
+    #         q, k = ttnn.experimental.rotary_embedding_llama_fused_qk(...)
+    #     else:
+    #         ... rotary_embedding_llama(q, ...); rotary_embedding_llama(k, ...)
+    # - so on a prefetcher mesh the non-fused pair is the *fallback* path, kept
+    # for Blackhole, and it expects a different cos/sin layout: `get_rot_mats`
+    # returns [1, 1, local_batch, head_dim] for the non-fused decode op, while
+    # `get_rm_rot_mats` expands to [1, expanded_batch, heads, head_dim] for the
+    # fused one.
+    #
+    # Measured for Llama on `(8, 4)` with the non-fused pair (D-B25b): the decode
+    # step wrote a K of |max| = inf into the cache at the current position while
+    # V, which does not pass through RoPE, was exact at PCC 0.99973 - and the
+    # prefix prefill wrote was still 0.99993. Qwen3-32B has 64 heads against 8 KV
+    # heads, so the head-row asymmetry that exposes this is larger here, not
+    # smaller.
+    use_qk_fused_rotary: bool = True,
     paged_attention_config: GalaxyPagedAttentionConfig | None = None,
     enable_device_sampling: bool = True,
     chunked_prefill_sequence_lengths: tuple[int, ...] = (),
@@ -1056,19 +1148,50 @@ def build_qwen3_32b_galaxy_transformer_2d_config(
     lm_head_config = LMHead2DConfig(
         output_weights=(lazy_weights.lm_head,),
         vocab_size=geometry.vocab_size,
-        decode_collective=GalaxyColumnAllReduce(mesh_device),
+        # One collective per mode, each naming its own worker sub-device. Without
+        # the sub-device id the reduction places workers on the whole compute
+        # grid, which the loaded decode manager does not own.
+        decode_collective=GalaxyColumnAllReduce(
+            mesh_device,
+            subdevice_id=lambda: resources.context("decode").worker_sub_device_id,
+            # Decode goes through the keyed persistent buffer, because
+            # `ttnn.all_reduce`'s buffer-less path falls back to a composite
+            # all-gather whose internal `concat` is not sub-device aware.
+            resources=resources,
+            placements=decode,
+            dtype=precision.lm_head_output_dtype,
+        ),
+        prefill_collective=GalaxyColumnAllReduce(
+            mesh_device,
+            subdevice_id=lambda: resources.context("prefill").worker_sub_device_id,
+        ),
         mesh_device=mesh_device,
         dim=geometry.dim,
         padded_vocab_size=geometry.padded_vocab_size,
         max_batch_size=geometry.max_batch_size,
         compute_kernel_config=precision.lm_head_kernel_config,
+        # Both weights stay interleaved DRAM, and saying so here is the honest
+        # description rather than a choice: `resolve_lazy_weight` fills only the
+        # *None* fields of a LazyWeight, and `_lazy` already gave this one
+        # `ttnn.DRAM_MEMORY_CONFIG`, so any other value here would be silently
+        # discarded rather than applied.
         decode_weights_memcfgs=(ttnn.DRAM_MEMORY_CONFIG,),
         prefill_weights_memcfgs=(ttnn.DRAM_MEMORY_CONFIG,),
-        decode_input_memcfg=ttnn.L1_MEMORY_CONFIG,
+        # Decode runs the 24-core gather-in0 ring - the same ring the MLP uses,
+        # and the one the production LM head has always used. Prefill keeps
+        # interleaved DRAM: it has many row tiles, so a 2D multicast matmul can
+        # spread over them, and its mode plan is not partitioned the way
+        # decode's is.
+        decode_input_memcfg=decode.lm_head_input_memcfg,
         prefill_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
-        decode_output_memcfg=ttnn.L1_MEMORY_CONFIG,
+        decode_output_memcfg=decode.lm_head_output_memcfg,
         prefill_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
-        decode_output_dtype=precision.decode_activation_dtype,
+        decode_program_configs=(decode.lm_head_program_config,),
+        # The ring matmul intersects its cores with this sub-device, and defaults
+        # to sub-device 0 - the prefetch senders - if it is not told.
+        decode_sub_device_id=lambda: resources.context("decode").worker_sub_device_id,
+        prefill_sub_device_id=lambda: resources.context("prefill").worker_sub_device_id,
+        decode_output_dtype=precision.lm_head_output_dtype,
         prefill_output_dtype=precision.prefill_activation_dtype,
     )
     # Sampling2D consumes logits whose users are sharded over the four mesh
@@ -1159,15 +1282,29 @@ def _relocate(tensor: Any, memory_config: Any, dtype: Any = None) -> Any:
     cast_to = dtype if needs_dtype else None
 
     if source_memcfg.is_sharded():
+        if not target_memcfg.is_sharded():
+            # Sharded to interleaved in ONE hop, straight into the requested
+            # interleaved config. `sharded_to_interleaved` runs on its *input's*
+            # `shard_spec.grid`, so it stays inside the partition whatever the
+            # destination buffer type is.
+            #
+            # The two-hop version this replaced staged into DRAM first and then
+            # asked `to_memory_config` to move DRAM -> L1, which is an
+            # interleaved-to-interleaved move and therefore `ttnn::prim::copy` on
+            # the full compute grid. For Llama that aborted the very first decode
+            # step to reach the LM head, which at the time asked for
+            # `ttnn.L1_MEMORY_CONFIG`:
+            #     TT_FATAL ... Kernel group cores do not match sub device cores
+            #                  for programmable core type TENSIX
+            # (defect D-B10). The bug is latent for every interleaved target that
+            # is not DRAM, in prefill as well as decode; this package carried the
+            # two-hop form unchanged.
+            placed = ttnn.sharded_to_interleaved(tensor, target_memcfg, output_dtype=cast_to)
+            if placed is not tensor:
+                deallocate_if_allocated(tensor)
+            return placed
         staged = ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=cast_to)
         deallocate_if_allocated(tensor)
-        if not target_memcfg.is_sharded():
-            if staged.memory_config() == target_memcfg:
-                return staged
-            placed = ttnn.to_memory_config(staged, target_memcfg)
-            if placed is not staged:
-                deallocate_if_allocated(staged)
-            return placed
         placed = ttnn.interleaved_to_sharded(staged, target_memcfg)
         deallocate_if_allocated(staged)
         return placed
@@ -1644,7 +1781,25 @@ def build_qwen3_32b_galaxy_model(
     precision: Qwen3_32BGalaxyPrecision = QWEN3_32B_GALAXY_ACCURACY,
     paged_attention_config: GalaxyPagedAttentionConfig | None = None,
     enable_device_sampling: bool = True,
-    use_qk_fused_rotary: bool = False,
+    # True, matching the production Galaxy model. The Galaxy attention decode
+    # path selects the fused op on exactly the prefetcher condition -
+    #     if self.use_prefetcher:
+    #         q, k = ttnn.experimental.rotary_embedding_llama_fused_qk(...)
+    #     else:
+    #         ... rotary_embedding_llama(q, ...); rotary_embedding_llama(k, ...)
+    # - so on a prefetcher mesh the non-fused pair is the *fallback* path, kept
+    # for Blackhole, and it expects a different cos/sin layout: `get_rot_mats`
+    # returns [1, 1, local_batch, head_dim] for the non-fused decode op, while
+    # `get_rm_rot_mats` expands to [1, expanded_batch, heads, head_dim] for the
+    # fused one.
+    #
+    # Measured for Llama on `(8, 4)` with the non-fused pair (D-B25b): the decode
+    # step wrote a K of |max| = inf into the cache at the current position while
+    # V, which does not pass through RoPE, was exact at PCC 0.99973 - and the
+    # prefix prefill wrote was still 0.99993. Qwen3-32B has 64 heads against 8 KV
+    # heads, so the head-row asymmetry that exposes this is larger here, not
+    # smaller.
+    use_qk_fused_rotary: bool = True,
     cache_path: Path | str | None = None,
     global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
     prefetcher_injections: dict[str, Any] | None = None,
