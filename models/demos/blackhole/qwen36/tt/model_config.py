@@ -334,6 +334,15 @@ class Qwen36ModelArgs(ModelArgs):
             return True
         return super().is_distributed_norm(mode)
 
+    @property
+    def base_model_name(self):
+        # get_base_model_name() strips "-A3B" (Qwen3.6-35B-A3B -> Qwen3.6-35B), so the emitted
+        # benchmark name misses this checkpoint's perf targets; keep the full name for MoE.
+        # getattr: read during base __init__ before moe_num_experts is set.
+        if getattr(self, "moe_num_experts", 0) > 0:
+            return self.model_name
+        return super().base_model_name
+
     def weight_cache_path(self, dtype=None):
         """Weight tensor cache dir, rooted at model_cache_path (TT_CACHE_PATH + device), NOT the HF
         snapshot (often read-only in CI -> caching there silently never persists); falls back to the
