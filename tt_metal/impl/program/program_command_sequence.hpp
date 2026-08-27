@@ -114,16 +114,10 @@ struct ProgramCommandSequence {
             });
     }
 
-    template <typename CommandVisitor>
-    void visit_program_config_buffer_commands(CommandVisitor&& visitor) const {
-        for (const HostMemDeviceCommand& command : program_config_buffer_command_sequences) {
-            visitor(command);
-        }
-    }
-
     uint32_t get_one_shot_fetch_size(bool stall_first, bool stall_before_program, bool send_binary) const {
         uint32_t one_shot_fetch_size =
-            ((stall_before_program || stall_first) ? stall_command_sequences[current_stall_seq_idx].size_bytes() : 0) +
+            (stall_first ? stall_command_sequences[current_stall_seq_idx].size_bytes() : 0) +
+            (stall_before_program ? stall_command_sequences[current_stall_seq_idx].size_bytes() : 0) +
             preamble_command_sequence.size_bytes() + get_program_config_buffer_size() + get_rt_args_size() +
             (send_binary ? program_binary_command_sequence.size_bytes() +
                                program_binary_setup_prefetcher_cache_command.size_bytes()

@@ -63,6 +63,7 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/program/program_config_command_generator.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
+#include "tt_metal/impl/program/program_command_sequence_writer.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
@@ -3279,99 +3280,20 @@ void write_program_command_sequence(
         stall_before_program,
         send_binary);
 
-    // Check if it's possible to write all commands in a single fetch queue entry
-    uint32_t one_shot_fetch_size =
-        program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
-    bool one_shot = one_shot_fetch_size <= metal_ctx.dispatch_mem_map().max_prefetch_command_size();
-
-    LOG_TRACE_LAZY(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
-    if (one_shot) {
-        manager.issue_queue_reserve(one_shot_fetch_size, command_queue_id);
-    }
-    uint32_t one_shot_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-
-    auto write_data_to_cq = [&](void* data, uint32_t size_bytes) {
-        if (!size_bytes) {
-            return;
-        }
-
-        if (one_shot) {
-            // Already reserved. Write only. Defer push back until all commands are written
-            manager.cq_write(data, size_bytes, one_shot_write_ptr);
-            one_shot_write_ptr += size_bytes;
-        } else {
-            manager.issue_queue_reserve(size_bytes, command_queue_id);
-            manager.cq_write(data, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
-            manager.issue_queue_push_back(size_bytes, command_queue_id);
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(size_bytes, command_queue_id);
-        }
-    };
-
-    // Write the preamble
-    write_data_to_cq(
-        program_command_sequence.preamble_command_sequence.data(),
-        program_command_sequence.preamble_command_sequence.size_bytes());
-
-    const auto curr_stall_seq_idx = program_command_sequence.current_stall_seq_idx;
-    if (stall_first) {
-        // Must stall before writing kernel config data
-        write_data_to_cq(
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes());
-    }
-
-    // TODO: We can pack multiple RT args into one fetch q entry
-    for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
-        write_data_to_cq(cmds.data(), cmds.size_bytes());
-    }
-
-    // Keep the generated command boundaries when one-shot mode is unavailable; each command fits one fetch entry.
-    program_command_sequence.visit_program_config_buffer_commands(
-        [&write_data_to_cq](const HostMemDeviceCommand& commands) {
-            write_data_to_cq(commands.data(), commands.size_bytes());
-        });
-
-    // Need to stall before writing the program binary?
-    if (stall_before_program) {
-        // Didn't stall before kernel config data, stall before remaining commands
-        write_data_to_cq(
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes());
-    }
-
-    if (send_binary) {
-        // Write the program binary
-        if (program_command_sequence.prefetcher_cache_used) {
-            write_data_to_cq(
-                program_command_sequence.program_binary_setup_prefetcher_cache_command.data(),
-                program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes());
-        }
-        write_data_to_cq(
-            program_command_sequence.program_binary_command_sequence.data(),
-            program_command_sequence.program_binary_command_sequence.size_bytes());
-    } else {
-        // Write the wait barrier before writing launch messages.
-        write_data_to_cq(
-            program_command_sequence.wait_barrier_command_sequence.data(),
-            program_command_sequence.wait_barrier_command_sequence.size_bytes());
-    }
-
-    // Write the launch message
-    write_data_to_cq(
-        program_command_sequence.launch_msg_command_sequence.data(),
-        program_command_sequence.launch_msg_command_sequence.size_bytes());
-
-    // Write the go signal
-    write_data_to_cq(
-        program_command_sequence.go_msg_command_sequence.data(),
-        program_command_sequence.go_msg_command_sequence.size_bytes());
-
-    if (one_shot) {
-        manager.issue_queue_push_back(one_shot_fetch_size, command_queue_id);
-        manager.fetch_queue_reserve_back(command_queue_id);
-        manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
-    }
+    const uint32_t max_prefetch_command_size = metal_ctx.dispatch_mem_map().max_prefetch_command_size();
+    const queue_write_detail::ProgramCommandWritePlan write_plan =
+        queue_write_detail::make_program_command_write_plan(
+            program_command_sequence, stall_first, stall_before_program, send_binary, max_prefetch_command_size);
+    LOG_TRACE_LAZY(
+        tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", write_plan.one_shot, write_plan.fetch_size);
+    queue_write_detail::write_program_command_sequence_to_queue(
+        program_command_sequence,
+        manager,
+        command_queue_id,
+        stall_first,
+        stall_before_program,
+        send_binary,
+        write_plan);
 
     LOG_TRACE_LAZY(tt::LogDispatch, "========== Finished Writing Program Command Sequence ==========");
     LOG_TRACE_LAZY(tt::LogDispatch, "");
