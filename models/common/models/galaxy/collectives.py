@@ -67,6 +67,25 @@ def _aliases_borrowed_buffer(tensor: Any, resource: Any) -> bool:
     return False
 
 
+def _ccl_tracing() -> bool:
+    return bool(os.getenv("TTTV2_GALAXY_CCL_TRACE"))
+
+
+def _ccl_shape_note(name: str, tensor: Any) -> str:
+    """Describe a tensor the way a CCL page-count fault would need it described."""
+
+    try:
+        spec = tensor.memory_config().shard_spec
+        shard = f"shard={tuple(spec.shape)} cores={spec.grid.num_cores()}"
+    except BaseException:
+        shard = "shard=interleaved"
+    try:
+        pages = tensor.buffer().num_pages()
+    except BaseException:
+        pages = "?"
+    return f"{name}: logical={tuple(tensor.shape)} {shard} pages={pages}"
+
+
 def _ccl_trace(message: str) -> None:
     """Print and flush a CCL step name when TTTV2_GALAXY_CCL_TRACE is set.
 
@@ -210,9 +229,29 @@ class GalaxyColumnAllReduce:
         """
 
         context = self.resources.context("decode")
+
+        def trace_step(message: str) -> None:
+            """Name a step, and under the trace flag *wait* for it.
+
+            Enqueues are asynchronous, so naming the three ops was not enough to
+            find D-B19: attempt 3's `logs3/a3_14_step2_gate.log` shows all three
+            printing and the block landing on the collective's own final
+            `synchronize`, which says only "one of these device programs never
+            completed". Synchronising after each one under the trace flag turns
+            that into a name. Off by default; a decode step must not synchronise
+            three extra times per token in production.
+            """
+
+            _ccl_trace(message)
+            if _ccl_tracing():
+                self.resources.synchronize("decode")
+                _ccl_trace(f"{message} -- completed on device")
+
         _ccl_trace(f"lm_head stage input from {tensor.memory_config().shard_spec.grid.num_cores()} cores")
+        _ccl_trace(_ccl_shape_note("lm_head in", tensor))
         staged = _relocate_sharded(tensor, self.placements.lm_head_all_reduce_input_memcfg)
-        _ccl_trace(f"lm_head staged, shape={tuple(staged.shape)}")
+        trace_step(f"lm_head staged, shape={tuple(staged.shape)}")
+        _ccl_trace(_ccl_shape_note("lm_head staged", staged))
         resource = select_galaxy_resource(context, "all_reduce", self.cluster_axis, staged)
         if not resource.persistent_output_buffers:
             raise ValueError("decode LM head all-reduce requires a persistent output buffer")
@@ -227,7 +266,8 @@ class GalaxyColumnAllReduce:
         buffer_l1 = ttnn.interleaved_to_sharded(
             resource.persistent_output_buffers[0], self.placements.lm_head_all_reduce_buffer_memcfg
         )
-        _ccl_trace(f"lm_head buffer in L1, shape={tuple(buffer_l1.shape)}")
+        trace_step(f"lm_head buffer in L1, shape={tuple(buffer_l1.shape)}")
+        _ccl_trace(_ccl_shape_note("lm_head buffer", buffer_l1))
         try:
             reduced = ttnn.experimental.all_reduce_async(
                 staged,
@@ -244,9 +284,10 @@ class GalaxyColumnAllReduce:
                 subdevice_id=self._resolved_subdevice_id(),
                 fp32_dest_acc=True,
             )
-            _ccl_trace(f"lm_head all_reduce_async returned, shape={tuple(reduced.shape)}")
+            _ccl_trace(_ccl_shape_note("lm_head reduced", reduced))
+            trace_step(f"lm_head all_reduce_async returned, shape={tuple(reduced.shape)}")
             placed = _relocate_sharded(reduced, tensor.memory_config())
-            _ccl_trace("lm_head reduced placed back")
+            trace_step("lm_head reduced placed back")
             # `all_reduce_async` may hand back the L1 buffer view itself rather
             # than a fresh tensor; that one is released once, below, in `finally`.
             if placed is not reduced and reduced is not buffer_l1:
@@ -267,6 +308,54 @@ class GalaxyColumnAllReduce:
             deallocate_if_allocated(buffer_l1)
             if staged is not tensor:
                 deallocate_if_allocated(staged)
+
+
+def compose_galaxy_logits(tensor: Any, *, mesh_device: Any = None, vocab_size: int | None = None) -> torch.Tensor:
+    """Compose Galaxy LM head logits to `[rows, vocab]` on host.
+
+    **`to_torch_auto_compose` cannot be used here, and gets it wrong silently.**
+    It infers a composer from the tensor's own `tensor_topology()`, and a matmul
+    output inherits its *activation's* topology, not its weight's. The LM head's
+    in0 is replicated over mesh rows and sharded over mesh columns on its last
+    axis (the reduced hidden dim), so the logits are labelled the same way -
+    while the vocabulary is in fact sharded over mesh *rows* by the weight mapper
+    (`[PlacementShard(-1), PlacementShard(-2)]`) and replicated over columns by
+    the column all-reduce.
+
+    Auto-composing therefore concatenates the four *columns* along the vocabulary
+    axis and takes one row, which on Llama-3.3-70B produces a 64128-wide tensor
+    holding four copies of mesh row 0's 16032-token vocabulary slice. Measured on
+    `(8, 4)`: the step-2 gate's `comp_pcc` failed with
+
+        RuntimeError: The size of tensor a (16416768) must match the size of
+                      tensor b (8208384) at non-singleton dimension 0
+
+    - 128 x 128256 against 128 x 64128. **A caller that slices `[:, :vocab_size]`
+    gets no error at all**, just a truncated tensor of the wrong tokens, which is
+    why this is a defect and not a shape nuisance: `GalaxyDirectRunner` did
+    exactly that, so every step-3 logit, argmax and accuracy number would have
+    been silently wrong.
+
+    The composition is the one the production LM head's host reference uses -
+    `ConcatMesh2dToTensor(dims=(0, 3))` then `[:1]` in
+    `models/demos/llama3_70b_galaxy/tt/lm_head.py::forward_on_host` - with the
+    axes swapped because here it is the rows that carry the vocabulary.
+
+    `_compose_kv` in `test_model_wh_galaxy.py` already refuses auto-compose for
+    the same reason, one tensor earlier in the same graph.
+    """
+
+    device = mesh_device or tensor.device()
+    composed = ttnn.to_torch(
+        tensor,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(device, dims=(3, 0), mesh_shape=GALAXY_MESH_SHAPE),
+    ).float()
+    # dims=(3, 0) is (mesh-row-target, mesh-column-target): rows concatenate on
+    # the vocabulary axis, and the four columns - identical after the all-reduce -
+    # stack on the free leading axis. Column 0 is the authoritative copy.
+    first_column = composed[0]
+    flat = first_column.reshape(-1, first_column.shape[-1])
+    return flat[:, :vocab_size] if vocab_size is not None else flat
 
 
 class GalaxyColumnUserSelector:

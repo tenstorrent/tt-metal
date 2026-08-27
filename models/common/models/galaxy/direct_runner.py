@@ -39,7 +39,7 @@ import torch
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
-from models.common.models.galaxy.collectives import deallocate_if_allocated
+from models.common.models.galaxy.collectives import compose_galaxy_logits, deallocate_if_allocated
 from models.common.models.galaxy.recipes import GALAXY_MESH_SHAPE
 from models.common.modules.lazy_weight import LazyWeight
 
@@ -354,15 +354,21 @@ class GalaxyDirectRunner:
     def _compose_rows(self, tensor: Any, rows: int) -> torch.Tensor:
         """Compose device logits and return ``[rows, vocab_size]`` on host.
 
-        The vocabulary is sharded over mesh rows and replicated over columns, so
-        the composed tensor may repeat the batch once per column; the first
-        ``rows`` rows are the authoritative copy.
+        The vocabulary is sharded over mesh rows and replicated over columns.
+        This used to call `to_torch_auto_compose`, which reads the tensor's own
+        topology - and a matmul output carries its *activation's* topology, so it
+        concatenated the four columns along the vocabulary axis instead of the
+        eight rows and returned four copies of row 0's vocabulary slice. Slicing
+        `[:, :vocab_size]` then narrowed silently rather than raising, so every
+        logit here was wrong with no symptom. See `compose_galaxy_logits`, which
+        carries the measurement.
         """
 
-        composed = to_torch_auto_compose(tensor).float()
-        flat = composed.reshape(-1, composed.shape[-1])
+        flat = compose_galaxy_logits(tensor, mesh_device=self.mesh_device, vocab_size=self.vocab_size)
         if flat.shape[0] < rows:
             raise ValueError(f"composed logits have {flat.shape[0]} rows, expected at least {rows}")
+        if flat.shape[1] != self.vocab_size:
+            raise ValueError(f"composed logits are {flat.shape[1]} wide, expected the {self.vocab_size} vocabulary")
         return flat[:rows, : self.vocab_size]
 
     # ------------------------------------------------------------------

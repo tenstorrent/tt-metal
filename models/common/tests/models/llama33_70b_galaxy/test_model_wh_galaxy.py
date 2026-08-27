@@ -49,7 +49,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
+from models.common.models.galaxy.collectives import compose_galaxy_logits
 from models.common.models.llama33_70b_galaxy.hf_adaptor import DEFAULT_HF_MODEL, convert_hf_model_weights
 from models.common.models.llama33_70b_galaxy.model import (
     LLAMA33_70B_GALAXY_ACCURACY,
@@ -57,6 +57,7 @@ from models.common.models.llama33_70b_galaxy.model import (
     parameters_from_hf_config,
 )
 from models.common.modules.lazy_weight import LazyWeight
+from models.common.tests.modules._hf_reference import reverse_permute_1d
 from models.common.tests.models.galaxy.galaxy_checkpoint import CheckpointUnavailable, load_layer_subset_causal_lm
 from models.common.utility_functions import comp_pcc
 
@@ -153,15 +154,25 @@ def _deallocate(tensor: Any) -> None:
         deallocate(True)
 
 
-def _logits(output: ttnn.Tensor, vocab_size: int) -> torch.Tensor:
-    """Compose device logits and drop the masked vocabulary padding."""
+def _logits(output: ttnn.Tensor, vocab_size: int, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
+    """Compose device logits and drop the masked vocabulary padding.
 
-    composed = to_torch_auto_compose(output).float()
-    return composed.reshape(-1, composed.shape[-1])[:, :vocab_size]
+    `to_torch_auto_compose` is wrong for this tensor and wrong *silently*; see
+    `compose_galaxy_logits`, which carries the measurement. It concatenated the
+    four mesh columns along the vocabulary axis instead of the eight rows, so a
+    128-token prefill composed to 128 x 64128 - four copies of row 0's vocabulary
+    slice - and the only reason this surfaced at all is that `comp_pcc` compares
+    sizes. A caller that slices `[:, :vocab_size]` would have seen no error.
+    """
+
+    return compose_galaxy_logits(output, mesh_device=mesh_device, vocab_size=vocab_size)
 
 
 def _assert_pcc(expected: torch.Tensor, actual: torch.Tensor, case: str) -> None:
+    """Compare and *record*. A passing gate is a number, not a silence."""
+
     passing, message = comp_pcc(expected.float(), actual.float(), _PCC)
+    print(f"[pcc] {case}: {message} (gate >= {_PCC})", flush=True)
     assert passing, f"{case} failed PCC>={_PCC}: {message}"
 
 
@@ -224,6 +235,17 @@ def _assert_kv_pcc(
 
     actual_k = _compose_kv(kv_pair[0], mesh_device)
     actual_v = _compose_kv(kv_pair[1], mesh_device)
+    # The device K cache is post-RoPE in **Meta interleaved** head-dim order
+    # (r0, i0, r1, i1, ...); HF's `past_key_values` keys are in HF's split order
+    # (r0, r1, ..., i0, i1, ...). The adaptor converts wq/wk with
+    # `reverse_permute` and the cos/sin tables with
+    # `permute_hf_rope_to_meta_tables` precisely so the device runs the Meta
+    # convention, and the two conventions cancel inside Q.K^T - which is why the
+    # *logits* match at PCC >= 0.99 while the raw caches do not. Measured on
+    # `(8, 4)`: comparing them unpermuted gives
+    #     prefill 128 cache K user 0 failed PCC>=0.99: 0.0386
+    # V is not permuted by either side: `wv_meta = wv_raw`.
+    expected_k = reverse_permute_1d(expected_k)
     users_per_column = _PHYSICAL_BATCH // _MESH_COLUMNS
     for user in range(0, _PHYSICAL_BATCH, users_per_column):
         _assert_pcc(expected_k[0, :, :length, :], actual_k[user, :, :length, :], f"{case} K user {user}")
@@ -296,7 +318,7 @@ def test_llama33_70b_galaxy_one_layer_prefill_and_decode(mesh_device: ttnn.MeshD
         try:
             x_embed = model.embed_prefill(_replicated_tokens(prefill_tokens, mesh_device))
             output = model.prefill_forward(x_embed, rot_mats, sequence_length=_PREFILL_LENGTH, user_ids=(0,))
-            actual = _logits(output, params.vocab_size)[:_PREFILL_LENGTH]
+            actual = _logits(output, params.vocab_size, mesh_device)[:_PREFILL_LENGTH]
             _assert_pcc(expected_prefill, actual, "prefill 128")
             # The cache contents, not just the block output: the Milestone B gate
             # is PCC >= 0.99 on both, because a decode step that reads the wrong
@@ -334,7 +356,7 @@ def test_llama33_70b_galaxy_one_layer_prefill_and_decode(mesh_device: ttnn.MeshD
             )
             x_embed = model.embed_decode(_replicated_tokens(decode_row, mesh_device))
             output = model.decode_forward(x_embed, tt_positions, rot_mats)
-            actual = _logits(output, params.vocab_size)
+            actual = _logits(output, params.vocab_size, mesh_device)
             # Assumption 2: prefill filled local user 0 of every column shard.
             for user in range(0, _PHYSICAL_BATCH, model.geometry.users_per_column):
                 _assert_pcc(expected_decode, actual[user], f"decode position {_PREFILL_LENGTH} user {user}")
@@ -437,7 +459,7 @@ def test_llama33_70b_galaxy_one_layer_prefill_2048(mesh_device: ttnn.MeshDevice)
         try:
             x_embed = model.embed_prefill(_replicated_tokens(tokens, mesh_device))
             output = model.prefill_forward(x_embed, rot_mats, sequence_length=_LONG_PREFILL_LENGTH, user_ids=(0,))
-            actual = _logits(output, params.vocab_size)[:_LONG_PREFILL_LENGTH]
+            actual = _logits(output, params.vocab_size, mesh_device)[:_LONG_PREFILL_LENGTH]
             _assert_pcc(reference, actual, "prefill 2048")
             _assert_kv_pcc(
                 reference_k,

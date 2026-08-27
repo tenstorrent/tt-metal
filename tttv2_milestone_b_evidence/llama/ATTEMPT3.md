@@ -133,3 +133,157 @@ Tilizing in the copy keeps it a host-side write, which is the whole point of
 `_materialize_table_copy` (see D-B1): a device-side `ttnn.tilize` would compile a
 full-grid program under the decode partition and abort the way the clone it
 replaced did.
+| 08 | `logs3/a3_08_step2_gate.log` | step-2 gate | **FAILED** — D-B21 fixed; new defect **D-B22** |
+| 09 | `logs3/a3_09_rope_host.log` | `test_rope_2d.py` after D-B22's fix | 2 failed — the host assertion encoded the wrong shape |
+| 10 | `logs3/a3_10_host_quick.log` | rope + prefetcher host after correcting it | 32 passed |
+| 11 | `logs3/a3_11_step2_gate.log` | step-2 gate | **FAILED** — the whole prefill graph ran to the logits; new defect **D-B23** |
+| 12 | `logs3/a3_12_host_quick.log` | `test_model_host.py` + `test_lm_head_2d.py` after D-B23's fix | 50 passed |
+
+## Result 08 — D-B22: the prefill transformation matrix was the wrong size
+
+`logs3/a3_08_step2_gate.log`. Tilized cos/sin got past D-B21 and the next
+argument of the same call failed:
+
+```text
+TT_FATAL ... Transformation matrix must have 4th dim equal to TILE_WIDTH
+  (rotary_embedding_llama_device_operation.cpp:194,
+   trans_mat.logical_shape()[-1] == TILE_WIDTH)
+```
+
+`prefill_trans` was built with `get_rot_transformation_mat(dhead=head_dim)`, i.e.
+`[1, 1, 128, 128]`. The op applies the transformation one tile at a time; the
+helper's own docstring says "dhead: Matrix dimension. **Must equal TILE_SIZE**";
+and the qualified 1D reference opens with `dhead = 32  # ROPE op uses a single
+tile`, discarding whatever it was passed. **Fixed** to `TILE_SIZE`.
+
+`test_rope_2d.py` asserted the wrong shape — `(1, 1, 128, 128)` — so the module
+and its host test agreed with each other and both disagreed with the op. That
+assertion is corrected with the device abort quoted against it. It is worth being
+explicit that this is *not* a threshold being relaxed to turn a run green: the
+device rejects 128 outright, and the value the test now asserts is the value the
+qualified reference forces.
+
+## Result 11 — the prefill graph reached the logits, and D-B23 was waiting there
+
+`logs3/a3_11_step2_gate.log`. **The entire one-layer prefill graph executed on
+silicon**: embedding, distributed norm, QKV, RoPE on real Q/K, causal SDPA, `wo`,
+the axis-1 QKV all-reduce, the axis-0 output all-reduce, all of the MLP's
+reduce-scatter/all-gather chain, the final distributed norm, the prefill LM head
+matmul and its column all-reduce. 220 s wall for the process.
+
+Then the comparison itself failed:
+
+```text
+RuntimeError: The size of tensor a (16416768) must match the size of tensor b
+              (8208384) at non-singleton dimension 0
+  from comp_pcc, under _assert_pcc(expected_prefill, actual, "prefill 128")
+```
+
+128 x 128256 against 128 x **64128**. `_logits` composed with
+`to_torch_auto_compose`, which infers its composer from the tensor's own
+`tensor_topology()` — and **a matmul output carries its activation's topology,
+not its weight's.** The LM head's in0 is replicated over mesh rows and sharded
+over mesh columns on its last axis, so the logits are labelled that way, while
+the vocabulary is actually sharded over mesh *rows* by the weight mapper
+`[PlacementShard(-1), PlacementShard(-2)]` and replicated over columns by the
+column all-reduce. Auto-compose therefore concatenated the four columns along the
+vocabulary axis: 4 x 16032 = 64128 columns holding **four copies of mesh row 0's
+vocabulary slice**.
+
+**Why this is the most dangerous defect of the night.** The only reason it
+surfaced is that `comp_pcc` compares sizes. `GalaxyDirectRunner._compose_rows`
+did the same auto-compose and then sliced `[:, : self.vocab_size]`, which on a
+64128-wide tensor **narrows without raising**. Every step-3 logit, every argmax,
+the demo text and the whole teacher-forced accuracy number would have been
+computed from the wrong 64128 tokens, with no error anywhere. A gate that fails
+open again, one layer down from the `load_reference_tokens` skip attempt 2 found.
+
+**Fixed** by `compose_galaxy_logits` in `galaxy/collectives.py`, used by both the
+runner and the test: an explicit
+`ConcatMesh2dToTensor(dims=(3, 0))` — rows on the vocabulary axis, the four
+identical columns stacked on the free leading axis — then column 0. This is the
+composition the production host reference uses
+(`lm_head.py::forward_on_host`, `dims=(0, 3)` then `[:1]`), with the axes swapped
+because here it is the rows that carry the vocabulary. The runner now also
+*rejects* a composed width that is not the vocabulary, so this cannot fail
+silently again.
+
+`_compose_kv` in the same test file already refused auto-compose for the same
+reason, one tensor earlier in the same graph, and said so in its docstring. The
+lesson generalises: **on this mesh, auto-composition is only safe for a tensor
+whose placement was set by a mapper, never for one produced by an op that
+contracts a sharded axis.**
+| 13 | `logs3/a3_13_step2_gate.log` | step-2 gate | **FAILED** — **prefill 128 logits PCC passed**; KV-cache K PCC 0.0386 (**D-B24**) |
+| 14 | `logs3/a3_14_step2_gate.log` | step-2 gate | **prefill half of the gate PASSED**; decode reached D-B19 and hung. Reaped deliberately once the trace had named the hang point. |
+
+## Result 13 — the first PCC number this model has ever produced, and D-B24
+
+`logs3/a3_13_step2_gate.log`. With the composition corrected, `prefill 128`
+passed `PCC >= 0.99` against the Hugging Face one-layer reference. The next
+assertion, the cache, did not:
+
+```text
+AssertionError: prefill 128 cache K user 0 failed PCC>=0.99: 0.038602362629236275
+```
+
+0.0386 is uncorrelated, not slightly wrong, and the *logits* had just passed —
+which is the whole diagnosis. The device K cache holds post-RoPE keys in **Meta
+interleaved** head-dim order `(r0, i0, r1, i1, ...)`; HF's `past_key_values`
+holds them in HF's split order `(r0, r1, ..., i0, i1, ...)`. The adaptor converts
+`wq`/`wk` with `reverse_permute` and the cos/sin tables with
+`permute_hf_rope_to_meta_tables` precisely so the device runs the Meta
+convention, and the two conventions **cancel inside `Q . K^T`** — so the logits
+agree while the raw caches cannot. `V` is untouched by either side
+(`wv_meta = wv_raw`).
+
+This is a defect in the *test*, and it was the kind that reads as a model
+failure. **Fixed** by permuting the reference K with `reverse_permute_1d` from
+`models/common/tests/modules/_hf_reference.py` — the shared 1D/2D test helper the
+brief points at — before comparing. Nothing on the device side changed.
+
+`_assert_pcc` now also *prints* every PCC it computes, passing or failing. A gate
+that passes silently records no number, and this job exists to produce numbers.
+
+## Result 14 — the prefill half of the step-2 gate, measured
+
+`logs3/a3_14_step2_gate.log`, one process, real `meta-llama/Llama-3.3-70B-Instruct`
+layer-0 weights:
+
+```text
+[pcc] prefill 128: 0.9995838243615001 (gate >= 0.99)
+[pcc] prefill 128 cache K user 0:  0.9999347766610057
+[pcc] prefill 128 cache V user 0:  0.9997498179150203
+[pcc] prefill 128 cache K user 8:  0.9999347766610057
+[pcc] prefill 128 cache V user 8:  0.9997498179150203
+[pcc] prefill 128 cache K user 16: 0.9999347766610057
+[pcc] prefill 128 cache V user 16: 0.9997498179150203
+[pcc] prefill 128 cache K user 24: 0.9999347766610057
+[pcc] prefill 128 cache V user 24: 0.9997498179150203
+```
+
+All four column-local users, so no mesh column silently wrote nothing.
+
+The decode half then reached **D-B19**, attempt 2's open hang, and the CCL trace
+did its job:
+
+```text
+[ccl] lm_head stage input from 24 cores
+[ccl] lm_head staged, shape=(1, 1, 32, 16032)
+[ccl] lm_head buffer DRAM -> L1
+[ccl] lm_head buffer in L1, shape=(1, 1, 32, 64512)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16032)
+[ccl] lm_head reduced placed back
+[ccl] lm_head synchronize            <- last line; no "synchronized"
+```
+
+That **rules out a host-side block in any of the three ops** — all three enqueued
+and returned — and confirms attempt 2's gdb reading exactly: an enqueued device
+program never signalled completion. It does not yet say *which*, because enqueues
+are asynchronous, so the trace now synchronises after each step when
+`TTTV2_GALAXY_CCL_TRACE` is set, and reports each tensor's shard spec and page
+count. One more run converts "one of three" into a name.
+
+The process was reaped deliberately rather than left to its 1800 s deadline: the
+trace had already extracted everything that run could give, and 20 minutes of
+wall clock is worth more than a tidier exit code. PID confirmed `comm=python`
+with 64 `/dev/tenstorrent` fds open before signalling, per the house rules.
