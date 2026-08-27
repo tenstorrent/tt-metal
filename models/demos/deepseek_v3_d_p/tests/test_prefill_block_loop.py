@@ -56,6 +56,14 @@ DSV3 = get_adapter("deepseek_v3_d_p")
 PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
 
 
+# Each mesh carries the isl_total that lands ISL_TOKENS_PER_CHIP on every one of its chips, so there
+# is one ISL per mesh instead of a cross product to prune. The id carries it because
+# perf/test_prefill_block_perf.py selects rows by it.
+def _with_isl(param):
+    isl_total = ISL_TOKENS_PER_CHIP * param.values[0][0]
+    return pytest.param(*param.values, isl_total, marks=param.marks, id=f"{param.id}-isl_{isl_total}")
+
+
 def _ci_unsupported_param_combos(**params):
     on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
     gate_fallback_mode = params["gate_fallback_mode"]
@@ -91,33 +99,29 @@ def _ci_unsupported_param_combos(**params):
         "layer8",
     ],
 )
-@pytest.mark.parametrize(
-    "isl_total",
-    # ISL_TOKENS_PER_CHIP on each chip, for every SP factor the mesh list below covers. The body
-    # skips any (mesh, isl_total) pair that does not land it, so only the matching ones run.
-    [ISL_TOKENS_PER_CHIP * sp for sp in (1, 2, 4, 8)],
-    ids=["isl_640", "isl_1k28", "isl_2k56", "isl_5k"],
-)
 @pytest.mark.parametrize("skip_reference", [False, True], ids=["with_ref", "no_ref"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, isl_total",
     [
-        pytest.param(
-            (1, 1),
-            {},
-            1,
-            id="mesh-1x1",
-        ),
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.EMB_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-mesh-2x4-2link",
-        ),
-        # FABRIC_2D variants — shared list defined in conftest.py (also used by
-        # test_prefill_transformer.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
-        *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
+        _with_isl(param)
+        for param in (
+            pytest.param(
+                (1, 1),
+                {},
+                1,
+                id="mesh-1x1",
+            ),
+            pytest.param(
+                (2, 4),
+                fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.EMB_SIZE),
+                2,
+                marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+                id="fabric2d-mesh-2x4-2link",
+            ),
+            # FABRIC_2D variants — shared list defined in conftest.py (also used by
+            # test_prefill_transformer.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
+            *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
+        )
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -143,12 +147,6 @@ def test_prefill_block_loop(
         pytest.skip("HF config not available")
     if state_dict is None:
         pytest.skip("State dict not available (no pretrained weights)")
-
-    if isl_total != ISL_TOKENS_PER_CHIP * mesh_device.shape[0]:
-        pytest.skip(
-            f"only {ISL_TOKENS_PER_CHIP} tokens/chip is tested; {tuple(mesh_device.shape)} needs "
-            f"isl_total={ISL_TOKENS_PER_CHIP * mesh_device.shape[0]}, got {isl_total}"
-        )
 
     # The 4x4 subtorus sweep is intentionally local/experimental until a dedicated CI owner exists.
     if (os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ) and tuple(mesh_device.shape) == (4, 4):
