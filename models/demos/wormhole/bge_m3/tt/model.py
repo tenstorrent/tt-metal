@@ -6,7 +6,7 @@ from dataclasses import replace
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.bge_m3.tt.embeddings import BgeM3Embedding, BgeM3EmbeddingsConfig
-from models.demos.wormhole.bge_m3.tt.encoder import BgeM3TransformerBlock
+from models.demos.wormhole.bge_m3.tt.encoder import BgeM3TransformerBlock, sequence_parallel_axis
 from models.demos.wormhole.bge_m3.tt.norm import LayerNorm1D, LayerNorm1DConfig
 from models.demos.wormhole.bge_m3.tt.tiny_model import ColBERTLinear, SparseLinear, TinyLinearConfig
 from models.demos.wormhole.bge_m3.tt.weight_adapter import (
@@ -35,27 +35,13 @@ class BgeM3Model(LightweightModule):
             raise ValueError(f"pooling must be one of {self._POOLING_MODES}, got {pooling!r}")
         self.pooling = pooling
         self._mask_dtype = _attention_mask_dtype(dtype, args.max_seq_len, args.max_batch_size)
-        # Sequence-parallel serving path: inputs are sharded on the sequence dim
-        # across a 1x2 N300 mesh. Embeddings/LN/MLP/output-proj are token-local;
-        # attention all-gathers K/V. The dense pad mask is skipped (the unpadded
-        # serving shape needs none) and position_ids must be supplied host-side
-        # (device cumsum over a sharded sequence would be wrong).
-        # Data-parallel serving path (DP=2): inputs are sharded on the BATCH dim
-        # across a 1x2 N300 mesh. Each chip is an independent replica running the
-        # full single-chip forward on its batch shard (B/2), full sequence. NO
-        # inter-chip collectives (no K/V all-gather) — attention is standard
-        # single-chip SDPA over the full local sequence. Exact full attention.
-        # Resolved once in ModelArgs; takes precedence over sequence-parallel.
+        # Data-parallel: the caller shards the batch across the mesh. Each chip
+        # runs the full forward on its shard and uses no collectives. ModelArgs
+        # resolves this, and it takes precedence over sequence-parallel.
         self._data_parallel = args.data_parallel
-        # Sequence-parallel serving path: inputs sharded on the sequence dim;
-        # attention all-gathers K/V. Disabled when data-parallel is active.
-        self._sequence_parallel = (
-            not self._data_parallel
-            and args.max_seq_len == 8192
-            and mesh_device is not None
-            and mesh_device.get_num_devices() == 2
-            and tuple(mesh_device.shape) == (2, 1)
-        )
+        # Sequence-parallel: the caller shards the sequence, and attention
+        # all-gathers K/V. encoder.py derives the matching mesh axis.
+        self._sequence_parallel = sequence_parallel_axis(args, mesh_device) is not None
         self._trace_id = None
         self._trace_device = None
         self._trace_cq_id = 0
@@ -154,10 +140,9 @@ class BgeM3Model(LightweightModule):
         input_ids: ttnn.Tensor,
         attention_mask: ttnn.Tensor | None,
     ) -> ttnn.Tensor | None:
-        """
-        Return additive [B, 1, S, S] with ``{0.0, -100000.0}`` (all-zero additive mask is a
-        no-op for SDPA). We avoid a host sync / ``.item()`` early return so the path stays
-        trace-safe (``ttnn.begin_trace_capture``) with unchanged numerics.
+        """Return an additive [B, 1, S, S] mask that holds 0.0 or -100000.0.
+
+        The method uses no host sync, so the path stays trace-safe.
         """
         self._require_rank2(input_ids, "input_ids")
         seq_len = input_ids.shape[1]
@@ -297,21 +282,17 @@ class BgeM3Model(LightweightModule):
         return self._apply_pooling(hidden_states, input_ids)
 
     def _apply_pooling(self, hidden_states: ttnn.Tensor, input_ids: ttnn.Tensor) -> ttnn.Tensor:
-        """Trace-safe pooling head applied to the last hidden state [B, 1, S, D].
+        """Apply the pooling head to the last hidden state [B, 1, S, D].
 
-        Modes:
-          * ``"cls"``     -> sentence embedding from the first token: [B, 1, 1, D]
-          * ``"mean"``    -> mask-weighted mean over valid tokens:    [B, 1, 1, D]
-          * ``"colbert"`` -> per-token ColBERT projection:            [B, 1, S, D]
-          * ``"sparse"``  -> per-token sparse (lexical) weights:      [B, 1, S, 1]
+        The modes return these shapes:
+          * "cls"     -> [B, 1, 1, D], the first token
+          * "mean"    -> [B, 1, 1, D], the mean over valid tokens
+          * "colbert" -> [B, 1, S, D], a per-token projection
+          * "sparse"  -> [B, 1, S, 1], per-token lexical weights
 
-        The model emits the raw head output; downstream post-processing
-        (crop CLS, attention masking, vocab scatter, normalization, scoring)
-        is the caller's responsibility -- this mirrors how the vLLM generator
-        wrapper consumes ``colbert_linear`` / ``sparse_linear``.
-
-        No ``.item()`` / host sync, so the path stays inside
-        ``ttnn.begin_trace_capture``.
+        The model returns the raw head output. The caller does the remaining
+        steps, such as normalization and scoring. The method uses no host sync,
+        so the path stays trace-safe.
         """
         # Ensure rank-4 [B, 1, S, D].
         while len(hidden_states.shape) < 4:

@@ -173,15 +173,16 @@ def _attention_qkv_dtype(dtype, max_seq_len, max_batch_size):
     return dtype
 
 
-def _sequence_parallel_axis(args, mesh_device, max_seq_len):
-    """Return the mesh axis to shard the sequence over, or None. Enabled for the
-    S8192 serving shape on a 1x2 N300 (mesh (2, 1)). Disabled in data-parallel
-    mode, where each chip owns a full-sequence batch shard and attention needs
-    no K/V all-gather."""
+def sequence_parallel_axis(args, mesh_device):
+    """Return the mesh axis that shards the sequence, or None.
+
+    The S8192 shape on a (2, 1) mesh uses axis 0. Data-parallel mode returns
+    None, because each chip owns a full-sequence batch shard.
+    """
     if args.data_parallel:
         return None
     if (
-        max_seq_len == 8192
+        args.max_seq_len == 8192
         and mesh_device is not None
         and mesh_device.get_num_devices() == 2
         and tuple(mesh_device.shape) == (2, 1)
@@ -192,7 +193,7 @@ def _sequence_parallel_axis(args, mesh_device, max_seq_len):
 
 def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq_len, max_batch_size, optimizations):
     """Build BgeM3AttentionConfig, overlaying Optimizations.attention fields when provided."""
-    sp_axis = _sequence_parallel_axis(args, mesh_device, max_seq_len)
+    sp_axis = sequence_parallel_axis(args, mesh_device)
     config = BgeM3AttentionConfig(
         data_parallel=args.data_parallel,
         wqkv=attention_weights.wqkv,
