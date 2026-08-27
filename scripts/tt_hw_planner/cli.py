@@ -3327,7 +3327,7 @@ def _try_auto_onboard_inline(
     the user to do something" into "if it can't find a sibling, the
     tool drafts one itself"."""
     try:
-        from .auto_onboard import auto_onboard, write_backend_into_registry
+        from .auto_onboard import auto_onboard
     except Exception as exc:
         print(f"  (auto-onboard import failed: {type(exc).__name__}: {exc}; " f"skipping inline draft)")
         return None
@@ -3407,7 +3407,14 @@ def _try_auto_onboard_inline(
                 f"{type(exc).__name__}: {exc}; falling back to closest-template path."
             )
         return None
-    ok, msg = write_backend_into_registry(proposal)
+    # Unattended mid-run onboard: record in the supplement store, not tracked
+    # source. An LLM-drafted entry written into family_backends.py during a run is
+    # unreviewed and persists in git; the registry sync's own additions go to a
+    # cache file for the same reason. `auto-onboard --accept` still writes to source
+    # because a human invoked it.
+    from .auto_onboard import write_backend_into_overlay
+
+    ok, msg = write_backend_into_overlay(proposal, onboarded_for=model_id)
     print(f"  {msg}")
     if not ok:
         print("  Falling back to closest-template path.")

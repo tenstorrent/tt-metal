@@ -414,6 +414,85 @@ def auto_onboard(
 _BACKENDS_FILE = Path(__file__).resolve().parent / "family_backends.py"
 
 
+def keys_broader_than_demo(entry: dict, target: str = "") -> str:
+    """Why this entry's model_type_keys over-claim relative to its demo folder, or "".
+
+    The signal is a demo folder named after ONE target while the key matches a whole
+    architecture family. The FLUX.2-klein text_encoder onboard claimed
+    model_type_keys=['qwen3'] for models/demos/flux_2_klein_9b_text_encoder, so any
+    Qwen3 model would route into a FLUX-specific folder.
+
+    "Named after the target" is established by comparing the folder's slug with the
+    slug of the target that was onboarded -- both derived, nothing about either name
+    assumed. A folder that simply differs from the key is NOT enough: a shared
+    backend legitimately serves families its folder is not named for (a generic
+    transformers demo serving many architectures), so the target link is required.
+    Returns "" when there is no target to compare against."""
+    from .scaffold_demo_folder import _slug
+
+    demo = str((entry or {}).get("demo_path") or "").strip()
+    keys = [str(k).strip() for k in ((entry or {}).get("model_type_keys") or []) if str(k).strip()]
+    if not demo or not keys or not target:
+        return ""
+    folder = _slug(os.path.basename(demo.rstrip("/")))
+    target_slug = _slug(os.path.basename(str(target).rstrip("/")))
+    if not folder or not target_slug:
+        return ""
+    # Is the folder named after this specific target?
+    target_derived = target_slug in folder or folder in target_slug
+    if not target_derived:
+        return ""
+    # ...and does the key describe a family wider than that target?
+    unscoped = [k for k in keys if _slug(k) not in folder]
+    if not unscoped:
+        return ""
+    return (
+        f"model_type_keys={keys} is broader than demo_path {demo!r}: the folder is named for "
+        f"one target ({target}) while {unscoped} matches a whole architecture family, so "
+        f"unrelated models of that family would route here"
+    )
+
+
+def write_backend_into_overlay(proposal: "AutoOnboardProposal", *, onboarded_for: str = "") -> Tuple[bool, str]:
+    """Record a validated proposal in the onboarded store instead of tracked source.
+
+    Auto-onboard runs unattended in the middle of a bring-up. Writing its result
+    into ``family_backends.py`` put an unreviewed, LLM-drafted entry into git --
+    which is how a machine-local path and a blank model_type_key reached tracked
+    source. The registry sync's own additions go to a cache file for exactly this
+    reason; this puts auto-onboard on the same footing, and the supplement layer
+    reads both.
+
+    Records the target it was onboarded for, and notes an over-broad key rather
+    than dropping the entry: the key is usually the target's real model_type, so
+    the entry is still the best available route -- it just needs to be visible.
+    Returns ``(ok, message)``."""
+    from .registry_sync import add_onboarded
+
+    if proposal.validation_errors:
+        return (
+            False,
+            "proposal has validation errors; not recording:\n  - " + "\n  - ".join(proposal.validation_errors),
+        )
+    entry = dict(proposal.backend_python_repr or {})
+    if not entry.get("name"):
+        return (False, "proposal has no name; not recording")
+    if onboarded_for:
+        entry["onboarded_for"] = onboarded_for
+    breadth = keys_broader_than_demo(entry, onboarded_for)
+    if breadth:
+        entry["notes"] = f"{entry.get('notes', '')}\n[over-broad key] {breadth}".strip()
+    from .family_backends import invalidate_overlay_cache
+
+    if not add_onboarded(entry):
+        return (False, "could not record the onboarded backend")
+    invalidate_overlay_cache()
+    msg = f"recorded onboarded backend {entry['name']!r} in the supplement store (not tracked source)"
+    if breadth:
+        msg += f"\n  WARNING: {breadth}"
+    return (True, msg)
+
+
 def write_backend_into_registry(
     proposal: AutoOnboardProposal,
     *,

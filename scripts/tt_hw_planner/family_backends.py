@@ -272,11 +272,15 @@ def _overlay_backends() -> List[FamilyBackend]:
         return _OVERLAY_BACKENDS_CACHE
     out: List[FamilyBackend] = []
     try:
-        from .registry_sync import load_generated_overlay
+        from .registry_sync import load_generated_overlay, load_onboarded
 
         static_names = {b.name for b in _BACKENDS}
         static_mt = {k.lower() for b in _BACKENDS for k in b.model_type_keys}
-        for m in load_generated_overlay().get("families", []):
+        # Two supplement sources, same schema: entries derived from the synced tree,
+        # and entries auto-onboarded during a run. Both live in the cache rather
+        # than in tracked source, so a wrong entry costs a cache file, not a commit.
+        _families = list(load_generated_overlay().get("families") or []) + list(load_onboarded().get("families") or [])
+        for m in _families:
             name = m.get("name") or m.get("concept")
             cat = m.get("category")
             demo = m.get("demo_path") or m.get("tt_path")
@@ -295,12 +299,27 @@ def _overlay_backends() -> List[FamilyBackend]:
                     notes=m.get("notes", "auto-registered from upstream TT_HW_PLANNER_FAMILY marker"),
                     model_type_keys=mkeys,
                     pipeline_tags=[str(t).lower() for t in (m.get("pipeline_tags") or [])],
+                    # Honoured from the entry: an onboarded backend that decomposes by
+                    # walking the model must keep doing so through this layer, or it
+                    # silently falls back to copying a sibling template.
+                    use_module_tree=bool(m.get("use_module_tree", False)),
                 )
             )
     except Exception:
         out = []
     _OVERLAY_BACKENDS_CACHE = out
     return out
+
+
+def invalidate_overlay_cache() -> None:
+    """Forget the memoised supplement layer.
+
+    ``_overlay_backends()`` memoises on first read, so a backend onboarded during a
+    run was invisible to the process that wrote it -- routing kept reporting
+    LLM-RESOLVED for a target whose exact-match entry had just been created. Call
+    this after writing to either supplement store."""
+    global _OVERLAY_BACKENDS_CACHE
+    _OVERLAY_BACKENDS_CACHE = None
 
 
 def all_backends() -> List[FamilyBackend]:

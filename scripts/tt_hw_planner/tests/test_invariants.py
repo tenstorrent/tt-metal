@@ -3671,8 +3671,15 @@ def test_try_auto_onboard_inline_helper_exists_and_is_safe() -> None:
     )
 
     assert "auto_onboard(" in body, "must call `auto_onboard(model_id, ...)` to LLM-draft the entry"
-    assert "write_backend_into_registry(" in body, (
-        "must call `write_backend_into_registry(proposal)` to splice " "the drafted backend into family_backends.py"
+    # The draft must be PERSISTED so the re-pick below can find it. It used to be
+    # spliced into family_backends.py; an unattended mid-run onboard now records it
+    # in the supplement store instead, so an unreviewed LLM-drafted entry no longer
+    # lands in tracked source. `auto-onboard --accept`, which a human invokes,
+    # still writes to source. Either persistence call satisfies this invariant.
+    assert "write_backend_into_overlay(" in body or "write_backend_into_registry(" in body, (
+        "must persist the drafted backend (write_backend_into_overlay for the "
+        "unattended path, write_backend_into_registry for the explicit one) so the "
+        "re-pick can resolve it"
     )
 
     assert "pick_backend_with_quality" in body, (

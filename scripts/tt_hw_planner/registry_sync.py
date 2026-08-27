@@ -876,6 +876,63 @@ def refresh_registry(tree_root, sha: str = "LOCAL") -> dict:
     return overlay
 
 
+def _onboarded_path() -> Path:
+    return _cache_root() / "onboarded_backends.json"
+
+
+def load_onboarded() -> dict:
+    """Backends auto-onboarded during a run. ``{}`` if none/unreadable.
+
+    Kept separate from ``registry_overlay.json`` because that file is regenerated
+    wholesale by :func:`refresh_registry` on every sync -- an entry written into it
+    would vanish on the next run. This store persists, is never regenerated from
+    the tree, and lives in the cache rather than in tracked source, so a wrong
+    entry costs a cache file instead of a commit."""
+    try:
+        doc = json.loads(_onboarded_path().read_text())
+        return doc if isinstance(doc, dict) else {}
+    except Exception:
+        return {}
+
+
+def add_onboarded(entry: dict) -> bool:
+    """Append one backend entry to the onboarded store. True if it was added.
+
+    Idempotent on ``name``: re-onboarding the same backend replaces its entry
+    rather than accumulating duplicates. Never raises -- failing to record an
+    onboarded backend must not end a bring-up."""
+    name = str((entry or {}).get("name") or "").strip()
+    if not name:
+        return False
+    try:
+        doc = load_onboarded()
+        families = [f for f in (doc.get("families") or []) if isinstance(f, dict)]
+        families = [f for f in families if str(f.get("name") or "").strip() != name]
+        families.append(dict(entry))
+        doc["families"] = families
+        p = _onboarded_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(doc, indent=2, sort_keys=True))
+        return True
+    except Exception:
+        return False
+
+
+def drop_onboarded(name: str) -> bool:
+    """Remove one onboarded backend by name. True if something was removed."""
+    try:
+        doc = load_onboarded()
+        families = [f for f in (doc.get("families") or []) if isinstance(f, dict)]
+        kept = [f for f in families if str(f.get("name") or "").strip() != str(name).strip()]
+        if len(kept) == len(families):
+            return False
+        doc["families"] = kept
+        _onboarded_path().write_text(json.dumps(doc, indent=2, sort_keys=True))
+        return True
+    except Exception:
+        return False
+
+
 def load_generated_overlay() -> dict:
     """Read the last-written overlay (supplement layer). ``{}`` if none/unreadable."""
     try:
