@@ -880,7 +880,83 @@ This is written down in `defer_global_cb`'s own docstring and in
 the handoff as something to expect. **It is a limitation with a name, not a new
 defect**, and it is reported rather than worked around.
 
+**And the first half of the test passed.** The log carries seven
+`[ccl] lm_head synchronized` lines before the abort, and the traceback is in the
+*second* `generate` -> `prefill_row`: the batch-1 runner generated its eight tokens
+at 80 layers, and only the second runner's prefill failed. So this is precisely a
+prefill-after-decode fault and nothing else, and batch-1 `generate` through the
+runner is itself a passing data point at 80 layers.
+
 What it does *not* block: batch 32 through a **single** runner, which is what
 `demo.py::test_..._direct_demo_batch32_has_no_cross_slot_contamination` does - all
 32 slots prefill before any of them decodes. That is the run that carries the
 "batch 32" claim, and it is queued.
+| 47 | `logs3/a3_47_accuracy_gate_run2.log` | accuracy gate, run 2/3 | **1 passed**, 954 s — identical numbers |
+| 48 | `logs3/a3_48_accuracy_gate_run3.log` | accuracy gate, run 3/3 | **1 passed**, 1057 s — identical numbers |
+
+## Result 47-48 — the accuracy gate three times, identically
+
+| Run | Log | Wall | top-1 | top-5 |
+| --- | --- | --- | --- | --- |
+| 1 | `logs3/a3_44_accuracy_gate_run1.log` | 1356 s | 501/511 = 0.9804 | 511/511 = 1.0000 |
+| 2 | `logs3/a3_47_accuracy_gate_run2.log` | 954 s | 501/511 = 0.9804 | 511/511 = 1.0000 |
+| 3 | `logs3/a3_48_accuracy_gate_run3.log` | 1057 s | 501/511 = 0.9804 | 511/511 = 1.0000 |
+
+Identical counts, not just identical percentages: the same 501 of 511 positions
+match the reference's top-1 in every run. Run 1 is slower only because it paid the
+weight-staging cache misses; runs 2 and 3 got cache hits.
+
+The three-runs rule is met for the gate, and the determinism is again the evidence
+that the LM head all-reduce's `fp32_dest_acc=True` is earning its place - a
+bfloat16 cross-device sum of the logits is order-dependent on ETH ring arrival, and
+would have shown up here as greedy flips between runs.
+| 49 | `logs3/a3_49_demo_batch1_run2.log` | 80-layer demo, run 2/3 | **1 passed**, 365 s — identical text |
+| 50 | `logs3/a3_50_demo_batch1_run3.log` | 80-layer demo, run 3/3 | **1 passed**, 603 s — identical text |
+
+## Result 49-50 — the demo three times, character for character
+
+```text
+a3_45  'A tensor is a multi-dimensional array of numerical values, similar to a matrix,'
+a3_49  'A tensor is a multi-dimensional array of numerical values, similar to a matrix,'
+a3_50  'A tensor is a multi-dimensional array of numerical values, similar to a matrix,'
+```
+
+Three fresh processes, same sixteen tokens. Greedy decoding *should* be
+deterministic, and on this hardware that is a claim worth testing rather than
+assuming: the production comment behind `fp32_dest_acc=True` says a bfloat16
+cross-device sum of the logits is order-dependent on ETH ring arrival and produces
+"per-row logit non-determinism -> greedy flips". Three identical continuations are
+the direct evidence that it does not happen here.
+| 51 | `logs3/a3_51_demo_batch32.log` | **80-layer demo at the physical batch 32** | **1 passed**, 395 s — 32 slots, 8 distinct continuations, all coherent |
+
+## Result 51 — batch 32, and the isolation property
+
+`test_llama33_70b_galaxy_direct_demo_batch32_has_no_cross_slot_contamination`,
+**1 passed**. 32 slots filled from the 8 default prompts, prefilled, then 15 decode
+steps at the physical batch:
+
+```text
+[demo] slot 0  prompt: 'Explain what a tensor is to a software engineer in two sentences.'
+[demo] slot 0  text  : 'A tensor is a multi-dimensional array of numerical values, similar to a matrix,'
+[demo] slot 1  prompt: 'Name three prime numbers greater than one hundred.'
+[demo] slot 1  text  : 'Here are three prime numbers greater than 100:\n\n1. 101\n2'
+[demo] slot 2  prompt: 'Write a one-line summary of the water cycle.'
+[demo] slot 2  text  : 'The water cycle is the continuous process by which water is circulated between the Earth and'
+[demo] slot 31 prompt: 'In one sentence, what does a rotary position embedding do?'
+[demo] slot 31 text  : 'A rotary position embedding, also known as RoPE (Rotary Position Embedding'
+```
+
+Every slot is coherent, on topic and *correct* - slot 1 actually names 101 - and
+slot 0's continuation is **character-for-character the same as the batch-1 runs**,
+which is the no-cross-slot-contamination property the test's name promises: a slot
+served alongside 31 others produces exactly what it produces alone.
+
+**Step 3's coverage is complete** except the two-runner case (Result 46):
+
+| Step-3 item | Runs | Result |
+| --- | --- | --- |
+| Full-model prefill + first decode token | 1 | PASS |
+| Teacher-forced accuracy (the gate) | **3** fresh | PASS, identical: top-1 501/511, top-5 511/511 |
+| Batch 1, coherent demo text | **3** fresh | PASS, identical text |
+| Batch 32, no cross-slot contamination | 1 | PASS |
+| Two runners in one process | 1 | FAIL — limitation L1's remaining half (Result 46) |
