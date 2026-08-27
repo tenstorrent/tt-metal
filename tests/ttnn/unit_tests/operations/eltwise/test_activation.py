@@ -232,7 +232,13 @@ def test_softplus(device, h, w, beta, threshold):
 
 
 def _bfloat16_neighbour(value, steps):
-    """Return ``value`` moved ``steps`` bfloat16 ULP away from zero (``steps`` may be negative)."""
+    """Return ``value`` moved ``steps`` bfloat16 ULP away from zero (``steps`` may be negative).
+
+    Adding to the raw bit pattern moves magnitude the right way for either sign, but only away
+    from zero: stepping down from ``+0.0`` gives ``0xFFFF`` and from ``-0.0`` wraps past the int16
+    floor to ``0x7FFF``, both NaN. Reject zero rather than feed NaN into a caller's stimulus.
+    """
+    assert value != 0, "bfloat16 neighbour is undefined at zero; the bit step would produce NaN"
     bits = torch.tensor(value, dtype=torch.bfloat16).view(torch.int16)
     return (bits + steps).view(torch.bfloat16).item()
 
