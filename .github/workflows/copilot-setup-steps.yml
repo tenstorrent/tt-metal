@@ -1,87 +1,65 @@
 name: "Copilot Setup Steps"
-
-# TEMPORARY PROBE - validating the docker-run design for PR #54520.
-# Replaced by the final version once these results are in.
+# TEMPORARY PROBE 2 - can a docker container resolve the k8s service DNS for Garage?
 on:
   workflow_dispatch:
   push:
     paths:
       - .github/workflows/copilot-setup-steps.yml
-
 jobs:
   copilot-setup-steps:
     runs-on: tt-ubuntu-2204-large-stable
-    # NO container: - Copilot's runtime must stay on the host (git-proxy path bug).
-    timeout-minutes: 40
+    timeout-minutes: 20
     permissions:
       contents: read
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Host environment
-        run: |
-          echo "::group::host"
-          echo "whoami      : $(whoami) ($(id -u):$(id -g))"
-          echo "groups      : $(id -Gn)"
-          echo "workspace   : ${GITHUB_WORKSPACE}"
-          echo "docker      : $(command -v docker || echo ABSENT) $(docker --version 2>/dev/null)"
-          echo "clang++-20  : $(command -v clang++-20 || echo 'ABSENT (expected - toolchain lives in the image)')"
-          echo "ccache      : $(command -v ccache || echo ABSENT)"
-          echo "shell       : $0"
-          echo "df /opt     : $(df -h /opt | tail -1)"
-          echo "::endgroup::"
-          docker info >/dev/null 2>&1 && echo "docker daemon reachable" || echo "::error::docker daemon NOT reachable"
-
-      - name: Pull CI build image
+      - name: Garage reachability from container, bridge vs host network
         run: |
           IMG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:latest
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin >/dev/null 2>&1 || \
-            echo "::warning::ghcr login failed; relying on cached image"
-          START=$(date +%s)
-          docker pull "$IMG"
-          echo "pull took $(( $(date +%s) - START ))s"
-          docker image inspect "$IMG" --format 'size: {{.Size}} bytes / created {{.Created}}'
+          EP=http://garage.garage.svc.cluster.local:3900
+          docker pull -q "$IMG" >/dev/null
 
-      - name: Compile test inside the image as the host user
+          echo "=== host (baseline) ==="
+          curl -sS -m 8 -o /dev/null -w '  host: HTTP %{http_code} in %{time_total}s\n' "$EP" \
+            || echo "  host: FAILED"
+
+          for NET in "default-bridge" "host"; do
+            echo "=== container network: $NET ==="
+            ARGS=(--rm)
+            [ "$NET" = "host" ] && ARGS+=(--network host)
+            docker run "${ARGS[@]}" --user "$(id -u):$(id -g)" -e HOME=/tmp "$IMG" bash -lc "
+              getent hosts garage.garage.svc.cluster.local >/dev/null 2>&1 \
+                && echo '  DNS: resolves ->' \$(getent hosts garage.garage.svc.cluster.local | head -1) \
+                || echo '  DNS: DOES NOT RESOLVE'
+              curl -sS -m 8 -o /dev/null -w '  HTTP: %{http_code} in %{time_total}s\n' $EP 2>&1 \
+                || echo '  HTTP: FAILED'
+            " 2>&1 | sed 's/^/  /'
+          done
+
+      - name: Real ccache remote write/read through the wrapper
         env:
-          ACTIONS_GARAGE_ACCESS_KEY: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
-          ACTIONS_GARAGE_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
+          AK: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
+          SK: ${{ secrets.GARAGE_S3_SECRET_KEY }}
         run: |
           IMG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:latest
-          ENDPOINT="http://garage.garage.svc.cluster.local:3900"
-          REMOTE="s3://ccache|region=garage|prefix=tt-metal|endpoint_url=${ENDPOINT}"
-          mkdir -p "${GITHUB_WORKSPACE}/.probe"
-          cat > "${GITHUB_WORKSPACE}/.probe/t.cpp" <<'CPP'
-          #include <string>
-          #include <cstdio>
-          int main() { std::string s = "probe"; printf("%s\n", s.c_str()); return 0; }
-          CPP
-          echo "::group::docker run (--user $(id -u):$(id -g))"
-          docker run --rm \
-            --user "$(id -u):$(id -g)" \
-            -v "${GITHUB_WORKSPACE}:/work" -w /work \
-            -e HOME=/tmp \
-            -e CCACHE_DIR=/tmp/ccache \
-            -e CCACHE_REMOTE_STORAGE="${REMOTE}" \
-            -e AWS_ACCESS_KEY_ID="${ACTIONS_GARAGE_ACCESS_KEY}" \
-            -e AWS_SECRET_ACCESS_KEY="${ACTIONS_GARAGE_SECRET_KEY}" \
-            -e AWS_DEFAULT_REGION=garage \
-            -e AWS_ENDPOINT_URL_S3="${ENDPOINT}" \
-            "$IMG" \
-            bash -lc '
-              set -e
-              echo "in-container user: $(id -u):$(id -g)  HOME=$HOME"
-              clang++-20 --version | head -1
-              ccache --version | head -1
-              ccache --show-config 2>/dev/null | grep -iE "remote_storage" || echo "no remote_storage visible"
-              ccache clang++-20 -std=c++20 -c .probe/t.cpp -o .probe/t.o
-              echo "compile OK"
-              ccache -s 2>/dev/null | grep -iE "remote|cache size|hits" | head -6 || true
-            '
-          echo "::endgroup::"
-          echo "::group::host-side artifact ownership"
-          ls -ln "${GITHUB_WORKSPACE}/.probe/"
-          echo "::endgroup::"
-          rm -rf "${GITHUB_WORKSPACE}/.probe"
+          EP=http://garage.garage.svc.cluster.local:3900
+          REMOTE="s3://ccache|region=garage|prefix=tt-metal|endpoint_url=${EP}"
+          mkdir -p .probe && printf '#include <string>\nint main(){std::string s="x";return s.size()-1;}\n' > .probe/a.cpp
+          for NET in "" "--network host"; do
+            LABEL="${NET:-default-bridge}"
+            echo "=== ccache remote via ${LABEL} ==="
+            docker run --rm $NET --user "$(id -u):$(id -g)" \
+              -v "${GITHUB_WORKSPACE}:/work" -w /work \
+              -e HOME=/tmp -e CCACHE_DIR=/tmp/cc -e CCACHE_REMOTE_STORAGE="$REMOTE" \
+              -e AWS_ACCESS_KEY_ID="$AK" -e AWS_SECRET_ACCESS_KEY="$SK" \
+              -e AWS_DEFAULT_REGION=garage -e AWS_ENDPOINT_URL_S3="$EP" \
+              -e CCACHE_LOGFILE=/tmp/cc.log \
+              "$IMG" bash -lc '
+                ccache -z >/dev/null 2>&1
+                ccache clang++-20 -std=c++20 -c .probe/a.cpp -o /tmp/a.o 2>&1 | tail -2
+                echo "--- remote counters ---"
+                ccache -sv 2>/dev/null | grep -iE "remote" | head -8
+                echo "--- log errors ---"
+                grep -iE "error|fail|denied|timed out" /tmp/cc.log 2>/dev/null | head -4 || echo "  (none)"
+              ' 2>&1 | sed 's/^/  /'
+          done
+          rm -rf .probe
