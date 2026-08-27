@@ -1847,16 +1847,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
 
+        supports_async_decode = getattr(self, "model_capabilities", {}).get("supports_async_decode", True)
+
         # vLLM under async scheduling supplies a one-step-stale last token at
         # reset steps (its host state lags device sampling). The device token
         # buffer holds the authoritative token sampled at the previous decode
         # step, so on a reset keep it: permute per slot_remap (condense moves),
         # only taking host tokens for slots freshly prefilled since the last
         # decode submit (their last token came from prefill, not decode).
-        # A model that does not declare async decode never has that lag, so the keep
-        # could only adopt a stale token from an earlier request whose position happens
-        # to coincide. model_capabilities lives on the vLLM adapter subclass.
-        supports_async_decode = getattr(self, "model_capabilities", {}).get("supports_async_decode", True)
         if (
             on_device_sampling
             and supports_async_decode
