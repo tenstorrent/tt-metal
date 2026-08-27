@@ -21,7 +21,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
-#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp"
 #include "ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp"
@@ -33,7 +32,7 @@ namespace ttml::ops {
 
 namespace {
 
-// Unlike ttnn::gelu, ttnn::experimental::gelu_bw takes a string rather than a GeluVariant, so
+// Unlike ttnn::gelu, ttnn::gelu_bw takes a string rather than a GeluVariant, so
 // we have to handle the string case explicitly.
 const std::string& gelu_bw_approximate(GeluVariant variant) {
     static const std::string k_none = "none";
@@ -66,8 +65,8 @@ autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, GeluVariant variant)
     auto out = autograd::create_tensor();
     out->set_value(ttnn::gelu(tensor->get_value(), variant));
     autograd::GradFunction grad = [tensor, out, variant]() {
-        auto dL_dt = ttnn::experimental::gelu_bw(out->get_grad(), tensor->get_value(), gelu_bw_approximate(variant));
-        tensor->add_grad(dL_dt);
+        auto dL_dt = ttnn::gelu_bw(out->get_grad(), tensor->get_value(), gelu_bw_approximate(variant));
+        tensor->add_grad(dL_dt[0].value());
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
