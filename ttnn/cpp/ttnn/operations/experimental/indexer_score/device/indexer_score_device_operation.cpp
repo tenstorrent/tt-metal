@@ -283,7 +283,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
 
 void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // chunk_start, cache slot, kv_len are hash-excluded runtime values -> re-checked on hits.
+    // chunk_start, cache slot, and exact kv_len are runtime values -> re-checked on hits.
     validate_runtime_values(attrs, tensor_args);
     validate_chunk_start(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
