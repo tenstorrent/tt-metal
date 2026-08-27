@@ -969,9 +969,19 @@ KNOBS = {
     # name (loop-reclaim-call-window) since its wider window is unproven
     # here; a same-value candidate landing on a reclaimed slot re-proves
     # its own window and always reprograms (the dead claim's foreign
-    # writer makes cross-window persistence unprovable).  Under the flag
-    # the loop-class selection prices same-value candidates jointly
-    # (rank key = the value's total saved issue words).  The trig
+    # writer makes cross-window persistence unprovable); the dead scan
+    # skips a slot whose unique TU claim value equals some pending
+    # candidate's value (that slot is the candidate's FREE
+    # value-identical home; stealing it forfeits a placement — the
+    # digamma-fresh lreg-pressure-exceeded bring-up finding); selection
+    # ORDER is the established uses-then-value ranking, unchanged (a
+    # words-saved key is pressure-blind, same hazard).  Shipped beside
+    # an UNGATED counted-row FINAL LOCKSTEP AUDIT soundness fix (the
+    # composed bring-up probe golden-FAILED tanh corr on the pinned
+    # sim; the canonicalization committed occupancy-cascade renames
+    # after lockstep verification with no final re-check — refusal
+    # counted-row-final-lockstep-divergence; corpus OFF/TD/ON-36
+    # byte-inert under the audit).  The trig
     # anatomy: the fresh body keeps every constant local (storm
     # contract) while the shared production init_inverse_hyperbolic
     # claims PRGM 12-14 with log1p_init constants NOTHING in the sem TU
