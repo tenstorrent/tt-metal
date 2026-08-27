@@ -124,6 +124,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    // Hardware configuration first, then the init routines that depend on it.
+    // The datacopy driver this fixture mirrors does it the other way round, as
+    // do a couple of other in-tree drivers; matmul_test.cpp and
+    // sfpu_sampling_test.cpp configure first. This fixture takes the
+    // configure-first order because it is meant to be exemplary, and because
+    // nothing here needs the original sequence -- not because the other order
+    // is known to be wrong.
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     // copy srca to dest
     _llk_math_eltwise_unary_datacopy_init_wrapper_<
         DataCopyType::A2D,
@@ -132,7 +140,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         is_int_fpu_en,
         llk_test_pack_mode_v<false, tilize_en>>(params.num_faces, formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
     for (int block_num = 0; block_num < params.NUM_BLOCKS; ++block_num)
     {

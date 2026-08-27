@@ -170,34 +170,85 @@ def test_plugin_name_constant_matches_the_module_that_exists():
     assert importlib.import_module(tt_llk_harness.PYTEST_PLUGIN) is not None
 
 
-def test_version_gate_accepts_current_and_rejects_the_future():
+def test_version_gate_accepts_compatible_and_rejects_the_rest(monkeypatch):
+    """Compatible means same major, minor no newer than the harness.
+
+    The interesting case is a *newer* harness major. Plain tuple ordering would
+    call that compatible, so a suite written for 1.x would sail through the gate
+    against 2.x — which only exists because something breaking changed — and
+    fail later somewhere less obvious.
+    """
     import tt_llk_harness
 
     major, minor = tt_llk_harness.HARNESS_API_VERSION
-    tt_llk_harness.require_version(major, minor)  # must not raise
+
+    tt_llk_harness.require_version(major, minor)  # exact
+    tt_llk_harness.require_version(major)  # minor defaults to 0
+    if minor > 0:
+        tt_llk_harness.require_version(major, minor - 1)  # older minor is fine
+
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         RuntimeError, match="harness API"
     ):
-        tt_llk_harness.require_version(major + 1)
+        tt_llk_harness.require_version(major, minor + 1)  # needs a newer minor
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        RuntimeError, match="harness API"
+    ):
+        tt_llk_harness.require_version(major + 1)  # needs a newer major
+
+    # And a harness that has moved on past this suite's major must be rejected.
+    monkeypatch.setattr(tt_llk_harness, "HARNESS_API_VERSION", (major + 1, 0))
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        RuntimeError, match="breaking change"
+    ):
+        tt_llk_harness.require_version(major, minor)
 
 
-def test_suite_needs_no_helpers_imports_of_its_own():
-    """A consumer should never have to reach past the facade.
+# The only places in this fixture allowed to name the implementation, and why.
+# Everything here asserts *about* ``helpers`` — that it resolves to the harness,
+# that ``register_golden`` genuinely comes from it — which is contract checking,
+# not consumer usage. Consumer code reaches the harness through the facade.
+SANCTIONED_IMPLEMENTATION_IMPORTS = {
+    "python_tests/test_out_of_tree_contract.py": {
+        "import helpers",
+        "import helpers.golden_generators as goldens_mod",
+        "import helpers.llk_pytest_plugin as plugin",
+    },
+}
 
-    The two ``helpers`` imports left in this file are deliberate: they assert
-    *about* the implementation (that ``helpers`` resolves to the harness, and
-    that ``register_golden`` really comes from it). Those are contract checks,
-    not consumer usage. Anything beyond them means the facade is incomplete.
+
+def test_no_consumer_module_reaches_past_the_facade():
+    """Scan the whole fixture, not just this file.
+
+    An earlier version of this test read only its own source, which let the
+    fixture's own golden module import ``helpers.golden_generators`` directly
+    without anything noticing — the representative consumer was quietly
+    depending on the private namespace the fixture exists to avoid. Walking the
+    tree closes that, and an explicit allow-list keyed by file says which
+    exceptions are intentional instead of pinning a count.
     """
-    source = Path(__file__).read_text()
-    helpers_imports = [
-        line.strip()
-        for line in source.splitlines()
-        if line.strip().startswith(("import helpers", "from helpers"))
-    ]
-    assert len(helpers_imports) == 3, (
-        "new `helpers` imports appeared — either add the name to "
-        f"tt_llk_harness.__all__, or justify it here:\n{helpers_imports}"
+    offenders: dict[str, list[str]] = {}
+
+    for path in sorted(FIXTURE_ROOT.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        rel = path.relative_to(FIXTURE_ROOT).as_posix()
+        allowed = SANCTIONED_IMPLEMENTATION_IMPORTS.get(rel, set())
+        found = [
+            line.strip()
+            for line in path.read_text().splitlines()
+            if line.strip().startswith(("import helpers", "from helpers"))
+        ]
+        unsanctioned = [line for line in found if line not in allowed]
+        if unsanctioned:
+            offenders[rel] = unsanctioned
+
+    assert not offenders, (
+        "these consumer modules import the private `helpers` namespace:\n"
+        + "\n".join(f"  {rel}: {lines}" for rel, lines in offenders.items())
+        + "\nEither reach it through tt_llk_harness (adding the name to "
+        "__all__ if missing), or add a justified entry to "
+        "SANCTIONED_IMPLEMENTATION_IMPORTS."
     )
 
 

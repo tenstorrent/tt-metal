@@ -111,20 +111,37 @@ HARNESS_API_VERSION = (1, 0)
 
 
 def require_version(major: int, minor: int = 0) -> None:
-    """Fail fast, and legibly, if the harness predates what this suite needs.
+    """Fail fast, and legibly, if the harness is incompatible with this suite.
 
     Without this a consumer pinned to an older submodule discovers the mismatch
     as an ``AttributeError`` or a missing keyword argument somewhere deep in a
     test run. Call it from your ``conftest.py`` right after importing::
 
         tt_llk_harness.require_version(1, 0)
+
+    Compatible means *same major, minor at least as new as requested*. A newer
+    major is a rejection, not an upgrade: a major bump only happens for a
+    breaking change that has completed its deprecation period, so a suite
+    written against 1.x has no reason to expect 2.x to work. Treating "newer is
+    always fine" as compatible is the failure mode this function exists to
+    prevent — it would let a consumer pass the advertised gate and then break
+    later, in a worse place.
     """
-    if (major, minor) > HARNESS_API_VERSION:
+    have_major, have_minor = HARNESS_API_VERSION
+    if major != have_major:
+        raise RuntimeError(
+            f"This suite needs tt-llk harness API {major}.x, but the harness on "
+            f"LLK_HOME provides {have_major}.{have_minor}. A different major "
+            "version means a breaking change to the out-of-tree contract: see "
+            "the migration note in docs/tests/getting_started.md §9, then move "
+            "the suite to the new spelling."
+        )
+    if minor > have_minor:
         raise RuntimeError(
             f"This suite needs tt-llk harness API {major}.{minor}, but the "
-            f"harness on LLK_HOME provides {HARNESS_API_VERSION[0]}."
-            f"{HARNESS_API_VERSION[1]}. Bump the tt-llk submodule, or pin the "
-            "suite to an older interface."
+            f"harness on LLK_HOME provides {have_major}.{have_minor}. Bump the "
+            "tt-llk submodule, or stop using whatever was added in "
+            f"{major}.{minor}."
         )
 
 

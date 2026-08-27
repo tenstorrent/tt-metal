@@ -934,12 +934,13 @@ class TestConfig:
 
         self._prepared = False
 
-        # Own copies before anything below mutates them. The speed-of-light
-        # branch folds runtimes into templates in place; with a shared ``[]``
-        # default that mutated the default object itself, so every later
+        # This instance owns its parameter lists: copy on the way in, and never
+        # mutate a caller's list or a default in place. The speed-of-light
+        # branch below rebinds rather than appending, for the same reason.
+        # (These used to default to a shared ``[]`` that the fold mutated, so a
         # variant constructed without explicit ``templates`` inherited the
-        # previous variant's runtimes. It also grew a list the caller still
-        # held. Both are invisible until they change what gets compiled.
+        # previous variant's runtimes -- invisible until it changed what got
+        # compiled. Regression coverage: test_test_config_regressions.py.)
         templates = list(templates or [])
         runtimes = list(runtimes or [])
 
@@ -1263,20 +1264,42 @@ class TestConfig:
         # has run; before that the registered extras live solely in
         # ``EXTRA_INCLUDE_*``. Hash both, so a variant built before the merge
         # and one built after cannot collide.
-        include_tokens = TestConfig._as_include_flags(self.include_dirs) + list(
+        #
+        # Each group is fenced by a label rather than concatenated, because the
+        # *role* of a dir is as much a compilation input as the dir itself. A
+        # flat list loses that: the same dir registered with ``prepend=True``
+        # and ``prepend=False`` yields the same token sequence while deciding
+        # opposite precedence against the in-tree ``helpers/src``. Labels cannot
+        # be confused with flags, which all start with ``-I``.
+        header_tokens = TestConfig._as_include_flags(self.include_dirs) + list(
             TestConfig.INCLUDES
         )
-        include_tokens += [
+        header_prepend = [
             flag
             for flag in TestConfig.EXTRA_INCLUDE_PREPEND
-            + TestConfig.EXTRA_INCLUDE_APPEND
-            if flag not in include_tokens
+            if flag not in header_tokens
+        ]
+        header_append = [
+            flag
+            for flag in TestConfig.EXTRA_INCLUDE_APPEND
+            if flag not in header_tokens
         ]
         src_include_prepend, src_include_append = self._extra_src_include_flag_lists()
-        search_dirs = include_tokens + src_include_prepend + src_include_append
+        search_dirs = [
+            "<<headers>>",
+            *header_tokens,
+            "<<headers-prepend>>",
+            *header_prepend,
+            "<<headers-append>>",
+            *header_append,
+            "<<src-prepend>>",
+            *src_include_prepend,
+            "<<src-append>>",
+            *src_include_append,
+        ]
 
         self.variant_id = sha256(
-            str(" | ".join(temp_str + search_dirs)).encode()
+            str(" | ".join(temp_str + ["<<search-dirs>>"] + search_dirs)).encode()
         ).hexdigest()
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
