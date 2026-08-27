@@ -26,6 +26,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/range_lockstep_allocation/buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/range_lockstep_allocation/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/mesh_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp

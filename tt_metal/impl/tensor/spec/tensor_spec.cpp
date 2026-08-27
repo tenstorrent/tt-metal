@@ -5,6 +5,7 @@
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/tensor_serialization_support.hpp>
 
@@ -308,6 +309,9 @@ MemoryConfig TensorSpec::populate_nd_shard_spec_from_legacy() const {
         mem_config.created_with_nd_shard_spec());
     if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(mem_config)) {
         tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(result, true);
+    }
+    if (tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(mem_config)) {
+        tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(result, true);
     }
     return result;
 }

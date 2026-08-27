@@ -20,6 +20,11 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
@@ -271,6 +276,39 @@ TEST_F(PerCoreAllocationTest, RangeLockstepRejectsInterleaved) {
     BufferShardingArgs interleaved;
     EXPECT_ANY_THROW(range_lockstep::set_range_lockstep_allocation(interleaved, true))
         << "An interleaved buffer spans every bank, so there is no narrower core set to scope to";
+}
+
+// The MemoryConfig surface is how a tensor carries the request down to buffer allocation, and
+// how it survives a cache round-trip. These are host-only: no device work is involved.
+namespace {
+MemoryConfig sharded_l1_memory_config() {
+    return MemoryConfig(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec(CoreRangeSet(CoreCoord(0, 0)), {32, 32}, ShardOrientation::ROW_MAJOR));
+}
+}  // namespace
+
+TEST_F(PerCoreAllocationTest, RangeLockstepMemoryConfigReachesShardingArgs) {
+    auto config = sharded_l1_memory_config();
+    ASSERT_FALSE(range_lockstep::is_range_lockstep_allocation(config));
+    range_lockstep::set_range_lockstep_allocation(config, true);
+    EXPECT_TRUE(range_lockstep::is_range_lockstep_allocation(config));
+
+    // TensorSpec is what turns a MemoryConfig into the BufferShardingArgs the allocator sees.
+    const TensorSpec spec(Shape({32, 32}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), config));
+    const auto sharding_args = spec.compute_buffer_sharding_args();
+    EXPECT_TRUE(range_lockstep::is_range_lockstep_allocation(sharding_args))
+        << "range lockstep set on the MemoryConfig did not reach the buffer's sharding args";
+}
+
+TEST_F(PerCoreAllocationTest, RangeLockstepMemoryConfigRejectsPerCoreAndInterleaved) {
+    auto per_core_config = sharded_l1_memory_config();
+    per_core::set_per_core_allocation(per_core_config, true);
+    EXPECT_ANY_THROW(range_lockstep::set_range_lockstep_allocation(per_core_config, true));
+
+    MemoryConfig interleaved(TensorMemoryLayout::INTERLEAVED, BufferType::L1);
+    EXPECT_ANY_THROW(range_lockstep::set_range_lockstep_allocation(interleaved, true));
 }
 
 TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {

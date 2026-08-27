@@ -82,6 +82,7 @@ std::tuple<
     const std::optional<ShardSpec>&,
     const std::optional<NdShardSpec>&,
     const bool&,
+    const bool&,
     const bool&>
 MemoryConfig::attribute_values() const {
     return std::forward_as_tuple(
@@ -90,7 +91,8 @@ MemoryConfig::attribute_values() const {
         impl().shard_spec_,
         impl().nd_shard_spec_,
         impl().created_with_nd_shard_spec_,
-        impl().per_core_allocation_);
+        impl().per_core_allocation_,
+        impl().range_lockstep_allocation_);
 }
 
 bool MemoryConfig::is_sharded() const {
