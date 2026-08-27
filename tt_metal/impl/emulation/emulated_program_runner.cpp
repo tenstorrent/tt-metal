@@ -2597,21 +2597,52 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
         } catch (...) {
         }
     } else if (r.kind == emule_route_kind::MCAST_2D) {
-        // 2D line multicast: {c,d,e,f}={E,W,N,S} per-direction hop counts; walk each non-zero direction.
+        // Mesh multicast first routes to (a,b). The hop counts are interpreted from that start node.
         using RD = tt::tt_fabric::RoutingDirection;
-        const std::pair<RD, uint32_t> dirs[4] = {{RD::E, r.c}, {RD::W, r.d}, {RD::N, r.e}, {RD::S, r.f}};
-        std::vector<uint32_t> tgts;
-        for (const auto& [dir, hops] : dirs) {
-            if (hops == 0) {
-                continue;
+        try {
+            const uint32_t start_chip = static_cast<uint32_t>(cp.get_physical_chip_id_from_fabric_node_id(
+                tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{r.b}, r.a)));
+            std::vector<uint32_t> tgts;
+            auto append_unique = [&](uint32_t chip) {
+                if (std::find(tgts.begin(), tgts.end(), chip) == tgts.end()) {
+                    tgts.push_back(chip);
+                }
+            };
+            auto append_branch = [&](uint32_t root, RD dir, uint32_t hops) {
+                const auto& walk = __emule_fabric_walk(root, dir);
+                for (uint32_t k = 0; k < hops && k < walk.size(); ++k) {
+                    append_unique(walk[k]);
+                }
+            };
+
+            const uint32_t spine_hops = r.e != 0 ? r.e : r.f;
+            if (spine_hops != 0) {
+                const RD spine_dir = r.e != 0 ? RD::N : RD::S;
+                uint32_t root = start_chip;
+                for (uint32_t spine_index = 0; spine_index < spine_hops; ++spine_index) {
+                    append_unique(root);
+                    append_branch(root, RD::E, r.c);
+                    append_branch(root, RD::W, r.d);
+                    const auto& spine_walk = __emule_fabric_walk(root, spine_dir);
+                    if (spine_index + 1 < spine_hops) {
+                        if (spine_walk.empty()) {
+                            break;
+                        }
+                        root = spine_walk[0];
+                    }
+                }
+            } else {
+                append_unique(start_chip);
+                const RD line_dir = r.c != 0 ? RD::E : RD::W;
+                const uint32_t line_hops = r.c != 0 ? r.c : r.d;
+                if (line_hops > 1) {
+                    append_branch(start_chip, line_dir, line_hops - 1);
+                }
             }
-            const auto& walk = __emule_fabric_walk(src_chip, dir);
-            for (uint32_t k = 0; k < hops && k < walk.size(); ++k) {
-                tgts.push_back(walk[k]);
+            if (!tgts.empty()) {
+                return tgts;
             }
-        }
-        if (!tgts.empty()) {
-            return tgts;
+        } catch (...) {
         }
     } else if (r.kind == emule_route_kind::MCAST_1D || r.kind == emule_route_kind::UNICAST_1D) {
         // 1D MUX path carries no direction tag: infer the worker's direction from a multicast's range and
