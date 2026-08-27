@@ -106,10 +106,10 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         // Reconfigure srcA for unpack
         reconfig_data_format_srca(input_dfb);
 
-#ifndef ARCH_BLACKHOLE
+#ifdef ARCH_WORMHOLE
         if constexpr (use_fast) {
             // WH fast-tilize uses both SrcA and SrcB; reconfigure SrcB to match input.
-            // BH fast-tilize only uses SrcA — SrcB must not be touched so matmul
+            // BH/Quasar fast-tilize only uses SrcA — SrcB must not be touched so matmul
             // weights stay configured correctly.
             reconfig_data_format_srcb(input_dfb);
         }
