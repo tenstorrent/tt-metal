@@ -1020,8 +1020,7 @@ jobs:
                           "unit",
                           "fabric",
                           "multiprocess",
-                          "distributed-ops",
-                          "tttv2"
+                          "distributed-ops"
                         ],
                         "type": "string"
                       },
