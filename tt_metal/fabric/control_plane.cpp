@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <iostream>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
@@ -65,6 +66,30 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 
 namespace tt::tt_fabric {
+namespace {
+
+// Whether to anchor a galaxy mesh with only its NW corner instead of all four corners.
+//
+// get_galaxy_fixed_asic_position_pinnings_for_mesh()'s four-corner mode requires the solver
+// to find an INJECTIVE assignment of the four logical mesh corners onto the four tray-corner
+// ASICs. On the quad4 Blackhole galaxies that consistently leaves exactly one corner --
+// always the south-west one, chip_id = cols * (rows - 1) -- unplaceable: 31 of 32 nodes for a
+// [4,8] mesh, 127 of 128 for [4,32], even though the physical graph is a strict SUPERSET of
+// the logical one and a valid embedding exists (verified edge-by-edge against the factory
+// system descriptor).
+//
+// Removing the anchor entirely is worse, not better: with no corner pinned the solver cannot
+// orient the mesh at all and maps ZERO of 128 nodes. The anchor is load-bearing.
+//
+// One anchor is the middle ground -- enough to fix orientation, without demanding the
+// four-way injective assignment the solver mishandles. nw_corner_only is an existing upstream
+// mode, so this only selects it.
+bool galaxy_nw_corner_only_anchor() {
+    static const bool enabled = std::getenv("TT_METAL_GALAXY_NW_CORNER_ONLY") != nullptr;
+    return enabled;
+}
+
+}  // namespace
 
 namespace {
 
@@ -470,7 +495,7 @@ void ControlPlane::init_control_plane(
                             mesh_id,
                             mesh_shape,
                             /*hard_pin_node_0=*/world_size == 1,
-                            /*nw_corner_only=*/false);
+                            /*nw_corner_only=*/galaxy_nw_corner_only_anchor());
                     pinning_groups.insert(pinning_groups.end(), mesh_pinning_groups.begin(), mesh_pinning_groups.end());
                 }
             }
@@ -592,7 +617,10 @@ void ControlPlane::init_control_plane_auto_discovery() {
             if (!is_1d && mesh_chip_count % 32 == 0) {
                 auto mesh_pinning_groups =
                     tt::tt_metal::experimental::tt_fabric::get_galaxy_fixed_asic_position_pinnings_for_mesh(
-                        mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/false);
+                        mesh_id,
+                        mesh_shape,
+                        /*hard_pin_node_0=*/world_size == 1,
+                        /*nw_corner_only=*/galaxy_nw_corner_only_anchor());
                 pinning_groups.insert(pinning_groups.end(), mesh_pinning_groups.begin(), mesh_pinning_groups.end());
             }
         }
