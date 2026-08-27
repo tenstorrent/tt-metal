@@ -27,6 +27,8 @@ std::vector<ttnn::DataType> moe_compute_supported_weight_dtypes() {
     return {ttnn::DataType::BFLOAT4_B, ttnn::DataType::BFLOAT8_B, ttnn::DataType::BFLOAT16};
 }
 
+std::vector<std::string> moe_compute_capabilities() { return {"cumulative_combine_wait_min"}; }
+
 bool is_moe_compute_weight_dtype_supported(ttnn::DataType dtype) {
     const auto supported = moe_compute_supported_weight_dtypes();
     return std::find(supported.begin(), supported.end(), dtype) != supported.end();

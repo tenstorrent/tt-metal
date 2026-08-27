@@ -8,6 +8,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
@@ -34,6 +35,14 @@ void bind_moe_compute(nb::module_& mod) {
 
 Callers must query this capability before packing or uploading expert weights;
 absence of the function means the runtime predates dtype-aware MoE CBs.)doc");
+    mod.def(
+        "moe_compute_capabilities",
+        &ttnn::experimental::moe_compute_capabilities,
+        R"doc(Return protocol capabilities positively implemented by this fused ``moe_compute`` runtime.
+
+Callers must require the relevant token before selecting a geometry that
+depends on it. Absence of the function or token means the protocol is not
+qualified and must fail closed.)doc");
     ttnn::bind_function<"moe_compute", "ttnn.experimental.">(
         mod,
         R"doc(

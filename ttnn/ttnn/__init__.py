@@ -556,6 +556,8 @@ if hasattr(ttnn._ttnn.operations.experimental.ccl_experimental, "moe_compute_sup
     experimental.moe_compute_supported_weight_dtypes = (
         ttnn._ttnn.operations.experimental.ccl_experimental.moe_compute_supported_weight_dtypes
     )
+if hasattr(ttnn._ttnn.operations.experimental.ccl_experimental, "moe_compute_capabilities"):
+    experimental.moe_compute_capabilities = ttnn._ttnn.operations.experimental.ccl_experimental.moe_compute_capabilities
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
