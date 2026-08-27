@@ -1,11 +1,14 @@
 name: "Copilot Setup Steps"
 
-# This workflow configures the environment for GitHub Copilot Agent with gh-aw MCP server
+# Environment for the GitHub Copilot cloud agent.
 #
-# EXPERIMENT (see PR description): pointing Copilot's environment at an internal
-# runner + the tt-metal CI build image, to find out whether the coding agent can
-# build tt-metal against our ccache infra. Revert to `runs-on: ubuntu-latest`
-# with no `container:` to restore previous behaviour.
+# Goal: the agent should be able to make a change and verify that it compiles.
+# That needs three things, all configured here or documented below:
+#   1. the tt-metal toolchain      -> the CI build image, via `container:`
+#   2. a warm shared ccache        -> Garage, reachable in-cluster
+#   3. instructions to use them    -> AGENTS.md at the repo root
+#
+# Authoring guidance for the agent itself lives in AGENTS.md, not here.
 on:
   workflow_dispatch:
   push:
@@ -17,9 +20,11 @@ jobs:
   copilot-setup-steps:
     runs-on: tt-ubuntu-2204-large-stable
     # NOTE: `container:` is NOT in Copilot's documented allowlist of honoured job
-    # keys (steps/permissions/runs-on/services/snapshot/timeout-minutes).
-    # Community reports say it is applied but then breaks Copilot's helper-script
-    # paths (exit 127). Testing whether that is still true as of 2026-08.
+    # keys (steps/permissions/runs-on/services/snapshot/timeout-minutes), and
+    # community reports say it is applied but then breaks Copilot's injected
+    # helper scripts (exit 127, and `set -o pipefail` under a non-bash /bin/sh).
+    # See the PR description. If that turns out to still be true, the toolchain
+    # has to move into a dedicated ARC runner image instead.
     #
     # `latest` rather than a pinned digest: the tag-latest job in
     # build-docker-artifact.yaml only moves it on pushes to main, so it tracks
@@ -38,8 +43,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # --- Probes run before the gh-aw install so they always report, even if a
-      # --- later step fails. Read the step output, not just the job's red/green.
+      # Probes run before anything that can fail, so they always report.
+      # Read the step output, not just the job's red/green.
       - name: Probe toolchain
         run: |
           echo "::group::toolchain"
@@ -56,20 +61,68 @@ jobs:
             exit 1
           }
 
-      - name: Probe ccache/Garage reachability
-        # Non-fatal, mirroring the existing treatment in build-artifact.yaml:
-        # we want to know whether the runner can see Garage, not gate on it.
+      - name: Configure remote ccache
+        # Copilot has NO access to Actions, Codespaces or Dependabot secrets -
+        # only to "Agents" secrets, which arrive as plain environment variables.
+        # Normal validation runs of this workflow instead get Actions secrets via
+        # the `secrets.` context. Support both so the same file works either way.
+        #
+        # Secrets are referenced at STEP level deliberately: job-level `env:` is
+        # known to resolve empty during agent-triggered runs.
+        env:
+          ACTIONS_GARAGE_ACCESS_KEY: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
+          ACTIONS_GARAGE_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
+        run: |
+          ACCESS_KEY="${GARAGE_S3_ACCESS_KEY:-$ACTIONS_GARAGE_ACCESS_KEY}"
+          SECRET_KEY="${GARAGE_S3_SECRET_KEY:-$ACTIONS_GARAGE_SECRET_KEY}"
+          ENDPOINT="http://garage.garage.svc.cluster.local:3900"
+          REMOTE="s3://ccache|region=garage|prefix=tt-metal|endpoint_url=${ENDPOINT}"
+
+          if [ -z "$ACCESS_KEY" ] || [ -z "$SECRET_KEY" ]; then
+            echo "::warning::Garage credentials absent. The agent will build with a COLD cache,"
+            echo "::warning::which will not complete within a session. Add GARAGE_S3_ACCESS_KEY and"
+            echo "::warning::GARAGE_S3_SECRET_KEY as repository *Agents* secrets (Settings ->"
+            echo "::warning::Secrets and variables -> Agents). Actions secrets are not visible to Copilot."
+            exit 0
+          fi
+
+          # Written to ccache's own config file rather than relying on environment
+          # propagation from this job into the agent's later session.
+          mkdir -p "${HOME}/.ccache"
+          umask 077
+          {
+            echo "remote_storage = ${REMOTE}"
+            echo "compression = true"
+            echo "compression_level = 3"
+          } > "${HOME}/.ccache/ccache.conf"
+
+          # Belt and braces for anything reading the environment instead.
+          {
+            echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}"
+            echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}"
+            echo "AWS_DEFAULT_REGION=garage"
+            echo "AWS_ENDPOINT_URL_S3=${ENDPOINT}"
+            echo "CCACHE_REMOTE_STORAGE=${REMOTE}"
+          } >> "$GITHUB_ENV"
+
+          echo "Configured remote ccache -> ${REMOTE}"
+
+      - name: Verify ccache can reach Garage
+        # Non-fatal: ccache degrades remote misses to local, so a hiccup here must
+        # not stop the agent from starting. It is loud because a cold cache means
+        # the agent almost certainly cannot finish a build.
         run: |
           ENDPOINT="http://garage.garage.svc.cluster.local:3900"
-          echo "Probing ${ENDPOINT} ..."
-          if command -v curl >/dev/null 2>&1; then
-            if curl -sS -m 10 -o /dev/null -w 'HTTP %{http_code} in %{time_total}s\n' "${ENDPOINT}"; then
-              echo "Garage endpoint is REACHABLE from this runner."
-            else
-              echo "::warning::Garage endpoint NOT reachable - Copilot would build with a cold cache."
-            fi
+          if command -v curl >/dev/null 2>&1 &&
+             curl -sS -m 10 -o /dev/null -w 'endpoint responded HTTP %{http_code} in %{time_total}s\n' "$ENDPOINT"; then
+            echo "Garage endpoint is reachable."
           else
-            echo "::warning::curl not present in image; skipped reachability probe."
+            echo "::warning::Garage endpoint NOT reachable - the agent would build with a cold cache."
+          fi
+          if [ -f "${HOME}/.ccache/ccache.conf" ]; then
+            echo "::group::ccache configuration"
+            ccache --show-config 2>&1 | grep -iE 'remote_storage|compression' || true
+            echo "::endgroup::"
           fi
 
       - name: Install gh-aw extension
