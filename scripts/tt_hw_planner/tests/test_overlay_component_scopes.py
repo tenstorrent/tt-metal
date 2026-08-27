@@ -41,12 +41,12 @@ PARENT = "some-org/Some-Model-9B"
 def test_component_scopes_finds_parent_qualified_scopes(om) -> None:
     m, root = om
     _scope(root, m._slug(PARENT))
-    _scope(root, "_tmp_components_some_model_9b__part_one")
-    _scope(root, "_tmp_components_some_model_9b__part_two")
+    _scope(root, "_tmp_components_some_model_9b_part_one")
+    _scope(root, "_tmp_components_some_model_9b_part_two")
     found = m.component_scopes(PARENT)
     assert sorted(found) == [
-        "_tmp_components_some_model_9b__part_one",
-        "_tmp_components_some_model_9b__part_two",
+        "_tmp_components_some_model_9b_part_one",
+        "_tmp_components_some_model_9b_part_two",
     ]
 
 
@@ -58,7 +58,7 @@ def test_component_scopes_excludes_the_parent_itself(om) -> None:
 
 def test_component_scopes_ignores_unrelated_models(om) -> None:
     m, root = om
-    _scope(root, "_tmp_components_other_model__part_one")
+    _scope(root, "_tmp_components_other_model_part_one")
     _scope(root, "some-org_Another-Model")
     assert m.component_scopes(PARENT) == []
 
@@ -71,7 +71,7 @@ def test_component_scopes_is_empty_when_nothing_is_registered(om) -> None:
 def test_drop_scope_removes_a_component_scope(om) -> None:
     """The scopes component_scopes returns must be droppable as-is."""
     m, root = om
-    slug = "_tmp_components_some_model_9b__part_one"
+    slug = "_tmp_components_some_model_9b_part_one"
     _scope(root, slug)
     count, dropped = m.drop_scope(slug)
     assert count == 1 and dropped == ["some/file.py"]
@@ -85,11 +85,11 @@ def test_overlay_drop_command_clears_parent_and_components(om, capsys) -> None:
 
     m, root = om
     _scope(root, m._slug(PARENT))
-    _scope(root, "_tmp_components_some_model_9b__part_one")
+    _scope(root, "_tmp_components_some_model_9b_part_one")
     rc = cmd_overlay_drop(argparse.Namespace(model_id=PARENT, rel_path=None))
     assert rc == 0
     assert not (root / m._slug(PARENT)).exists()
-    assert not (root / "_tmp_components_some_model_9b__part_one").exists(), "component scope survived the drop"
+    assert not (root / "_tmp_components_some_model_9b_part_one").exists(), "component scope survived the drop"
 
 
 def test_nothing_to_drop_is_still_reported(om, capsys) -> None:
@@ -100,3 +100,26 @@ def test_nothing_to_drop_is_still_reported(om, capsys) -> None:
     rc = cmd_overlay_drop(argparse.Namespace(model_id=PARENT, rel_path=None))
     assert rc == 0
     assert "nothing to drop" in capsys.readouterr().out
+
+
+def test_component_name_survives_slugging_unchanged() -> None:
+    """One separator, deliberately.
+
+    Every downstream name -- demo folder, overlay scope, worktree -- is derived from
+    the alias basename through _slug, which collapses any run of non-alphanumerics
+    to a single underscore. A doubled separator could never survive, so the
+    component ended up with two spellings for the same thing. Pin that the alias is
+    its own slug."""
+    from scripts.tt_hw_planner.probe import _component_alias
+    from scripts.tt_hw_planner.scaffold_demo_folder import _slug
+    import os
+    import tempfile
+
+    base = tempfile.mkdtemp()
+    target = os.path.join(base, "real_dir")
+    os.makedirs(target, exist_ok=True)
+    os.environ["TT_HW_PLANNER_COMPONENT_BASE"] = os.path.join(base, "aliases")
+    alias = _component_alias("some-org/Some-Model-9B", "some_part", target)
+    name = os.path.basename(alias)
+    assert name == _slug(name), f"alias {name!r} changes under slugging -> two names for one component"
+    assert "some_model_9b" in name and "some_part" in name

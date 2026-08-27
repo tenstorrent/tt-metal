@@ -868,17 +868,22 @@ def component_scopes(model_id: str) -> List[str]:
     "clean slate" was not clean, and stale patches had to be removed by hand.
 
     Parts are recognised by the parent-qualified alias naming a component target
-    carries (``<parent>__<part>``), so this reads only the scopes already on disk:
-    no model load, no network, and nothing assumed about what the parts are called.
+    carries (``<parent>_<part>``), so this reads only the scopes already on disk: no
+    model load, no network, and nothing assumed about what the parts are called. The
+    scope must extend BEYOND the parent's own name, so the parent's scope and a
+    differently-named sibling model are both excluded.
     """
     from .scaffold_demo_folder import _slug as _fs_slug
 
-    token = _fs_slug(os.path.basename(model_id.rstrip("/"))) + "__"
+    token = _fs_slug(os.path.basename(model_id.rstrip("/"))) + "_"
     parent = _slug(model_id)
     out: List[str] = []
     for row in list_overlays(None):
         scope = str(row.get("model_dir_slug") or "")
-        if scope and scope != parent and token in scope and scope not in out:
+        if not scope or scope == parent or scope in out:
+            continue
+        idx = scope.find(token)
+        if idx >= 0 and scope[idx + len(token) :]:
             out.append(scope)
     return out
 

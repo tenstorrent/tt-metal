@@ -121,7 +121,7 @@ def test_cache_is_stale_until_invalidated(stores) -> None:
 def test_family_wide_key_on_a_target_specific_folder_is_flagged() -> None:
     from scripts.tt_hw_planner.auto_onboard import keys_broader_than_demo
 
-    target = "/tmp/components/some_model_9b__some_part"
+    target = "/tmp/components/some_model_9b_some_part"
     reason = keys_broader_than_demo(
         {"demo_path": "models/demos/some_model_9b_some_part", "model_type_keys": ["some_arch"]}, target
     )

@@ -951,7 +951,13 @@ def _component_alias(parent_id: str, name: str, target: str) -> str:
     base = os.environ.get("TT_HW_PLANNER_COMPONENT_BASE") or os.path.join(
         tempfile.gettempdir(), "tt_hw_planner_components"
     )
-    alias_name = f"{_slug(os.path.basename(parent_id.rstrip('/')))}__{_slug(name)}"
+    # Single separator, deliberately: every downstream name (demo folder, overlay
+    # scope, worktree) is derived from this basename through _slug, which collapses
+    # any run of non-alphanumerics to one underscore. A doubled separator could
+    # therefore never survive, and the component ended up with two spellings --
+    # `<parent>__<part>` here and `<parent>_<part>` in the demo folder -- for the
+    # same thing. One separator means one name everywhere.
+    alias_name = f"{_slug(os.path.basename(parent_id.rstrip('/')))}_{_slug(name)}"
     alias = os.path.join(base, alias_name)
     try:
         os.makedirs(base, exist_ok=True)
