@@ -12,6 +12,7 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     run_mla_perf_loudbox,
     run_model_device_perf_test_with_merge,
 )
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla"
 
@@ -24,6 +25,14 @@ _CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq5k and max_s
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
 _CMD_CHUNKED_8X4 = (
     f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and kimi and func and torus-xy-8x4' --wrapper-invocation"
+)
+
+
+_IGNORE_POWER = os.environ.get("DS_PERF_IGNORE_POWER") == "1"
+_REQUIRE_HIGH_POWER = pytest.mark.skipif(
+    not (is_high_power() or _IGNORE_POWER),
+    reason="galaxy perf baselines are cut on a >=130W TDP host; an 8kW galaxy measures differently. "
+    "DS_PERF_IGNORE_POWER=1 runs it anyway, for bring-up only",
 )
 
 
@@ -75,6 +84,7 @@ def test_deepseek_v3_mla_perf_loudbox():
     )
 
 
+@_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
 def test_deepseek_v3_mla_perf_galaxy():
     if not _is_galaxy_env():
@@ -98,6 +108,7 @@ def test_deepseek_v3_mla_perf_galaxy():
     )
 
 
+@_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
 def test_kimi_mla_chunked_perf_galaxy():
     """Kimi K2.6 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk
@@ -125,6 +136,7 @@ def test_kimi_mla_chunked_perf_galaxy():
     )
 
 
+@_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
 def test_kimi_k3_mla_chunked_perf_galaxy():
     """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk

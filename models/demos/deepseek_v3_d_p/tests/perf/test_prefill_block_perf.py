@@ -10,8 +10,11 @@ import re
 import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import _is_galaxy_env, run_model_device_perf_test_with_merge
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
+
+_IGNORE_POWER = os.environ.get("DS_PERF_IGNORE_POWER") == "1"
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *([".."] * 5)))
 _SUBTORUS_Y4_ENV = {
@@ -148,6 +151,12 @@ def test_deepseek_v3_prefill_block_perf(
     margin,
     comments,
 ):
+    if ("_8x4_" in model_name or "_4x4_" in model_name) and not (is_high_power() or _IGNORE_POWER):
+        pytest.skip(
+            "galaxy perf baselines are cut on a >=130W TDP host; an 8kW galaxy measures differently. "
+            "DS_PERF_IGNORE_POWER=1 runs it anyway, for bring-up only"
+        )
+
     if "_8x4_" in model_name and "torus_xy" in model_name:
         if not _is_galaxy_env():
             pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
