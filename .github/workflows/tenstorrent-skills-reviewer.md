@@ -30,7 +30,7 @@ pre-agent-steps:
         CACHE_HEAD_SHA="$(tr -d '\n' < /tmp/gh-aw/agent/pr-data-head-sha.txt)"
       fi
       # Skip fetch only when cache data matches current PR head commit.
-      if [ -n "$CURRENT_HEAD_SHA" ] && [ "$CURRENT_HEAD_SHA" = "$CACHE_HEAD_SHA" ] && [ -f /tmp/gh-aw/agent/pr-diff.patch ] && [ -f /tmp/gh-aw/agent/pr-meta.json ] && [ -f /tmp/gh-aw/agent/pr-review-comments.json ]; then
+      if [ -n "$CURRENT_HEAD_SHA" ] && [ "$CURRENT_HEAD_SHA" = "$CACHE_HEAD_SHA" ] && [ -f /tmp/gh-aw/agent/pr-diff.patch ] && [ -f /tmp/gh-aw/agent/pr-meta.json ] && [ -f /tmp/gh-aw/agent/pr-review-comments.json ] && [ -n "$(jq -r '.baseRefName // empty' /tmp/gh-aw/agent/pr-meta.json 2>/dev/null)" ]; then
         LINES=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)
         COMMENT_COUNT=$(jq 'length' /tmp/gh-aw/agent/pr-review-comments.json)
         echo "Cache hit: using pre-fetched PR data for head ${CURRENT_HEAD_SHA} (${LINES} diff lines, ${COMMENT_COUNT} review comments)"
@@ -150,25 +150,51 @@ pre-agent-steps:
       # administration:read, which this workflow does not hold. On this repo
       # two overlapping pull_request rulesets compose most-restrictive, and
       # rulesets is the reading that answers correctly.
-      REQUIRED=$(gh api "repos/$EXPR_GITHUB_REPOSITORY/rules/branches/$BASE" \
-        --jq '[.[] | select(.type=="pull_request") | .parameters.required_approving_review_count]
-              | max // 0' 2>/dev/null || echo 0)
+      RULES=$(gh api "repos/$EXPR_GITHUB_REPOSITORY/rules/branches/$BASE" 2>/dev/null || echo '[]')
+      REQUIRED=$(printf '%s' "$RULES" | jq '[.[]? | select(.type=="pull_request")
+              | .parameters.required_approving_review_count] | max // 0' 2>/dev/null || echo 0)
       # Fall back to no floor rather than a malformed --argjson, which would
       # abort the step and take the whole review down with it.
       case "$REQUIRED" in ''|null|*[!0-9]*) REQUIRED=0 ;; esac
 
+      # Whether code-owner review is enforced at all on this base. The split
+      # check counts CODEOWNERS approvals, so where no rule requires them the
+      # whole proposal is moot -- and `on: pull_request` here has path filters
+      # but no branch filter, so bases without a pull_request rule do reach us.
+      OWNER_REVIEW=$(printf '%s' "$RULES" | jq '[.[]? | select(.type=="pull_request")
+              | .parameters.require_code_owner_review] | any' 2>/dev/null || echo false)
+      case "$OWNER_REVIEW" in true|false) ;; *) OWNER_REVIEW=false ;; esac
+
+      # Approvals already in. GitHub credits an approval toward the branch
+      # floor whether or not the approver owns anything, so take every
+      # approver, not just owners.
+      APPROVED=$(gh api --paginate "repos/$EXPR_GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
+        --jq '[.[] | select(.state=="APPROVED") | .user.login]' 2>/dev/null \
+        | jq -rs 'add // [] | unique | join(",")' 2>/dev/null || echo "")
+
+      # Prefix the author with '@'. codeowners_map.py keys an owner token by
+      # lowercasing it only when it starts with '@', so a bare login never
+      # matches the '@login' in CODEOWNERS: --exclude silently does nothing
+      # while still reporting the name as excluded. (--approved normalises,
+      # --exclude does not.)
+      AUTHOR=$(jq -r '.author.login // empty' "$OUT/pr-meta.json")
+      [ -n "$AUTHOR" ] && AUTHOR="@$AUTHOR"
+      REQUESTED=$(jq -c '[.reviewRequests[]? | (.name // .login)]' "$OUT/pr-meta.json" 2>/dev/null || echo '[]')
+      case "$REQUESTED" in '') REQUESTED='[]' ;; esac
+
       jq -n --arg base "$BASE" --arg codeowners "$FOUND" --arg head_sha "$HEAD_SHA" \
             --argjson changed "$CHANGED" --argjson fetched "$FETCHED" \
-            --argjson required "$REQUIRED" \
-            --arg author "$(jq -r '.author.login // ""' "$OUT/pr-meta.json")" \
-            --argjson requested "$(jq -c '[.reviewRequests[]? | (.name // .login)]' "$OUT/pr-meta.json")" \
+            --argjson required "$REQUIRED" --argjson owner_review "$OWNER_REVIEW" \
+            --arg author "$AUTHOR" --arg approved "$APPROVED" \
+            --argjson requested "$REQUESTED" \
             '{base: $base, codeowners_path: $codeowners, head_sha: $head_sha,
               changed_files: $changed, files_fetched: $fetched,
-              required_approvals: $required,
-              author: $author, requested_reviewers: $requested}' \
+              required_approvals: $required, owner_review_required: $owner_review,
+              author: $author, already_approved: $approved,
+              requested_reviewers: $requested}' \
         > "$OUT/pr-split-context.json"
       touch "$OUT/split-check.enabled"
-      echo "Split check enabled: ${FETCHED}/${CHANGED} files, CODEOWNERS at ${FOUND} on ${BASE}, floor ${REQUIRED}"
+      echo "Split check enabled: ${FETCHED}/${CHANGED} files, CODEOWNERS at ${FOUND} on ${BASE}, floor ${REQUIRED}, code-owner review required: ${OWNER_REVIEW}"
 max-daily-ai-credits: 10000
 if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
 "on":
@@ -335,9 +361,11 @@ These describe **impact, not merge gates**. This workflow is advisory and cannot
 
 | File | Contents |
 |---|---|
-| `pr-split-context.json` | `base`, `codeowners_path`, `changed_files`, `files_fetched`, `required_approvals`, `author`, `requested_reviewers` |
+| `pr-split-context.json` | `base`, `head_sha`, `codeowners_path`, `changed_files`, `files_fetched`, `required_approvals`, `owner_review_required`, `author` (already `@`-prefixed), `already_approved`, `requested_reviewers` |
 | `pr-files.txt` | The full changed-file list, paginated — **use this, not `pr-meta.json`'s `files`**, which caps at 100 |
 | `CODEOWNERS.base` | CODEOWNERS as it exists on the base branch, first-found of the three locations |
+
+**If `owner_review_required` is `false`, stop and report nothing.** No ruleset on this base requires code-owner approval, so a cover over CODEOWNERS counts approvals GitHub will never demand. This trigger has path filters but no branch filter, so bases without a `pull_request` rule do reach this step.
 
 Load `/tt-split-pr-by-codeowners` for the semantics and the judgement, and run its matcher against those files:
 
@@ -348,12 +376,15 @@ python3 .github/skills/tt-split-pr-by-codeowners/scripts/codeowners_map.py \
   --expect-files <changed_files> \
   --required-approvals <required_approvals> \
   --exclude <author> \
+  --approved <already_approved> \
   --json
 ```
 
-`--exclude <author>` is not optional: GitHub never accepts an author as a reviewer of their own PR, so leaving them in the candidate pool can report a minimum approval count that cannot occur.
+Pass `author` **exactly as the context file spells it, `@` included** — the matcher keys an owner token by lowercasing it only when it starts with `@`, so a bare login never matches the `@login` in CODEOWNERS and `--exclude` silently does nothing while still listing the name under `excluded_from_cover`. Do not strip the `@`. The exclusion is not optional: GitHub never accepts an author as a reviewer of their own PR, so leaving them in the pool can report a minimum that cannot occur.
 
-Read the skill's fetching guidance as **already satisfied** — do not re-run its `gh` snippets. If `files_fetched` is below `changed_files`, or the matcher reports `cover_is_exact: false`, say so in the report rather than presenting the number as settled.
+Omit `--approved` when `already_approved` is empty; otherwise it is what makes `approvals_outstanding` the number a reader can act on.
+
+Read the skill's fetching guidance as **already satisfied** — do not re-run its `gh` snippets. Two honesty checks on the output: if the matcher reports `cover_is_exact: false`, the figure is an upper bound and must be described as one; and if it exits non-zero with no JSON, the file list was short of `--expect-files` — report that the check could not run rather than falling back to a partial count.
 
 Report in Step 6 as a `CONSIDER`-level note in its own `<details>` block, never as an inline comment and never as a MUST-FIX — a split is a judgment call about review cost, not a defect. **Recommending no split is the expected outcome and must be stated plainly** when the cover is already small; say nothing rather than manufacturing a proposal. The skill plans only: propose the slices, never open or push anything.
 
