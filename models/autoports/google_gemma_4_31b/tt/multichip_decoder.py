@@ -1539,8 +1539,15 @@ class MultichipDecoder(OptimizedDecoder):
         width_cores = 7
         if hidden % (width_cores * ttnn.TILE_SIZE):
             raise ValueError(f"MLP residual width {hidden} is not tile-divisible over {width_cores} cores")
-        for start in range(0, seq_len, MLP_CHUNK):
-            end = min(start + MLP_CHUNK, seq_len)
+        # Chunk on aligned row ranges like the attention output projection:
+        # every non-tail range spans a multiple of 8 tile rows, so the block
+        # shard below always uses all 8 core rows, and the tail is at most 8
+        # tile rows, which fits a single core row. Fixed-stride MLP_CHUNK
+        # chunking left a seq_len-dependent tail whose tile-row count set
+        # height_cores = gcd(tile_rows, 8) = 1 for odd counts; a 17,948-token
+        # prompt tails at 49 tile rows, whose 1568*768*2 = 2,408,448 B shard
+        # can never fit a 1,461,504 B L1 bank.
+        for start, end in _output_proj_row_ranges(seq_len):
             chunk_rows = end - start
             residual_chunk = ttnn.slice(residual, [0, 0, start, 0], [1, 1, end, hidden])
             normed = self.layer.pre_feedforward_layernorm.forward(residual_chunk)
@@ -1564,7 +1571,7 @@ class MultichipDecoder(OptimizedDecoder):
 
             padded_chunk_rows = math.ceil(chunk_rows / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
             tile_rows = padded_chunk_rows // ttnn.TILE_SIZE
-            height_cores = math.gcd(tile_rows, 8)
+            height_cores = max(divisor for divisor in range(1, 9) if tile_rows % divisor == 0)
             shard_memory = ttnn.create_sharded_memory_config(
                 shape=(padded_chunk_rows // height_cores, hidden // width_cores),
                 core_grid=ttnn.CoreGrid(x=width_cores, y=height_cores),
