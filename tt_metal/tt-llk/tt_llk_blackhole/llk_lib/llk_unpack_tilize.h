@@ -373,11 +373,17 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    // Restore tile-descriptor Z and X dim to the canonical baseline programmed by
-    // configure_unpack_AB. Z-dim equals the operand's num_faces; X-dim is 0 because the
-    // per-context override in Tile_x_dim_cntx0 (set below) is what the unpacker actually
-    // consumes for srcA. The non-8-bit init path mutates X-dim (to face_r_dim*num_faces*FACE_C_DIM)
-    // so it must be reverted here too to keep the operand operation-restorable.
+    // Restore the tile-descriptor Z and X dim that the non-8-bit tilize init path mutates
+    // (init sets X-dim = face_r_dim*num_faces*FACE_C_DIM and Z-dim = 1; see _llk_unpack_tilize_init_),
+    // reverting them to the operand baseline programmed by configure_unpack_AB: Z-dim = the operand's
+    // num_faces and X-dim = 0 (the per-context Tile_x_dim_cntx0 set below is what the unpacker
+    // actually consumes for srcA). This keeps the non-8-bit path operation-restorable.
+    //
+    // Unlike Wormhole, Blackhole tilize genuinely owns the descriptor on this path, so restoring it
+    // here is correct (not a band-aid) — cf. tt-llk#1161. On the 8-bit path init does NOT write the
+    // descriptor (it falls back to the WH-like per-face unpack), so there the Z-write below is a
+    // benign no-op in isolation (it stamps the operand's own num_faces); a following op with a
+    // different num_faces re-establishes geometry via configure_unpack_AB / reconfig_full_operand.
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 16, TILE_DESC_UPPER_HALFWORD_MASK>(CANONICAL_UNPA_TILE_X_DIM);
 
