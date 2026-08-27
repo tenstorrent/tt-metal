@@ -132,6 +132,12 @@ constexpr uint32_t GATHER_PAGES = CT(GATHER_PAGES);  // the WHOLE landing CB, in
 constexpr uint32_t NEED_START = CT(NEED_START);
 constexpr uint32_t READ_X_AT_OFFSET = CT(READ_X_AT_OFFSET);
 constexpr uint32_t START_PAGE = CT(START_PAGE);
+// Hybrid dispatch: experts outside this band belong to the other routed-expert op.
+// Applied to the RAW token count before it becomes tiles -- a tile-granular bound
+// cannot separate 300 from 320 -- and before the mailbox publish, so compute and the
+// writer inherit the skip from the one value they already read.
+constexpr uint32_t MIN_ACTIVE_TOKENS = CT(MIN_ACTIVE_TOKENS);
+constexpr uint32_t MAX_ACTIVE_TOKENS = CT(MAX_ACTIVE_TOKENS);
 
 constexpr uint32_t cb_x_in = CT(CB_X_IN);
 constexpr uint32_t cb_x_tiles = CT(CB_X_TILES);
@@ -399,7 +405,8 @@ void kernel_main() {
         noc_async_read_barrier();
         invalidate_l1_cache();
         const uint32_t global_expert_id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_idx)[local_expert_id];
-        const uint32_t count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_cnt)[global_expert_id];
+        const uint32_t raw_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_cnt)[global_expert_id];
+        const uint32_t count = (raw_count < MIN_ACTIVE_TOKENS || raw_count > MAX_ACTIVE_TOKENS) ? 0u : raw_count;
 
         uint32_t m_t = (count + TILE_H - 1) / TILE_H;
         if (m_t > M_T_MAX) {

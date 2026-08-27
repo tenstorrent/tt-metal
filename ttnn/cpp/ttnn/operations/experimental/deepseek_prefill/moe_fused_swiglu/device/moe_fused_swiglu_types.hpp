@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <tuple>
 #include <vector>
@@ -25,6 +26,13 @@ struct OperationArguments {
     uint32_t grid_x = 0;
     uint32_t grid_y = 0;
     bool read_x_at_offset = false;
+    // Active-token band this op owns. An expert whose count falls outside [min, max] is
+    // dropped like a zero count -- uniform across the grid, so it costs no CB traffic, no
+    // collective round and no semaphore. Wide open by default; a hybrid dispatch narrows it
+    // so this op and unified_routed_expert_moe split the experts by load over ONE shared
+    // counts vector, with no masked tensors and no host sync.
+    uint32_t min_active_tokens = 0;
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
     RoutedExpertActivation activation = RoutedExpertActivation::Silu;
     tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::BFLOAT8_B;
     tt::tt_metal::MemoryConfig output_memory_config{
@@ -37,6 +45,8 @@ struct OperationArguments {
         "grid_x",
         "grid_y",
         "read_x_at_offset",
+        "min_active_tokens",
+        "max_active_tokens",
         "activation",
         "output_dtype",
         "output_memory_config",
@@ -49,6 +59,8 @@ struct OperationArguments {
             grid_x,
             grid_y,
             read_x_at_offset,
+            min_active_tokens,
+            max_active_tokens,
             activation,
             output_dtype,
             output_memory_config,

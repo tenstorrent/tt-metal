@@ -23,7 +23,9 @@ ttnn::Tensor moe_fused_swiglu(
     const std::optional<ttnn::Tensor>& output,
     const std::optional<ttnn::Tensor>& expert_region_offsets,
     bool read_x_at_offset,
-    RoutedExpertActivation activation) {
+    RoutedExpertActivation activation,
+    uint32_t min_active_tokens,
+    uint32_t max_active_tokens) {
     constexpr uint32_t TILE = 32;
     TT_FATAL(!w_gates.empty(), "moe_fused_swiglu: at least one local expert is required");
     TT_FATAL(
@@ -86,7 +88,9 @@ ttnn::Tensor moe_fused_swiglu(
         output_memory_config,
         resolved_compute_config,
         output,
-        expert_region_offsets);
+        expert_region_offsets,
+        min_active_tokens,
+        max_active_tokens);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu

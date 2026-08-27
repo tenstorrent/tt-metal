@@ -347,7 +347,9 @@ ttnn::Tensor unified_routed_expert_moe(
     ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation,
     const std::vector<ttnn::Tensor>& gate_biases,
     const std::vector<ttnn::Tensor>& up_biases,
-    const std::vector<ttnn::Tensor>& down_biases) {
+    const std::vector<ttnn::Tensor>& down_biases,
+    uint32_t min_active_tokens,
+    uint32_t max_active_tokens) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -357,7 +359,9 @@ ttnn::Tensor unified_routed_expert_moe(
             .x_is_row_major = x_is_row_major,
             .activation = activation,
             .fuse_bias = !gate_biases.empty(),
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .min_active_tokens = min_active_tokens,
+            .max_active_tokens = max_active_tokens},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

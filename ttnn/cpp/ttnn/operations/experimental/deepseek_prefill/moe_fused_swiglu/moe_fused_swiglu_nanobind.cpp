@@ -3,6 +3,8 @@
 
 #include "moe_fused_swiglu_nanobind.hpp"
 
+#include <limits>
+
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
@@ -55,7 +57,9 @@ void bind_moe_fused_swiglu(nb::module_& mod) {
         nb::arg("output") = nb::none(),
         nb::arg("expert_region_offsets") = nb::none(),
         nb::arg("read_x_at_offset") = false,
-        nb::arg("activation") = RoutedExpertActivation::Silu);
+        nb::arg("activation") = RoutedExpertActivation::Silu,
+        nb::arg("min_active_tokens") = 0,
+        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::detail
