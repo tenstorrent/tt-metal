@@ -1053,6 +1053,25 @@ KNOBS = {
     # the constants program ONCE at the outermost proven entry with no
     # peel.  Refusals keep the peel byte-identically.
     "crossloop-cc-peel": "-mtt-tensix-optimize-crossloop-cc-peel",
+    # HS (opaque-replay-record, 2026-08-26): derive the TU-wide PRGM
+    # freedom proof THROUGH raw REPLAY record words instead of refusing
+    # the whole TU as opaque (opaque-region-undeclared — lcm-fresh's
+    # named residual from lane HR: the int-storm harness's binary-GCD
+    # init records 28 SFPU words with TTI_REPLAY(0,28,0,1)).  A
+    # load_mode=1/exec=0 record's window words are architecturally
+    # SWALLOWED (stored to the replay buffer, never pushed to the
+    # backend — pinned-sim replay expander fact), and in a TU whose
+    # every playback path keeps its refusal (raw execute words, REPLAY
+    # in MOP slots) the recorded content is never delivered, so an
+    # admitted region contributes NO PRGM/LaneConfig/CC effect.  The
+    # walk statically identifies the swallowed words (straight-line or
+    # one structurally counted single-block loop, exact trips, every
+    # trip swallowed); recorded PRGM-capable words (SFPCONFIG,
+    # non-allocatable SFPLOADI, nested expander words), playback
+    # words, interleaved calls/typed builtins/volatile stores, and
+    # count/shape/trip gaps all refuse by name and keep the opaque
+    # refusal byte-identically.
+    "opaque-replay-record": "-mtt-tensix-optimize-opaque-replay-record",
 }
 
 
@@ -1200,6 +1219,13 @@ KNOB_MODES = {
     # plain ON.  on-plus while a booking knob; promotion requires an
     # R9 witness and the ON-vs-ON attribution ceremony.
     "crossloop-cc-peel": "on-plus",
+    # HS opaque-replay-record: default-off Init(0) booking knob; it
+    # unlocks residency/prgm-const placements in TUs carrying raw
+    # record regions, which exist only under the reviewed-ON residency
+    # classes, so the booking A/B is (ON + flag) vs plain ON.  on-plus
+    # while a booking knob; promotion requires an R9 witness and the
+    # ON-vs-ON attribution ceremony.
+    "opaque-replay-record": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
