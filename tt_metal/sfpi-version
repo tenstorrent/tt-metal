@@ -1,13 +1,11 @@
-# sfpi release 7.69.0
+# sfpi branch tensix-intrinsics
 
-sfpi_repo='https://github.com/tenstorrent/sfpi'
-sfpi_version='7.69.0'
+# Not a release: no tarball is published for this toolchain, so leaving the
+# package hashes out is what selects the build-from-source path in
+# tt_metal/hw/CMakeLists.txt and in tt-llk's setup_testing_env.sh.
+
+sfpi_repo='https://git.beeblebrox.me/ivan/sfpi'
+sfpi_version='tensix-intrinsics'
 sfpi_base=''
-sfpi_build='822'
+sfpi_build=''
 sfpi_hashtype='sha256'
-sfpi_aarch64_debian_txz_hash='5b17de7eba80292b70ffbb0e125e3cff1f8042b8ad0cf42227ae55ac04146bbb'
-sfpi_aarch64_debian_deb_hash='71bc212e77b33927c938d288b67fcbb062d3cd04c249c9ba1eb50760a7186fff'
-sfpi_x86_64_debian_txz_hash='b0c93362de2f69b0e4c335abd126ff59748f5dae316980d17aa1525ed523eb14'
-sfpi_x86_64_debian_deb_hash='2ef4441f75774ab1bafde0e8d3ca5517b1b053d1e47b874dd20a73664c50a6e2'
-sfpi_x86_64_fedora_txz_hash='ca3d4f08b3d1629c324beea4bd8036af5c776711d3638924205c6d66c7c3809f'
-sfpi_x86_64_fedora_rpm_hash='2eee8b87297b732f50d3607570305cf9fd10d4b0e7a23262e0f9486b13959572'
