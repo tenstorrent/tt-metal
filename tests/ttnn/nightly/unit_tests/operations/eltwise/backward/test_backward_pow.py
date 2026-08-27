@@ -302,9 +302,22 @@ def test_bw_pow_preallocated_output_wins_over_memory_config(input_shapes, expone
 
     This is the invariant whose behaviour changed: the gradient is written into the
     supplied tensor, so it stays in that tensor's memory space even when a different
-    config is requested. `full_like_impl` reaches this via
-    `optional_output_tensor.value().memory_config()` in `full_impl`, so flipping that
-    precedence would break it silently.
+    config is requested.
+
+    The two parametrizations reach it by different routes, and neither goes through
+    `full_impl`:
+
+    - exponent 0: `zeros_like` -> `full_like_impl` takes the fast path for a device
+      tensor in TILE layout whose dtype already matches, short-circuiting to
+      `ttnn::fill(tensor, 0.0f, memory_config, optional_output_tensor)`. `fill` is a
+      DEFINE_UNARY_OP_SCALAR_VARIANT, so precedence is decided by `unary_impl`
+      (eltwise/unary/unary.cpp:38-40), which prefers
+      `optional_output_tensor.value().memory_config()` over the requested config.
+    - exponent 2: `full_like_impl` is not involved. The write-through is the
+      `where(lez(input), inf, final_result, output_mem_config, input_grad)` at the end
+      of `pow_bw`, via `where`'s output-tensor handling.
+
+    Changing either of those would break this silently.
     """
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     in_data, input_tensor = data_gen_with_range(input_shapes, 0.1, 10, device)
