@@ -396,7 +396,9 @@ ttnn::Tensor moe_fused_swiglu(
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
-    const std::optional<ttnn::Tensor>& expert_region_offsets) {
+    const std::optional<ttnn::Tensor>& expert_region_offsets,
+    uint32_t min_active_tokens,
+    uint32_t max_active_tokens) {
     using OperationType = operations::experimental::deepseek_prefill::moe_fused_swiglu::MoeFusedSwiGluDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -405,6 +407,8 @@ ttnn::Tensor moe_fused_swiglu(
             .grid_x = grid_x,
             .grid_y = grid_y,
             .read_x_at_offset = read_x_at_offset,
+            .min_active_tokens = min_active_tokens,
+            .max_active_tokens = max_active_tokens,
             .activation = activation,
             .output_dtype = output_dtype,
             .output_memory_config = output_memory_config,
