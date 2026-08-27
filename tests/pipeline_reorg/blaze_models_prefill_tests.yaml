@@ -367,6 +367,23 @@
   team: models
   sp_config: sc1
 
+- name: "Kimi-K2.6-1T MoE perf 5k"
+  fabric_profile: torus_xy
+  cmd: |
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -vvv --tb=short
+    '
+  test_type: kimi_moe_perf
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      timeout: 15
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
 # Ring joint SDPA gates, over ModelConfig shape presets on random tensors (not model runs):
 #   joint-attention perf -> wan2_2_1xGLX and mla_100k
 #   ring_mla chunked     -> kimi50k and kimi_k3 for perf; kimi_k3 for accuracy and determinism
