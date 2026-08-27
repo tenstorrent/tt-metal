@@ -1289,12 +1289,11 @@
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     fail=0
-    # 2x2 needs no filter: *_req_exact_devices skips it on a Galaxy by device count.
-    # The two bh_4x8 cases are also 32 devices so device count cannot gate them, and they
-    # die in fixture setup (8k packet > wormhole 7616 max; fabric config override); wh_4x8
-    # at 480p misses its encoder tolerance. Both excluded pending jamesleeTT's input.
+    # 2x2 and the 2x4 family skip on a Galaxy by device count; ring_bh_4x8 now skips on the
+    # fabric payload guard in conftest.py. wh_4x8 at 480p is still excluded: it misses its
+    # encoder tolerance (0.105-0.111 measured against 0.1), which is a separate question.
     pytest --timeout 2700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
-      -k "resolution_480p and t2v and not bh_4x8 and not wh_4x8" || fail=1
+      -k "resolution_480p and t2v and not wh_4x8" || fail=1
     pytest --timeout 1500 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
       -k "4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p" || fail=1
     exit $fail
