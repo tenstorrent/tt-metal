@@ -816,6 +816,11 @@ public:
     // L1 offset, for handing to a routine that addresses the semaphore directly.
     uintptr_t l1_addr() const;
 
+    // The reserved id. A handle that outlives this object has to carry the id rather
+    // than a reference: every pair-derived multicast builds its two semaphores as
+    // LOCALS inside noc_load, and a reference would dangle the moment it returned.
+    uint32_t semaphore_id() const;
+
     // Local: spin until this core's copy reaches (or reaches at least) `value`.
     Semaphore& wait(uint32_t value);
     Semaphore& wait_min(uint32_t value);
@@ -869,6 +874,57 @@ private:
 // Writes: fire and forget. The destructor completes them correctly, so there is
 // nothing at the call site to forget. wait() is there for the rare case that
 // needs *landed* rather than *departed*.
+// ---------------------------------------------------------------------------
+// NocAsyncMcastTx -- the handle a MULTICAST load returns
+//
+// A multicast load is not a plain read: the sender fills its own copy from DRAM and
+// then broadcasts it, while every receiver has its copy filled for it and learns so
+// from a flag. NocAsyncReadTx cannot express the second half, because it has no idea
+// which role this core plays or which semaphore carries the flag.
+//
+// So this carries both -- the `data_sent` id and the role -- and today does nothing
+// with them. `wait()` is byte for byte what NocAsyncReadTx's does: the read barrier
+// and the push. The receiver's flag wait is still inside noc_load, where it has
+// always been.
+//
+// THAT IS DELIBERATE. Sinking the flag wait into wait() is a behaviour change with a
+// precondition attached -- the flag is a 0/1 the sender rewrites every round, so a
+// receiver holding an uncleared 1 cannot tell round b from b+1 -- and it belongs in
+// its own step. See unified_mcast_handle_spec.md. This step is the shape only, and
+// its checkpoint is that every suite is unchanged.
+// ---------------------------------------------------------------------------
+
+template <int thread, typename S>
+struct NocAsyncMcastTx {
+    using shape = S;
+
+    NocAsyncMcastTx(const Storage<S>& storage, uint32_t data_sent_id, bool sender);
+
+    NocAsyncMcastTx(const NocAsyncMcastTx&) = delete;
+    NocAsyncMcastTx& operator=(const NocAsyncMcastTx&) = delete;
+    NocAsyncMcastTx(NocAsyncMcastTx&&) = delete;
+    NocAsyncMcastTx& operator=(NocAsyncMcastTx&&) = delete;
+
+#if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    ~NocAsyncMcastTx();
+#endif
+
+    // Publishes the block. No argument, and returns Block<S>, so every existing call
+    // site -- all of them `noc_load(...).wait()` -- compiles unchanged.
+    Block<S> wait() const;
+
+    uint32_t cb_id;
+    static constexpr uint32_t num_pages = S::num_pages;
+
+    // Carried for the step that moves the flag wait here. Unused today.
+    mutable Semaphore<thread> data_sent;
+    bool sender;
+
+#if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    mutable bool waited = false;
+#endif
+};
+
 // ---------------------------------------------------------------------------
 
 template <int thread, typename S>
@@ -1083,7 +1139,7 @@ NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn);
 // the handshake. `receivers_ready` is cleared by the sender once it has counted
 // everyone in; `data_sent` is cleared by each receiver after it observes it.
 template <int thread, typename S, typename Accessor>
-NocAsyncReadTx<thread, S> noc_load(
+NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage,
     PhysicalMcast mcast,
     Semaphore<thread>& receivers_ready,
@@ -1092,7 +1148,7 @@ NocAsyncReadTx<thread, S> noc_load(
     uint32_t block_idx);
 
 template <int thread, typename S, typename Accessor>
-NocAsyncReadTx<thread, S> noc_load(
+NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage,
     LogicalMcast mcast,
     Semaphore<thread>& receivers_ready,
@@ -1111,7 +1167,7 @@ NocAsyncReadTx<thread, S> noc_load(
 // NOC, overlapping). Name the pair explicitly to put two broadcasts on ONE thread
 // and still keep them apart.
 template <int thread, int pair = thread, typename S, typename Accessor>
-NocAsyncReadTx<thread, S> noc_load(
+NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
 // Multicast load with a CUSTOM fill, the same relationship the plain noc_load's Fn form has
@@ -1123,12 +1179,12 @@ NocAsyncReadTx<thread, S> noc_load(
 // strided in DRAM and contiguous nowhere -- but it is an ordinary block once in L1. Costs no
 // extra traffic: the built-in read issues one request per page too.
 template <int thread, int pair = thread, typename S, typename Fn>
-NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, Fn fn);
+NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, Fn fn);
 template <int thread, int pair = thread, typename S, typename Fn>
-NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, Fn fn);
+NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, Fn fn);
 
 template <int thread, int pair = thread, typename S, typename Accessor>
-NocAsyncReadTx<thread, S> noc_load(
+NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
 // Fill a one-page Storage with the constant metal's reduce folds in: the value in

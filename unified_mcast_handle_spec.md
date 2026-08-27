@@ -1,6 +1,10 @@
 # Spec: give the multicast load a deferred handle
 
-Proposal, not implementation. Written against `origin/main` at `9aa797dec5e`.
+Written against `origin/main` at `9aa797dec5e`.
+
+**STATUS: step 1 done -- `NocAsyncMcastTx` exists and carries the state, behaviour
+unchanged. Steps 2 to 4 (the assert, the deferral, the measurement) NOT done, held at the
+author's request pending a different proposal for the detection half.**
 
 The ask: make the multicast `noc_load` return a handle in the shape of
 `NocAsyncWriteCoreTx` -- carrying the `data_sent` semaphore and a role flag -- with the
@@ -150,8 +154,18 @@ different checks for two different failures and neither subsumes the other.
 
 ## 6. Order of work
 
-1. `NocAsyncMcastTx` with the receiver wait still inside `noc_load` -- pure refactor, the
-   handle does nothing new. Suite must be unchanged, which is the checkpoint.
+1. **DONE.** `NocAsyncMcastTx` with the receiver wait still inside `noc_load` -- pure
+   refactor, the handle does nothing new. Checkpoint met: 19 suites passed, 0 failed, and
+   the multicast users (matmul_mcast, mcast, matmul_blocked, attention_proj, flash,
+   example_matmul) verified individually including with asserts on.
+
+   Two things the implementation needed that the spec had not called out. `Semaphore::id`
+   was private with no accessor, and a reference would not do: every pair-derived multicast
+   builds its two semaphores as LOCALS inside `noc_load`, so the handle has to carry the id
+   -- hence a new `semaphore_id()` accessor. And the multicast form used to DELEGATE to the
+   plain `Fn` form, inheriting `NocAsyncReadTx` along with it, so the producing half had to
+   be extracted into `detail::issue_load` for the multicast form to run the same protocol
+   and return a different handle.
 2. The in-flight assert. Still nothing to catch, but it is in place before the window opens.
 3. Sink the receiver's flag wait into `.wait()`. NOW the assert is load-bearing. Suite green
    with asserts on is the checkpoint.
