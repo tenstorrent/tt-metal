@@ -21,14 +21,15 @@ namespace ttnn::operations::data_movement::concat_codegen {
 
 namespace {
 
-// concat.yaml's rm-width-2in-unaligned-staged-copy-volume predicate.
+// Two-input width-dim demotion: the staged-copy volume past which codegen loses to native.
 //
-// Mechanism (concat.yaml demotion block): reader_concat_rm_width_interleaved.cpp
+// Mechanism: reader_concat_rm_width_interleaved.cpp
 // gates a batched direct-write fast path on both input rows filling their
-// physical page pitch exactly (kernel :60-68). When that fails, every stick is
-// staged through a scratch CB and copied into the assembly page two bytes at a
-// time by a volatile uint16_t RISC loop (kernel :102-145) -- no batching, no
-// read/write overlap. Native's own fallback for the same unaligned-last-dim
+// physical page pitch exactly and on input1's payload landing at an offset its
+// own transport can address (kernel :60-68). Whichever side fails its condition
+// stages instead: every stick of it goes through a scratch CB and is copied into
+// the assembly page two bytes at a time by a volatile uint16_t RISC loop
+// (kernel :102-145) -- no batching, no read/write overlap. Native's own fallback for the same unaligned-last-dim
 // condition (concat.cpp's build_non_aligned_last_dim_concat) dispatches 4
 // programs (transpose -> concat -> transpose). So this is fallback-vs-fallback:
 // codegen wins on dispatch count while the staged-copy volume is small, and
@@ -46,29 +47,28 @@ bool rm_width_2in_unaligned_staged_copy_volume(const std::vector<Tensor>& input_
         return false;
     }
 
-    auto row_bytes = [](const Tensor& t) {
-        return static_cast<uint32_t>(t.logical_shape()[-1]) * static_cast<uint32_t>(t.element_size());
-    };
-    auto row_bytes_aligned = [](const Tensor& t, uint32_t bytes) {
-        return bytes % static_cast<uint32_t>(t.buffer()->alignment()) == 0;
-    };
-
-    const uint32_t in0_row_bytes = row_bytes(in0);
-    const uint32_t in1_row_bytes = row_bytes(in1);
-    const bool in0_aligned = row_bytes_aligned(in0, in0_row_bytes);
-    const bool in1_aligned = row_bytes_aligned(in1, in1_row_bytes);
-    if (in0_aligned && in1_aligned) {
-        // Every input's row bytes is an alignment multiple: the reader takes
-        // the batched direct-write fast path, which wins at every measured
-        // size in this regime.
+    // Mirror of the reader's compile-time path selection (kernel :60-68) over the same buffer
+    // values create_descriptor_rm_width hands it. Input1's payload lands at input0's stick size
+    // inside the assembly page, and IN1_NOC_ALIGNMENT is input1's own buffer alignment, so input1
+    // writes directly only when its stick fills its page *and* input0's stick is a multiple of
+    // that alignment. Two inputs may sit in different memory configurations -- only N > 2 is held
+    // to one shared config -- so input0 filling its own page does not answer the second term.
+    const auto* src0 = in0.buffer();
+    const auto* src1 = in1.buffer();
+    const uint32_t in0_stick = static_cast<uint32_t>(src0->page_size());
+    const uint32_t in1_stick = static_cast<uint32_t>(src1->page_size());
+    const uint32_t in1_noc_alignment = static_cast<uint32_t>(src1->alignment());
+    const bool in0_direct = in0_stick == static_cast<uint32_t>(src0->aligned_page_size());
+    const bool in1_direct =
+        in1_stick == static_cast<uint32_t>(src1->aligned_page_size()) && in0_stick % in1_noc_alignment == 0;
+    if (in0_direct && in1_direct) {
+        // The reader takes the batched direct-write fast path, which wins at
+        // every measured size in this regime.
         return false;
     }
 
-    // in0 unaligned implies IN0_STICK_SIZE % IN1_NOC_ALIGNMENT != 0 (kernel's
-    // in1_direct condition), so input1 cannot be direct either: both inputs
-    // stage and the staged row equals the full output row. Otherwise only
-    // input1 stages.
-    const uint32_t staged_row_bytes = in0_aligned ? in1_row_bytes : (in0_row_bytes + in1_row_bytes);
+    // Only the sides that miss the direct path pay the scratch-staged byte copy.
+    const uint32_t staged_row_bytes = (in0_direct ? 0 : in0_stick) + (in1_direct ? 0 : in1_stick);
 
     tt::tt_metal::IDevice* device = in0.device();
     uint32_t total_out_sticks = 1;
@@ -163,6 +163,21 @@ bool supported_by_codegen(
     if (input_tensors.size() < 2 || input_tensors.size() > ttnn::prim::kConcatMaxNwayInputs) {
         return false;
     }
+    for (const auto& t : input_tensors) {
+        // A host tensor answers every check below this loop -- layout(), dtype() and
+        // memory_config() read the spec, not a buffer -- and then the CB-fit helpers those checks
+        // end in dereference device() and buffer(). Decline up front so such a call reaches
+        // native's own validation instead of a null deref inside a routing predicate.
+        if (t.storage_type() != StorageType::DEVICE || t.buffer() == nullptr) {
+            return false;
+        }
+        // No builder has a zero-work path: an empty input contributes a zero-length block that the
+        // readers' block-cycling cursor cannot advance past, and a zero-width output turns the
+        // stick count into a division by zero. Native answers these shapes.
+        if (t.logical_shape().volume() == 0) {
+            return false;
+        }
+    }
     if (output_mem_config.is_sharded()) {
         return false;
     }
@@ -190,8 +205,7 @@ bool supported_by_codegen(
 
     if (input_tensors.size() > 2) {
         // The N-way readers share one TensorAccessorArgs ABI across every
-        // input (spec.py's build_concat_rm_{width,nonwidth}_nway), so every
-        // input must sit in the exact same memory configuration.
+        // input, so every input must sit in the exact same memory configuration.
         const auto& first_mem = first.memory_config();
         for (const auto& t : input_tensors) {
             if (t.memory_config() != first_mem) {
