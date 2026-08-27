@@ -36,7 +36,7 @@ ENABLE_LOGGING = False
 def multi_scale_deformable_attn_ttnn(
     value,
     value_spatial_shapes,
-    sampling_locations,
+    sampling_grids,
     attention_weights,
     device,
 ):
@@ -49,8 +49,8 @@ def multi_scale_deformable_attn_ttnn(
         value_spatial_shapes (torch.Tensor): Spatial shape of
             each feature map, has shape (num_levels, 2),
             last dimension 2 represent (h, w)
-        sampling_locations (ttnn.Tensor): The location of sampling points,
-            has shape
+        sampling_grids (ttnn.Tensor): The location of sampling points, already
+            rescaled to grid_sample's [-1, 1] and in ROW_MAJOR, has shape
             (bs, num_queries, num_heads, num_levels, num_points, 2),
             the last dimension 2 represent (x, y).
         attention_weights (ttnn.Tensor): The weight of sampling points used
@@ -62,17 +62,13 @@ def multi_scale_deformable_attn_ttnn(
         ttnn.Tensor: Attended features with shape (bs, num_queries, embed_dims)
     """
     bs, _, num_heads, head_dim = value.shape
-    _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
+    _, num_queries, num_heads, num_levels, num_points, _ = sampling_grids.shape
 
     if ENABLE_LOGGING:
         logger.info("MSDA Start")
 
     # Split value into a list of tensors for each level
     value_list = ttnn.split(value, [H_ * W_ for H_, W_ in value_spatial_shapes], dim=1)
-
-    # Normalize sampling locations from [0,1] to [-1,1] for grid_sample
-    sampling_grids = ttnn.mul(sampling_locations, 2.0)
-    sampling_grids = ttnn.sub(sampling_grids, 1.0)
 
     # The fused op takes all three inputs ROW_MAJOR, so the head-major permute runs there rather
     # than on a tiled tensor.
@@ -93,7 +89,6 @@ def multi_scale_deformable_attn_ttnn(
         value_l_ = ttnn.reshape(value_l_, (bs * num_heads, H_, W_, head_dim))
 
         sampling_grid_l_ = sampling_grids[:, :, :, level, :, :]  # [bs, num_queries, num_heads, num_points, 2]
-        sampling_grid_l_ = ttnn.to_layout(sampling_grid_l_, layout=ttnn.ROW_MAJOR_LAYOUT)
         sampling_grid_l_ = ttnn.permute(
             sampling_grid_l_, (0, 2, 1, 3, 4)
         )  # [bs, num_heads, num_queries, num_points, 2]
@@ -158,6 +153,30 @@ class TTMSDeformableAttention:
         self.params = params
 
         self.head_dim = self.embed_dims // self.num_heads
+
+        # Built on first use and kept: it is derived from spatial_shapes and the head/level/point
+        # counts, none of which vary between calls, and rebuilding it uploads from host every time.
+        self._offset_normalizer = None
+
+    def _flat_offset_normalizer(self, spatial_shapes):
+        """One row scaling the flat offset vector, laid out to match the linear's output order.
+
+        num_heads outermost, then num_levels, num_points, and (x, y) innermost. The axis swap that
+        pairs level extents with (x, y) is the reference implementation's, kept as-is.
+        """
+        if self._offset_normalizer is None:
+            level_scale = torch.stack([spatial_shapes[:, 1], spatial_shapes[:, 0]], dim=-1)
+            row = (
+                level_scale.reshape(self.num_levels, 1, 2)
+                .expand(self.num_levels, self.num_points, 2)
+                .reshape(1, -1)
+                .repeat(1, self.num_heads)
+                .to(torch.float32)
+            )
+            self._offset_normalizer = ttnn.from_torch(
+                row, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+        return self._offset_normalizer
 
     def forward(
         self,
@@ -242,9 +261,6 @@ class TTMSDeformableAttention:
         sampling_offsets = ttnn.linear(
             query, self.params.sampling_offsets.weight, bias=self.params.sampling_offsets.bias
         )
-        sampling_offsets = ttnn.reshape(
-            sampling_offsets, (bs * num_queries * self.num_heads, self.num_levels, self.num_points, 2)
-        )
 
         if ENABLE_LOGGING:
             logger.info("MSDA Attention Weight Generation")
@@ -270,35 +286,36 @@ class TTMSDeformableAttention:
             # D represents the number of depth levels in 3D point sampling (e.g., 4 points per pillar)
             D = reference_points.shape[2]
 
-            spatial_shapes_tt = ttnn.from_torch(
-                spatial_shapes, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            # The offsets, the reference points and the [0,1] -> [-1,1] rescale are all elementwise,
+            # and none of them needs the (num_levels, num_points, 2) axes spelled out. Kept flat as
+            # [bs*num_queries, num_heads*num_levels*num_points*2] they stay tile-clean; split out,
+            # the trailing (num_points, 2) pads to a full 32x32 tile and every op in this chain
+            # carries 128x its own data.
+            fan = self.num_heads * self.num_levels * (self.num_points // D)
+            width = self.num_heads * self.num_levels * self.num_points * 2
+
+            sampling_offsets = ttnn.div(
+                ttnn.reshape(sampling_offsets, (bs * num_queries, width)),
+                self._flat_offset_normalizer(spatial_shapes),
             )
 
-            # Create offset normalizer to convert pixel-space offsets to normalized coordinates [0,1]
-            offset_normalizer = ttnn.stack([spatial_shapes_tt[..., 1], spatial_shapes_tt[..., 0]], dim=-1)
+            # Each query's (D, 2) reference block applies to every (head, level, point//D) triple,
+            # so the flat row is that block repeated ``fan`` times. Built in ROW_MAJOR because the
+            # D*2 source is narrower than a tile.
+            reference_rows = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
+            reference_rows = ttnn.reshape(reference_rows, (bs * num_queries, D * 2))
+            reference_rows = ttnn.repeat(reference_rows, ttnn.Shape((1, fan)))
+            reference_rows = ttnn.to_layout(reference_rows, ttnn.TILE_LAYOUT)
 
-            # sampling_offsets: [bs*num_queries*num_heads, num_levels, num_points, 2]
-            # offset_normalizer: [num_levels, 2] -> [1, num_levels, 1, 2] for broadcasting
-            offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add batch * query * head dimension
-            offset_normalizer = ttnn.unsqueeze(offset_normalizer, -2)  # Add point dimension
+            # Sampling locations, rescaled to grid_sample's [-1, 1] in the same flat pass.
+            sampling_grids = ttnn.add(reference_rows, sampling_offsets)
+            sampling_grids = ttnn.sub(ttnn.mul(sampling_grids, 2.0), 1.0)
 
-            sampling_offsets = ttnn.div(sampling_offsets, offset_normalizer)
-
-            # reference_points: [bs, num_queries, D, 2] -> [bs, num_queries, 1, 1, 1, D, 2]
-            reference_points_expanded = ttnn.unsqueeze(reference_points, 2)  # Add head dimension
-            reference_points_expanded = ttnn.unsqueeze(reference_points_expanded, 3)  # Add level dimension
-            reference_points_expanded = ttnn.unsqueeze(reference_points_expanded, 4)  # Add point dimension
-
-            # Reshape sampling_offsets to separate depth dimension for proper addition with reference_points
-            # From [bs*num_queries*num_heads, num_levels, num_points, 2]
-            sampling_offsets = ttnn.reshape(
-                sampling_offsets, (bs, num_queries, self.num_heads, self.num_levels, self.num_points // D, D, 2)
-            )
-            # Compute final sampling locations
-            sampling_locations = ttnn.add(reference_points_expanded, sampling_offsets)
-            # Flatten back to standard format for multi-scale deformable attention
-            sampling_locations = ttnn.reshape(
-                sampling_locations, (bs, num_queries, self.num_heads, self.num_levels, self.num_points, 2)
+            # Only now spell the axes out, and in ROW_MAJOR, where the degenerate trailing dims
+            # cost nothing.
+            sampling_grids = ttnn.reshape(
+                ttnn.to_layout(sampling_grids, ttnn.ROW_MAJOR_LAYOUT),
+                (bs, num_queries, self.num_heads, self.num_levels, self.num_points, 2),
             )
         else:
             raise ValueError(f"Reference points must have 2 dimensions, got {reference_points.shape[-1]}")
@@ -307,7 +324,7 @@ class TTMSDeformableAttention:
         output = multi_scale_deformable_attn_ttnn(
             value=value,
             value_spatial_shapes=spatial_shapes,
-            sampling_locations=sampling_locations,
+            sampling_grids=sampling_grids,
             attention_weights=attention_weights,
             device=self.device,
         )
