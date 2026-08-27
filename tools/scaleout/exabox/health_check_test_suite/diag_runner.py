@@ -1333,7 +1333,15 @@ def run_tests(tt_metal: Path, tier: str, phase: Phase, dry_run: bool, logs_dir: 
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def main() -> int:
+def default_tt_metal_path() -> Path:
+    """Repo root: $TT_METAL_HOME, else four parents up from this file
+    (tools/scaleout/exabox/health_check_test_suite/diag_runner.py -> repo root)."""
+    return Path(os.environ.get("TT_METAL_HOME") or Path(__file__).resolve().parents[4])
+
+
+def build_diag_arg_parser() -> argparse.ArgumentParser:
+    """Build the diag CLI parser. Exposed so callers (e.g. run_health_check's
+    subprocess wrapper) can introspect the accepted flags and stay in sync."""
     ap = argparse.ArgumentParser(description="SYS-4365 diag tool")
     ap.add_argument("--tier", choices=list(TIER_TESTS), required=True)
     ap.add_argument("--dry-run", action="store_true", help="Print intended subprocess calls; skip destructive steps.")
@@ -1348,20 +1356,43 @@ def main() -> int:
     ap.add_argument(
         "--tt-metal-path",
         type=Path,
-        default=Path(os.environ.get("TT_METAL_HOME") or Path(__file__).resolve().parents[4]),
+        default=default_tt_metal_path(),
         help="tt-metal repo root (contains build/test/tt_metal/unit_tests_deployment).",
     )
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
-    args = ap.parse_args()
+    return ap
+
+
+def run_diag(
+    tier: str,
+    *,
+    dry_run: bool = False,
+    skip_reset: bool = False,
+    skip_tests: bool = False,
+    input_snapshot: Path | None = None,
+    tt_smi_path: str | None = None,
+    tt_metal_path: Path | None = None,
+    output: Path = Path("diag_report.json"),
+    snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
+) -> tuple[int, dict]:
+    """Run the full diagnostic pipeline (snapshot → reset loop → gtests).
+
+    Programmatic entry point equivalent to the CLI: writes the JSON report to
+    *output* (gtest logs to ``<output_dir>/logs/``) and returns
+    ``(exit_code, report_dict)``. ``exit_code`` is ``1`` on FAIL, else ``0`` —
+    identical to the process exit code produced by ``main()``.
+    """
+    if tt_metal_path is None:
+        tt_metal_path = default_tt_metal_path()
 
     started = datetime.now(timezone.utc)
     report = {
         "tool_version": "0.3.0-draft",
-        "tier": args.tier,
+        "tier": tier,
         "host": socket.gethostname(),
         "started_utc": started.isoformat(),
-        "dry_run": args.dry_run,
+        "dry_run": dry_run,
         "tt_smi_version": None,
         "detected_board_rev": None,
         "phases": {},
@@ -1371,15 +1402,15 @@ def main() -> int:
     snap_phase = Phase(name="snapshot")
     t0 = time.time()
     try:
-        if args.input_snapshot:
-            log(f"using input snapshot: {args.input_snapshot}")
-            snap = json.loads(args.input_snapshot.read_text())
+        if input_snapshot:
+            log(f"using input snapshot: {input_snapshot}")
+            snap = json.loads(input_snapshot.read_text())
         else:
-            tt_smi = resolve_tt_smi(args.tt_smi_path)
+            tt_smi = resolve_tt_smi(tt_smi_path)
             version = detect_tt_smi_version(tt_smi)
             report["tt_smi_version"] = ".".join(str(x) for x in version) if version else None
             log(f"using tt-smi: {tt_smi} (version={report['tt_smi_version']})")
-            snap = take_snapshot(tt_smi, args.snapshot_out)
+            snap = take_snapshot(tt_smi, snapshot_out)
         report["detected_board_rev"] = validate_snapshot(snap, snap_phase)
     except Exception as e:
         snap_phase.error = repr(e)
@@ -1393,18 +1424,18 @@ def main() -> int:
     reset_phase = Phase(name="reset_loop")
     post_reset_phases: list = []
     # Only revalidate via fresh snapshots when running live (not --input-snapshot).
-    snap_out_for_resets = None if args.input_snapshot else args.snapshot_out
+    snap_out_for_resets = None if input_snapshot else snapshot_out
     t0 = time.time()
-    if args.skip_reset:
+    if skip_reset:
         reset_phase.add(Check(name="reset_loop", status=SKIP, details="--skip-reset"))
     else:
         try:
-            tt_smi = resolve_tt_smi(args.tt_smi_path)
+            tt_smi = resolve_tt_smi(tt_smi_path)
             reset_loop(
                 tt_smi,
-                RESET_PLAN[args.tier],
+                RESET_PLAN[tier],
                 reset_phase,
-                args.dry_run,
+                dry_run,
                 snapshot_out=snap_out_for_resets,
                 post_reset_phases=post_reset_phases,
             )
@@ -1416,9 +1447,13 @@ def main() -> int:
     report["phases"]["reset_loop"] = asdict(reset_phase)
     # reset_loop prints its own per-reset lines as they run; rollup line only.
     print(f"  {'reset_loop':14} {reset_phase.status:5} ({reset_phase.duration_s:.1f}s)", flush=True)
-    # Dedupe per-reset snapshots: if all match initial, keep only initial and
-    # record a single summary check. If any differ, splice only the differing
-    # phases into the report (the matching ones are noise).
+    # Dedupe per-reset snapshots: splice the differing phases into the report
+    # (matching intermediates are noise) but ALWAYS keep the final post-reset
+    # snapshot, even when it matches initial. normalize_health_report judges the
+    # fleet on the last snapshot_after_* phase (post[-1]); if the unit regressed
+    # on an early reset but recovered by the final one, dropping the (matching)
+    # final snapshot would strand the stale regression as post[-1] and falsely
+    # fail a node that actually came back healthy.
     if post_reset_phases:
 
         def _check_sig(checks: list) -> tuple:
@@ -1435,6 +1470,12 @@ def main() -> int:
             (matched if _check_sig([asdict(c) for c in p.checks]) == initial_sig else differed).append((name, p))
         for name, p in differed:
             report["phases"][name] = asdict(p)
+        # Preserve the actual final snapshot so the verdict reflects the true end
+        # state. If it differed it is already spliced above (in chronological
+        # order, so it stays post[-1]); if it matched initial, add it back here.
+        final_name, final_phase = post_reset_phases[-1]
+        if final_name not in report["phases"]:
+            report["phases"][final_name] = asdict(final_phase)
         summary_status = PASS if not differed else WARN
         summary_details = f"{len(matched)}/{len(post_reset_phases)} post-reset snapshots matched initial" + (
             f"; {len(differed)} differed (see {', '.join(n for n,_ in differed)})" if differed else ""
@@ -1461,12 +1502,12 @@ def main() -> int:
     # Phase 3: gtest
     test_phase = Phase(name="tests")
     t0 = time.time()
-    if args.skip_tests:
+    if skip_tests:
         test_phase.add(Check(name="tests", status=SKIP, details="--skip-tests"))
     else:
         try:
-            logs_dir = args.output.resolve().parent / "logs"
-            run_tests(args.tt_metal_path, args.tier, test_phase, args.dry_run, logs_dir)
+            logs_dir = output.resolve().parent / "logs"
+            run_tests(tt_metal_path, tier, test_phase, dry_run, logs_dir)
         except Exception as e:
             test_phase.error = repr(e)
             test_phase.add(Check(name="tests", status=FAIL, details=repr(e)))
@@ -1487,8 +1528,8 @@ def main() -> int:
     else:
         report["overall_status"] = PASS
 
-    args.output.write_text(json.dumps(report, indent=2))
-    log(f"wrote report: {args.output} (overall={report['overall_status']})")
+    output.write_text(json.dumps(report, indent=2))
+    log(f"wrote report: {output} (overall={report['overall_status']})")
 
     # Separator delineates the live per-phase output above from the final
     # rollup below, so the OVERALL summary block is visually distinct.
@@ -1507,7 +1548,23 @@ def main() -> int:
         else:
             print(f"    {phase_name:11} {status}")
 
-    return 0 if report["overall_status"] != FAIL else 1
+    return (0 if report["overall_status"] != FAIL else 1), report
+
+
+def main() -> int:
+    args = build_diag_arg_parser().parse_args()
+    rc, _report = run_diag(
+        tier=args.tier,
+        dry_run=args.dry_run,
+        skip_reset=args.skip_reset,
+        skip_tests=args.skip_tests,
+        input_snapshot=args.input_snapshot,
+        tt_smi_path=args.tt_smi_path,
+        tt_metal_path=args.tt_metal_path,
+        output=args.output,
+        snapshot_out=args.snapshot_out,
+    )
+    return rc
 
 
 if __name__ == "__main__":

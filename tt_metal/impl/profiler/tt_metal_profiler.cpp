@@ -10,7 +10,7 @@
 #include <mesh_workload.hpp>
 #include <mesh_command_queue.hpp>
 #include <tt_metal.hpp>
-#include <tt_metal_profiler.hpp>
+#include "tt_metal_profiler.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -53,6 +53,7 @@
 #include "profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "program.hpp"
+#include "program/program_impl.hpp"
 #include "kernels/kernel.hpp"
 #include "device/device_manager.hpp"
 #include "rtoptions.hpp"
@@ -426,8 +427,8 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
 
         try {
-            detail::CompileProgram(device_sender, program_sender);
-            detail::CompileProgram(device_receiver, program_receiver);
+            program_sender.impl().compile(device_sender);
+            program_receiver.impl().compile(device_receiver);
         } catch (std::exception& e) {
             log_error(tt::LogMetal, "Failed compile: {}", e.what());
             throw e;
@@ -538,6 +539,7 @@ void syncAllDevices(ChipId host_connected_device) {
     for (auto& sender : profiler_state_manager->device_device_time_pair) {
         for (auto& receiver : sender.second) {
             std::vector<std::pair<uint64_t, uint64_t>> timePairs;
+            timePairs.reserve(receiver.second.size() / 2);
             for (int i = 0; i < receiver.second.size(); i += 2) {
                 uint64_t senderTime = (receiver.second[i].first + receiver.second[i + 1].first) / 2;
                 timePairs.push_back({senderTime, receiver.second[i].second});

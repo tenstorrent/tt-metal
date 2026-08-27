@@ -94,6 +94,14 @@ def _fit_cores(total_rows, device):
     return num_cores, grid
 
 
+@pytest.mark.xfail(
+    run=False,
+    reason="use_transpose_as_fold=True routes through the Quasar transpose_wh compute (transpose_wh_rm), "
+    "which deadlocks in the tilize->transpose dest_section_flip TTI_STALLWAIT (LLK hand-off item). This is "
+    "the WH/BH fold path; the Quasar resnet model uses the direct channels-last fold (use_transpose_as_fold="
+    "False, input_is_nhwc=True) instead -- see ttnn_functional_resnet50.run() and test_fold_c8.py. run=False "
+    "so the deadlock does not execute.",
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1, 2], ids=["b1", "b2"])
 def test_quasar_fold(mesh_device, batch_size):

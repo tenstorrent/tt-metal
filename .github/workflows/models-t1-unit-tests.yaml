@@ -18,6 +18,7 @@ on:
           - qwen3.6-27b
           - gpt-oss-120b
           - minimax-m3
+          - deepseek-v3
           - whisper
           - gemma-4-12b
           - gemma-4-26b-a4b
@@ -25,9 +26,13 @@ on:
           - dit-common
           - wan-2.2-t2v
           - wan-2.2-i2v
-          # llama3.3-70b-galaxy: disabled — see #42139
+          - llama3.3-70b-galaxy
           - flux.1-schnell
           - flux.1-dev
+          - ltx-2.3
+          - z-image-turbo
+          - resnet50
+          - tt-transformers-common
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -50,8 +55,6 @@ on:
           # scarce exabox hardware.
           - "bh_sc1 (BH Single Galaxy)"
           - "bh_sc4 (BH Supercluster 4)"
-          - "bh_sc4-blitz (BH Supercluster 4 / Blitz)"
-          - "bh_sc4-mgd (BH Supercluster 4 / MGD)"
           - "bh_sc16 (BH Supercluster 16)"
       platform:
         required: false
@@ -101,7 +104,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_sc4-mgd"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_sc4"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"
@@ -119,6 +122,7 @@ jobs:
           echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -132,9 +136,10 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   models-unit-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     secrets: inherit
-    # OIDC only on this caller (the reusable workflow's multihost job needs ttop auth), not
-    # workflow-wide. Job-level permissions replace inherited defaults, so restate what tests need.
+    # OIDC only on this caller (multihost-ci runner chart may need it), not workflow-wide.
+    # Job-level permissions replace inherited defaults, so restate what tests need.
     permissions:
       contents: read
       packages: read

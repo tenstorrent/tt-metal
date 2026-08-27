@@ -1,14 +1,18 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
 #include <vector>
+#include <thread>
+#include <future>
 
 #include <tt_stl/assert.hpp>
 #include "blockfloat_common.hpp"
+#include "common/executor.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -367,11 +371,6 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     TT_ASSERT(input_data.size() % num_float_in_tile == 0);
     uint32_t num_tiles = input_data.size() / num_float_in_tile;
 
-    std::vector<uint32_t> packed_result;
-
-    std::vector<uint8_t> exponents;
-    std::vector<uint32_t> data;
-
     int num_exponents_in_dword = 4;
     int num_mantissas_in_dword;
     if constexpr (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) {
@@ -381,72 +380,158 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     } else {
         num_mantissas_in_dword = 4;
     }
-    int fp32_element_index = 0;
-    for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
-        std::vector<uint32_t> packed_data;
-        std::vector<uint8_t> exponents_with_padding;
-        exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
-        for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
-            for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
-                for (int i = 0; i < subtile_rows; ++i) {
-                    std::vector<uint32_t> single_row;
-                    // populate a single row
-                    for (int j = 0; j < subtile_cols; ++j) {
-                        int data_index;
-                        if (row_major_input) {
-                            data_index =
-                                (tr * face_H + i) * tile_W + (tc * face_W + j) + (num_float_in_tile * tile_index);
+
+    // Lambda to process a range of tiles
+    auto process_tile_range = [&](int start_tile, int end_tile) -> std::vector<uint32_t> {
+        const int rows_per_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows;
+        const int mantissa_dwords_per_tile = num_float_in_tile / num_mantissas_in_dword;
+        const int exp_dwords_per_tile =
+            exponent_padding ? static_cast<int>(tt::round_up(static_cast<uint32_t>(rows_per_tile), l1_alignment)) /
+                                   num_exponents_in_dword
+                             : rows_per_tile / num_exponents_in_dword;
+
+        std::vector<uint32_t> local_result;
+        local_result.reserve(
+            static_cast<size_t>(end_tile - start_tile) * (exp_dwords_per_tile + mantissa_dwords_per_tile));
+        std::vector<uint8_t> exponents;
+        exponents.reserve(num_exponents_in_dword);
+        std::vector<uint32_t> data;
+        data.reserve(num_mantissas_in_dword);
+
+        for (int tile_index = start_tile; tile_index < end_tile; ++tile_index) {
+            std::vector<uint32_t> packed_data;
+            packed_data.reserve(mantissa_dwords_per_tile);
+            std::vector<uint8_t> exponents_with_padding;
+            exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
+
+            size_t fp32_element_base = row_major_input ? 0 : (tile_index * num_float_in_tile);
+
+            for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
+                for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
+                    for (int i = 0; i < subtile_rows; ++i) {
+                        std::vector<uint32_t> single_row;
+                        single_row.reserve(subtile_cols);
+                        // populate a single row
+                        for (int j = 0; j < subtile_cols; ++j) {
+                            size_t data_index;
+                            if (row_major_input) {
+                                data_index =
+                                    (tr * face_H + i) * tile_W + (tc * face_W + j) + (num_float_in_tile * tile_index);
+                            } else {
+                                data_index = fp32_element_base +
+                                             (tr * subtiles_in_tile_col + tc) * (subtile_rows * subtile_cols) +
+                                             i * subtile_cols + j;
+                            }
+                            float float_num = static_cast<float>(input_data[data_index]);
+                            uint32_t uint32_num = *reinterpret_cast<uint32_t*>(&float_num);
+                            single_row.push_back(uint32_num);
+                        }
+
+                        uint8_t exp = get_max_exp(single_row, is_exp_a);
+
+                        // check if it satisfies the 16B alignment
+                        if (exponent_padding) {
+                            exponents_with_padding.push_back(exp);
                         } else {
-                            data_index = fp32_element_index++;
+                            exponents.push_back(exp);
+                            if (exponents.size() % num_exponents_in_dword == 0) {
+                                local_result.push_back(get_exp_dword(exponents));
+                                exponents.clear();
+                            }
                         }
-                        float float_num = static_cast<float>(input_data[data_index]);
-                        uint32_t uint32_num = *reinterpret_cast<uint32_t*>(&float_num);
-                        single_row.push_back(uint32_num);
-                    }
 
-                    uint8_t exp = get_max_exp(single_row, is_exp_a);
-
-                    // check if it satisfies the 16B alignment
-                    if (exponent_padding) {
-                        exponents_with_padding.push_back(exp);
-                    } else {
-                        exponents.push_back(exp);
-                        if (exponents.size() % num_exponents_in_dword == 0) {
-                            packed_result.push_back(get_exp_dword(exponents));
-                            exponents.clear();
-                        }
-                    }
-
-                    for (uint32_t u32_datum : single_row) {
-                        data.push_back(u32_datum);
-                        if (data.size() % num_mantissas_in_dword == 0) {
-                            uint32_t datum = create_packed_bfp_packed_as_u32<BfpFormat>(data, exp, is_exp_a);
-                            packed_data.push_back(datum);
-                            data.clear();
+                        for (uint32_t u32_datum : single_row) {
+                            data.push_back(u32_datum);
+                            if (data.size() % num_mantissas_in_dword == 0) {
+                                uint32_t datum = create_packed_bfp_packed_as_u32<BfpFormat>(data, exp, is_exp_a);
+                                packed_data.push_back(datum);
+                                data.clear();
+                            }
                         }
                     }
                 }
             }
+            // prepend exponents to follow data packing order:
+            //  16 exponents for sub-tile 0​
+            //      exp_row0, exp_row1, … exp_row15​
+            //  16 exponents for sub-tile 1​
+            //  16 exponents for sub-tile 2​
+            //  16 exponents for sub-tile 3​
+            //  entire sub-tile 0 (RM layout)​
+            //  entire sub-tile 1 (RM layout)​
+            //  entire sub-tile 2 (RM layout)​
+            //  entire sub-tile 3 (RM layout)
+            // align the exponent section to 16B
+            if (exponent_padding) {
+                std::vector<uint8_t> pads(
+                    tt::round_up(exponents_with_padding.size(), l1_alignment) - exponents_with_padding.size(), 0);
+                exponents_with_padding.insert(exponents_with_padding.end(), pads.begin(), pads.end());
+                std::vector<uint32_t> packed = pack_exponents(exponents_with_padding, num_exponents_in_dword);
+                local_result.insert(local_result.end(), packed.begin(), packed.end());
+            }
+            local_result.insert(local_result.end(), packed_data.begin(), packed_data.end());
         }
-        // prepend exponents to follow data packing order:
-        //  16 exponents for sub-tile 0​
-        //      exp_row0, exp_row1, … exp_row15​
-        //  16 exponents for sub-tile 1​
-        //  16 exponents for sub-tile 2​
-        //  16 exponents for sub-tile 3​
-        //  entire sub-tile 0 (RM layout)​
-        //  entire sub-tile 1 (RM layout)​
-        //  entire sub-tile 2 (RM layout)​
-        //  entire sub-tile 3 (RM layout)
-        // align the exponent section to 16B
-        if (exponent_padding) {
-            std::vector<uint8_t> pads(
-                tt::round_up(exponents_with_padding.size(), l1_alignment) - exponents_with_padding.size(), 0);
-            exponents_with_padding.insert(exponents_with_padding.end(), pads.begin(), pads.end());
-            std::vector<uint32_t> packed = pack_exponents(exponents_with_padding, num_exponents_in_dword);
-            packed_result.insert(packed_result.end(), packed.begin(), packed.end());
-        }
-        packed_result.insert(packed_result.end(), packed_data.begin(), packed_data.end());
+
+        return local_result;
+    };
+
+    // Determine how many parallel work items to split the tiles into.
+    // Only parallelize if we have enough tiles to justify the overhead.
+    constexpr uint32_t MIN_TILES_PER_CHUNK = 4;
+    uint32_t max_chunks = std::thread::hardware_concurrency();
+    if (max_chunks == 0) {
+        max_chunks = 1;
+    }
+    uint32_t num_chunks = std::min(max_chunks, num_tiles / MIN_TILES_PER_CHUNK);
+    num_chunks = std::max(1u, num_chunks);
+
+    if (num_chunks == 1) {
+        // Single-threaded execution
+        return process_tile_range(0, num_tiles);
+    }
+
+    log_debug(
+        tt::LogAlways,
+        "Converting {} block-float tiles with {} chunks ({} tiles/chunk)",
+        num_tiles,
+        num_chunks,
+        num_tiles / num_chunks);
+
+    std::vector<std::vector<uint32_t>> chunk_results(num_chunks);
+    std::vector<std::shared_future<void>> futures;
+    futures.reserve(num_chunks);
+
+    uint32_t tiles_per_chunk = num_tiles / num_chunks;
+    uint32_t remainder = num_tiles % num_chunks;
+
+    uint32_t start_tile = 0;
+    for (uint32_t t = 0; t < num_chunks; ++t) {
+        uint32_t tiles_for_this_chunk = tiles_per_chunk + (t < remainder ? 1 : 0);
+        uint32_t end_tile = start_tile + tiles_for_this_chunk;
+
+        futures.emplace_back(
+            tt::tt_metal::detail::async([&chunk_results, &process_tile_range, t, start_tile, end_tile]() {
+                chunk_results[t] = process_tile_range(start_tile, end_tile);
+            }));
+
+        start_tile = end_tile;
+    }
+
+    // Wait for all chunks to complete. get() also rethrows the first exception raised in any chunk.
+    for (auto& future : futures) {
+        future.get();
+    }
+
+    // Concatenate results from all chunks
+    std::vector<uint32_t> packed_result;
+    size_t total_size = 0;
+    for (const auto& result : chunk_results) {
+        total_size += result.size();
+    }
+    packed_result.reserve(total_size);
+
+    for (auto& result : chunk_results) {
+        packed_result.insert(packed_result.end(), result.begin(), result.end());
     }
 
     return packed_result;
@@ -521,5 +606,12 @@ template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp8>(ttsl::Spa
 template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp2_b>(ttsl::Span<const uint8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
 template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp4_b>(ttsl::Span<const uint8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
 template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp8_b>(ttsl::Span<const uint8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+
+template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp2>(ttsl::Span<const int8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp4>(ttsl::Span<const int8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp8>(ttsl::Span<const int8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp2_b>(ttsl::Span<const int8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp4_b>(ttsl::Span<const int8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp_tiles<tt::DataFormat::Bfp8_b>(ttsl::Span<const int8_t> input_data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
 
 // clang-format on

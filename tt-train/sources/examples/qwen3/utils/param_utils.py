@@ -33,7 +33,10 @@ def build_weight_mapping_distributed(config, root_prefix, tie_word_embeddings):
         mapping["model.embed_tokens.weight"] = f"{root_prefix}/lm_head/weight"
         shard_types["model.embed_tokens.weight"] = "col_w"
     else:
-        mapping["model.embed_tokens.weight"] = f"{root_prefix}/model/embed_tokens"
+        # FeatureParallelEmbedding is a module, so the table hangs off it as
+        # ``.../embed_tokens/weight`` rather than being a bare tensor named
+        # ``.../embed_tokens``. Still row_w: the table is sharded on the hidden dim.
+        mapping["model.embed_tokens.weight"] = f"{root_prefix}/model/embed_tokens/weight"
         shard_types["model.embed_tokens.weight"] = "row_w"
         mapping["lm_head.weight"] = f"{root_prefix}/lm_head/weight"
         shard_types["lm_head.weight"] = "col_w"
@@ -209,7 +212,7 @@ def _build_grad_mapping_distributed(config, root_prefix, tie_word_embeddings):
         mapping["model.embed_tokens.weight"] = f"{root_prefix}/lm_head/weight"
         gs["model.embed_tokens.weight"] = "concat_2"
     else:
-        mapping["model.embed_tokens.weight"] = f"{root_prefix}/model/embed_tokens"
+        mapping["model.embed_tokens.weight"] = f"{root_prefix}/model/embed_tokens/weight"
         gs["model.embed_tokens.weight"] = "concat_3"
         mapping["lm_head.weight"] = f"{root_prefix}/lm_head/weight"
         gs["lm_head.weight"] = "concat_2"

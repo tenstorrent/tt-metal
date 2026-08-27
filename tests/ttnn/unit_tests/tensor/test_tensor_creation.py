@@ -31,6 +31,7 @@ pytestmark = pytest.mark.use_module_device
     "tt_dtype",
     [
         ttnn.uint8,
+        ttnn.int8,
         ttnn.uint16,
         ttnn.uint32,
         ttnn.int32,
@@ -85,6 +86,7 @@ def test_tensor_creation(shape, tt_dtype, layout, device):
     "tt_dtype",
     [
         ttnn.uint8,
+        ttnn.int8,
         ttnn.uint16,
         ttnn.uint32,
         ttnn.int32,
@@ -155,6 +157,7 @@ core_ranges = ttnn.num_cores_to_corerangeset(56, grid_size, True)
     "tt_dtype",
     [
         ttnn.uint8,
+        ttnn.int8,
         ttnn.uint16,
         ttnn.uint32,
         ttnn.int32,
@@ -320,6 +323,7 @@ def test_tensor_creation_with_tensor_spec(tensor_spec, device):
     [
         # 1D tensors
         (ttnn.uint8, [1, 3], [1, 2, 3]),
+        (ttnn.int8, [1, 3], [-1, -2, -3]),
         (ttnn.uint16, [1, 3], [1000, 2000, 3000]),
         (ttnn.int32, [1, 3], [-100, -200, -300]),
         (ttnn.uint32, [1, 3], [1000000, 2000000, 3000000]),
@@ -327,6 +331,7 @@ def test_tensor_creation_with_tensor_spec(tensor_spec, device):
         (ttnn.bfloat16, [1, 3], [1.25, 2.75, 3.125]),
         # 2D tensors
         (ttnn.uint8, [2, 3], [1, 2, 3, 4, 5, 6]),
+        (ttnn.int8, [2, 3], [-1, -2, -3, 4, 5, 6]),
         (ttnn.uint16, [2, 3], [1000, 2000, 3000, 4000, 5000, 6000]),
         (ttnn.int32, [2, 3], [-100, -200, -300, 400, 500, 600]),
         (ttnn.uint32, [2, 3], [1000000, 2000000, 3000000, 4000000, 5000000, 6000000]),
@@ -334,6 +339,7 @@ def test_tensor_creation_with_tensor_spec(tensor_spec, device):
         (ttnn.bfloat16, [2, 3], [1.25, 2.75, 3.125, 4.375, 5.625, 6.875]),
         # 3D tensors
         (ttnn.uint8, [2, 2, 2], [1, 2, 3, 4, 5, 6, 7, 8]),
+        (ttnn.int8, [2, 2, 2], [-1, -2, -3, -4, -5, -6, -7, -8]),
         (ttnn.uint16, [2, 2, 2], [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]),
         (ttnn.int32, [2, 2, 2], [-100, -200, -300, -400, -500, -600, -700, -800]),
         (ttnn.uint32, [2, 2, 2], [1000000, 2000000, 3000000, 4000000, 5000000, 6000000, 7000000, 8000000]),
@@ -341,6 +347,11 @@ def test_tensor_creation_with_tensor_spec(tensor_spec, device):
         (ttnn.bfloat16, [2, 2, 2], [1.25, 2.75, 3.125, 4.375, 5.625, 6.875, 7.125, 8.25]),
         # 4D tensors
         (ttnn.uint8, [2, 2, 2, 2], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+        (
+            ttnn.int8,
+            [2, 2, 2, 2],
+            [-1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12, -13, -14, -15, -16],
+        ),
         (
             ttnn.uint16,
             [2, 2, 2, 2],
@@ -616,6 +627,8 @@ def flatten_list(nested_list):
         (ttnn.uint16, [0, 1, 2, 255, 256, 32767, 32768, 65535, 0, 1, 2, 255, 256, 32767, 32768, 65535], 0),
         (ttnn.uint8, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], 0),
         (ttnn.uint8, [0, 1, 2, 127, 128, 254, 255, 100, 0, 1, 2, 127, 128, 254, 255, 100], 0),
+        (ttnn.int8, [1, 2, 3, 4, 5, 6, 7, 8, -1, -2, -3, -4, -5, -6, -7, -8], 0),
+        (ttnn.int8, [0, 1, -1, 127, -128, -127, 100, -100, 0, 1, -1, 127, -128, -127, 100, -100], 0),
     ],
     ids=[
         "float32",
@@ -630,6 +643,8 @@ def flatten_list(nested_list):
         "uint16_edges",
         "uint8",
         "uint8_edges",
+        "int8",
+        "int8_edges",
     ],
 )
 @pytest.mark.parametrize("shape", [(2, 8), (2, 2, 2, 2)])

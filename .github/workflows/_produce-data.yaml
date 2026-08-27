@@ -64,12 +64,13 @@ on:
       - "Blackhole sanity tests"
       - "(Blackhole) e2e tests"
       - "(Blackhole) Demo tests"
+      - "Blaze Models Prefill tests"
       - "PR Gate"
       - "Merge Gate"
       - "Nightly tt-metal L2 tests"
       - "Package and release"
       - "Build test and publish upstream tests"
-      - "vLLM nightly tests"
+      - "vLLM Model Tests"
       - "metal - Run microbenchmarks"
       - "Multi-Host Deployment (Physical)"
       - "(Galaxy) Multi-user Isolation Tests"
@@ -92,6 +93,10 @@ on:
       - "Custom test dispatch"
       - "Validate installation step from instructions"
       - "LLK perf"
+      - "(Runtime) Sanity Tests"
+      - "(Runtime) Unit Tests"
+      - "(Runtime) Integration Tests"
+      - "(Runtime) Performance Tests"
     types:
       - completed
 

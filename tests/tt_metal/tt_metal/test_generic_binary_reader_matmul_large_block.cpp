@@ -30,7 +30,6 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -40,6 +39,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -98,8 +99,7 @@ std::vector<std::uint32_t> transpose_tiles(
 
 }  // namespace
 
-TEST_F(MeshDeviceSingleCardFixture, GenericBinaryReaderMatmulLargeBlock) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+TEST_F(UnitMeshFixture, GenericBinaryReaderMatmulLargeBlock) {
     bool pass = true;
 
     try {
@@ -124,26 +124,19 @@ TEST_F(MeshDeviceSingleCardFixture, GenericBinaryReaderMatmulLargeBlock) {
         uint32_t dram_buffer_size_out =
             single_tile_size * M * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        tt_metal::InterleavedBufferConfig act_config{
-            .device = dev,
-            .size = dram_buffer_size_act,
-            .page_size = dram_buffer_size_act,
-            .buffer_type = tt_metal::BufferType::DRAM};
-
-        tt_metal::InterleavedBufferConfig weights_config{
-            .device = dev,
-            .size = dram_buffer_size_weights,
-            .page_size = dram_buffer_size_weights,
-            .buffer_type = tt_metal::BufferType::DRAM};
-
-        tt_metal::InterleavedBufferConfig dst_config{
-            .device = dev,
-            .size = dram_buffer_size_out,
-            .page_size = dram_buffer_size_out,
-            .buffer_type = tt_metal::BufferType::DRAM};
-        auto src0_dram_buffer = CreateBuffer(act_config);
-        auto src1_dram_buffer = CreateBuffer(weights_config);
-        auto dst_dram_buffer = CreateBuffer(dst_config);
+        // The kernels treat each buffer as one page, so each page size must equal its buffer size.
+        auto src0_dram_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = dram_buffer_size_act},
+            {.page_size = dram_buffer_size_act, .buffer_type = BufferType::DRAM},
+            &this->device());
+        auto src1_dram_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = dram_buffer_size_weights},
+            {.page_size = dram_buffer_size_weights, .buffer_type = BufferType::DRAM},
+            &this->device());
+        auto dst_dram_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = dram_buffer_size_out},
+            {.page_size = dram_buffer_size_out, .buffer_type = BufferType::DRAM},
+            &this->device());
 
         uint32_t src0_cb_index = 0;
         uint32_t cb0_tiles = M * in0_block_w * 2;
@@ -192,20 +185,17 @@ TEST_F(MeshDeviceSingleCardFixture, GenericBinaryReaderMatmulLargeBlock) {
         uint32_t src1_num_bytes_per_block = src1_num_tiles_per_block * single_tile_size;
         TT_FATAL(source_addresses.size() == num_blocks * src0_num_reads_per_block, "Error");
 
-        tt_metal::InterleavedBufferConfig l1_config{
-            .device = dev,
-            .size = source_addresses.size() * sizeof(uint32_t),
-            .page_size = source_addresses.size() * sizeof(uint32_t),
-            .buffer_type = tt_metal::BufferType::L1};
-
-        auto source_addresses_in_l1 = CreateBuffer(l1_config);
+        auto source_addresses_in_l1 = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = source_addresses.size() * sizeof(uint32_t)},
+            {.page_size = source_addresses.size() * sizeof(uint32_t), .buffer_type = BufferType::L1},
+            &this->device());
         auto source_addresses_in_l1_addr = source_addresses_in_l1->address();
 
         const std::array generic_binary_reader_args{
-            src0_dram_buffer->address(),
-            (uint32_t) 0,
-            src1_dram_buffer->address(),
-            (uint32_t) 0,
+            (uint32_t)src0_dram_buffer->address(),
+            (uint32_t)0,
+            (uint32_t)src1_dram_buffer->address(),
+            (uint32_t)0,
             (uint32_t)source_addresses.size(),
             (uint32_t)source_addresses_in_l1_addr,
             (uint32_t)num_blocks,
@@ -223,15 +213,17 @@ TEST_F(MeshDeviceSingleCardFixture, GenericBinaryReaderMatmulLargeBlock) {
                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         const std::array writer_rt_args{
-            dst_dram_buffer->address(),
-            (std::uint32_t) 0,
-            (std::uint32_t)out_subblock_h, // num tiles per sub block m
-            (std::uint32_t)out_subblock_w, // num tiles per sub block n
-            (std::uint32_t)M/out_subblock_h, // num sub blocks m
-            (std::uint32_t)N/out_subblock_w, // num sub blocks n
-            (std::uint32_t)out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row within sub-block
-            (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row of sub-blocks
-            (std::uint32_t)out_subblock_w*single_tile_size}; // bytes offset to next sub-block
+            (std::uint32_t)dst_dram_buffer->address(),
+            (std::uint32_t)0,
+            (std::uint32_t)out_subblock_h,      // num tiles per sub block m
+            (std::uint32_t)out_subblock_w,      // num tiles per sub block n
+            (std::uint32_t)M / out_subblock_h,  // num sub blocks m
+            (std::uint32_t)N / out_subblock_w,  // num sub blocks n
+            (std::uint32_t)out_subblock_w * single_tile_size *
+                (N / out_subblock_w),  // bytes offset to next row within sub-block
+            (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size *
+                (N / out_subblock_w),                           // bytes offset to next row of sub-blocks
+            (std::uint32_t)out_subblock_w * single_tile_size};  // bytes offset to next sub-block
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
@@ -291,24 +283,24 @@ TEST_F(MeshDeviceSingleCardFixture, GenericBinaryReaderMatmulLargeBlock) {
             convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         auto activations_tile_transposed = transpose_tiles(activations, M, K, in0_block_w);
-        tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations_tile_transposed);
+        slow_dispatch::WriteToBuffer(*src0_dram_buffer, activations_tile_transposed);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
         auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);
         auto weights_tile_layout =
             convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
-        tt_metal::detail::WriteToDeviceL1(dev, core, source_addresses_in_l1_addr, source_addresses);
+        slow_dispatch::WriteToBuffer(*src1_dram_buffer, weights);
+        slow_dispatch::WriteToL1(this->device(), core, source_addresses_in_l1_addr, source_addresses);
 
         tt_metal::SetRuntimeArgs(program, generic_binary_reader_kernel, core, generic_binary_reader_args);
 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_rt_args);
 
-        tt_metal::detail::LaunchProgram(dev, program);
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+        slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

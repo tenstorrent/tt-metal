@@ -605,28 +605,6 @@ void kernel_main() {
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
-    if (use_barrier_sem) {
-        // multicast to entire ring of workers for both this dir and opposite dir
-        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_mcastseminc, multicast_route_info);
-
-        uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(this_core_x, this_core_y, barrier_sem, 0);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_direction_connection,
-            pkt_hdr_mcastseminc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
-
-        // we need to complete the fabric mux connection init immediately after any fabric transaction
-        mf.flush();
-
-        barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(opposite_core_x, opposite_core_y, barrier_sem, 0);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_direction_connection,
-            pkt_hdr_mcastseminc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
-
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 2 * (ring_size - 1));
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
-    }
 
     fabric_unicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
@@ -635,6 +613,21 @@ void kernel_main() {
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
+
+    if (use_barrier_sem) {
+        // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
+        uint64_t opposite_barrier_sem_noc_addr = safe_get_noc_addr(opposite_core_x, opposite_core_y, barrier_sem, 0);
+        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            fabric_direction_connection,
+            pkt_hdr_seminc,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_barrier_sem_noc_addr, 0});
+
+        // we need to complete the fabric mux connection init immediately after any fabric transaction
+        mf.flush();
+
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+    }
 
     // Relevant for 2nd-last iter:
     // In 2nd-last iter we send the full tensor slice. But in preparation for the last iter where each dir
@@ -655,6 +648,10 @@ void kernel_main() {
         mf.flush();
         noc_obj.async_writes_flushed();
     };
+
+    // The batch_ready_sem is incremented once per batch by the opposite-direction neighbour;
+    // instead of resetting it with set(0) after every batch
+    uint32_t batch_ready_target = 0;
 
     for (uint32_t b = 0; b < input_tensor_B; ++b) {
         constexpr uint32_t ring_size_by_2 = ring_size / 2;
@@ -808,26 +805,23 @@ void kernel_main() {
         // final batch — there is no next batch to protect, and the reader gates receive-side completion.
         // input_tensor_B is a compile-time constant, so this whole block compiles away for B == 1.
         if (b + 1 < input_tensor_B) {
-            // multicast to entire ring of workers for both this dir and opposite dir
-            uint64_t batch_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(this_core_x, this_core_y, batch_ready_sem, 0);
-            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
+            uint64_t opposite_batch_ready_sem_noc_addr =
+                safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
+            fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                 fabric_direction_connection,
-                pkt_hdr_mcastseminc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
-            noc_obj.async_writes_flushed();
-
-            batch_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
-            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                fabric_direction_connection,
-                pkt_hdr_mcastseminc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
+                pkt_hdr_seminc,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_batch_ready_sem_noc_addr, 0});
             noc_obj.async_writes_flushed();
 
             noc_semaphore_wait_min(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 2 * (ring_size - 1));
-            noc_semaphore_set(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);  // reset before next batch
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ++batch_ready_target);
         }
+    }
+
+    // Reset the out_ready semaphores once, only after all batches
+    if constexpr (input_tensor_B > 1) {
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
     }
 
     noc_obj.async_write_barrier();

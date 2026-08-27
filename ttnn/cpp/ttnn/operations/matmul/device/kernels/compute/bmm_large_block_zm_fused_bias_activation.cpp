@@ -490,9 +490,9 @@ void kernel_main() {
 #endif
                 reconfig_data_format(in1_dfb_id, mm_partials_dfb_id, in0_dfb_id, bias_dfb_id);
                 if constexpr (row_broadcast_bias) {
-                    add_bcast_rows_init_short(mm_partials_dfb_id, bias_dfb_id);
+                    add_bcast_rows_init(mm_partials_dfb_id, bias_dfb_id);
                 } else {
-                    add_tiles_init(mm_partials_dfb_id, bias_dfb_id);
+                    add_init(mm_partials_dfb_id, bias_dfb_id);
                 }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the CB for reuse across bh/batch iterations.

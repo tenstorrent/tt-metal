@@ -19,10 +19,12 @@
 #include "tt_metal/impl/dispatch/command_queue_common.hpp"
 
 #include "llrt.hpp"
+#include "env_lib.hpp"
 #include <tt-metalium/tt_align.hpp>
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/impl/context/context_types.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include <variant>
 #include <llrt/tt_cluster.hpp>
@@ -159,8 +161,7 @@ inline DeviceData::DeviceData(
     bool is_banked,
     uint32_t dram_data_size_words,
     const DispatchTestConfig& cfg) :
-    use_coherent_data_(cfg.use_coherent_data),
-    hugepage_issue_buffer_size_(cfg.hugepage_issue_buffer_size) {
+    use_coherent_data_(cfg.use_coherent_data), hugepage_issue_buffer_size_(cfg.hugepage_issue_buffer_size) {
     this->base_data_addr[static_cast<int>(tt::CoreType::WORKER)] = l1_data_addr;
     this->base_data_addr[static_cast<int>(tt::CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)] = dram_data_addr;
@@ -651,6 +652,7 @@ namespace CommandBuilder {
 // Emits a single linear write, optionally multicast, with inline data
 template <bool flush_prefetch, bool inline_data>
 HostMemDeviceCommand build_linear_write_command(
+    MetalContext& metal_ctx,
     const std::vector<uint32_t>& payload,
     const CoreRange& worker_range,
     bool is_mcast,
@@ -659,12 +661,12 @@ HostMemDeviceCommand build_linear_write_command(
     uint32_t xfer_size_bytes) {
     // Calculate the command size using DeviceCommandCalculator
     // Pre-calculate the exact size to allocate correct amount of memory in HostMemDeviceCommand buffer
-    DeviceCommandCalculator cmd_calc;
+    DeviceCommandCalculator cmd_calc(metal_ctx);
     cmd_calc.add_dispatch_write_linear<flush_prefetch, inline_data>(xfer_size_bytes);
     const uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(command_size_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     // Add the dispatch write linear command
     cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
@@ -682,6 +684,7 @@ HostMemDeviceCommand build_linear_write_command(
 // payload is already stitched together for all pages in the chunk
 template <bool inline_data>
 HostMemDeviceCommand build_paged_write_command(
+    MetalContext& metal_ctx,
     const std::vector<uint32_t>& payload,
     uint32_t base_addr,
     uint32_t page_size_bytes,
@@ -689,12 +692,12 @@ HostMemDeviceCommand build_paged_write_command(
     uint16_t start_page_cmd,
     bool is_dram) {
     // Calculate the command size
-    DeviceCommandCalculator cmd_calc;
+    DeviceCommandCalculator cmd_calc(metal_ctx);
     cmd_calc.add_dispatch_write_paged<inline_data>(page_size_bytes, pages_in_chunk);
     const uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(command_size_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     // Add the dispatch write paged command
     cmd.add_dispatch_write_paged<inline_data>(
@@ -713,6 +716,7 @@ HostMemDeviceCommand build_paged_write_command(
 // Serializes a packed-unicast command including sub-command table
 // and optional replicated payloads when stride is enabled
 inline HostMemDeviceCommand build_packed_write_command(
+    MetalContext& metal_ctx,
     const std::vector<uint32_t>& payload,
     const std::vector<CQDispatchWritePackedUnicastSubCmd>& sub_cmds,
     uint32_t common_addr,
@@ -729,7 +733,7 @@ inline HostMemDeviceCommand build_packed_write_command(
     const uint32_t payload_bytes = tt::align(sizeof(CQDispatchCmd) + sub_cmds_bytes, l1_alignment) + data_bytes;
 
     // Calculate the command size
-    DeviceCommandCalculator cmd_calc;
+    DeviceCommandCalculator cmd_calc(metal_ctx);
     cmd_calc.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
         num_sub_cmds,        // num_sub_cmds
         payload_size_bytes,  // packed_data_sizeB
@@ -739,7 +743,7 @@ inline HostMemDeviceCommand build_packed_write_command(
     const uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(command_size_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     // Build data_collection pointing to the payload
     std::vector<std::pair<const void*, uint32_t>> data_collection;
@@ -908,40 +912,46 @@ inline std::vector<CQDispatchWritePackedUnicastSubCmd> build_sub_cmds(
     return sub_cmds;
 }
 
-// Clamp xfer_size to fit within max_fetch_bytes_
+// Largest transfer size no greater than xfer_size_bytes whose packed write command fits in max_fetch_bytes, or 0 if
+// even one alignment unit does not fit. A caller that gets 0 must not emit the command: a packed write of no payload
+// makes the dispatcher issue zero-length NOC writes, which the watcher NOC sanitizer stops the device for.
 inline uint32_t clamp_to_max_fetch(
+    MetalContext& metal_ctx,
     uint32_t max_fetch_bytes,
     uint32_t xfer_size_bytes,
     uint32_t num_sub_cmds,
     uint32_t packed_write_max_unicast_sub_cmds,
     bool no_stride,
     uint32_t l1_alignment) {
-    // Calculate the command size
-    DeviceCommandCalculator cmd_calc;
-    cmd_calc.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-        num_sub_cmds,     // num_sub_cmds
-        xfer_size_bytes,  // packed_data_sizeB
-        packed_write_max_unicast_sub_cmds,
-        no_stride  // no_stride
-    );
-    uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
-
-    // If the command size is less than max_fetch_bytes_, return the transfer size
-    if (command_size_bytes <= max_fetch_bytes) {
-        return xfer_size_bytes;
-    }
-
-    // Else, linearly decrement by alignment until it fits
-    uint32_t result = xfer_size_bytes;
-    while (result > 0 && command_size_bytes > max_fetch_bytes) {
-        result -= l1_alignment;
+    // Each size gets its own calculator. DeviceCommandCalculator accumulates, so asking one calculator about a second
+    // size reports what both commands would occupy together -- the measurement then only grows as the loop below tries
+    // smaller transfers, no size ever looks like it fits, and the loop walks the transfer down to nothing.
+    const auto command_size_bytes = [&](uint32_t payload_bytes) {
+        DeviceCommandCalculator cmd_calc(metal_ctx);
         cmd_calc.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-            num_sub_cmds,  // num_sub_cmds
-            result,        // packed_data_sizeB
+            num_sub_cmds,   // num_sub_cmds
+            payload_bytes,  // packed_data_sizeB
             packed_write_max_unicast_sub_cmds,
             no_stride  // no_stride
         );
-        command_size_bytes = cmd_calc.write_offset_bytes();
+        return cmd_calc.write_offset_bytes();
+    };
+
+    if (command_size_bytes(xfer_size_bytes) <= max_fetch_bytes) {
+        return xfer_size_bytes;
+    }
+
+    // Else step down an alignment unit at a time until it fits. The step is taken through a helper because a transfer
+    // size that is not a multiple of the alignment would otherwise wrap past zero on its last step.
+    const auto step_down = [l1_alignment](uint32_t size) {
+        const uint32_t remainder = size % l1_alignment;
+        const uint32_t step = remainder != 0 ? remainder : l1_alignment;
+        return size > step ? size - step : 0;
+    };
+
+    uint32_t result = step_down(xfer_size_bytes);
+    while (result != 0 && command_size_bytes(result) > max_fetch_bytes) {
+        result = step_down(result);
     }
 
     return result;
@@ -978,13 +988,9 @@ inline tt::CoreType sd_cq_kernel_core_type(const tt_metal::IDevice* device) {
     return tt::tt_metal::detail::resolve_sd_cq_kernel_core_type(device);
 }
 
-inline tt_metal::DataMovementProcessor prefetch_dm() {
-    return tt::tt_metal::detail::prefetch_dm_processor();
-}
+inline tt_metal::DataMovementProcessor prefetch_dm() { return tt::tt_metal::detail::prefetch_dm_processor(); }
 
-inline tt_metal::DataMovementProcessor dispatch_dm() {
-    return tt::tt_metal::detail::dispatch_dm_processor();
-}
+inline tt_metal::DataMovementProcessor dispatch_dm() { return tt::tt_metal::detail::dispatch_dm_processor(); }
 
 inline const tt_metal::DispatchMemMap& sd_dispatch_mem_map() {
     return tt_metal::MetalContext::instance().dispatch_mem_map();
@@ -1013,9 +1019,9 @@ inline tt_metal::KernelHandle create_sd_cq_kernel(
                 .is_legacy_kernel = true});
     }
     if (device->arch() == tt::ARCH::QUASAR) {
-        // Quasar interim Tensix path (TT_METAL_TENSIX_DISPATCH_CORES=1): the experimental API
-        // auto-assigns DMs by creation order (prefetch first -> DM0, dispatch -> DM1), matching the
-        // legacy behavior. dm_processor is not used here.
+        // Quasar interim Tensix path (TT_METAL_TENSIX_DISPATCH_CORES=1): CreateKernel skips
+        // reserved DM0/DM1 and auto-assigns free user DMs (prefetch first -> DM2, …).
+        // dm_processor is not used here.
         return tt::tt_metal::experimental::quasar::CreateKernel(
             program,
             kernel_path,
@@ -1072,6 +1078,15 @@ inline bool is_quasar_cq_dram_backed() {
     return !rtoptions.is_dram_backed_cq_specified() || rtoptions.get_dram_backed_cq();
 }
 
+struct CompletionQueuePtrToggle {
+    uint32_t ptr_16B = 0;
+    uint32_t toggle = 0;
+};
+
+inline CompletionQueuePtrToggle split_ptr_toggle(uint32_t ptr_and_toggle) {
+    return {ptr_and_toggle & 0x7fffffffu, ptr_and_toggle >> 31};
+}
+
 // Wrapper template that marks any base fixture as the Quasar-simulator-only variant; the constructor
 // sets quasar_simulator_variant_ before gtest's SetUp() reads it.
 template <class FDFixture>
@@ -1115,26 +1130,30 @@ protected:
     // Test Config defaults
     DispatchTestConfig cfg_;
 
-    void SetUp() override {
-        if (!validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        tt_metal::GenericMeshDeviceFixture::SetUp();
-
-        // Setup Config
+    virtual DispatchPayloadGenerator::Config payload_generator_config() const {
         DispatchPayloadGenerator::Config pgcfg;
         pgcfg.use_coherent_data = cfg_.use_coherent_data;
         pgcfg.perf_test = cfg_.perf_test;
         pgcfg.min_xfer_size_bytes = cfg_.min_xfer_size_bytes;
         pgcfg.max_xfer_size_bytes = cfg_.max_xfer_size_bytes;
 
-        // Handle Seeding
+        // Handle Seeding. TT_METAL_SEED replays a particular run: these tests generate their command streams from the
+        // seed, so a failure that only some streams provoke is only reproducible if the seed it logged can be set back.
         std::random_device rd;
-        pgcfg.seed = rd();
+        pgcfg.seed = tt::parse_env("TT_METAL_SEED", static_cast<uint32_t>(rd()));
+        return pgcfg;
+    }
+
+    void SetUp() override {
+        if (!validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        tt_metal::GenericMeshDeviceFixture::SetUp();
 
         // Initialize Generator
+        const DispatchPayloadGenerator::Config pgcfg = payload_generator_config();
         payload_generator_ = std::make_unique<DispatchPayloadGenerator>(pgcfg);
-        log_info(tt::LogTest, "Random seed set to {}", pgcfg.seed);
+        log_info(tt::LogTest, "Random seed set to {} (set TT_METAL_SEED to replay)", pgcfg.seed);
 
         // These are used for test logic (loops, alignment, etc.) rather than generation
         dispatch_buffer_page_size_ = cfg_.dispatch_buffer_page_size;
@@ -1179,13 +1198,16 @@ protected:
         if (!Common::is_quasar_sim()) {
             return default_worker_start;
         }
+        const CoreCoord worker_grid = device_->compute_with_storage_grid_size();
         const bool fast_dispatch = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
-        return fast_dispatch ? CoreCoord{0, 0} : CoreCoord{1, 0};
+        return fast_dispatch ? CoreCoord{0, 0} : CoreCoord{worker_grid.x - 1, 0};
     }
 
     CoreRange worker_range(const CoreCoord& first_worker, bool multi_core = true) const {
         if (Common::is_quasar_sim()) {
-            return CoreRange{first_worker, first_worker};
+            const CoreCoord worker_grid = device_->compute_with_storage_grid_size();
+            const CoreCoord last_worker = multi_core ? CoreCoord{worker_grid.x - 1, worker_grid.y - 1} : first_worker;
+            return CoreRange{first_worker, last_worker};
         }
         const CoreCoord last_worker = multi_core ? CoreCoord{first_worker.x + 1, first_worker.y + 1} : first_worker;
         return CoreRange{first_worker, last_worker};
@@ -1213,12 +1235,12 @@ protected:
         const auto start = std::chrono::steady_clock::now();
         uint32_t avail = 0;
         while (avail < total_expected_cq_payload) {
-            const uint32_t completion_queue_write_ptr_and_toggle =
-                mgr_->completion_queue_wait_front(fdcq_->id(), exit_condition);
-            const uint32_t completion_q_write_ptr = (completion_queue_write_ptr_and_toggle & 0x7fffffff) << 4;
-            const uint32_t completion_q_write_toggle = completion_queue_write_ptr_and_toggle >> (31);
+            const auto [completion_q_write_ptr_16B, completion_q_write_toggle] =
+                split_ptr_toggle(mgr_->completion_queue_wait_front(fdcq_->id(), exit_condition));
+            const uint32_t completion_q_write_ptr = completion_q_write_ptr_16B << 4;
             const uint32_t completion_q_read_ptr = mgr_->get_completion_queue_read_ptr(fdcq_->id());
             const uint32_t completion_q_read_toggle = mgr_->get_completion_queue_read_toggle(fdcq_->id());
+            const uint32_t completion_q_base = mgr_->get_issue_queue_limit(fdcq_->id());
             const uint32_t limit = mgr_->get_completion_queue_limit(fdcq_->id());  // offset of end, in bytes
 
             if (completion_q_write_toggle == completion_q_read_toggle) {
@@ -1226,7 +1248,7 @@ protected:
                             ? completion_q_write_ptr - completion_q_read_ptr
                             : 0u;
             } else {
-                avail = (limit - completion_q_read_ptr) + completion_q_write_ptr;
+                avail = (limit - completion_q_read_ptr) + (completion_q_write_ptr - completion_q_base);
             }
 
             if (timeout_ms > 0 && !Common::is_quasar_sim()) {
@@ -1284,6 +1306,9 @@ protected:
         uint32_t num_iterations,
         bool wait_for_completion = true,
         bool wait_for_host_writes = false) {
+        tt::tt_metal::MetalContext& metal_ctx =
+            tt::tt_metal::MetalContext::instance(tt::tt_metal::extract_context_id(device_));
+
         // PHASE 2: Calculate total command buffer size
         uint64_t per_iter_total = 0;
         for (const auto& cmd : commands_per_iteration) {
@@ -1291,7 +1316,7 @@ protected:
         }
 
         // For the barrier wait command
-        DeviceCommandCalculator cmd_calc;
+        DeviceCommandCalculator cmd_calc(metal_ctx);
         cmd_calc.add_dispatch_wait();
 
         const uint64_t total_cmd_bytes = num_iterations * per_iter_total + cmd_calc.write_offset_bytes();
@@ -1310,7 +1335,7 @@ protected:
         // 2. Writing (HugepageDeviceCommand):
         //    - wraps a pointer that points directly to the issue queue memory (cmd_buffer_base)
         //    - the loop below copies staged commands into the issue queue memory
-        HugepageDeviceCommand dc(cmd_buffer_base, total_cmd_bytes);
+        HugepageDeviceCommand dc(metal_ctx, cmd_buffer_base, total_cmd_bytes);
 
         // Store the size of each command entry (per-chunk)
         std::vector<uint32_t> entry_sizes;
@@ -1333,7 +1358,7 @@ protected:
         // Without this, there can be occasional timeouts in MetalContext::initialize_and_launch_firmware()
         // between test fixtures possibly because the previously issued commands
         // are not completed before next firmware launch
-        HostMemDeviceCommand cmd(cmd_calc.write_offset_bytes());
+        HostMemDeviceCommand cmd(metal_ctx, cmd_calc.write_offset_bytes());
         cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
         dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
         entry_sizes.push_back(cmd.size_bytes());

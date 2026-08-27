@@ -380,6 +380,61 @@ def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard
         device.set_program_cache_misses_allowed(False)
 
 
+def test_pad_rm_sharded_height_only_override_addr_change(device):
+    """Cache-hit hook (override_runtime_arguments) for the CB-bound height-sharded RM factory: buffer
+    addresses are excluded from the pad hash, so a second identical pad at DIFFERENT input AND output
+    addresses must hit the cache and still re-point both sharded CB bases instead of reading/writing
+    the first dispatch's L1 shards."""
+    torch.manual_seed(48928)
+
+    n, c, h, w = 1, 3, 224, 256
+    padded_shape = [n, c, 256, w]
+    input_tensor_start = [0, 0, 0, 0]
+    pad_value = 8.0
+
+    num_cores_x, num_cores_y = 8, 7
+    ncores = num_cores_x * num_cores_y
+    shard_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+    )
+    in_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (ttnn.core.divup(n * c * h, ncores), w), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    out_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            shard_grid,
+            (ttnn.core.divup(n * c * padded_shape[2], ncores), w),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    def _make():
+        t = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+        return t, ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
+        )
+
+    def _run(tt_in):
+        return ttnn.pad(tt_in, padded_shape, input_tensor_start, pad_value, memory_config=out_cfg)
+
+    torch_a, tt_a = _make()
+    tt_out_a = _run(tt_a)
+    assert_equal(pad_reference(torch_a, padded_shape, input_tensor_start, pad_value), ttnn.to_torch(tt_out_a))
+    entries_after_first = device.num_program_cache_entries()
+
+    # Keep A alive so B's input and output both land at different L1 addresses.
+    torch_b, tt_b = _make()
+    assert tt_b.buffer_address() != tt_a.buffer_address(), "second input must land at a different address"
+    tt_out_b = _run(tt_b)
+    assert tt_out_b.buffer_address() != tt_out_a.buffer_address(), "second output must land at a different address"
+    assert device.num_program_cache_entries() == entries_after_first, "identical pad must be a cache hit"
+    assert_equal(pad_reference(torch_b, padded_shape, input_tensor_start, pad_value), ttnn.to_torch(tt_out_b))
+
+
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 64),), (0, 64)), (((16, 16), (0, 32)), (0, 32, 0, 32))])
@@ -403,15 +458,14 @@ def test_pad(device, h, w, padding, torch_padding, value):
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((32, 32),), (32, 32))])
 @pytest.mark.parametrize("value", [0])
-def test_pad_padding_validation_front_pad_not_supported(device, h, w, padding, torch_padding, value):
+def test_pad_padding_validation_front_pad_not_supported(device, h, w, padding, torch_padding, value, expect_error):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    with pytest.raises(RuntimeError) as e:
+    with expect_error(RuntimeError, "ttnn.pad: on device tile padding does not support front padding"):
         ttnn.pad(input_tensor, padding=padding, value=value)
-    assert "ttnn.pad: on device tile padding does not support front padding" in str(e.value)
     return
 
 
@@ -419,15 +473,14 @@ def test_pad_padding_validation_front_pad_not_supported(device, h, w, padding, t
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 32), (0, 32), (0, 32)), (0, 32, 0, 32, 0, 32))])
 @pytest.mark.parametrize("value", [0])
-def test_pad_padding_validation_length(device, h, w, padding, torch_padding, value):
+def test_pad_padding_validation_length(device, h, w, padding, torch_padding, value, expect_error):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    with pytest.raises(RuntimeError) as e:
+    with expect_error(RuntimeError, "ttnn.pad: padding len can't be larger than input tensor rank"):
         ttnn.pad(input_tensor, padding=padding, value=value)
-    assert "ttnn.pad: padding len can't be larger than input tensor rank" in str(e.value)
     return
 
 
@@ -487,7 +540,7 @@ def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding", [((0, 32), (0, 32)), ((1, 64), (0, 96)), ((0, 64), (0, 43)), ((32, 64), (64, 96))])
 @pytest.mark.parametrize("value", [0])
-def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
+def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value, expect_error):
     torch.manual_seed(0)
     torch_padding = (padding[1][0], padding[1][1], padding[0][0], padding[0][1])
 
@@ -502,9 +555,8 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
         or padding[1][0] % ttnn.TILE_SIZE != 0
         or padding[1][1] % ttnn.TILE_SIZE != 0
     ):
-        with pytest.raises(RuntimeError) as e:
-            output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
-        assert "must be a multiple of the tile size on height and width" in str(e.value)
+        with expect_error(RuntimeError, "must be a multiple of the tile size on height and width"):
+            ttnn.pad(input_tensor, padding=padding, value=value)
         return
     else:
         output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
@@ -569,6 +621,47 @@ def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout, mem_co
         assert torch.equal(output_tt, output_torch)
 
 
+# test_pad_op above parametrizes TILE x use_multicore=False, but its shapes are already tile-aligned,
+# so invoke_tile() returns through the view() fast path and never reaches prim::pad.  Crossing a tile
+# boundary is what actually selects PadTileCoreProgramFactory, the single-core tiled factory.
+@pytest.mark.parametrize(
+    "in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.bfloat8_b]
+)
+@pytest.mark.parametrize(
+    "shape, padshape",
+    [
+        ([1, 1, 32, 32], [1, 1, 64, 64]),  # grow both tile dims
+        ([1, 1, 32, 64], [2, 3, 64, 96]),  # grow the batch/channel dims too
+        ([2, 1, 64, 32], [2, 2, 96, 64]),
+    ],
+)
+@pytest.mark.parametrize("pad_value", [0.0, 7.0])
+@pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_pad_tile_single_core(device, in_dtype, shape, padshape, pad_value, mem_config):
+    if in_dtype == ttnn.bfloat8_b and pad_value != 0.0:
+        pytest.skip("bfloat8_b compares approximately; the exact-fill check below does not apply")
+    if in_dtype == ttnn.float32 and pad_value != 0.0:
+        pytest.xfail("#54223: FLOAT32 pad value is packed as two bfloat16s in the single-core TILE factory")
+
+    torch_input = random_torch_tensor(in_dtype, shape)
+    ttnn_input = ttnn.from_torch(
+        torch_input, device=device, memory_config=mem_config, dtype=in_dtype, layout=ttnn.TILE_LAYOUT
+    )
+
+    # Repeat so the second and third dispatches land on a program-cache hit, which is where a
+    # stale tensor binding would show up.
+    for _ in range(3):
+        output_tt = ttnn.to_torch(ttnn.pad(ttnn_input, padshape, [0, 0, 0, 0], value=pad_value, use_multicore=False))
+        assert output_tt.shape == torch.Size(padshape)
+
+        output_torch = torch.full(padshape, pad_value).to(output_tt.dtype)
+        output_torch[: shape[0], : shape[1], : shape[2], : shape[3]] = torch_input.to(output_tt.dtype)
+        if in_dtype == ttnn.bfloat8_b:
+            assert_allclose(output_torch, output_tt, rtol=0.05, atol=0.025)
+        else:
+            assert torch.equal(output_tt, output_torch)
+
+
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_multicore", [True])
 def test_pad_op_row_major_unevernly_sharded(device, in_dtype, use_multicore):
@@ -613,9 +706,6 @@ def _unsqueeze(smaller, larger, fill):
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.bfloat8_b])
 def test_pad_tile(shape, padding, dtype, device):
-    if (shape, padding) in [([5, 4, 3, 2, 1], [1, 0, 0, 0]), ([5, 4, 3, 2, 1], [32, 32, 32, 64])]:
-        pytest.xfail("Can't pad upper dims with rank>4")
-
     if len(shape) < len(padding):
         shape = _unsqueeze(shape, padding, 1)
     elif len(padding) < len(shape):
@@ -1251,7 +1341,7 @@ def test_pad_nd_sharded_to_nd_sharded_front_padding_row_major(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype):
+def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype, expect_error):
     torch.manual_seed(42)
 
     tensor_shape = [1, 1, 32, 32]
@@ -1275,7 +1365,7 @@ def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype):
         memory_config=input_memory_config,
     )
 
-    with pytest.raises(RuntimeError, match="ttnn.pad: on device tile padding does not support front padding"):
+    with expect_error(RuntimeError, "ttnn.pad: on device tile padding does not support front padding"):
         ttnn.pad(
             input_ttnn_tensor,
             padded_shape,
@@ -1284,3 +1374,264 @@ def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype):
             use_multicore=True,
             memory_config=output_memory_config,
         )
+
+
+def _ttnn_padding_to_torch(padding):
+    """Convert ttnn per-dim (before, after) padding to torch.nn.functional.pad format."""
+    # torch.nn.functional.pad expects (last_dim_before, last_dim_after, ..., first_dim_before, first_dim_after).
+    return tuple(v for i in reversed(range(len(padding))) for v in padding[i])
+
+
+def _assert_pad_fill_regions(output_tensor, input_shape, padding, value):
+    """Exact check that every padded slice equals the fill value."""
+    for dim, (before, after) in enumerate(padding):
+        if before:
+            slices = [slice(None)] * len(input_shape)
+            slices[dim] = slice(0, before)
+            assert torch.all(output_tensor[tuple(slices)] == value)
+        if after:
+            slices = [slice(None)] * len(input_shape)
+            slices[dim] = slice(before + input_shape[dim], before + input_shape[dim] + after)
+            assert torch.all(output_tensor[tuple(slices)] == value)
+
+
+def _assert_pad_body_matches(output_tensor, input_tensor, padding, *, atol=0.0):
+    """Check the unpadded region matches the input."""
+    slices = []
+    for dim, (before, _after) in enumerate(padding):
+        slices.append(slice(before, before + input_tensor.shape[dim]))
+    body_out = output_tensor[tuple(slices)]
+    if atol == 0.0:
+        assert torch.equal(body_out, input_tensor)
+    else:
+        assert_allclose(body_out.float(), input_tensor.float(), rtol=0, atol=atol)
+
+
+@pytest.mark.parametrize(
+    "shape,padding",
+    [
+        ((1, 4, 4, 4, 128), ((0, 0), (1, 1), (0, 0), (0, 0), (0, 0))),
+        ((2, 4, 4, 4, 128), ((1, 0), (0, 0), (0, 0), (0, 0), (0, 0))),
+        ((1, 4, 4, 4, 128), ((0, 0), (0, 2), (0, 0), (0, 0), (0, 0))),
+        ((1, 4, 4, 4, 128), ((0, 0), (0, 0), (1, 2), (0, 0), (0, 0))),
+        ((1, 4, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 2), (0, 0))),
+        ((1, 4, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 0), (0, 3))),
+        ((1, 2, 3, 4, 4, 128), ((0, 0), (1, 0), (0, 0), (0, 0), (0, 0), (0, 0))),
+        ((1, 2, 3, 4, 4, 128), ((0, 0), (0, 0), (0, 2), (0, 0), (0, 0), (0, 0))),
+        ((1, 2, 3, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 1), (0, 0), (0, 0))),
+        ((1, 2, 3, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 0), (0, 2), (0, 0))),
+        ((1, 2, 3, 4, 4, 128), ((0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 1))),
+        ((2, 4, 4, 4, 128), ((1, 1), (0, 2), (0, 0), (0, 0), (0, 0))),
+        ((2, 3, 4, 5, 8), ((1, 1), (0, 1), (2, 0), (0, 2), (1, 1))),
+        ((2, 2, 3, 4, 4, 16), ((0, 1), (0, 0), (1, 0), (0, 0), (0, 0), (0, 2))),
+        ((2, 2, 2, 2, 2, 4, 16), ((0, 0), (0, 0), (1, 1), (0, 0), (0, 0), (0, 0), (0, 0))),
+        ((2, 2, 2, 2, 2, 2, 2, 8), ((0, 0), (1, 1), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0))),
+        ((2, 2, 2, 2, 2, 2, 2, 8), ((0, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 1), (0, 0), (0, 0))),
+        ((3, 3, 5, 7, 13), ((0, 0), (1, 2), (0, 0), (0, 0), (0, 0))),
+    ],
+    ids=[
+        "rank5_dim1",
+        "rank5_dim0",
+        "rank5_dim1_after_only",
+        "rank5_dim2",
+        "rank5_dim3",
+        "rank5_dim4",
+        "rank6_dim1",
+        "rank6_dim2",
+        "rank6_dim3",
+        "rank6_dim4",
+        "rank6_dim5",
+        "rank5_dim0_and_dim1",
+        "rank5_all_dims",
+        "rank6_dim0_dim2_dim5",
+        "rank7_dim2",
+        "rank8_dim1",
+        "rank8_dim5",
+        "rank5_unaligned",
+    ],
+)
+@pytest.mark.parametrize("value", [0.0, 3.5])
+def test_pad_rank_gt4_all_dimensions(device, shape, padding, value):
+    torch.manual_seed(0)
+
+    torch_padding = _ttnn_padding_to_torch(padding)
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    output_tensor = ttnn.pad(input_tensor, padding, value)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape,padding",
+    [
+        # Leading dims (reshape path). Tile layout has no front-padding support on device,
+        # so these only exercise back padding.
+        ((1, 4, 4, 32, 128), ((0, 0), (0, 1), (0, 0), (0, 0), (0, 0))),
+        ((2, 4, 4, 32, 128), ((0, 1), (0, 0), (0, 0), (0, 0), (0, 0))),
+        ((1, 2, 3, 4, 32, 128), ((0, 0), (0, 0), (0, 2), (0, 0), (0, 0), (0, 0))),
+        # dim rank-3 (squeeze-to-4D path) and a combination across both paths.
+        ((1, 4, 4, 32, 128), ((0, 0), (0, 0), (0, 2), (0, 0), (0, 0))),
+        ((2, 4, 4, 32, 128), ((0, 1), (0, 2), (0, 1), (0, 0), (0, 0))),
+        # Height/width padding must stay tile aligned.
+        ((1, 4, 4, 32, 128), ((0, 0), (0, 1), (0, 0), (0, 32), (0, 64))),
+    ],
+    ids=[
+        "rank5_dim1",
+        "rank5_dim0",
+        "rank6_dim2",
+        "rank5_dim2",
+        "rank5_dim0_dim1_dim2",
+        "rank5_dim1_with_hw",
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_pad_rank_gt4_tile_layout(device, shape, padding, dtype):
+    torch.manual_seed(0)
+    value = 0.0
+
+    torch_padding = _ttnn_padding_to_torch(padding)
+    if dtype == ttnn.int32:
+        torch_input_tensor = torch.randint(-100, 100, shape, dtype=torch.int32)
+    else:
+        torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, padding, value))
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.int32, ttnn.uint32])
+def test_pad_rank_gt4_row_major_integer_dtypes(device, dtype):
+    """Leading-dim padding of a rank > 4 tensor must not depend on the element type."""
+    torch.manual_seed(0)
+    shape = (2, 4, 4, 4, 128)
+    padding = ((1, 0), (1, 1), (0, 0), (0, 0), (0, 2))
+
+    torch_input_tensor = torch.randint(0, 100, shape, dtype=torch.int32)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, _ttnn_padding_to_torch(padding), value=0)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, padding, 0.0)).to(torch.int32)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "padding", [((0, 0), (0, 1), (0, 0), (0, 0), (0, 0)), ((0, 0), (0, 0), (0, 1), (0, 0), (0, 0))]
+)
+def test_pad_rank_gt4_tile_bfloat8_b(device, padding):
+    """bfloat8_b is padded via a bfloat16 round trip; make sure the rank > 4 path preserves that."""
+    torch.manual_seed(0)
+    shape = (1, 4, 4, 32, 128)
+    value = 7.0
+
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, _ttnn_padding_to_torch(padding), value=value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, padding, value))
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    _assert_pad_fill_regions(output_tensor, shape, padding, value)
+    _assert_pad_body_matches(output_tensor, torch_input_tensor, padding, atol=0.05)
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize(
+    "shape,padding",
+    [
+        # Single leading dim: trailing squeeze path still applies memory_config.
+        ((1, 4, 4, 32, 128), ((0, 0), (0, 1), (0, 0), (0, 0), (0, 0))),
+        # Multiple leading dims only: memory_config must be applied after the reshape passes.
+        ((2, 4, 4, 4, 128), ((0, 1), (0, 2), (0, 0), (0, 0), (0, 0))),
+    ],
+    ids=["single_leading_dim", "all_leading_dims"],
+)
+def test_pad_rank_gt4_memory_config(device, layout, memory_config, shape, padding):
+    """The requested output memory config must survive the reshape/pad/reshape round trip."""
+    torch.manual_seed(0)
+    value = 0.0
+
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, _ttnn_padding_to_torch(padding), value=value)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=layout, device=device)
+    output = ttnn.pad(input_tensor, padding, value, memory_config=memory_config)
+
+    assert output.memory_config().buffer_type == memory_config.buffer_type
+    output_tensor = ttnn.to_torch(output)
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+def test_pad_rank_gt4_padding_shorter_than_rank(device):
+    """A padding spec shorter than the rank is left-filled with zeros, as for rank <= 4."""
+    torch.manual_seed(0)
+    shape = (1, 4, 4, 4, 128)
+
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    full_padding = ((0, 0), (0, 0), (0, 2), (0, 0), (0, 0))
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, _ttnn_padding_to_torch(full_padding), value=0.0)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, [(0, 2), (0, 0), (0, 0)], 0.0))
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "padding",
+    [
+        ((1, 0), (0, 0), (0, 0), (0, 0), (0, 0)),
+        ((0, 0), (1, 0), (0, 0), (0, 0), (0, 0)),
+        ((0, 0), (0, 0), (1, 0), (0, 0), (0, 0)),
+    ],
+    ids=["dim0", "dim1", "dim2"],
+)
+def test_pad_rank_gt4_tile_front_padding_not_supported(device, padding, expect_error):
+    """Front padding stays unsupported in tile layout, on upper dims of rank > 4 as well."""
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn((2, 4, 4, 32, 128), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "ttnn.pad: on device tile padding does not support front padding"):
+        ttnn.pad(input_tensor, padding, 0.0)
+
+
+@pytest.mark.parametrize("use_multicore", [True, False], ids=["multicore", "singlecore"])
+@pytest.mark.parametrize(
+    "shape,padding",
+    [
+        # Leading dim (reshape path) and dim rank-3 (squeeze-to-4D path).
+        ((2, 4, 4, 4, 128), ((0, 1), (0, 0), (0, 0), (0, 0), (0, 0))),
+        ((2, 4, 4, 4, 128), ((0, 0), (0, 1), (0, 2), (0, 0), (0, 0))),
+    ],
+    ids=["dim0", "dim1_and_dim2"],
+)
+def test_pad_rank_gt4_use_multicore(device, shape, padding, use_multicore):
+    """The rank > 4 path must agree with torch for both the multicore and single-core kernels."""
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.pad(
+        torch_input_tensor, _ttnn_padding_to_torch(padding), mode="constant", value=0.0
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.pad(input_tensor, padding, 0.0, use_multicore=use_multicore))
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)

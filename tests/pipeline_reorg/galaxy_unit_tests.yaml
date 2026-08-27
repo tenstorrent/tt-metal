@@ -17,6 +17,7 @@
   name: Galaxy UMD unit tests
   model: unit
   team: umd
+  owner_id: U09769N29BN # Aleksa Marković
   # owner: see issue #29677
   auto_triage: true
   cmd: ./build/test/umd/galaxy/unit_tests_glx
@@ -28,6 +29,7 @@
   name: UMD API tests
   model: unit
   team: umd
+  owner_id: U09769N29BN # Aleksa Marković
   auto_triage: true
   cmd: ./build/test/umd/api/api_tests
   skus:
@@ -39,7 +41,7 @@
   name: Galaxy Fabric tests
   model: fabric
   team: scaleout
-  owner_id: UJ45FEC7M # Allan Liu
+  owner_id: U08EE956Q8Z # Allan Liu
   auto_triage: true
   cmd: |
     mkdir -p generated/test_reports
@@ -56,7 +58,7 @@
   name: Galaxy Multi-Process tests
   model: multiprocess
   team: scaleout
-  owner_id: U03NG0A5ND7 # Aditya Saigal
+  owner_id: U0709049XNK # Aditya Saigal
   auto_triage: false
   cmd: |
     python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
@@ -97,37 +99,3 @@
 #   skus:
 #     wh_galaxy:
 #       timeout: 25
-
-- id: galaxy-tttv2-modules
-  name: Galaxy tttv2 tests
-  model: tttv2
-  team: models
-  owner_id: U07RY6B5FLJ # Gongyu Wang
-  auto_triage: true
-  cmd: |
-    mkdir -p generated/test_reports
-    failed=0
-    HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-      pytest --durations-min=3.0 models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
-      -m "not slow" \
-      --tb=short \
-      --cov=models.common.modules.rmsnorm.rmsnorm_2d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg || failed=1
-    HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-      pytest --durations-min=3.0 models/common/tests/modules/mlp/test_mlp_2d.py \
-      -m "not slow" \
-      --tb=short \
-      --cov=models.common.modules.mlp.mlp_2d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg || failed=1
-    HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-      pytest --durations-min=3.0 models/common/tests/test_auto_compose.py \
-      --tb=short \
-      --cov=models.common.auto_compose \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg || failed=1
-    exit $failed
-  skus:
-    wh_galaxy_perf:
-      timeout: 10

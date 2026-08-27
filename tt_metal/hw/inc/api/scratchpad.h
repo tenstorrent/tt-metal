@@ -75,16 +75,9 @@ public:
     using reference = T&;
     using const_reference = const T&;
 
-    // Resolve a scratchpad from its binding token: read the per-node base SRAM (L1) address from the CRTA
-    // slot at the token's CRTA word offset; size is the static spec value.
+    // Metal 2.0 ctor: Create a Scratchpad from its binding token:
     [[nodiscard]] explicit Scratchpad(const ScratchpadBindingToken& token) noexcept :
         Scratchpad(pointer{get_common_arg_val<uint32_t>(token.crta_offset_)}, token.size_in_bytes_) {}
-
-    [[nodiscard]] Scratchpad(pointer base_addr, size_type size_in_bytes) noexcept :
-        start_addr_(base_addr), sentinel_addr_(pointer{base_addr.get_address() + uintptr_t{size_in_bytes}}) {
-        ASSERT(base_addr.get_address() % alignof(T) == 0);
-        ASSERT(size_in_bytes % sizeof(T) == 0);
-    }
 
     /** @brief Get the element at the given index
      *
@@ -146,6 +139,15 @@ public:
     [[nodiscard]] pointer local_mem() const noexcept { return start_addr_; }
 
 private:
+    // Create a Scratchpad from an SRAM (L1) base address and size in bytes.
+    // This ctor is private because a Scratchpad represents an allocated SRAM (L1) region.
+    // A user may NOT construct a Scratchpad from an arbitrary address/size. (Use CoreLocalMem for that use case.)
+    [[nodiscard]] Scratchpad(pointer base_addr, size_type size_in_bytes) noexcept :
+        start_addr_(base_addr), sentinel_addr_(pointer{base_addr.get_address() + uintptr_t{size_in_bytes}}) {
+        ASSERT(base_addr.get_address() % alignof(T) == 0);
+        ASSERT(size_in_bytes % sizeof(T) == 0);
+    }
+
     // constexpr note:
     // The following members could be `constexpr` if `CoreLocalMem<T>` supported constexpr
     // construction/copy and a constexpr `get_address()`:
@@ -164,3 +166,48 @@ private:
     // sentinel_addr_ could be omitted in class layout if we inject the size information as a template parameter.
     pointer start_addr_, sentinel_addr_;
 };
+
+// A scratchpad is a node-local SRAM (L1) allocation, so it can be either endpoint of a NoC transaction.
+// This specialization makes it usable directly as the Src or Dst of any Noc operation.
+//
+// Notes:
+//  - `offset_bytes` addresses within the region. For Scratchpad, this is bounds-checked with an assertion.
+//  - Scratchpad may be used by both DM and compute (TRISC) kernels, but only DM kernels have NoC access.
+//
+#if !defined(COMPILE_FOR_TRISC)
+template <typename T>
+struct noc_traits_t<Scratchpad<T>> {
+    struct src_args_type {
+        uint32_t offset_bytes = 0;
+    };
+    struct dst_args_type {
+        uint32_t offset_bytes = 0;
+    };
+    struct dst_args_mcast_type {};
+
+    template <Noc::AddressType address_type>
+    static auto src_addr(const Scratchpad<T>& src, const Noc&, const src_args_type& args) {
+        static_assert(address_type == Noc::AddressType::LOCAL_L1, "Scratchpad can only be used as a local L1 source");
+        ASSERT(args.offset_bytes < src.size_in_bytes());
+        return src.get_base_address() + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr(const Scratchpad<T>& dst, const Noc&, const dst_args_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1, "Scratchpad can only be used as a local L1 destination");
+        ASSERT(args.offset_bytes < dst.size_in_bytes());
+        return dst.get_base_address() + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr_mcast(const Scratchpad<T>&, const Noc&, const dst_args_mcast_type&) {
+        // A scratchpad is private to one kernel instance per node, so multicasting into it would be
+        // writing into other kernels' private memory. Revisit only if a real use case appears.
+        static_assert(false, "Scratchpad cannot be used as a NoC multicast destination");
+    }
+};
+
+template <typename T>
+inline constexpr bool noc_zero_l1_endpoint_v<Scratchpad<T>> = true;
+template <typename T>
+inline constexpr bool is_scratchpad_v<Scratchpad<T>> = true;
+#endif  // !defined(COMPILE_FOR_TRISC)

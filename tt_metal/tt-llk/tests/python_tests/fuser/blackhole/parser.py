@@ -15,25 +15,46 @@ and one to OUTPUT_DIMS for output dimension computation.
 from typing import Annotated, ClassVar, List, Union
 
 from fuser.validator import (
-    SUPPORTED_TILE_SIZES,
+    DATACOPY_TILE_32X32_ONLY,
+    DEST_TO_SRCA_NEEDS_ACC,
+    ELTWISE_DIMS,
+    INT32_NEEDS_UNPACK_TO_DEST,
+    L1_ACC_FORMAT_SUPPORTED,
+    LOFI_ONLY,
+    MATMUL_DIMS,
+    MATMUL_INNER_TILE_DIMS,
+    MATMUL_OPERAND_DIMS,
+    NO_BROADCAST,
+    NO_BROADCAST_ACC_TO_DEST,
+    NO_BROADCAST_REUSE_DEST,
+    NO_COL_ROW_BCAST_32X16,
+    NO_REUSE_DEST,
+    NO_TRANSPOSE,
+    NO_TRANSPOSE_FACES,
+    NO_TRANSPOSE_UNPACK_TO_DEST,
+    NO_UNPACK_TO_DEST,
+    PACK_FULL_TILE_ONLY,
+    PACK_NO_BLOCK_FLOAT,
+    PACK_NO_L1_ACC,
+    REDUCE_PARAMS_REQUIRED,
+    SCALAR_BCAST_NO_TRANSPOSE_FACES,
+    SRC_A_DIMS,
+    SUB_BCAST_COL_REQUIRED,
+    SUPPORTED_SRC_A_TILE,
+    TRANSPOSE_NEEDS_FULL_TILE,
+    TRANSPOSE_WITHIN_FACE_REQUIRED,
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
     OperationSchemaBase,
     PackSchema,
     UnarySfpuMathSchema,
-    _has_transpose,
-    _tile_dims,
+    eltwise_unpacker_rules,
+    forced_unpackers,
+    require_src_a_tiles,
 )
 from helpers.llk_params import (
-    AccToDest,
-    BroadcastType,
-    DataFormat,
-    EltwiseBinaryReuseDestType,
-    L1Accumulation,
-    MathFidelity,
     MathOperation,
     Tilize,
-    UnpackToDest,
 )
 from pydantic import Field
 
@@ -45,7 +66,9 @@ from .fpu.reduce import ReduceFpu
 from .fpu.reduce_block_max import ReduceBlockMaxFpu
 from .fpu.reduce_block_max_runtime import ReduceBlockMaxRuntimeFpu
 from .fpu.sub_bcast_col_custom import SubBcastColCustomFpu
+from .fpu.transpose_dest import TransposeDestFpu
 from .packer.packer import Packer
+from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
@@ -54,58 +77,26 @@ from .unpacker.reduce_block_max import ReduceBlockMaxUnpacker
 from .unpacker.reduce_block_max_runtime import ReduceBlockMaxRuntimeUnpacker
 from .unpacker.sub_bcast_col_custom import SubBcastColCustomUnpacker
 from .unpacker.tilize_a import UnpackerTilizeA
+from .unpacker.transpose_dest import TransposeDestUnpacker
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
-
-_int32_unpack_to_dest = (
-    lambda s, a, b: a.data_format == DataFormat.Int32
-    and s.unpack_to_dest != UnpackToDest.Yes,
-    "Int32 src_a requires unpack_to_dest: Yes (SrcA/SrcB registers are 19-bit wide)",
-)
-
-_ab_checks = [
-    (
-        lambda s, a, b: s.broadcast_type == BroadcastType.Scalar
-        and s.unpack_transpose_faces.value,
-        "SrcA transpose is not supported with scalar broadcast",
-    ),
-]
-
-_tilize_a_checks = [
-    (
-        lambda s, a, b: s.broadcast_type != BroadcastType.None_,
-        "UnpackerTilizeA does not support broadcast",
-    ),
-    (
-        lambda s, a, b: s.unpack_transpose_faces.value
-        or s.unpack_transpose_within_face.value,
-        "UnpackerTilizeA does not support transpose",
-    ),
-]
-
-_matmul_checks = [
-    (
-        lambda s, a, b: s.unpack_transpose_within_face != s.unpack_transpose_faces,
-        "MatmulUnpacker does not support different values for transpose_faces and transpose_within_face",
-    ),
-]
 
 UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(),
-        [_int32_unpack_to_dest],
+        [INT32_NEEDS_UNPACK_TO_DEST, NO_TRANSPOSE_UNPACK_TO_DEST],
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
-        _ab_checks,
+        [SCALAR_BCAST_NO_TRANSPOSE_FACES],
     ),
     "UnpackerTilizeA": (
         lambda s: UnpackerTilizeA(),
-        _tilize_a_checks,
+        [NO_BROADCAST, NO_TRANSPOSE],
     ),
     "MatmulUnpacker": (
         lambda s: MatmulUnpacker(),
-        _matmul_checks,
+        [NO_TRANSPOSE_FACES],
     ),
     "ReduceUnpacker": (
         lambda s: ReduceUnpacker(s.reduce_dim, s.reduce_pool),
@@ -123,124 +114,30 @@ UNPACKER_MAP = {
         lambda s: SubBcastColCustomUnpacker(),
         None,
     ),
+    "TransposeDestUnpacker": (
+        lambda s: TransposeDestUnpacker(),
+        None,
+    ),
 }
 
-_no_reuse_dest = (
-    lambda s, a, b: s.reuse_dest != EltwiseBinaryReuseDestType.NONE,
-    "reuse_dest is only supported for Eltwise operations",
-)
-
-_dest_to_srca_needs_acc = (
-    lambda s, a, b: s.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
-    and s.acc_to_dest != AccToDest.Yes,
-    "reuse_dest DEST_TO_SRCA requires acc_to_dest: true",
-)
-
-_lofi_only = (
-    lambda s, a, b: s.math_fidelity != MathFidelity.LoFi,
-    "only LoFi math fidelity is supported for this operation",
-)
-
-_matmul_dim_check = (
-    lambda s, a, b: a.dimensions[1] != b.dimensions[0],
-    "Matmul: incompatible dimensions for src_a and src_b",
-)
-
-_eltwise_unpacker_reuse = (
-    lambda s, a, b: s.unpacker is not None
-    and s.reuse_dest != EltwiseBinaryReuseDestType.NONE
-    and s.unpacker != "UnpackerA",
-    "Eltwise with reuse_dest: unpacker must be UnpackerA",
-)
-
-_eltwise_unpacker_default = (
-    lambda s, a, b: s.unpacker is not None
-    and s.reuse_dest == EltwiseBinaryReuseDestType.NONE
-    and s.unpacker != "UnpackerAB",
-    "Eltwise: unpacker must be UnpackerAB",
-)
-
-_datacopy_unpacker = (
-    lambda s, a, b: s.unpacker is not None
-    and s.unpacker not in {"UnpackerA", "UnpackerTilizeA"},
-    "Datacopy: unpacker must be UnpackerA or UnpackerTilizeA",
-)
-
-_forced_unpacker = lambda name: (
-    lambda s, a, b: s.unpacker is not None and s.unpacker != name,
-    f"unpacker must be {name}",
-)
-
-_reduce_params = (
-    lambda s, a, b: s.reduce_pool is None or s.reduce_dim is None,
-    "Reduce requires both reduce_pool and reduce_dim",
-)
-
-_unsupported_tile = (
-    lambda s, a, b: _tile_dims(a.tile_shape) not in SUPPORTED_TILE_SIZES,
-    "Unsupported src_a tile shape",
-)
-
-_eltwise_transpose_tile = (
-    lambda s, a, b: _has_transpose(s) and _tile_dims(a.tile_shape) != (32, 32),
-    "Only (32, 32) tiles are supported for eltwise with transpose",
-)
-
-_eltwise_bcast_32x16 = (
-    lambda s, a, b: s.broadcast_type in (BroadcastType.Column, BroadcastType.Row)
-    and _tile_dims(a.tile_shape) == (32, 16),
-    "32x16 tiles are not supported for eltwise with column/row broadcast",
-)
-
-_only_32x32_or_16x32_tile = (
-    lambda s, a, b: _tile_dims(a.tile_shape) not in ((32, 32), (16, 32)),
-    "Only (32, 32) or (16, 32) tiles are supported for this operation",
-)
-
-# 32x32-only: for ops whose Blackhole fuser generators do not yet plumb tile shape / dst_index
-# (e.g. SubBcastColCustom, whose BH math generator calls the ct_dim-only overload -> 32x32 default).
-_only_32x32_tile = (
-    lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32),
-    "Only (32, 32) tiles are supported for this operation",
-)
-
-_datacopy_only_32x32 = (
-    lambda s, a, b: _tile_dims(a.tile_shape) != (32, 32)
-    and (
-        _has_transpose(s)
-        or s.broadcast_type in (BroadcastType.Column, BroadcastType.Row)
-        or (
-            s.unpack_to_dest == UnpackToDest.Yes
-            and s.broadcast_type != BroadcastType.None_
-        )
-    ),
-    "Only (32, 32) tiles are supported for Datacopy with transpose, col/row broadcast, or unpack-to-dest with broadcast",
-)
-
-_matmul_in0_16x16 = (
-    lambda s, a, b: _tile_dims(a.tile_shape) == (16, 16),
-    "Matmul in0 tile shape (16, 16) is not supported",
-)
-
-_matmul_in1_tile = (
-    lambda s, a, b: _tile_dims(b.tile_shape) not in ((32, 32), (32, 16), (16, 32)),
-    "Matmul in1 tile shape must be (32, 32), (32, 16), or (16, 32)",
-)
-
-_matmul_inner_dims = (
-    lambda s, a, b: a.tile_shape.total_col_dim() != b.tile_shape.total_row_dim(),
-    "Matmul tile inner dimensions must match: in0 cols must equal in1 rows",
-)
-
 _eltwise_checks = [
-    _dest_to_srca_needs_acc,
-    _eltwise_unpacker_reuse,
-    _eltwise_unpacker_default,
-    _unsupported_tile,
-    _eltwise_transpose_tile,
-    _eltwise_bcast_32x16,
+    DEST_TO_SRCA_NEEDS_ACC,
+    *eltwise_unpacker_rules,
+    SUPPORTED_SRC_A_TILE,
+    TRANSPOSE_NEEDS_FULL_TILE,
+    NO_UNPACK_TO_DEST,
+    NO_COL_ROW_BCAST_32X16,
+    NO_BROADCAST_REUSE_DEST,
+    NO_BROADCAST_ACC_TO_DEST,
 ]
-_eltwise_lofi_checks = [*_eltwise_checks, _lofi_only]
+_eltwise_lofi_checks = [*_eltwise_checks, LOFI_ONLY]
+
+_matmul_checks = [
+    NO_REUSE_DEST,
+    MATMUL_OPERAND_DIMS,
+    forced_unpackers("MatmulUnpacker"),
+    MATMUL_INNER_TILE_DIMS,
+]
 
 FPU_MAP = {
     "Elwadd": (
@@ -257,90 +154,86 @@ FPU_MAP = {
     ),
     "Datacopy": (
         lambda s: DatacopyFpu(),
-        [_no_reuse_dest, _datacopy_unpacker, _unsupported_tile, _datacopy_only_32x32],
+        [
+            NO_REUSE_DEST,
+            forced_unpackers("UnpackerA", "UnpackerTilizeA"),
+            SUPPORTED_SRC_A_TILE,
+            DATACOPY_TILE_32X32_ONLY,
+        ],
     ),
     "Matmul": (
         lambda s: MatmulFpu(),
-        [
-            _no_reuse_dest,
-            _matmul_dim_check,
-            _forced_unpacker("MatmulUnpacker"),
-            _matmul_in0_16x16,
-            _matmul_in1_tile,
-            _matmul_inner_dims,
-        ],
+        _matmul_checks,
     ),
     "MatmulNoMop": (
         lambda s: MatmulNoMopFpu(),
-        [
-            _no_reuse_dest,
-            _matmul_dim_check,
-            _forced_unpacker("MatmulUnpacker"),
-            _matmul_in0_16x16,
-            _matmul_in1_tile,
-            _matmul_inner_dims,
-        ],
+        _matmul_checks,
     ),
     "Reduce": (
         lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool),
         [
-            _no_reuse_dest,
-            _reduce_params,
-            _forced_unpacker("ReduceUnpacker"),
-            _unsupported_tile,
+            NO_REUSE_DEST,
+            REDUCE_PARAMS_REQUIRED,
+            forced_unpackers("ReduceUnpacker"),
+            SUPPORTED_SRC_A_TILE,
         ],
     ),
     "ReduceBlockMax": (
         lambda s: ReduceBlockMaxFpu(),
         [
-            _no_reuse_dest,
-            _forced_unpacker("ReduceBlockMaxUnpacker"),
-            _only_32x32_or_16x32_tile,
+            NO_REUSE_DEST,
+            forced_unpackers("ReduceBlockMaxUnpacker"),
+            require_src_a_tiles((32, 32), (16, 32)),
         ],
     ),
     "ReduceBlockMaxRuntime": (
         lambda s: ReduceBlockMaxRuntimeFpu(),
         [
-            _no_reuse_dest,
-            _forced_unpacker("ReduceBlockMaxRuntimeUnpacker"),
-            _only_32x32_or_16x32_tile,
+            NO_REUSE_DEST,
+            forced_unpackers("ReduceBlockMaxRuntimeUnpacker"),
+            require_src_a_tiles((32, 32), (16, 32)),
         ],
     ),
     "SubBcastColCustom": (
         lambda s: SubBcastColCustomFpu(),
         [
-            _no_reuse_dest,
-            _forced_unpacker("SubBcastColCustomUnpacker"),
-            _only_32x32_tile,
+            NO_REUSE_DEST,
+            forced_unpackers("SubBcastColCustomUnpacker"),
+            SUB_BCAST_COL_REQUIRED,
+            require_src_a_tiles((32, 32)),
+        ],
+    ),
+    "TransposeDest": (
+        lambda s: TransposeDestFpu(),
+        [
+            NO_REUSE_DEST,
+            forced_unpackers("TransposeDestUnpacker"),
+            TRANSPOSE_WITHIN_FACE_REQUIRED,
+            require_src_a_tiles((32, 32)),
         ],
     ),
 }
 
-_l1_acc_format = (
-    lambda s, output: s.pack_l1_accumulation == L1Accumulation.Yes
-    and not output.data_format.supports_l1_accumulation(),
-    "Output data format does not support L1 accumulation",
-)
-
 PACKER_MAP = {
-    "Packer": (Packer, [_l1_acc_format]),
+    "Packer": (Packer, [L1_ACC_FORMAT_SUPPORTED]),
+    "PackUntilize": (
+        PackUntilize,
+        [PACK_FULL_TILE_ONLY, PACK_NO_BLOCK_FLOAT, PACK_NO_L1_ACC],
+    ),
 }
 
-_eltwise_dims = lambda a, b: (min(a[0], b[0]), min(a[1], b[1]))
-_matmul_dims = lambda a, b: (a[0], b[1])
-_src_a_dims = lambda a, b: a
-
 OUTPUT_DIMS = {
-    "Elwadd": _eltwise_dims,
-    "Elwmul": _eltwise_dims,
-    "Elwsub": _eltwise_dims,
-    "Datacopy": _src_a_dims,
-    "Matmul": _matmul_dims,
-    "MatmulNoMop": _matmul_dims,
-    "Reduce": _src_a_dims,
-    "ReduceBlockMax": _src_a_dims,
-    "ReduceBlockMaxRuntime": _src_a_dims,
-    "SubBcastColCustom": _src_a_dims,
+    "Elwadd": ELTWISE_DIMS,
+    "Elwmul": ELTWISE_DIMS,
+    "Elwsub": ELTWISE_DIMS,
+    "Datacopy": SRC_A_DIMS,
+    "Matmul": MATMUL_DIMS,
+    "MatmulNoMop": MATMUL_DIMS,
+    "Reduce": SRC_A_DIMS,
+    "ReduceBlockMax": SRC_A_DIMS,
+    "ReduceBlockMaxRuntime": SRC_A_DIMS,
+    "SubBcastColCustom": SRC_A_DIMS,
+    "TransposeDest": SRC_A_DIMS,
 }
 
 UNARY_SFPU_OPS = {
@@ -415,18 +308,18 @@ PackEntrySchema = Union[
 
 
 class OperationSchema(OperationSchemaBase):
+    dest_consuming_operations: ClassVar = frozenset({"TransposeDest"})
+
     math: List[MathSchema] = Field(..., min_length=1)
     pack: List[PackEntrySchema] = Field(..., min_length=1)
     bh_tilize: Tilize = Tilize.No
 
     def _arch_validate(self):
-        unpackers = [
+        unique_unpackers = {
             m.unpacker
             for m in self.math
             if isinstance(m, FpuMathSchema) and m.unpacker is not None
-        ]
-
-        unique_unpackers = set(unpackers)
+        }
 
         if "UnpackerTilizeA" in unique_unpackers:
             self.bh_tilize = Tilize.Yes

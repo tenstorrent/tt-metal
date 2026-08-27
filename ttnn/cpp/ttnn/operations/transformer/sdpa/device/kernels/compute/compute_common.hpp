@@ -249,9 +249,15 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
 }
 
 #ifdef TRISC_MATH
-template <bool legacy_compat = true>
+template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
-    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, (legacy_compat), idst, VectorMode::C);
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_recip_first_column,
+        (legacy_compat, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::C);
 }
 #endif
 
@@ -262,9 +268,9 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     CircularBuffer cb_in(in_cb);
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
+    reconfig_data_format_srca(in_cb);
     copy_tile_to_dst_init_short(in_cb);
     recip_tile_init();
-    reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(in_cb);
 
     cb_in.wait_front(num_tiles);
@@ -300,8 +306,11 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
-    sub_bcast_cols_init_short(in0_cb, in1_cb);
+    // llk_unpack_AB_init (inside sub_bcast_cols_init) validates the live
+    // unpacker configuration.  Reconfigure first: qk_im can be FP32 while the
+    // row maximum is BF16, notably after applying a windowed BF16 mask.
     reconfig_data_format(in0_cb, in1_cb);
+    sub_bcast_cols_init(in0_cb, in1_cb);
 
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
@@ -405,7 +414,7 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
 
     reconfig_data_format(in0_cb, in1_cb);
     pack_reconfig_data_format(out_cb);
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    mul_bcast_cols_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
 
@@ -488,8 +497,8 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     constexpr uint32_t granularity = cols;
 #endif
 
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
     reconfig_data_format(in0_cb, in1_cb);
+    mul_bcast_cols_init(in0_cb, in1_cb);
     pack_reconfig_data_format(in0_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
@@ -532,7 +541,7 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
 #endif
 
     reconfig_data_format(in0_cb, in1_scalar_cb);
-    mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
+    mul_bcast_scalar_init(in0_cb, in1_scalar_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1_scalar.wait_front(1);
     uint32_t in0_index = 0;
@@ -567,7 +576,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 
     reconfig_data_format(in0_cb, in1_cb);
     pack_reconfig_data_format(in0_cb);
-    add_tiles_init(in0_cb, in1_cb);
+    add_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -598,8 +607,8 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
 
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
     reconfig_data_format(in0_cb, in1_cb);
+    mul_bcast_cols_init(in0_cb, in1_cb);
     pack_reconfig_data_format(in0_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
@@ -626,7 +635,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
 
-    mul_tiles_init(in0_cb, in1_cb);
+    mul_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -645,13 +654,13 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 
-template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
+template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void exp_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_exponential_first_column,
-        (SDPA_EXP_APPROX_MODE, scale_bf16),
+        (SDPA_EXP_APPROX_MODE, scale_bf16, is_fp32_dest_acc_en),
         idst,
         VectorMode::C);
 }
@@ -669,7 +678,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE>();
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
@@ -692,10 +701,16 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 }
 
 #ifdef TRISC_MATH
-template <VectorMode vector_mode = VectorMode::C>
+template <VectorMode vector_mode = VectorMode::C, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fused_max_sub_exp_add_tile, idst, vector_mode, scale_bf16);
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_fused_max_sub_exp_add_tile,
+        (is_fp32_dest_acc_en),
+        idst,
+        vector_mode,
+        scale_bf16);
 }
 #endif
 
@@ -853,7 +868,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
     exp_tile_init<false>();
     // recip_tile_first_column<false>() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
     // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
@@ -875,7 +890,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binop_with_scalar,
-            (APPROX, ADD_UNARY, 8 /* ITERATIONS */),
+            (APPROX, ADD_UNARY, 8 /* ITERATIONS */, DST_ACCUM_MODE),
             0 /*dst_index*/,
             VectorMode::C,
             0x3F800000 /*scalar*/));
@@ -890,11 +905,13 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
 }
 
 #ifdef TRISC_MATH
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
-    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+    SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_softplus_first_column,
+        (is_fp32_dest_acc_en),
         idst,
         VectorMode::C,
         beta,
@@ -912,7 +929,7 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
     softplus_tile_init();
     constexpr uint32_t const_1_fp32 = 0x3F800000;
     constexpr uint32_t const_20_fp32 = 0x41A00000;
@@ -951,7 +968,7 @@ __attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb,
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
@@ -1031,7 +1048,7 @@ ALWI void matmul_blocks(
                 cb_mask.wait_front(out_subblock_num_tiles);
                 cb_zero.wait_front(1);
                 reconfig_data_format(zero_cb, mask_cb);
-                add_tiles_init(zero_cb, mask_cb, true);
+                add_init(zero_cb, mask_cb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
@@ -1085,13 +1102,15 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
      * Use matmul on Mx1 input to reduce rows within tile to produce Mx1 output.
      */
 
+    // matmul_block_init validates the live reverse-order unpacker setup
+    // (in1_cb -> SrcA, out_cb -> SrcB), so establish it before init.
+    reconfig_data_format(in1_cb, out_cb);
     matmul_block_init(
         out_cb, in1_cb, 0 /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     constexpr uint32_t output_num_tiles = M * N;
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
-    reconfig_data_format(in1_cb, out_cb);
     pack_reconfig_data_format(out_cb);
     cb_in1.wait_front(N);
     cb_out.wait_front(M);

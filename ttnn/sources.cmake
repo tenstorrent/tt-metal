@@ -43,6 +43,7 @@ set(TTNN_CORE_SRCS
     core/tensor/tensor_ops.cpp
     core/services/h2d_socket_service.cpp
     core/services/d2h_socket_service.cpp
+    core/services/layer_ack_service.cpp
     core/tensor/d2d_stream_service.cpp
     cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
     core/tensor/tensor_utils.cpp
@@ -73,6 +74,9 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.cpp
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/dit_fused_distributed_groupnorm.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/device/dit_fused_distributed_groupnorm_device_operation.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/device/dit_fused_distributed_groupnorm_program_factory.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_common.cpp
@@ -120,6 +124,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/h2d_stream_service.cpp
     cpp/ttnn-nanobind/d2h_stream_service.cpp
     cpp/ttnn-nanobind/counter_channel.cpp
+    cpp/ttnn-nanobind/layer_ack_service.cpp
     cpp/ttnn-nanobind/layer_completion.cpp
     cpp/ttnn-nanobind/mesh_socket.cpp
     cpp/ttnn-nanobind/profiler.cpp
@@ -154,17 +159,22 @@ endif()
 set(TTNN_CORE_JIT_API_HEADERS
     api/ttnn/tensor/layout/layout.hpp
     cpp/ttnn/kernel/compute/bmm_tilize_untilize.cpp
+    cpp/ttnn/kernel/compute/dest_format_helpers.hpp
     cpp/ttnn/kernel/compute/eltwise_copy.cpp
     cpp/ttnn/kernel/compute/moreh_common.hpp
     cpp/ttnn/kernel/compute/tilize.cpp
+    cpp/ttnn/kernel/compute/tilize_metal2.cpp
     cpp/ttnn/kernel/compute/transpose_wh.cpp
+    cpp/ttnn/kernel/dataflow/cb_fill_helpers.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
+    cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp
     cpp/ttnn/kernel/dataflow/generate_mm_scaler.hpp
     cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp
     cpp/ttnn/kernel/dataflow/moreh_common.hpp
     cpp/ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp
     cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp
     cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
+    cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id_metal2.cpp
     cpp/ttnn/kernel/kernel_common_utils.hpp
     cpp/ttnn/kernel/kernel_utils.hpp
 )

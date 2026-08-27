@@ -267,6 +267,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
             case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(buffer);
+            case DataType::INT8: return dispatch_to_concrete.template operator()<int8_t>(buffer);
             case DataType::FP8_E4M3: TT_THROW("FP8_E4M3 single-device to_torch is not supported");
             case DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(buffer);
             case DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(buffer);
@@ -317,6 +318,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
 
     switch (tt_tensor.dtype()) {
         case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tt_tensor);
+        case DataType::INT8: return dispatch_to_concrete.template operator()<int8_t>(tt_tensor);
         case DataType::FP8_E4M3: return dispatch_to_concrete.template operator()<float8_e4m3>(tt_tensor);
         case DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tt_tensor);
         case DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tt_tensor);
@@ -403,6 +405,7 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
             case DataType::UINT8: return to_host_buffer_impl.operator()<uint8_t>(contiguous_py_tensor);
             case DataType::UINT16: return to_host_buffer_impl.operator()<uint16_t>(contiguous_py_tensor);
             case DataType::INT32: return to_host_buffer_impl.operator()<int32_t>(contiguous_py_tensor);
+            case DataType::INT8: return to_host_buffer_impl.operator()<int8_t>(contiguous_py_tensor);
             default: TT_THROW("Unsupported target DataType: {}", target_dtype);
         }
     };
@@ -889,7 +892,7 @@ void pytensor_module(nb::module_& mod) {
                     "tensor.item() requires tensor to have exactly one element, but got {} elements",
                     self.logical_volume());
                 auto dtype = self.dtype();
-                auto get_scalar = [&]() -> std::variant<float, int32_t, uint32_t, uint16_t, uint8_t> {
+                auto get_scalar = [&]() -> std::variant<float, int32_t, uint32_t, uint16_t, uint8_t, int8_t> {
                     nb::gil_scoped_release release;
                     switch (dtype) {
                         case DataType::FLOAT32: return self.to_vector<float>()[0];
@@ -897,6 +900,7 @@ void pytensor_module(nb::module_& mod) {
                         case DataType::BFLOAT8_B:
                         case DataType::BFLOAT4_B: return self.to_vector<float>()[0];
                         case DataType::INT32: return self.to_vector<int32_t>()[0];
+                        case DataType::INT8: return self.to_vector<int8_t>()[0];
                         case DataType::UINT32: return self.to_vector<uint32_t>()[0];
                         case DataType::UINT16: return self.to_vector<uint16_t>()[0];
                         case DataType::UINT8: return self.to_vector<uint8_t>()[0];
@@ -1519,6 +1523,24 @@ void pytensor_module(nb::module_& mod) {
 
             Returns:
                 int: Element size in bytes (e.g., 2 for bfloat16, 4 for float32).
+        )doc")
+        .def(
+            "buffer_unique_id",
+            [](const Tensor& self) -> std::optional<size_t> {
+                if (!is_device_tensor(self) || !self.is_allocated()) {
+                    return std::nullopt;
+                }
+                auto* backing = self.device_storage().get_root_mesh_buffer().get_backing_buffer();
+                if (!backing) {
+                    return std::nullopt;
+                }
+                return backing->unique_id();
+            },
+            R"doc(
+            Get the unique ID of this tensor's root backing device buffer, or
+            None if the tensor is not on device / not allocated. Views return
+            the ID of the buffer that owns their device memory. This ID matches
+            the IDs reported by the unsafe-allocation tracker.
         )doc")
         .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(

@@ -12,13 +12,13 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/debug/dprint.h"
 #include "api/debug/assert.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
-#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
@@ -165,7 +165,8 @@ void kernel_main() {
     uint32_t ring_route_base[num_workers];
     uint32_t ring_payload_base[num_workers];
     uint32_t ring_meta_base[num_workers];
-    uint32_t addr_ready_sem_l1_offset = get_semaphore(addr_ready_semaphore_id);
+    Noc noc;
+    Semaphore<> addr_ready_sem(addr_ready_semaphore_id);
     uint32_t cross_addr_sem_l1_offset = get_semaphore(cross_addr_semaphore_id);
     for (uint32_t s = 0; s < num_workers; s++) {
         ring_route_base[s] = get_write_ptr(ring_route_cb[s]);
@@ -176,7 +177,7 @@ void kernel_main() {
         noc_inline_dw_write(mailbox + 1 * sizeof(uint32_t), ring_payload_base[s]);
         noc_inline_dw_write(mailbox + 2 * sizeof(uint32_t), ring_meta_base[s]);
         noc_async_write_barrier();  // all three addresses must land before addr_ready wakes worker s
-        noc_semaphore_inc(get_noc_addr(ring_noc_x[s], ring_noc_y[s], addr_ready_sem_l1_offset), 1);
+        addr_ready_sem.up(noc, ring_noc_x[s], ring_noc_y[s], 1);
         noc_async_atomic_barrier();
         DPRINT_DISPATCH("Sender writer: addr handshake done ring={} u=({},{})\n", s, ring_noc_x[s], ring_noc_y[s]);
     }
@@ -189,14 +190,13 @@ void kernel_main() {
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
 
 #ifdef FABRIC_2D
-    // Portable FABRIC_2D connections: one RoutingPlaneConnectionManager slot per dispatch-axis
-    // neighbor (each a distinct fabric direction), opened on its correct forwarding routing plane by
-    // the host. Required for multi-hop forwarding along the dispatch axis; the legacy fixed-link
+    // Portable FABRIC_2D connections: one RoutingPlaneConnectionManager slot per physical first-hop
+    // direction needed by the dispatch group, opened on its correct routing plane by the host.
+    // Required for multi-hop forwarding along the dispatch axis; the legacy fixed-link
     // array connection only forwards a single hop (deadlocks on e.g. the 4-device column of a 4x2
     // mesh). FABRIC_1D keeps the legacy array + per-target unicast handshake in the #else branch.
     static_assert(axis != ReplicateGroup::NONE, "FABRIC_2D dispatch requires a concrete cluster_axis");
     uint32_t num_connections = get_arg_val<uint32_t>(rt_args_idx++);
-    uint8_t sem_route_id = PacketHeaderPool::allocate_header_n(static_cast<uint8_t>(num_connections));
     auto fabric_connections = tt::tt_fabric::RoutingPlaneConnectionManager::build_from_args<
         tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION>(rt_args_idx, num_connections);
 
@@ -212,71 +212,45 @@ void kernel_main() {
         dir_to_slot[fabric_connections.get_tag(i)] = static_cast<uint8_t>(i);
     }
 
-    // Bidirectional multicast handshake (hs_ = handshake): each device increments the init/exit
-    // semaphore on every other dispatch-axis device exactly once. The forward slot (+axis: SOUTH for
-    // COLS / EAST for ROWS) covers `hs_pos_range` devices, the backward slot the other `hs_neg_range`;
-    // together exactly dispatch_devices-1 peers.
-    //
-    // LINEAR axis: forward covers the (len-1-pos) devices ahead, backward the pos devices behind, and a
-    // connection is forward iff the neighbor's axis position is larger.
-    // RING/TORUS axis: the wrap closes the loop, so the linear split is wrong — the wrap neighbor sits at
-    // the far axis position and would be misclassified as forward, doubling one side and never covering
-    // the other (init_sem never reaches dispatch_devices-1 -> hang). Instead split the ring into two
-    // disjoint arcs that tile all len-1 peers exactly once regardless of pos: forward covers len/2
-    // devices, backward covers the rest. Classify a connection forward iff its eth direction (tag) is the
-    // +axis direction, not by neighbor position.
-    constexpr bool hs_is_cols = (axis == ReplicateGroup::COLS);
-    constexpr uint32_t hs_axis_pos =
-        hs_is_cols ? (linearized_mesh_coord / mesh_cols) : (linearized_mesh_coord % mesh_cols);
-    constexpr uint32_t hs_axis_len = hs_is_cols ? mesh_rows : mesh_cols;
-    constexpr bool hs_is_ring = has_wrap_around<topology>();
-    // Per-direction arc sizes; forward (pos) + backward (neg) = hs_axis_len - 1 in both branches.
-    //   ring:   forward = len/2, backward = the remaining peers — two disjoint arcs that tile every
-    //           peer exactly once, parity-agnostic (NOT "devices ahead/behind", which is linear-only).
-    //   linear: forward = len-1-pos devices ahead, backward = pos devices behind.
-    constexpr uint32_t hs_pos_range = hs_is_ring ? (hs_axis_len / 2) : ((hs_axis_len - 1) - hs_axis_pos);
-    constexpr uint32_t hs_neg_range = hs_is_ring ? ((hs_axis_len - 1) - (hs_axis_len / 2)) : hs_axis_pos;
-    // +axis eth direction that marks a connection "forward" on a ring (a wrap neighbor's axis position
-    // is on the wrong side, so position can't classify it): SOUTH = increasing row index (dim 0,
-    // mesh_rows); EAST = increasing col index (dim 1, mesh_cols) — per the BH galaxy mesh wiring.
-    constexpr uint8_t hs_fwd_tag =
-        hs_is_cols ? static_cast<uint8_t>(eth_chan_directions::SOUTH) : static_cast<uint8_t>(eth_chan_directions::EAST);
-    constexpr uint8_t HS_START_SKIP_SELF = 1;  // start_distance: deliver from the first hop, skipping self
-
-    uint8_t hs_starts[tt::tt_fabric::RoutingPlaneConnectionManager::MaxConnections];
-    uint8_t hs_ranges[tt::tt_fabric::RoutingPlaneConnectionManager::MaxConnections];
-    for (uint32_t i = 0; i < num_connections; ++i) {
-        const uint16_t nbr_chip = fabric_connections.get(i).dst_dev_id;
-        const uint16_t nbr_mesh = fabric_connections.get(i).dst_mesh_id;
-        // Reverse-map this neighbor's (mesh, chip) to its linearized mesh index to read its axis
-        // position. The neighbor must be one of this device's dispatch targets (host guarantees it).
-        uint32_t nbr_lin = 0;
-        bool nbr_found = false;
-        for (uint32_t d = 0; d < num_devices; ++d) {
-            if (dest_chip_ids[d] == nbr_chip && dest_mesh_ids[d] == nbr_mesh) {
-                nbr_lin = d;
-                nbr_found = true;
-                break;
+    // A logical dispatch axis can turn through the physical Fabric2D graph (for example, an 8x1 group
+    // embedded in a 2x4 LoudBox). A multi-hop multicast range cannot describe that path reliably.
+    // Explicitly unicast one semaphore increment to every peer in this dispatch group; each packet uses
+    // the routing plane selected for its actual first hop and carries its final (mesh, chip) destination.
+    constexpr uint32_t dispatch_group_begin = axis == ReplicateGroup::COLS
+                                                  ? linearized_mesh_coord % mesh_cols
+                                                  : (linearized_mesh_coord / mesh_cols) * mesh_cols;
+    constexpr uint32_t dispatch_group_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
+    auto dispatch_2d_unicast_handshake = [&](uint64_t sem_addr, bool flush) {
+        for (uint32_t peer = 0; peer < dispatch_devices; ++peer) {
+            const uint32_t dst_chip_index = dispatch_group_begin + peer * dispatch_group_stride;
+            if (dst_chip_index == linearized_mesh_coord) {
+                continue;
             }
-        }
-        ASSERT(nbr_found);  // a connection neighbor missing from dest_chip_ids => mis-sized/garbled rt args
-        // nbr_axis_pos (and the reverse-map above) feed only the linear classifier; unused on a ring.
-        [[maybe_unused]] const uint32_t nbr_axis_pos = hs_is_cols ? (nbr_lin / mesh_cols) : (nbr_lin % mesh_cols);
-        // Ring: classify by the connection's eth direction (the wrap neighbor's axis position is on the
-        // wrong side). Linear: classify by neighbor axis position.
-        const bool is_forward =
-            hs_is_ring ? (fabric_connections.get(i).tag == hs_fwd_tag) : (nbr_axis_pos > hs_axis_pos);
-        hs_starts[i] = HS_START_SKIP_SELF;
-        hs_ranges[i] = is_forward ? static_cast<uint8_t>(hs_pos_range) : static_cast<uint8_t>(hs_neg_range);
-    }
 
-    // flush=true holds the receiver EDM's atomic-inc until this sender's prior fabric writes to that chip
-    // commit (needed at exit to order the inc behind payload/metadata). init passes flush=false: it is the
-    // first fabric traffic, so there are no prior writes to order against — matching the FABRIC_1D path.
-    auto dispatch_2d_mcast_handshake = [&](uint64_t sem_addr, bool flush) {
-        const auto cmd = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_addr, 1, flush};
-        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            fabric_connections, sem_route_id, cmd, hs_starts, hs_ranges);
+            ccl_routing_utils::line_unicast_route_info_t route_info{};
+            route_info.dst_chip_id = dest_chip_ids[dst_chip_index];
+            route_info.dst_mesh_id = dest_mesh_ids[dst_chip_index];
+            const uint32_t fabric_route =
+                static_cast<uint32_t>(get_next_hop_router_direction(route_info.dst_mesh_id, route_info.dst_chip_id));
+            ASSERT(fabric_route < static_cast<uint32_t>(eth_chan_directions::COUNT));
+            if (fabric_route >= static_cast<uint32_t>(eth_chan_directions::COUNT)) {
+                return;
+            }
+            const uint8_t connection_slot = dir_to_slot[fabric_route];
+            ASSERT(connection_slot != DIR_TO_SLOT_EMPTY);
+            if (connection_slot == DIR_TO_SLOT_EMPTY) {
+                return;
+            }
+
+            ccl_routing_utils::fabric_set_line_unicast_route(
+                pkt_hdr_for_route_helper(unicast_packet_header), route_info);
+            unicast_packet_header->to_noc_unicast_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_addr, 1, flush});
+            auto& sender = fabric_connections.get(connection_slot).sender;
+            sender.wait_for_empty_write_slot();
+            sender.send_payload_flush_blocking_from_address(
+                reinterpret_cast<uint32_t>(unicast_packet_header), sizeof(PACKET_HEADER_TYPE));
+        }
     };
 #else
     constexpr std::array<bool, 4> directions = DIRECTIONS;
@@ -290,7 +264,7 @@ void kernel_main() {
     // Init semaphore exchange
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
 #ifdef FABRIC_2D
-    dispatch_2d_mcast_handshake(init_noc_semaphore_addr, /*flush=*/false);
+    dispatch_2d_unicast_handshake(init_noc_semaphore_addr, /*flush=*/false);
 #else
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
@@ -433,8 +407,8 @@ void kernel_main() {
     // not be observed before our prior fabric writes (payload + metadata) to that chip have landed,
     // or a peer could see sem-reached-threshold before the data is in DRAM. The two paths enforce
     // this differently:
-    //   - FABRIC_2D: the noc_async_write_barrier() above drains local writes, and the 2D multicast
-    //     handshake is issued with flush=true so the receiver EDM also holds the atomic-inc until our
+    //   - FABRIC_2D: the noc_async_write_barrier() above drains local writes, and each 2D unicast
+    //     handshake packet is issued with flush=true so the receiver EDM holds the atomic-inc until our
     //     prior fabric writes commit (init uses flush=false: no prior writes to order against).
     //   - FABRIC_1D (#else): send_init_semaphore_to_configured_targets is called with /*flush=*/true
     //     so the receiver EDM holds the atomic-inc until our prior writes commit (the init handshake
@@ -442,7 +416,7 @@ void kernel_main() {
     {
         const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
 #ifdef FABRIC_2D
-        dispatch_2d_mcast_handshake(exit_noc_semaphore_addr, /*flush=*/true);
+        dispatch_2d_unicast_handshake(exit_noc_semaphore_addr, /*flush=*/true);
 #else
         send_init_semaphore_to_configured_targets<
             linearized_mesh_coord,
@@ -469,12 +443,9 @@ void kernel_main() {
         noc_semaphore_set(exit_sem_ptr, 0);
     }
 
-    // The atomic-inc handshake helpers (both the FABRIC_2D multicast and the FABRIC_1D per-target
-    // unicast) send via send_payload_flush_non_blocking_from_address — that confirms the write
-    // departed the worker's NIU but not that the bytes landed in the EDM's L1 inbox. If we exit and
-    // close the fabric connections while a send is mid-flight, the EDM might process its slot
-    // bookkeeping before the bytes arrive. A full barrier ensures all writes (and atomics,
-    // defensively) have completed before we close.
+    // FABRIC_2D's FLUSH_BLOCKING handshake sends drain the source before packet-header reuse, but do
+    // not prove arrival in the EDM inbox; FABRIC_1D's per-target helper sends are non-blocking. Keep a
+    // full barrier before either connection path closes so every prior write and atomic has arrived.
     noc_async_full_barrier();
 
 #ifdef FABRIC_2D

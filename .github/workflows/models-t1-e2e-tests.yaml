@@ -27,6 +27,14 @@ on:
           - flux.1-dev
           - wan-2.2-t2v
           - wan-2.2-i2v
+          - ltx-2.3-pro-t2v
+          - ltx-2.3-fast-t2v
+          - ltx-2.3-pro-i2v
+          - ltx-2.3-fast-i2v
+          - deepseek-v3-tg
+          - deepseek-v3-b1
+          - z-image-turbo
+          - resnet50
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -44,7 +52,11 @@ on:
           - "bh_p300 (P300)"
           - "bh_quietbox_2 (BH QB2)"
           - "bh_galaxy (BH Galaxy)"
-          - "bh_sc4-mgd (BH Supercluster 4 / MGD)"
+          - "bh_sc1 (BH Single Galaxy)"
+          - "bh_sc4 (BH Supercluster 4)"
+          # Dispatch-only: excluded from scheduled ALL_SKUS so cron runs don't allocate
+          # scarce SC16 hardware. Enabled in package-and-release via release-build-test-publish.
+          - "bh_sc16 (BH Supercluster 16)"
       platform:
         required: false
         type: choice
@@ -93,7 +105,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_sc4-mgd"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_sc1,bh_sc4"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"
@@ -111,6 +123,7 @@ jobs:
           echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -124,8 +137,9 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   models-e2e-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
-    # id-token: write is required by the nested exabox multihost job (ttop OIDC). Job-level
-    # permissions replace inherited defaults, so restate the reads the container legs need too.
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
+    # id-token: write is required by the nested exabox multihost job (multihost-ci runner chart).
+    # Job-level permissions replace inherited defaults, so restate the reads the container legs need too.
     permissions:
       contents: read
       packages: read

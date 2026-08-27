@@ -87,6 +87,14 @@ class MeshConfig:
         if config.tp > tp_dim_size:
             raise ValueError(f"{mode.value}: TP({config.tp}) > mesh_{self.tp_axis}_size({tp_dim_size})")
 
+        # EP>1 makes the expert dimension sharded across ep_axis, and ttnn.moe_routing_remap
+        # requires expert_parallel_size to equal that axis extent exactly. Catch it here rather
+        # than as a device-side TT_FATAL mid-forward. EP=1 is unconstrained: prefill runs EP=1
+        # on multi-row meshes and never reaches the remap.
+        ep_dim_size = self.mesh_shape[self.ep_axis]
+        if config.ep > 1 and config.ep != ep_dim_size:
+            raise ValueError(f"{mode.value}: EP({config.ep}) != mesh_{self.ep_axis}_size({ep_dim_size})")
+
     def get_config(self, mode: Mode) -> ModeConfig:
         """Type-safe mode config access"""
         return self.decode if mode == Mode.DECODE else self.prefill

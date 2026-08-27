@@ -368,6 +368,7 @@ MoEGPTMeshWorkloadFactory::create_at(
     }
 
     std::vector<uint32_t> runtime_args;
+    runtime_args.reserve(13);
     runtime_args.push_back(0);
     runtime_args.push_back(0);
     for (uint32_t i = 0; i < 4; ++i) {
@@ -384,6 +385,7 @@ MoEGPTMeshWorkloadFactory::create_at(
     runtime_args.push_back(output_base_l1_addr);   // [12] output_base_l1_addr
 
     std::vector<uint32_t> vchannels;
+    vchannels.reserve(dram_bank2core_coords.size());
     uint32_t dram_bank = 0;
     for (auto core : dram_bank2core_coords) {
         uint32_t vchannel = dram_bank & 0x3;
@@ -486,9 +488,11 @@ MoEGPTMeshWorkloadFactory::create_at(
         }
 
         // The dispatch drain core holds the HEIGHT_SHARDED indices/scores shard from
-        // all_to_all_dispatch_metadata.  Because dispatch cores cannot host user kernels,
-        // we cannot use CB aliasing here.  Instead, both tilize cores do a single bulk NOC
-        // read from the dispatch drain core at kernel start.
+        // all_to_all_dispatch_metadata -- "dispatch" names that op, not a fast-dispatch core.
+        // The shard is an ordinary L1 allocation, so it always sits on a compute core, but its
+        // coordinate is whichever core that op was given and need not be one of the tilize
+        // cores picked below.  So both tilize cores do a single bulk NOC read from it at kernel
+        // start rather than aliasing a CB onto it.
         const CoreCoord dispatch_drain_logical =
             expert_indices.buffer()->shard_spec().tensor_shard_spec.grid.ranges().begin()->start_coord;
 

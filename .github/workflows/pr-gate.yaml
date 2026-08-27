@@ -142,8 +142,11 @@ jobs:
       build-ttnn-import-artifact: true
       publish-artifact: false
       publish-package: true
-      tracy: true
+      tracy: false
       skip-tt-train: false
+      # CI-internal only: consumers of these packages all run in docker images that
+      # already stage SFPI, so skip the redundant download. Never set for release builds.
+      use-system-sfpi: true
       # Treeless clone: skip the trees/blobs that dominate the tag fetch, but keep commits + tags
       # so git describe still yields a real version. Depth stays at the default.
       checkout-filter: tree:0
@@ -161,6 +164,7 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
+      run-clang-tidy: ${{ steps.find-changes.outputs.run-clang-tidy }}
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
       cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
       tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
@@ -186,7 +190,7 @@ jobs:
         uses: ./.github/actions/find-changed-files
 
   runtime-smoke-tests:
-    needs: [asan-build, find-changed-files]
+    needs: [asan-build, build-docker-images, find-changed-files]
     if: ${{
       github.ref_name == 'main' ||
       needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -197,6 +201,10 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
+      # github_hosted_cpu runs on ubuntu-latest (external runner) — no harbor access.
+      # Use raw GHCR tag from build-docker-images, not the harbor-prefixed ref from
+      # asan-build (same as build-docs below).
+      cpu-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-metalium
       test-category: pr_gate
@@ -294,12 +302,13 @@ jobs:
 
   # Full clang-tidy scan (same checks enforced at merge gate).
   # force-scan=true → single full-scan job (avoids 4-way per-target split with high setup overhead).
-  # Gated on any-code-changed so docs/workflow-only PRs are skipped entirely.
+  # Gated on run-clang-tidy so docs-only PRs and workflow-only PRs that cannot
+  # affect the scan (see find-changed-files.sh's explicit key-workflow list) are skipped entirely.
   code-analysis:
     needs: [build-docker-images, find-changed-files]
     if: >-
       ${{
-        needs.find-changed-files.outputs.any-code-changed == 'true' &&
+        needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
         ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group')
       }}
     uses: ./.github/workflows/code-analysis.yaml

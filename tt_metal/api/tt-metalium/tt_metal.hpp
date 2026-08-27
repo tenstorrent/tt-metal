@@ -20,8 +20,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/profiler_optional_metadata.hpp>
-#include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in SetRuntimeArgs/GetRuntimeArgs default parameter).
 #include <umd/device/types/core_coordinates.hpp>
@@ -162,8 +160,10 @@ void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& 
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
+[[deprecated("Use distributed::EnqueueMeshWorkload instead. detail::LaunchProgram will be removed after 2026-09-21.")]]
 void LaunchProgram(
     IDevice* device, Program& program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
+[[deprecated("Use distributed::EnqueueMeshWorkload instead. detail::LaunchProgram will be removed after 2026-09-21.")]]
 void LaunchProgram(
     IDevice* device,
     const std::shared_ptr<Program>& program,
@@ -195,6 +195,9 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
  * a user wants to compile a program with Slow Dispatch Force Enabled (advanced feature, currently used internally to
  * launch Fast Dispatch Firmware and in the Device Performance Profiler)           | bool      | | No |
  */
+[[deprecated(
+    "Program is compiled automatically by the runtime infrastructure; this API is unnecessary. "
+    "CompileProgram will be removed after 2026-09-21.")]]
 void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
@@ -233,20 +236,6 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
  * |                          | no       |
  */
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op = false);
-
-/**
- * Decode per device program ID to get encoded values (base program id, device id, and a flag indicating whether
- * it's an op run entirely on host).
- *
- * Return value: tuple<uint32_t, uint32_t, bool>
- *
- * | Argument             | Description                                                                         |  Data
- * type            | Valid range              | required |
- * |----------------------|-------------------------------------------------------------------------------------|-----------------------|--------------------------|----------|
- * | device_program_id    | Encoded device specific id used by the performance profiler  |
- * uint32_t        | 0 - 2^32 - 1             | yes      |
- */
-DeviceProgramId DecodePerDeviceProgramID(uint32_t device_program_id);
 
 // clang-format off
 /**

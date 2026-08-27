@@ -57,7 +57,8 @@ void kernel_main() {
     constexpr uint32_t work_reg = 1;
 
     init_sfpu(cb_input, cb_output);
-    binary_op_init_common(cb_input, cb_input, cb_output);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
 
     // =========================================================================
     // Phase 1: Square and accumulate all input tiles into one FP32 tile

@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <tuple>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -16,22 +17,23 @@
 
 namespace ttnn::operations::ccl {
 
-// The program-cache hash is computed automatically by reflecting over the members
-// below and hashing each one. This is safe only because every field here is a
-// stable, structural value.
-//
-// To add a volatile field later (e.g. a semaphore or raw pointer), do not rely
-// on this auto-hashing -- define attribute_names + attribute_values() to list
-// exactly what to hash.
+// The program-cache hash and the profiler's op metadata both come from attribute_names + attribute_values(), every
+// struct field must be added to both lists. Miss one and two different configs will share a cached program.
+// NOTE: auto-reflection can't be used since it value-initializes the struct, and TensorSpec has no default ctor.
 struct AllGatherParams {
-    int32_t dim = 0;
-    MemoryConfig output_mem_config;
+    // Gather dim: counted from the end of the shape, so always negative. A padded shape can outrank the
+    // logical one (a tiled rank-<2 tensor is promoted to rank 2, extra dims prepended), so this is the only
+    // format valid against both. Use Shape::get_normalized_index() where a non-negative axis is needed.
+    int32_t dim_from_end = -1;
+
+    tt::tt_metal::TensorSpec output_spec;
     std::optional<uint32_t> cluster_axis;
 
     // Fabric setup info
     tt::tt_fabric::FabricConfig fabric_config{};
     // Per-axis info (an inactive axis has num_devices = 1, num_links = 0, and Linear topology)
     std::array<tt::tt_fabric::Topology, 2> axis_topology{};
+    std::array<bool, 2> axis_is_straight{};  // is the axis wired as a straight physical line
     std::array<uint32_t, 2> axis_num_devices{};
     std::array<uint32_t, 2> axis_num_links{};
     uint32_t num_devices = 0;  // number of devices participating in the collective
@@ -40,6 +42,35 @@ struct AllGatherParams {
     // Worker-core selection.
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
     std::optional<CoreRangeSet> sub_core_grid;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "dim_from_end",
+        "output_spec",
+        "cluster_axis",
+        "fabric_config",
+        "axis_topology",
+        "axis_is_straight",
+        "axis_num_devices",
+        "axis_num_links",
+        "num_devices",
+        "packet_size",
+        "subdevice_id",
+        "sub_core_grid");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            dim_from_end,
+            output_spec,
+            cluster_axis,
+            fabric_config,
+            axis_topology,
+            axis_is_straight,
+            axis_num_devices,
+            axis_num_links,
+            num_devices,
+            packet_size,
+            subdevice_id,
+            sub_core_grid);
+    }
 
     // "true 2D" = a 2D fabric config with both axes active
     bool is_true_2d() const {

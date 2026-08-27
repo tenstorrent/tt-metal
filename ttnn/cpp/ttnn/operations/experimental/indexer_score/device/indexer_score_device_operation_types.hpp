@@ -37,8 +37,9 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
 using ttnn::prim::BlockCyclicLayout;
 
 // Ring-fused indexer: the op subsumes the SP all-gather. Instead of the caller pre-gathering K, it hands the
-// per-chip LOCAL K shard (tensor_args.k_local) as the all-gather INPUT and the full [B,1,T,D] persistent buffer
-// (tensor_args.k) as the all-gather OUTPUT; the fused program factory co-schedules the ring_attention all-gather
+// per-chip LOCAL K shard (tensor_args.k_local) as the all-gather INPUT and the full persistent buffer
+// (tensor_args.k) as the all-gather OUTPUT. In indexed mode k_local may be a multi-slot ND-sharded cache and k
+// is batch-1 scratch; only cache_batch_idx is gathered. The fused program factory co-schedules the all-gather
 // (the only Linear+fuse-capable AG) into the SAME program as the indexer compute, wiring a producer->consumer
 // semaphore handshake so the reader starts scoring once the gather lands. Scalar AG config only (tensors live in
 // tensor_args). All fields and semaphore addresses are hashed because the descriptor embeds them in AG worker
@@ -114,9 +115,9 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     const Tensor& q;
-    const Tensor& k;  // fused: the [B,1,T,D] persistent all-gather OUTPUT buffer the reader scores against
+    const Tensor& k;  // fused: persistent all-gather OUTPUT; batch 1 in indexed mode
     const Tensor& weights;
-    // Fused only: this device's per-chip LOCAL K shard [B,1,sll,D] = the all-gather INPUT. nullopt unfused.
+    // Fused only: per-chip LOCAL K [B,1,sll,D], interleaved or ND-sharded. nullopt unfused.
     std::optional<Tensor> k_local{std::nullopt};
 };
 

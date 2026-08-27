@@ -12,13 +12,13 @@ export TT_METAL_HOME=/path/to/tt-metal
 cd $TT_METAL_HOME
 
 # Full light tier (snapshot + tt-smi -r + eth_link_up gtest, ~75s)
-./tools/scaleout/exabox/healt_check_test_suite/run_diag.sh light
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh light
 
 # Snapshot-only smoke (fastest iteration)
-./tools/scaleout/exabox/healt_check_test_suite/run_diag.sh light --skip-reset --skip-tests
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh light --skip-reset --skip-tests
 
 # Offline / dev iteration against a stored snapshot
-./tools/scaleout/exabox/healt_check_test_suite/run_diag.sh light --dry-run \
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh light --dry-run \
     --input-snapshot snap.json --output /tmp/diag_report.json
 ```
 
@@ -187,8 +187,27 @@ ninja -C build_Release unit_tests_deployment
 ## Repo layout
 
 ```
-tools/scaleout/exabox/healt_check_test_suite/
-├── run_diag.sh        # bash dispatcher (sets TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH, execs runner)
-├── diag_runner.py     # Python orchestrator (this is where all check logic lives)
-└── HEALTH_CHECK.md     # this file
+tools/scaleout/exabox/health_check_test_suite/
+├── run_diag.sh         # bash dispatcher (sets TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH, execs runner)
+├── diag_runner.py      # Python orchestrator (all check logic lives here). Also exposes run_diag() as a
+│                       #   programmatic entry point returning (exit_code, report_dict).
+├── HEALTH_CHECK.md     # this file
+└── test_infrastructure/  # scheduled/CI harness around the diag suite
+    ├── run_health_check.py              # entrypoint: run diag as a subprocess, then JIRA + CSV + SFTP
+    ├── analyze_health_check_results.py  # diag_report.json -> runs/checks CSVs (Superset)
+    ├── requirements.txt                 # runtime deps (requests, paramiko, prometheus_client)
+    └── utils/                           # supporting modules
+        ├── diag_execution.py            # invoke diag_runner.py as a subprocess (timeout/kill aware)
+        ├── system_info.py               # tt-smi / kmd / fw version discovery
+        ├── telemetry.py                 # tt-telemetry (Prometheus) collection + formatting
+        ├── report.py                    # post-reset normalization + actionable-failure verdict
+        ├── jira_client.py               # JIRA ticket create / update / close / attach
+        ├── sftp_upload.py               # CSV upload to the Data-team SFTP endpoint
+        ├── secrets_loader.py            # JIRA / SFTP credential-file parsing
+        └── health_check_models.py       # Pydantic schema for the CSV output
 ```
+
+The `test_infrastructure/` harness previously lived in the `exabox-infra` repo and
+spun up a nested Docker container to run the diag suite. Now that the harness ships
+in the same image as the diag suite, `run_health_check.py` invokes `diag_runner.py`
+directly as a subprocess (see `diag_execution.py`) instead of via docker-in-docker.

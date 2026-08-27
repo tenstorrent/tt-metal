@@ -222,6 +222,7 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         // remote coordinates are a complete no-op here.
         const auto& view = mesh_device->get_view();
         std::vector<distributed::MeshCoordinate> local_coords;
+        local_coords.reserve(mesh_device->shape().mesh_size());
         distributed::MeshCoordinateRangeSet local_range;
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
             if (view.impl().is_local(coord)) {

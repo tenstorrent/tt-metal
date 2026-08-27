@@ -9,6 +9,7 @@
 #include <numeric>
 #include <set>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <tt-logger/tt-logger.hpp>
@@ -30,6 +31,7 @@
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "distributed/mesh_workload_impl.hpp"
+#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <variant>
@@ -148,8 +150,11 @@ using ComputeEngineMaskMap = std::unordered_map<const KernelSpec*, ComputeEngine
 //   Gen2: bits 0-7 = DM processors, bits 8-15 = Tensix compute engines
 using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, uint16_t>;
 
-// DFB name -> DFB ID map (for unpack_to_dest_mode indexing)
+// DFB name -> program-wide DFB ID map (host-side identity: aliasing, borrowed bindings)
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
+// DFB name -> device slot map. The slot is what a kernel sees (the dfb::<name> accessor value) and
+// what indexes the per-core config table, so it is what device-facing lowering must use.
+using DFBNameToSlotMap = std::unordered_map<DFBSpecName, uint32_t>;
 using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
 
 // ============================================================================
@@ -527,6 +532,55 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 binding.tensor_parameter_name);
 
             collected.tensor_parameter_users[binding.tensor_parameter_name].push_back(&kernel);
+        }
+
+        std::unordered_set<std::string> reserved_type_aliases;
+        reserved_type_aliases.reserve(accessor_names.size());
+        for (const auto& binding_name : accessor_names) {
+            reserved_type_aliases.insert(binding_name + "_t");
+        }
+
+        std::unordered_set<std::string> sequence_names;
+        for (const auto& sequence : kernel.advanced_options.tensor_binding_sequences) {
+            TT_FATAL(
+                IsValidCppIdentifier(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                sequence.sequence_name);
+            TT_FATAL(
+                !accessor_names.contains(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' collides with a TensorBinding accessor_name",
+                kernel.unique_id,
+                sequence.sequence_name);
+            TT_FATAL(
+                !reserved_type_aliases.contains(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' collides with generated type alias '{}'",
+                kernel.unique_id,
+                sequence.sequence_name,
+                sequence.sequence_name);
+            auto [sit, sinserted] = sequence_names.insert(sequence.sequence_name);
+            TT_FATAL(
+                sinserted,
+                "Kernel '{}' has duplicate tensor binding sequence_name '{}'",
+                kernel.unique_id,
+                sequence.sequence_name);
+
+            std::unordered_set<std::string> member_names;
+            for (const auto& member : sequence.members) {
+                TT_FATAL(
+                    accessor_names.contains(member),
+                    "Kernel '{}' tensor binding sequence '{}' references unknown tensor accessor_name '{}'",
+                    kernel.unique_id,
+                    sequence.sequence_name,
+                    member);
+                auto [mit, minserted] = member_names.insert(member);
+                TT_FATAL(
+                    minserted,
+                    "Kernel '{}' tensor binding sequence '{}' has duplicate member '{}'",
+                    kernel.unique_id,
+                    sequence.sequence_name,
+                    member);
+            }
         }
     }
 
@@ -1164,37 +1218,48 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate DataflowBufferSpecs
     //////////////////////////////////
 
-    // Validate the total number of DFBs in the ProgramSpec:
-    //  - For Gen1, there's a hard limit (hal::get_arch_num_circular_buffers())
-    //  - For Gen2, the true DFB limit is configuration-dependent, based on the availability
-    //    of tile counters. This won't actually get checked until the Program is enqueued :(
-    //  - However, the Gen1 check actually DOES apply to Gen2 as a strict upper limit.
-    //    In practice, we'll run out of tile counters long before we hit the HAL CB limit,
-    //    but then runtime software sizes some buffers based on this.
-    //
-    // For Quasar, this is a partial validation only!
-    // The true number of available DFBs depends on the tile counters, which are consumed in
-    // a DFB configuration-dependent way.
-    // Unfortunately, those checks won't trigger until the DFB code runs... not until the
-    // Program is actually enqueued :(
+    // Device slots are allocated per core (two DFBs may share a slot iff their node sets are
+    // disjoint), so the arch limit is on how many DFBs land on any single node — not on
+    // ProgramSpec::dataflow_buffers.size(). Gen1 lowers each slot to a circular buffer; Gen2
+    // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on
+    // Gen2 is still checked later at enqueue.
     {
-        const uint32_t max_dfbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
-        if (spec.dataflow_buffers.size() > max_dfbs) {
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const uint32_t max_slots_per_core = hal.has_tile_counter_registers()
+                                                ? static_cast<uint32_t>(::dfb::NUM_DFBS)
+                                                : tt::tt_metal::hal::get_arch_num_circular_buffers();
+
+        std::unordered_map<NodeCoord, uint32_t> dfbs_per_node;
+        for (const auto& dfb : spec.dataflow_buffers) {
+            for (const NodeCoord& node : corerange_to_cores(collected.dfb_node_set.at(dfb.unique_id))) {
+                dfbs_per_node[node]++;
+            }
+        }
+
+        for (const auto& [node, count] : dfbs_per_node) {
+            if (count <= max_slots_per_core) {
+                continue;
+            }
             if (is_gen1_arch()) {
                 TT_THROW(
-                    "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The target "
-                    "architecture supports up to {}.",
+                    "ProgramSpec '{}' places {} DataflowBufferSpecs on node ({}, {}), but Gen1 "
+                    "supports at most {} device slots per core (disjoint cores may reuse slots).",
                     spec.name,
-                    spec.dataflow_buffers.size(),
-                    max_dfbs);
+                    count,
+                    node.x,
+                    node.y,
+                    max_slots_per_core);
             } else if (is_gen2_arch()) {
                 TT_THROW(
-                    "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The permitted "
-                    "number of DFBs for the target architecture is configuration-dependent, "
-                    "but {} is a hard upper limit.",
+                    "ProgramSpec '{}' places {} DataflowBufferSpecs on node ({}, {}), but the "
+                    "target architecture supports at most {} device slots per core. The true "
+                    "limit is also configuration-dependent (tile counters) and is checked at "
+                    "enqueue.",
                     spec.name,
-                    spec.dataflow_buffers.size(),
-                    max_dfbs);
+                    count,
+                    node.x,
+                    node.y,
+                    max_slots_per_core);
             } else {
                 TT_FATAL(false, "Unknown architecture");
             }
@@ -2076,6 +2141,7 @@ std::vector<KernelCouplingGroup> BuildDMKernelCouplingGroups(
     // Iterate dm_kernels in given order to preserve a deterministic per-class member order.
     std::unordered_map<size_t, size_t> root_to_group_idx;
     std::vector<KernelCouplingGroup> groups;
+    groups.reserve(dm_kernels.size());
     for (size_t i = 0; i < dm_kernels.size(); ++i) {
         const size_t r = find(i);
         auto [it, inserted] = root_to_group_idx.try_emplace(r, groups.size());
@@ -2115,6 +2181,7 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
     // num_threads uniformity is enforced upstream, so same-role compute kernels get identical masks
     // without any coupling-group machinery).
     std::vector<const KernelSpec*> dm_kernels;
+    dm_kernels.reserve(spec.kernels.size());
     for (const KernelSpec& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
             dm_kernels.push_back(&kernel);
@@ -2371,8 +2438,8 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 //    boundaries by walking handles. See KernelCrtaLayout in jit_build_settings.hpp.
 struct TensorBindingsForKernel {
     std::vector<TensorBindingHandle> handles;
-    std::vector<uint32_t> cta_words;  // appended after any pre-existing positional CTAs
-                                      // (currently, this is the only Metal 2.0 use of positional CTAs)
+    // Binding-only CTA payload; appended after the user CTA-vararg positional prefix.
+    std::vector<uint32_t> cta_words;
     KernelCrtaLayout crta_layout;
 };
 
@@ -2392,11 +2459,14 @@ struct TensorBindingsForKernel {
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
-    size_t base_named_crta_count) {
+    size_t base_named_crta_count,
+    uint32_t base_cta_offset) {
     TensorBindingsForKernel out;
     out.handles.reserve(kernel.tensor_bindings.size());
 
-    uint32_t cta_word_offset = 0;
+    // Absolute word index into the unified positional CTA buffer:
+    //   [ CTA varargs (base_cta_offset words) | TensorBinding payloads ... ]
+    uint32_t cta_word_offset = base_cta_offset;
     size_t crta_word_index = base_named_crta_count;
     uint32_t binding_section_words = 0;
     for (const auto& binding : kernel.tensor_bindings) {
@@ -2462,20 +2532,21 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     return out;
 }
 
-// Create map of accessor name -> logical DFB id
+// Create map of local accessor name -> DFB device slot. This is the value baked into the kernel's
+// dfb::<name> accessor, so it must be the device slot rather than the program-wide id.
 tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
-    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
-        const uint32_t id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
+        const uint32_t slot = dfb_name_to_slot.at(dfb_binding.dfb_spec_name);
         TT_FATAL(
-            id <= std::numeric_limits<uint16_t>::max(),
-            "Kernel '{}' DFB '{}' logical id {} does not fit uint16_t",
+            slot <= std::numeric_limits<uint16_t>::max(),
+            "Kernel '{}' DFB '{}' device slot {} does not fit uint16_t",
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
-            id);
-        out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(id));
+            slot);
+        out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(slot));
     }
     return out;
 }
@@ -2598,16 +2669,16 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
 // MakeKernelSource: Create a KernelSource from a KernelSpec
 // ----------------------------------------------------------------------------
 
-KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
+KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_id) {
     return std::visit(
         [&](const auto& src) -> KernelSource {
             using T = std::decay_t<decltype(src)>;
             if constexpr (std::is_same_v<T, std::filesystem::path>) {
                 TT_FATAL(!src.empty(), "KernelSpec '{}' has empty source file path", kernel_spec.unique_id);
-                return KernelSource(src.string(), KernelSource::SourceType::FILE_PATH);
+                return KernelSource::from_path(context_id, src);
             } else if constexpr (std::is_same_v<T, KernelSpec::SourceCode>) {
                 TT_FATAL(!src.code.empty(), "KernelSpec '{}' has empty inline source code", kernel_spec.unique_id);
-                return KernelSource(src.code, KernelSource::SourceType::SOURCE_CODE);
+                return KernelSource::from_source(src.code);
             } else {
                 static_assert(!sizeof(T*), "Unhandled KernelSpec::source alternative");
             }
@@ -2671,22 +2742,24 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const ComputeUnpackModes& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const ComputeUnpackModes& user_modes, const DFBNameToSlotMap& dfb_name_to_slot) {
     const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
+        // Indexed by device slot: this vector is consumed by the HLK alongside the CB-indexed data
+        // formats, which set_dfb_data_fmt_and_tile also keys by slot.
+        uint32_t dfb_slot = dfb_name_to_slot.at(dfb_name);
         // This TT_FATAL is unreachable, provided that validation wasn't skipped.
         TT_FATAL(
-            dfb_id < max_cbs,
-            "Internal Error: DFB '{}' has id {} which exceeds the JIT data-format "
+            dfb_slot < max_cbs,
+            "Internal Error: DFB '{}' has device slot {} which exceeds the JIT data-format "
             "slot count ({}); compute kernels cannot reference DFBs past this limit",
             dfb_name,
-            dfb_id,
+            dfb_slot,
             max_cbs);
         // Public UnpackMode -> internal UnpackToDestMode. UnpackToDest keeps full FP32 by
         // unpacking straight to Dest; UnpackToSrc is the SrcA/B path (the internal "Default").
-        unpack_modes[dfb_id] =
+        unpack_modes[dfb_slot] =
             (mode == UnpackMode::UnpackToDest) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
     }
     return unpack_modes;
@@ -2696,7 +2769,7 @@ std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
 // MakeGen1ComputeConfig: Create a ComputeConfig (WH/BH) from a KernelSpec
 // ----------------------------------------------------------------------------
 
-ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
 
@@ -2706,7 +2779,7 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         "ComputeGen1Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen1 = std::get<ComputeGen1Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen1.unpack_modes, dfb_name_to_id);
+    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen1.unpack_modes, dfb_name_to_slot);
 
     return ComputeConfig{
         .math_fidelity = gen1.fpu_math_fidelity,
@@ -2746,7 +2819,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
 // ----------------------------------------------------------------------------
 
 experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
-    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
     TT_FATAL(
@@ -2755,7 +2828,7 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         "ComputeGen2Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen2 = std::get<ComputeGen2Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_id);
+    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_slot);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
@@ -2905,7 +2978,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     //
     // TensorBindings ride two existing kernel-arg channels:
     //   - Static layout (rank, shape, bank coords, ...) flows through the kernel's positional
-    //     CTA buffer. (Empty in Metal 2.0 today; the binding payload is its first user.)
+    //     CTA buffer, after any user CTA-vararg prefix (KernelAdvancedOptions::compile_time_varargs).
     //   - Per-enqueue base address flows through a reserved-prefix named CRTA, appended to
     //     the kernel's user-named CRTAs and filled by SetProgramRunArgs from the
     //     corresponding TensorArgument entry. TensorParameters that opt into a dynamic accessor
@@ -2919,7 +2992,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     }
 
     // Step 3: Build the Program
-    auto program_impl = std::make_shared<detail::ProgramImpl>();
+    auto program_impl = std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device));
     program_impl->mark_created_from_spec();  // mark as Metal 2.0 ProgramSpec-created (for legality checks)
 
     // Register TensorParameters with the program for ValidateProgramRunArgs to consult at enqueue.
@@ -2932,6 +3005,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     // NOTE: Iterate over spec.dataflow_buffers (not collected.dfb_endpoints) to ensure
     //       deterministic DFB ID assignment based on user-specified order.
     DFBNameToIdMap dfb_name_to_id;
+    DFBNameToSlotMap dfb_name_to_slot;
     for (const auto& dfb_spec : spec.dataflow_buffers) {
         const DFBSpecName& dfb_name = dfb_spec.unique_id;
         const auto& dfb_endpoint_info = collected.dfb_endpoints.at(dfb_name);
@@ -2945,6 +3019,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl->register_dfb_spec_name(dfb_name.get(), dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
+        dfb_name_to_slot[dfb_name] = program_impl->get_dataflow_buffer(dfb_id)->device_slot;
 
         // Borrowed-memory DFB: record the dfb_id ↔ TensorParamName binding so that
         // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
@@ -2995,21 +3070,27 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
-        KernelSource kernel_src = MakeKernelSource(kernel_spec);
+        KernelSource kernel_src = MakeKernelSource(kernel_spec, program_impl->get_context_id());
         const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
 
-        // Make the accessor name -> DFB ID map for this kernel
+        // Make the local accessor name -> DFB device slot map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles =
-            MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_id);
+            MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_slot);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
             MakeSemaphoreBindingHandles(kernel_spec, semaphore_name_to_id);
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
+        //    (after the user CTA-vararg prefix)
         //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
         const auto& user_named_crtas = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
+        const auto& cta_varargs = kernel_spec.advanced_options.compile_time_varargs;
+        const uint32_t vararg_cta_count = static_cast<uint32_t>(cta_varargs.size());
         TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
-            kernel_spec, resolved_tensor_parameters, /*base_named_crta_count=*/user_named_crtas.size());
+            kernel_spec,
+            resolved_tensor_parameters,
+            /*base_named_crta_count=*/user_named_crtas.size(),
+            /*base_cta_offset=*/vararg_cta_count);
 
         // Create TensorBindingHandles for this kernel
         const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
@@ -3031,6 +3112,10 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // CRTA list through unchanged.
         const auto& named_rtas = kernel_spec.runtime_arg_schema.runtime_arg_names;
 
+        // Positional CTAs: [ user CTA varargs | TensorBinding CTA payloads ]
+        std::vector<uint32_t> compile_args = cta_varargs;
+        compile_args.insert(compile_args.end(), ta_bindings.cta_words.begin(), ta_bindings.cta_words.end());
+
         // Create the kernel object
         std::shared_ptr<Kernel> kernel;
 
@@ -3041,9 +3126,10 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
             if (kernel_spec.is_data_movement_kernel()) {
                 auto config = MakeQuasarDataMovementConfig(kernel_spec);
-                config.compile_args = ta_bindings.cta_words;  // populate positional CTAs from tensor bindings
+                config.compile_args = std::move(compile_args);
                 auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
                 kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
+                    program_impl->get_context_id(),
                     kernel_src,
                     node_ranges,
                     config,
@@ -3056,10 +3142,11 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                     tensor_binding_handles,
                     ta_bindings.crta_layout);
             } else {
-                auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_id);
-                config.compile_args = ta_bindings.cta_words;
+                auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_slot);
+                config.compile_args = std::move(compile_args);
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
+                    program_impl->get_context_id(),
                     kernel_src,
                     node_ranges,
                     config,
@@ -3075,8 +3162,9 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         } else {  // gen1
             if (kernel_spec.is_data_movement_kernel()) {
                 auto config = MakeGen1DataMovementConfig(kernel_spec);
-                config.compile_args = ta_bindings.cta_words;
+                config.compile_args = std::move(compile_args);
                 kernel = std::make_shared<DataMovementKernel>(
+                    program_impl->get_context_id(),
                     kernel_src,
                     node_ranges,
                     config,
@@ -3088,9 +3176,10 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                     tensor_binding_handles,
                     ta_bindings.crta_layout);
             } else {
-                auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
-                config.compile_args = ta_bindings.cta_words;
+                auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot);
+                config.compile_args = std::move(compile_args);
                 kernel = std::make_shared<ComputeKernel>(
+                    program_impl->get_context_id(),
                     kernel_src,
                     node_ranges,
                     config,
@@ -3108,6 +3197,17 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
         // will later fill each handle's allocated_address.
         kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
+
+        std::vector<TensorBindingSequenceHandle> tensor_binding_sequences;
+        tensor_binding_sequences.reserve(kernel_spec.advanced_options.tensor_binding_sequences.size());
+        for (const auto& sequence : kernel_spec.advanced_options.tensor_binding_sequences) {
+            tensor_binding_sequences.push_back(
+                TensorBindingSequenceHandle{.sequence_name = sequence.sequence_name, .members = sequence.members});
+        }
+        kernel->set_tensor_binding_sequences(std::move(tensor_binding_sequences));
+
+        // Prefix length for device get_compile_time_vararg* bounds (values are in compile_time_args_).
+        kernel->set_compile_time_vararg_count(vararg_cta_count);
 
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
         KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);

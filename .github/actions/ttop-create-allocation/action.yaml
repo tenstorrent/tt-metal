@@ -60,12 +60,13 @@ runs:
         printf "%s" "${ALLOCATION_MANIFEST}" | kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} apply -f -
 
     - name: Wait for Allocation
-      uses: ./.github/actions/ttop-await-resource
-      with:
-        namespace: ${{ inputs.namespace }}
-        resource: allocation/${{ inputs.allocationName }}
-        mode: poll
-        jsonpath: '{.status.phase}'
-        expected: Allocated
-        timeoutSeconds: ${{ inputs.timeoutSeconds }}
-        retries: ${{ inputs.retries }}
+      shell: bash
+      env:
+        NAMESPACE: ${{ inputs.namespace }}
+        RESOURCE: allocation/${{ inputs.allocationName }}
+        MODE: poll
+        JSONPATH: '{.status.phase}'
+        EXPECTED: Allocated
+        OVERALL_TIMEOUT: ${{ inputs.timeoutSeconds }}
+        RETRIES: ${{ inputs.retries }}
+      run: "$GITHUB_ACTION_PATH/../ttop-await-resource/await.sh"

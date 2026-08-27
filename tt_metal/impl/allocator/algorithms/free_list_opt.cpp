@@ -342,6 +342,12 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(
     size_t size_segregated_index = get_size_segregated_index(alloc_size);
     std::vector<std::pair<DeviceAddr, DeviceAddr>> addresses;
 
+    size_t max_candidate_blocks = 0;
+    for (size_t i = size_segregated_index; i < size_segregated_count; i++) {
+        max_candidate_blocks += free_blocks_segregated_by_size_[i].size();
+    }
+    addresses.reserve(max_candidate_blocks);
+
     for (size_t i = size_segregated_index; i < size_segregated_count; i++) {
         for (size_t block_index : free_blocks_segregated_by_size_[i]) {
             if (block_size_[block_index] >= alloc_size) {
@@ -516,20 +522,17 @@ MemoryBlockTable FreeListOpt::get_memory_block_table() const {
     return blocks;
 }
 
-void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
-    if (shrink_size == 0) {
-        return;
-    }
+size_t FreeListOpt::find_block_to_shrink(DeviceAddr shrink_size, bool bottom_up) const {
     TT_FATAL(bottom_up, "Shrinking from the top is currently not supported");
     TT_FATAL(
-        shrink_size <= this->max_size_bytes_,
+        shrink_size < this->max_size_bytes_,
         "Shrink size {} must be smaller than max size {}",
         shrink_size,
         max_size_bytes_);
 
     // loop and scan the block list to find if the shrink cut into any allocated block
     size_t block_to_shrink = -1;
-    DeviceAddr shrunk_address = shrink_size_ + shrink_size;
+    const DeviceAddr shrunk_address = shrink_size_ + shrink_size;
     // TODO: There must be a way to force the beginning of all blocks be at index 0
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (!meta_block_is_allocated_[i]) {
@@ -543,11 +546,24 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
                 block_address_[i]);
         } else if (block_address_[i] <= shrunk_address && block_address_[i] + block_size_[i] >= shrunk_address) {
             block_to_shrink = i;
-            break;
         }
     }
 
     TT_FATAL(block_to_shrink != -1, "Shrink size {} does not align with any block. This must be a bug", shrunk_address);
+    return block_to_shrink;
+}
+
+void FreeListOpt::validate_shrink_size(DeviceAddr shrink_size, bool bottom_up) const {
+    if (shrink_size != 0) {
+        this->find_block_to_shrink(shrink_size, bottom_up);
+    }
+}
+
+void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
+    if (shrink_size == 0) {
+        return;
+    }
+    const size_t block_to_shrink = this->find_block_to_shrink(shrink_size, bottom_up);
 
     // Find the relevant size segregated list
     size_t size_segregated_index = get_size_segregated_index(block_size_[block_to_shrink]);

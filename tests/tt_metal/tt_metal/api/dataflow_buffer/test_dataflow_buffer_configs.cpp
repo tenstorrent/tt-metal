@@ -16,6 +16,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -35,6 +36,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "../metal2_host_api/test_helpers.hpp"
 #include "dfb_test_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -242,8 +244,8 @@ void validate_dfb_tile_counters(
     }
 }
 
-TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTensixTest1xDFB1Sx1SConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -273,8 +275,8 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
 }
 
 // Host-only: validates Quasar L1 packing (96B header + per-hart blobs + producer-ready region).
-TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -293,7 +295,7 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->devices_.at(0)->get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1u);
@@ -343,6 +345,8 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_EQ(entry0->logical_dfb_id, 0u);
     EXPECT_NE(entry0->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
     EXPECT_EQ(entry0->entry_size, 1024u);
+    EXPECT_EQ(entry0->capacity, 16u);  // STRIDED 1P1C: capacity == num_entries; stored as u16 at bytes 26-27
+    EXPECT_EQ(entry0->_reserved0, 0u);
     EXPECT_EQ(entry0->producer_signal_bit, 0u);  // first producer, bit 0
 
     // DFB 0 init entry for hart 4 (consumer): no IS_PRODUCER flag.
@@ -351,6 +355,7 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
         buf.data() + ghdr->hart_blob_offset[4]);
     EXPECT_EQ(entry4->logical_dfb_id, 0u);
     EXPECT_EQ(entry4->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
+    EXPECT_EQ(entry4->capacity, 0u);  // consumers leave capacity 0; producers program the TC
     EXPECT_EQ(dfb_read_init_entry_producer_signal_bit(reinterpret_cast<const uint8_t*>(entry4), true), 0xFFu);
 
     // participation_mask drives device init entry count; non-participating harts are zero.
@@ -366,8 +371,8 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_EQ(nbytes, experimental::dfb::detail::compute_dfb_config_serialized_size(dfbs));
 }
 
-TEST_F(MeshDeviceFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -386,7 +391,7 @@ TEST_F(MeshDeviceFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->devices_.at(0)->get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1u);
@@ -447,8 +452,8 @@ TEST_F(MeshDeviceFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     }
 }
 
-TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4SConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTest1xDFB1Sx4SConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -482,8 +487,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, DMTensixTest1xDFB4Sx1SConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTensixTest1xDFB4Sx1SConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -515,8 +520,8 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB4Sx1SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1SConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTest1xDFB4Sx1SConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -548,8 +553,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4SConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTest1xDFB4Sx4SConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -581,8 +586,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4SConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTest1xDFB2Sx4SConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -620,8 +625,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2SConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTest1xDFB4Sx2SConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -653,8 +658,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx1BConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTest1xDFB1Sx1BConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -683,8 +688,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx1BConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTest1xDFB1Sx4BConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -718,8 +723,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1BConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTest1xDFB4Sx1BConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -751,8 +756,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1BConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTest1xDFB4Sx4BConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -808,8 +813,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
-TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTest1xDFB4Sx2BConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -860,8 +865,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
 // 2S x 4B: 2 producers (riscs 0,1) with 4 blocked consumers (riscs 2,3,4,5)
 // Each producer has 1 TC, each consumer has 2 TCs (num_producers TCs)
 // ALL: Each consumer's TC[i] pairs with producer[i]
-TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTest1xDFB2Sx4BConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -949,8 +954,8 @@ static void validate_multicore_dfb_groups(
 
 // Multi-core DFB, no implicit sync: 2 cores, 1 producer, 1 consumer, STRIDED.
 // Expected: 1 DfbGroup (homogeneous HW config) with 2 cores.
-TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -1011,8 +1016,8 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync) {
 
 // Multi-core DFB, with implicit sync: 2 cores, 1 producer, 1 consumer, STRIDED.
 // Txn IDs should be allocated once (core-invariant) and identical across cores.
-TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -1049,8 +1054,8 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync) {
 }
 
 // Identical-config multi-core: assert one DfbGroup is produced (multicast-ready).
-TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     experimental::dfb::DataflowBufferConfig config{
@@ -1141,8 +1146,8 @@ void validate_intra_tensix_dfb(
         (int)rc.config.remapper_pair_index);
 }
 
-TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, TensixIntraTest1xDFB1Sx1SConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
     // Intra-tensix: pack TRISC (producer) → unpack TRISC (consumer) on Neo0.
@@ -1184,13 +1189,13 @@ inline experimental::ProgramRunArgs MakeMinimalRunArgs(const experimental::NodeC
 
 // num_entries override on a finalized DFB recomputes the txn descriptor in place while PRESERVING the
 // TC assignment and transaction IDs (only the threshold changes for the new ring depth).
-TEST_F(MeshDeviceFixture, DFBReentryOverridePreservesTcAndRecomputesTxn) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DFBReentryOverridePreservesTcAndRecomputesTxn) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB transaction IDs / tile counters require Quasar";
     }
     const experimental::NodeCoord node{0, 0};
     experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
-    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     program.impl().finalize_dataflow_buffer_configs();
 
@@ -1241,13 +1246,13 @@ TEST_F(MeshDeviceFixture, DFBReentryOverridePreservesTcAndRecomputesTxn) {
 
 // On re-entry the txn-id count is preserved, so a num_entries override that breaks the preserved divisor
 // is rejected up front with an actionable message.
-TEST_F(MeshDeviceFixture, DFBReentryNumEntriesViolatesTxnDivisorFails) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DFBReentryNumEntriesViolatesTxnDivisorFails) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB transaction-id divisor check requires Quasar";
     }
     const experimental::NodeCoord node{0, 0};
     experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
-    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto params = MakeMinimalRunArgs(node);
@@ -1261,13 +1266,13 @@ TEST_F(MeshDeviceFixture, DFBReentryNumEntriesViolatesTxnDivisorFails) {
 
 // Ring extent past Tensix unreserved L1 is rejected. entry_size stays within the TRISC uint16
 // L1-unit field so this hits the L1 check rather than the entry_size width check.
-TEST_F(MeshDeviceFixture, DFBReentryEntrySizeRingExtentFails) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DFBReentryEntrySizeRingExtentFails) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB ring-extent check requires Quasar";
     }
     const experimental::NodeCoord node{0, 0};
     experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
-    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto params = MakeMinimalRunArgs(node);
@@ -1281,13 +1286,13 @@ TEST_F(MeshDeviceFixture, DFBReentryEntrySizeRingExtentFails) {
 }
 
 // TRISC stores entry_size in uint16 L1 units; 1 MiB is 65536 units and must fail before init truncates.
-TEST_F(MeshDeviceFixture, DFBReentryEntrySizeExceedsUint16Fails) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DFBReentryEntrySizeExceedsUint16Fails) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB TRISC entry_size check requires Quasar";
     }
     const experimental::NodeCoord node{0, 0};
     experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
-    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto params = MakeMinimalRunArgs(node);
@@ -1300,13 +1305,13 @@ TEST_F(MeshDeviceFixture, DFBReentryEntrySizeExceedsUint16Fails) {
 
 // capacity (num_entries / max(producers, consumers)) is stored as uint16_t (the tile-counter register
 // width); an override that pushes it past the max is rejected rather than silently truncated.
-TEST_F(MeshDeviceFixture, DFBOverrideCapacityExceedsUint16Fails) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DFBOverrideCapacityExceedsUint16Fails) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB capacity / tile-counter limit requires Quasar";
     }
     const experimental::NodeCoord node{0, 0};
     experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
-    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     auto params = MakeMinimalRunArgs(node);
     params.dfb_run_overrides.push_back(
@@ -1315,7 +1320,6 @@ TEST_F(MeshDeviceFixture, DFBOverrideCapacityExceedsUint16Fails) {
         [&] { experimental::SetProgramRunArgs(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("capacity 70000 exceeds the maximum 65535")));
 }
-
 
 // ============================================================================
 // Metal 2.0 config/validation ports (folded from test_dataflow_buffer_2_0.cpp
@@ -1362,8 +1366,7 @@ struct M2ConfigDFBParams {
     std::optional<m2::NodeRange> target_nodes = std::nullopt;  // override single-core default
 };
 
-static inline Program build_single_dfb_program_2_0(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const M2ConfigDFBParams& p) {
+static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, const M2ConfigDFBParams& p) {
     const m2::NodeCoord node{0, 0};
     const m2::DFBSpecName DFB{"dfb"};
     const m2::KernelSpecName PRODUCER{"producer"};
@@ -1469,7 +1472,7 @@ static inline Program build_single_dfb_program_2_0(
         .tensor_parameters = tensor_parameters,
         .work_units = {wu},
     };
-    return m2::MakeProgramFromSpec(*mesh_device, spec);
+    return m2::MakeProgramFromSpec(mesh_device, spec);
 }
 
 // Semantic TC-pairing check (M2 doesn't expose explicit risc masks, so we don't
@@ -1614,14 +1617,13 @@ static inline void validate_multicore_dfb_groups_2_0(
 // Group 5 M2: 2-core homogeneous-grid checks (legacy: MultiCoreDFB_1P1C_Strided_*)
 // =====================================================================================
 
-TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
     // 2-core test (nodes (0,0)..(1,0)): the Quasar 1x3 emu reports a 1x1
     // compute grid, so skip there.
-    CoreCoord grid = mesh_device->get_devices()[0]->compute_with_storage_grid_size();
+    CoreCoord grid = this->device().compute_with_storage_grid_size();
     if (grid.x < 2) {
         GTEST_SKIP() << "2-core test requires grid.x >= 2 (got " << grid.x << "x" << grid.y << ")";
     }
@@ -1634,7 +1636,7 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync_2_0) {
         .implicit_sync = false,
         .target_nodes = m2::NodeRange{m2::NodeCoord{0, 0}, m2::NodeCoord{1, 0}},
     };
-    Program program = build_single_dfb_program_2_0(mesh_device, p);
+    Program program = build_single_dfb_program_2_0(this->device(), p);
     program.impl().finalize_dataflow_buffer_configs();
     validate_multicore_dfb_groups_2_0(
         program, *p.target_nodes, /*expected_num_groups=*/1, /*expected_cores_per_group=*/2);
@@ -1661,14 +1663,13 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync_2_0) {
     }
 }
 
-TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
     // 2-core test (nodes (0,0)..(1,0)): the Quasar 1x3 emu reports a 1x1
     // compute grid, so skip there.
-    CoreCoord grid = mesh_device->get_devices()[0]->compute_with_storage_grid_size();
+    CoreCoord grid = this->device().compute_with_storage_grid_size();
     if (grid.x < 2) {
         GTEST_SKIP() << "2-core test requires grid.x >= 2 (got " << grid.x << "x" << grid.y << ")";
     }
@@ -1681,7 +1682,7 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync_2_0) {
         .implicit_sync = true,
         .target_nodes = m2::NodeRange{m2::NodeCoord{0, 0}, m2::NodeCoord{1, 0}},
     };
-    Program program = build_single_dfb_program_2_0(mesh_device, p);
+    Program program = build_single_dfb_program_2_0(this->device(), p);
     program.impl().finalize_dataflow_buffer_configs();
     validate_multicore_dfb_groups_2_0(
         program, *p.target_nodes, /*expected_num_groups=*/1, /*expected_cores_per_group=*/2);
@@ -1704,9 +1705,8 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync_2_0) {
 // =====================================================================================
 
 #define CONFIG_TC_TEST_2_0(name, prod, cons, num_p, num_c, pap_kind, cap_kind, exp_prod_tc, exp_cons_tc) \
-    TEST_F(MeshDeviceFixture, name##_2_0) {                                                              \
-        auto& mesh_device = this->devices_.at(0);                                                        \
-        if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {                                     \
+    TEST_F(UnitMeshFixture, name##_2_0) {                                                                \
+        if (this->device().arch() != ARCH::QUASAR) {                                                     \
             GTEST_SKIP() << "M2 path is Quasar-only";                                                    \
         }                                                                                                \
         using namespace m2_config_test_helpers;                                                          \
@@ -1719,7 +1719,7 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync_2_0) {
             .cap = m2::DFBAccessPattern::cap_kind,                                                       \
             .implicit_sync = false,                                                                      \
         };                                                                                               \
-        Program program = build_single_dfb_program_2_0(mesh_device, p);                                  \
+        Program program = build_single_dfb_program_2_0(this->device(), p);                               \
         program.impl().finalize_dataflow_buffer_configs();                                               \
         validate_dfb_tile_counters_2_0(                                                                  \
             program,                                                                                     \
@@ -1760,7 +1760,7 @@ CONFIG_TC_TEST_2_0(DMTest1xDFB2Sx4BConfig, DM, DM, 2, 4, STRIDED, ALL, 4, 2)
 // =====================================================================================
 
 // Host-only: DFB pool is [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], allocated top-down in ascending blocks.
-TEST(TxnIdAllocatorTest, AllocatesTopDownFromDfbPool) {
+TEST(TxnIdAllocatorTest, CPU_AllocatesTopDownFromDfbPool) {
     using tt::tt_metal::experimental::dfb::detail::TxnIdAllocator;
     TxnIdAllocator alloc;
 
@@ -1795,9 +1795,8 @@ TEST(TxnIdAllocatorTest, AllocatesTopDownFromDfbPool) {
 
 // B2: For num_entries in {16, 15, 7}, producer_txn_descriptor.num_txn_ids should
 // land on {2, 3, 1} (divisibility-based selection).
-TEST_F(MeshDeviceFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Implicit sync (and therefore the txn-id allocator) is Quasar-only";
     }
     using namespace m2_config_test_helpers;
@@ -1823,7 +1822,7 @@ TEST_F(MeshDeviceFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
             .num_entries = c.num_entries,
             .implicit_sync = true,
         };
-        Program program = build_single_dfb_program_2_0(mesh_device, p);
+        Program program = build_single_dfb_program_2_0(this->device(), p);
         program.impl().finalize_dataflow_buffer_configs();
         auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
         ASSERT_EQ(dfbs.size(), 1u);
@@ -1853,9 +1852,8 @@ TEST_F(MeshDeviceFixture, B2_TxnIdAllocator_Boundaries_Config_2_0) {
 // B4: Verifies the cached `num_entries_to_process_threshold` field:
 //   STRIDED: threshold = num_entries / num_txn_ids
 //   ALL:     threshold = num_consumers * (num_entries / num_txn_ids)
-TEST_F(MeshDeviceFixture, B4_CachedThreshold_Config_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, B4_CachedThreshold_Config_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Implicit sync (and therefore threshold caching) is Quasar-only";
     }
     using namespace m2_config_test_helpers;
@@ -1871,7 +1869,7 @@ TEST_F(MeshDeviceFixture, B4_CachedThreshold_Config_2_0) {
             .num_entries = 16,
             .implicit_sync = true,
         };
-        Program program = build_single_dfb_program_2_0(mesh_device, p);
+        Program program = build_single_dfb_program_2_0(this->device(), p);
         program.impl().finalize_dataflow_buffer_configs();
         auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
         ASSERT_EQ(dfbs.size(), 1u);
@@ -1896,7 +1894,7 @@ TEST_F(MeshDeviceFixture, B4_CachedThreshold_Config_2_0) {
             .cap = m2::DFBAccessPattern::ALL,
             .implicit_sync = true,
         };
-        Program program = build_single_dfb_program_2_0(mesh_device, p);
+        Program program = build_single_dfb_program_2_0(this->device(), p);
         program.impl().finalize_dataflow_buffer_configs();
         auto dfbs = program.impl().dataflow_buffers_on_core(CoreCoord(0, 0));
         ASSERT_EQ(dfbs.size(), 1u);
@@ -1908,9 +1906,8 @@ TEST_F(MeshDeviceFixture, B4_CachedThreshold_Config_2_0) {
 
 // B10: divisibility — (a) pathological num_entries should fail at MakeProgramFromSpec/finalize;
 // (b) barely-divisible (only n=1 works) should succeed.
-TEST_F(MeshDeviceFixture, B10_NumEntriesDivisibility_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, B10_NumEntriesDivisibility_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Txn-id allocator is Quasar-only";
     }
     using namespace m2_config_test_helpers;
@@ -1929,7 +1926,7 @@ TEST_F(MeshDeviceFixture, B10_NumEntriesDivisibility_2_0) {
         };
         EXPECT_THROW(
             {
-                Program program = build_single_dfb_program_2_0(mesh_device, p);
+                Program program = build_single_dfb_program_2_0(this->device(), p);
                 program.impl().finalize_dataflow_buffer_configs();
             },
             std::exception);
@@ -1948,7 +1945,7 @@ TEST_F(MeshDeviceFixture, B10_NumEntriesDivisibility_2_0) {
             .implicit_sync = false,
         };
         EXPECT_NO_THROW({
-            Program program = build_single_dfb_program_2_0(mesh_device, p);
+            Program program = build_single_dfb_program_2_0(this->device(), p);
             program.impl().finalize_dataflow_buffer_configs();
         });
     }
@@ -1967,9 +1964,8 @@ TEST_F(MeshDeviceFixture, B10_NumEntriesDivisibility_2_0) {
 // 8-DM > 6-DM-cap omissions in the CONFIG_TC_TEST_2_0 list above.
 
 // INTRA self-loop config probe (legacy: TensixIntraTest1xDFB1Sx1SConfig).
-TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, TensixIntraTest1xDFB1Sx1SConfig_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "INTRA scope is Quasar-only";
     }
     const m2::DFBSpecName DFB{"intra_dfb"};
@@ -2006,7 +2002,7 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig_2_0) {
         .tensor_parameters = {},
         .work_units = {m2::WorkUnitSpec{.name = "wu", .kernels = {COMPUTE}, .target_nodes = node}},
     };
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
     m2_config_test_helpers::validate_intra_tensix_dfb_2_0(program, CoreCoord(0, 0));
 }
 
@@ -2018,9 +2014,8 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig_2_0) {
 // =====================================================================================
 
 // B6 — Producer access pattern = ALL is rejected.
-TEST_F(MeshDeviceFixture, B6_AllProducer_Rejected_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, B6_AllProducer_Rejected_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB validation tested on Quasar";
     }
     using namespace m2_config_test_helpers;
@@ -2035,7 +2030,7 @@ TEST_F(MeshDeviceFixture, B6_AllProducer_Rejected_2_0) {
     };
     EXPECT_THROW(
         {
-            Program program = build_single_dfb_program_2_0(mesh_device, p);
+            Program program = build_single_dfb_program_2_0(this->device(), p);
             program.impl().finalize_dataflow_buffer_configs();
         },
         std::exception);
@@ -2046,14 +2041,13 @@ TEST_F(MeshDeviceFixture, B6_AllProducer_Rejected_2_0) {
 // (CircularBufferConfig is a legacy host-API construct). M2 programs are
 // purely DFB-based; the legacy CB-then-DFB rejection path can't be exercised
 // through the M2 spec model.
-TEST_F(MeshDeviceFixture, B7_CB_DFB_Mix_Rejected_2_0) {
+TEST_F(UnitMeshFixture, B7_CB_DFB_Mix_Rejected_2_0) {
     GTEST_SKIP() << "Not applicable: M2 ProgramSpec has no CB construct";
 }
 
 // B8 — ALL consumer with num_consumers > 4 is rejected (Remapper has 4 clientR slots).
-TEST_F(MeshDeviceFixture, B8_FiveAllConsumers_Rejected_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, B8_FiveAllConsumers_Rejected_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Remapper limit tested on Quasar";
     }
     using namespace m2_config_test_helpers;
@@ -2069,7 +2063,7 @@ TEST_F(MeshDeviceFixture, B8_FiveAllConsumers_Rejected_2_0) {
     };
     EXPECT_THROW(
         {
-            Program program = build_single_dfb_program_2_0(mesh_device, p);
+            Program program = build_single_dfb_program_2_0(this->device(), p);
             program.impl().finalize_dataflow_buffer_configs();
         },
         std::exception);
@@ -2081,13 +2075,13 @@ TEST_F(MeshDeviceFixture, B8_FiveAllConsumers_Rejected_2_0) {
 // binds the DFB as both PRODUCER and CONSUMER). There's no way to construct an
 // INTER-scope spec through the M2 API, so the legacy rejection path has no
 // direct equivalent.
-TEST_F(MeshDeviceFixture, B9_InterTensixScope_Rejected_2_0) {
+TEST_F(UnitMeshFixture, B9_InterTensixScope_Rejected_2_0) {
     GTEST_SKIP() << "Not applicable: M2 DataflowBufferSpec has no tensix_scope field";
 }
 
 // Host-only: packer INTRA pairs allocate top-down from 63; DM1 1:m pairs stay in [0,16).
-TEST_F(MeshDeviceFixture, IntraPackerRemapperPairsTopDownConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, IntraPackerRemapperPairsTopDownConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar-only remapper pool split";
     }
 
@@ -2163,8 +2157,8 @@ TEST_F(MeshDeviceFixture, IntraPackerRemapperPairsTopDownConfig) {
 // T7: one INTRA DFB past what a Neo's Tensix-only TC pool can back must fail. The limit is per Neo:
 // each INTRA DFB spends a ClientL + shadow pair out of that Neo's 16 Tensix-only TCs, so 8 fit and the
 // 9th exhausts the pool (and its packer remapper pair).
-TEST_F(MeshDeviceFixture, MaxEightIntraPerNeoConfig) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, MaxEightIntraPerNeoConfig) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar-only INTRA TC pool limit";
     }
 
@@ -2190,6 +2184,107 @@ TEST_F(MeshDeviceFixture, MaxEightIntraPerNeoConfig) {
     }
 
     EXPECT_THROW(program.impl().finalize_dataflow_buffer_configs(), std::exception);
+}
+
+// =====================================================================================
+// Device slot assignment
+// =====================================================================================
+
+namespace {
+
+experimental::dfb::DataflowBufferConfig make_minimal_dfb_config() {
+    return experimental::dfb::DataflowBufferConfig{
+        .entry_size = 1024,
+        .num_entries = 2,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x2,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
+}
+
+// The safety property behind slot reuse: a slot indexes a per-core config table, so two DFBs may
+// share a slot only when no core hosts both of them.
+void expect_no_slot_collision_on_any_core(Program& program, const CoreRange& cores) {
+    for (auto x = cores.start_coord.x; x <= cores.end_coord.x; x++) {
+        for (auto y = cores.start_coord.y; y <= cores.end_coord.y; y++) {
+            const CoreCoord core(x, y);
+            std::set<uint32_t> slots_on_core;
+            for (const auto& dfb : program.impl().dataflow_buffers_on_core(core)) {
+                EXPECT_TRUE(slots_on_core.insert(dfb->device_slot).second)
+                    << "Core (" << x << "," << y << ") has two DFBs at device slot " << dfb->device_slot;
+            }
+        }
+    }
+}
+
+}  // namespace
+
+// A DFB created late (high program-wide id) that shares no core with the earlier DFBs should reuse a
+// low slot instead of extending the per-core config table. This is the shape that overflowed the
+// dispatch payload when the slot was just a creation counter (issue #51409).
+TEST_F(UnitMeshFixture, DFBDeviceSlotsReusedAcrossDisjointCores) {
+    const CoreCoord grid = this->device().compute_with_storage_grid_size();
+    // Coordinator at (0,0) plus workers spanning (1,0)..(4,0).
+    if (grid.x < 5) {
+        GTEST_SKIP() << "Needs at least 5 worker cores in a row (got " << grid.x << "x" << grid.y << ")";
+    }
+    const CoreCoord coordinator(0, 0);
+    const CoreRange workers(CoreCoord(1, 0), CoreCoord(4, 0));
+    const CoreRange all_cores(CoreCoord(0, 0), CoreCoord(4, 0));
+
+    Program program = CreateProgram();
+    const auto config = make_minimal_dfb_config();
+
+    // Spans every core, so it conflicts with everything below.
+    uint32_t wide_id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(all_cores), config);
+
+    // Worker-only DFBs, then a coordinator-only DFB created last.
+    std::vector<uint32_t> worker_ids;
+    worker_ids.reserve(3);
+    for (int i = 0; i < 3; i++) {
+        worker_ids.push_back(experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(workers), config));
+    }
+    uint32_t coordinator_id =
+        experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(coordinator)), config);
+
+    const auto& impl = program.impl();
+    EXPECT_EQ(impl.get_dataflow_buffer(coordinator_id)->id, 4u) << "expected creation order to give this the last id";
+
+    expect_no_slot_collision_on_any_core(program, all_cores);
+
+    EXPECT_EQ(impl.get_dataflow_buffer(wide_id)->device_slot, 0u);
+    for (uint32_t i = 0; i < worker_ids.size(); i++) {
+        EXPECT_EQ(impl.get_dataflow_buffer(worker_ids[i])->device_slot, i + 1)
+            << "worker DFB " << i << " conflicts with the wide DFB and its worker peers";
+    }
+    // Conflicts only with the wide DFB, so it reuses slot 1 rather than taking slot 4.
+    EXPECT_EQ(impl.get_dataflow_buffer(coordinator_id)->device_slot, 1u);
+}
+
+// The per-core slot limit is on how many DFBs share a core, not on how many exist in the program:
+// DFBs on disjoint cores all fit at slot 0.
+TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
+    const bool is_quasar = this->device().arch() == ARCH::QUASAR;
+    const uint32_t max_slots =
+        is_quasar ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal::get_arch_num_circular_buffers();
+    const CoreCoord grid = this->device().compute_with_storage_grid_size();
+    const uint32_t num_dfbs = max_slots + 4;
+    if (grid.x * grid.y < num_dfbs) {
+        GTEST_SKIP() << "Needs at least " << num_dfbs << " cores to place one DFB per core";
+    }
+
+    Program program = CreateProgram();
+    const auto config = make_minimal_dfb_config();
+    for (uint32_t i = 0; i < num_dfbs; i++) {
+        const CoreCoord core(i % grid.x, i / grid.x);
+        uint32_t id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(CoreRange(core)), config);
+        EXPECT_EQ(program.impl().get_dataflow_buffer(id)->device_slot, 0u)
+            << "DFB " << i << " is alone on core (" << core.x << "," << core.y << ")";
+    }
 }
 
 }  // end namespace tt::tt_metal

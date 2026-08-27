@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -349,8 +350,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 
     auto sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, {});
     auto& sysmem_manager = this->reference_sysmem_manager();
-    auto event =
-        MeshEvent(sysmem_manager.get_next_event(id_), mesh_device_, id_, MeshCoordinateRange(mesh_device_->shape()));
+    auto event = MeshEvent(sysmem_manager.get_next_event(id_), *this, MeshCoordinateRange(mesh_device_->shape()));
 
     // Issue commands to clear expected_num_workers_completed counter(s) on the dispatcher
     for (auto* device : mesh_device_->get_devices()) {
@@ -369,6 +369,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     // Clear counter(s) on host to reflect update device state
     for (auto sub_device_id : sub_device_ids) {
         expected_num_workers_completed_[*sub_device_id] = 0;
+        cross_node_program_completion_counts_[*sub_device_id].clear();
     }
 
     // Block after clearing counter(s) on dispatcher
@@ -449,6 +450,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Need to stall and reset counters if host wraps
     if (updated_worker_counts.wrapped) [[unlikely]] {
         get_config_buffer_mgr(*sub_device_id).mark_completely_full(0);
+        cross_node_program_completion_counts_[*sub_device_id].clear();
         for (auto* device : mesh_device_->get_devices()) {
             program_dispatch::reset_expected_num_workers_completed_on_device(
                 static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
@@ -461,6 +463,20 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     expected_num_workers_completed_[*sub_device_id] = updated_worker_counts.current;
     expected_num_workers_completed = updated_worker_counts.previous;
 
+    // Only order CrossNode config Buffer rewrites when this workload re-launches a
+    // program that previously used CrossNode on this CQ. Non-zero sync_count means "wait until that prior launch."
+    uint32_t program_ordering_sync_count = 0;
+    for (const auto& [device_range, program] : mesh_workload.get_programs()) {
+        (void)device_range;
+        if (program.impl().get_per_core_cross_node_dfbs().empty()) {
+            continue;
+        }
+        const auto it = cross_node_program_completion_counts_[*sub_device_id].find(program.impl().get_id());
+        if (it != cross_node_program_completion_counts_[*sub_device_id].end()) {
+            program_ordering_sync_count = std::max(program_ordering_sync_count, it->second);
+        }
+    }
+
     // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->get_config_buffer_mgr(*sub_device_id),
@@ -468,6 +484,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         mesh_workload.impl().get_program_binary_status(mesh_device_id),
         num_workers,
         expected_num_workers_completed,
+        program_ordering_sync_count,
         dispatch_metadata);
 
     std::unordered_set<uint32_t> chip_ids_in_workload = {};
@@ -531,8 +548,19 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             TracyMessage(msg.c_str(), msg.size());
         }
     }
+
+    // Remember when this CrossNode launch will complete so a later re-enqueue of the
+    // same program can wait only for that launch.
+    for (const auto& [device_range, program] : mesh_workload.get_programs()) {
+        (void)device_range;
+        if (!program.impl().get_per_core_cross_node_dfbs().empty()) {
+            cross_node_program_completion_counts_[*sub_device_id][program.impl().get_id()] =
+                updated_worker_counts.current;
+        }
+    }
+
     // Send go signals to devices not running a program to ensure consistent global state
-    this->write_go_signal_to_unused_sub_grids(
+    this->write_go_signal_sequences_to_unused_sub_grids(
         chip_ids_in_workload,
         sub_device_id,
         expected_num_workers_completed,
@@ -897,7 +925,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
         // Return a dummy event for mock devices
-        return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+        return MeshEvent(0, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
     }
 
     in_use_ = true;
@@ -905,10 +933,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
 
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto event = MeshEvent(
-        sysmem_manager.get_next_event(id_),
-        mesh_device_,
-        id_,
-        device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+        sysmem_manager.get_next_event(id_), *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     auto dispatch_lambda = [this, &event, &sub_device_ids, notify_host](const MeshCoordinate& coord) {
@@ -1140,6 +1165,14 @@ void FDMeshCommandQueue::reset_worker_state(
     for (auto* device : mesh_device_->get_devices()) {
         TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
     }
+    // The launch message ring buffer and the worker GO mailboxes are shared across hardware CQs, and only the
+    // CQ that is passed reset_launch_msg_state resets them. Nothing orders that reset against worker programs
+    // still outstanding on the other CQs, so drain this CQ before the resetting CQ remaps the mailboxes. The
+    // caller holds the MeshDevice api lock, hence the nolock variant. Note that this must happen before
+    // sub_device_cq_owner is resized: finish_nolock indexes it with the currently active sub device ids.
+    if (!reset_launch_msg_state && in_use_) {
+        this->finish_nolock();
+    }
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;
@@ -1190,16 +1223,23 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     });
 }
 
-void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
+void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
     std::unordered_set<uint32_t>& chip_ids_in_workload,
     const SubDeviceId& sub_device_id,
     uint32_t expected_num_workers_completed,
     bool mcast_go_signals,
     bool unicast_go_signals,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
+    // The config-buffer manager is mesh-global. Covered devices receive this stall through their program sequence;
+    // unused devices must receive it here before a later workload can overwrite the globally freed ring region.
+    std::optional<uint32_t> config_ring_sync_count;
+    if (dispatch_md.stall_first || dispatch_md.stall_before_program) {
+        config_ring_sync_count = dispatch_md.sync_count;
+    }
+
     for (auto& device : mesh_device_->get_devices()) {
         if (!chip_ids_in_workload.contains(device->id())) {
-            write_go_signal(
+            write_go_signal_sequence(
                 id_,
                 mesh_device_,
                 sub_device_id,
@@ -1208,7 +1248,8 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
                 this->virtual_program_dispatch_core(),
                 mcast_go_signals,
                 unicast_go_signals,
-                dispatch_md);
+                dispatch_md,
+                config_ring_sync_count);
         }
     }
 }
@@ -1353,7 +1394,8 @@ void FDMeshCommandQueue::record_end() {
     }
     std::vector<uint32_t> exec_buf_end = {};
 
-    DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
+    MetalContext& metal_ctx = MetalContext::instance(mesh_device_->impl().get_context_id());
+    DeviceCommand command_sequence(metal_ctx, metal_ctx.hal().get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
 
     exec_buf_end.reserve(command_sequence.size_bytes() / sizeof(uint32_t));
@@ -1370,7 +1412,9 @@ void FDMeshCommandQueue::record_end() {
         // safe because allocate_trace_programs() reinitializes dispatch_metadata at the start of
         // each range's processing, overwriting any stale mutations from a previous range.
         std::vector<TraceNode*> trace_nodes;
+        trace_nodes.reserve(trace_nodes_.size());
         std::vector<MeshTraceNode*> mesh_trace_nodes;
+        mesh_trace_nodes.reserve(trace_nodes_.size());
         // Records the number of MeshTraceNodes that had no relevant program.
         struct UnusedNodeData {
             uint32_t unused_nodes_both_multicast_and_unicast = 0;
@@ -1446,7 +1490,7 @@ void FDMeshCommandQueue::record_end() {
                 auto& trace_worker_descriptor = trace_worker_descriptors[sub_device];
                 program_dispatch::ProgramDispatchMetadata go_signal_md;
                 go_signal_md.prefetcher_cache_info.is_cached = true;
-                write_go_signal(
+                write_go_signal_sequence(
                     this->id_,
                     this->mesh_device_,
                     sub_device,
@@ -1455,7 +1499,8 @@ void FDMeshCommandQueue::record_end() {
                     this->virtual_program_dispatch_core(),
                     multicast,
                     unicast,
-                    go_signal_md);
+                    go_signal_md,
+                    std::nullopt);
 
                 auto& worker_launch_msg_state = worker_launch_message_buffer_state[sub_device_id];
                 if (multicast) {

@@ -83,6 +83,10 @@ public:
     virtual std::string_view get_compiler_opt_level() const = 0;
     // Returns the linker optimization level
     virtual std::string_view get_linker_opt_level() const = 0;
+    // Returns true when this kernel opted into RISC-V Vector (Zve32f) code generation for its
+    // TRISC2 (pack) compile (ComputeConfig::enable_trisc2_rvv). Default off: the build recipe
+    // is byte-identical to a build without this knob.
+    virtual bool get_trisc2_rvv_enabled() const { return false; }
 
     // Called to process the user defines
     virtual void process_defines(std::function<void(const std::string& define, const std::string& value)>) const = 0;
@@ -126,6 +130,11 @@ public:
     virtual void process_scratchpad_binding_handles(
         std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
 
+    // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
+    // Emitted as constexpr std::tuple tokens in the `tensor::` namespace (user order; no sort).
+    virtual void process_tensor_binding_sequences(
+        std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)>) const {}
+
     // Named RTA/CRTA schema (Metal 2.0 APIs).
     // The order of names determines the byte offset of each arg within the named-args
     // section of the dispatch buffer.
@@ -144,6 +153,10 @@ public:
     // Default is the all-zero layout (no named CRTAs, no bindings, varargs start at offset 0),
     // which matches the legacy-kernel case where the buffer has only varargs.
     virtual KernelCrtaLayout get_crta_layout() const { return {}; }
+
+    // Metal 2.0: length of the CTA-vararg prefix in positional compile_time_args.
+    // Default 0 for non–Metal 2.0 kernels.
+    virtual uint32_t get_compile_time_vararg_count() const { return 0; }
 
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args

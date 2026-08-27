@@ -159,7 +159,7 @@ targets:
               decode_t/s/u: 17.16
               decode_t/s: 549.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 1024
@@ -169,7 +169,7 @@ targets:
               decode_t/s/u: 15.24
               decode_t/s: 487.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 2048
@@ -179,7 +179,7 @@ targets:
               decode_t/s/u: 13.91
               decode_t/s: 445.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       wh_llmbox_perf:
         entries:
@@ -191,7 +191,7 @@ targets:
               decode_t/s/u: 14.6
               decode_t/s: 3737.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 256
             seq_len: 1024
@@ -201,7 +201,7 @@ targets:
               decode_t/s/u: 13.2
               decode_t/s: 3379.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 256
             seq_len: 2048
@@ -211,7 +211,7 @@ targets:
               decode_t/s/u: 12.4
               decode_t/s: 3174.0
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       wh_galaxy_perf:
         entries:
@@ -223,7 +223,7 @@ targets:
               decode_t/s/u: 6.9
               decode_t/s: 7065.6
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 1024
             seq_len: 1024
@@ -233,7 +233,7 @@ targets:
               decode_t/s/u: 6.3
               decode_t/s: 6451.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 1024
             seq_len: 2048
@@ -243,7 +243,51 @@ targets:
               decode_t/s/u: 6.6
               decode_t/s: 6758.4
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
+            team: models
+  gemma-2-2b:
+    aliases: ["gemma-2-2b", "google/gemma-2-2b-it"]
+    skus:
+      # Seeded from measured ci-token-matching on N300 (90.0 / 100.0).
+      # N150 uses the same model path; CI will re-calibrate if it drifts.
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            # Tier 3: exempt from perf targets; accuracy still gated.
+            perf: {}
+            accuracy:
+              top1: 90
+              top5: 100
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf: {}
+            accuracy:
+              top1: 90
+              top5: 100
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+  gemma-2-9b:
+    aliases: ["gemma-2-9b", "google/gemma-2-9b-it"]
+    skus:
+      # Seeded from measured ci-token-matching on N300 (91.8 / 99.8).
+      wh_n300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            # Tier 3: exempt from perf targets; accuracy still gated.
+            perf: {}
+            accuracy:
+              top1: 92
+              top5: 100
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   gemma-3-27b:
     aliases: ["gemma-3-27b", "google/gemma-3-27b-it", "gemma-3-27b-vision"]
@@ -525,8 +569,11 @@ targets:
             seq_len: 712
             status: active
             perf:
-              decode_t/s/u: 8.8
-              prefill_time_to_first_token: 195
+              # Greedy decode now takes the on-device argmax fast-path on single-chip
+              # (allow_force_argmax gated on num_devices == 1). Measured 23.50-23.60 t/s/u
+              # over 3 CI runs, was 8.8; TTFT 113.2-113.5 ms, was 195.
+              decode_t/s/u: 23.5
+              prefill_time_to_first_token: 113
             accuracy: {}
       wh_n300:
         entries:
@@ -559,8 +606,10 @@ targets:
             seq_len: 712
             status: active
             perf:
-              decode_t/s/u: 20.3
-              prefill_time_to_first_token: 75
+              # Same fast-path as wh_n150 above. Measured 33.04-33.13 t/s/u over 4 CI runs,
+              # was 20.3; TTFT 53.31-53.35 ms, was 75.
+              decode_t/s/u: 33.0
+              prefill_time_to_first_token: 53
             accuracy: {}
       bh_p300:
         entries:
@@ -601,13 +650,18 @@ targets:
       p300x2:
         entries:
           # Catch-all (no batch_size/seq_len): serves the data-parallel b4 perf run and the
-          # token-matching (b1) accuracy check. Perf seeded from data-parallel run 27016350392
-          # (b4 aggregate); accuracy is the token-matching (b1) target.
+          # token-matching (b1) accuracy check. Accuracy is the token-matching (b1) target.
+          # Perf re-seeded 2026-08-07 from the b4 data-parallel run 31146018726 after #48886
+          # (0a0510e7fc1, "Enable force_argmax fast-path on non-Galaxy") landed: measured
+          # 37.34 t/s/u / 149.35 t/s / 14.44 ms vs the old 20.88 / 83.5 / 19 targets, which
+          # tripped the validator's "much better than expected" upper bound. The 14 scheduled
+          # runs before #48886 sat at 18.9-21.3 t/s/u with no runner correlation, so this is a
+          # genuine step change from that optimization, not machine variance.
           - status: active
             perf:
-              prefill_time_to_first_token: 19
-              decode_t/s/u: 20.88
-              decode_t/s: 83.5
+              prefill_time_to_first_token: 14.4
+              decode_t/s/u: 37.3
+              decode_t/s: 149.4
             accuracy:
               top1: 90.0
               top5: 97.6
@@ -796,6 +850,21 @@ targets:
             accuracy:
               top1: 95
               top5: 100
+          # ci-eval-1 (batch-1, 6 repeat batches) on models/demos/llama3_70b_galaxy.
+          # As with the b32/s507 entry below, seq_len is the *character* length of the prompt the
+          # demo resolves with, not a token count: 419 is the first prompt in
+          # eval_repeat_prompts_batch1.json, which is the batch the metrics are measured from.
+          # Measured on wh_galaxy_perf: local at 8baa100a684 (TTFT 725.6-730.4ms, 62.8-63.0 t/s/u),
+          # CI runs 31196515869 / 31196536004 (TTFT 671.5-674.0ms, 64.6-65.0 t/s/u).
+          - batch_size: 1
+            seq_len: 419
+            status: active
+            perf:
+              prefill_time_to_first_token: 730
+              decode_t/s/u: 62.9
+              decode_t/s: 62.9
+              prefill_time_to_first_token_tolerance: 0.3
+            accuracy: {}
       # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
       # (ci-eval-32 invocation).
       p300x2:
@@ -889,7 +958,7 @@ targets:
             seq_len: 744
             status: active
             perf:
-              decode_t/s/u: 21.9
+              decode_t/s/u: 25.3
               prefill_time_to_first_token: 118
               prefill_time_to_first_token_tolerance: 0.2
             accuracy: {}
@@ -911,6 +980,32 @@ targets:
             accuracy:
               top1: 95
               top5: 100
+  mistral-small-3.1-24b:
+    aliases: ["Mistral-Small-3.1-24B", "mistralai/Mistral-Small-3.1-24B-Instruct-2503"]
+    skus:
+      # Ported from blackhole_demo_tests.yaml / t3k_unit_tests.yaml — neither the
+      # e2e pipeline_tests nor the vision unit tests emit a benchmark payload yet,
+      # so there are no measured numbers to target. Populate after the first
+      # tiered run reports perf / accuracy.
+      wh_llmbox_perf:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08GEGWHQJF # Adam Roberge
+            team: models
+      bh_quietbox_2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08GEGWHQJF # Adam Roberge
+            team: models
+
   mixtral-8x7b:
     aliases: ["Mixtral-8x7B", "mistralai/Mixtral-8x7B-Instruct-v0.1"]
     skus:
@@ -1050,7 +1145,7 @@ targets:
               decode_t/s: 12.0
               decode_t_s_tolerance: 0.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 2048
@@ -1073,7 +1168,7 @@ targets:
               decode_t/s: 347.6
               decode_t_s_tolerance: 0.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       p300x2:
         entries:
@@ -1082,7 +1177,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
   qwen2.5-7b:
     aliases: ["Qwen2.5-7B", "Qwen/Qwen2.5-7B-Instruct"]
@@ -1120,6 +1215,25 @@ targets:
               decode_t_s_u_tolerance: 0.2
               prefill_time_to_first_token: 105
             accuracy: {}
+      bh_quietbox_2:
+        entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 96
+              top5: 99
+          - batch_size: 32
+            seq_len: 1024
+            status: active
+            perf:
+              decode_t/s: 665.9
+              decode_t/s/u: 20.81
+              decode_t_s_u_tolerance: 0.2
+              prefill_time_to_first_token: 83.3
+              prefill_time_to_first_token_tolerance: 0.2
+            accuracy: {}
   qwen2.5-vl-32b:
     aliases: ["Qwen2.5-VL-32B", "Qwen/Qwen2.5-VL-32B-Instruct"]
     skus:
@@ -1149,7 +1263,7 @@ targets:
               decode_t/s: 22.0
               decode_t_s_tolerance: 0.2
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
           - batch_size: 32
             seq_len: 2048
@@ -1159,7 +1273,7 @@ targets:
               decode_t/s/u: 17.76
               decode_t/s: 568.19
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
       p300x2:
         entries:
@@ -1168,7 +1282,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U07RY6B5FLJ # Gongyu Wang
+            owner_id: U08JFM3CFA4 # Gongyu Wang
             team: models
   qwen3-32b:
     aliases: ["Qwen3-32B", "Qwen/Qwen3-32B"]
@@ -1230,6 +1344,31 @@ targets:
               prefill_time_to_first_token: 700.0
               decode_t/s/u: 60.0
               decode_t/s: 1920.0
+            accuracy: {}
+            owner_id: U053W15B6JF # Djordje Ivanovic
+            team: models
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 89
+              top5: 97
+            owner_id: U053W15B6JF # Djordje Ivanovic
+            team: models
+      # Blackhole Galaxy runs the same Qwen3-32B model on the no-prefetcher path.
+      # Perf seeded from measured batch-32 (seq_len=507) e2e demo runs on BH Galaxy
+      # (TTFT ~1226 ms, ~33.9 tok/s/user); accuracy floor mirrors the WH Galaxy entry
+      # (measured token accuracy 95.6% top-1 / 99.8% top-5 clears it with margin).
+      bh_galaxy_perf:
+        entries:
+          - batch_size: 32
+            seq_len: 507
+            status: active
+            perf:
+              prefill_time_to_first_token: 1225.0
+              decode_t/s/u: 34.0
+              decode_t/s: 1088.0
             accuracy: {}
             owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
@@ -1367,4 +1506,137 @@ targets:
             perf: {}
             accuracy: {}
             owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+
+  vit:
+    aliases: ["ViT", "vit", "google/vit-base-patch16-224"]
+    skus:
+      # Placeholder coverage for the tier-2 (vit, wh_n150) / (vit, wh_n300) combos
+      # registered in models_e2e_tests.yaml. The demo asserts samples/sec against its
+      # own hardcoded expectation and emits no benchmark payload, and samples/sec is not
+      # in ALLOWED_TARGET_METRIC_NAMES in validate_perf_targets.py, so there is no
+      # measurable metric to declare here yet. Kept as TODO so the combo is on the books.
+      wh_n150:
+        entries:
+          - batch_size: 8
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q # Ashai Reddy Ginuga
+            team: models
+      wh_n300:
+        entries:
+          - batch_size: 8
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q # Ashai Reddy Ginuga
+            team: models
+
+  # ResNet-50 is tier 1, so unlike the tier-3 models migrated alongside it, it is not
+  # exempt from targets. The values below are measured, not placeholders:
+  #   wh_n150        batch 16   top1 75.375   fps 28.43   (run 31590127406)
+  #   wh_llmbox_perf batch 128  top1 75.456   fps 29.05   (run 31606078371)
+  #
+  # Only the two e2e SKUs are listed -- validate_perf_targets.py's
+  # _collect_active_test_combos walks models_e2e_tests.yaml alone, so unit and device-perf
+  # combos are never gap-checked.
+  #
+  # top1 and fps come from the vision measurement pair registered in
+  # validate_perf_targets.py: ("inference", "top1_accuracy") and ("inference", "fps"),
+  # emitted by run_resnet_imagenet_inference. Accuracy is held tight at 1% because it was
+  # reproducible to three decimals across both SKUs; fps gets 15% because throughput on
+  # shared CI hosts is far noisier than correctness.
+  resnet50:
+    aliases: ["ResNet-50", "resnet50", "ResNet50", "microsoft/resnet-50"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 16
+            seq_len: null
+            status: active
+            perf:
+              fps: 28.43
+              fps_tolerance: 0.15
+            accuracy:
+              top1: 75.375
+              top1_tolerance: 0.01
+            owner_id: U085GDCAZTN # Pavle Josipovic
+            team: ttnn
+      wh_llmbox_perf:
+        entries:
+          - batch_size: 128
+            seq_len: null
+            status: active
+            perf:
+              fps: 29.05
+              fps_tolerance: 0.15
+            accuracy:
+              top1: 75.456
+              top1_tolerance: 0.01
+            owner_id: U085GDCAZTN # Pavle Josipovic
+            team: ttnn
+
+  # Tier 3 is exempt from perf targets, but these three e2e tests measure throughput and
+  # previously gated nothing: prep_perf_report writes a CSV and asserts nothing, so an
+  # arbitrarily large regression stayed invisible. Each fps below is the first CI
+  # measurement on wh_n150 (run 32378297838), held to a 10% band, and each reproduced
+  # within 1.3% on run 32388317325. There is no accuracy block: only MobileNetV3
+  # validates outputs on the e2e path (PCC 0.98, in-test), and none of the three emit an
+  # accuracy metric.
+  #
+  # EfficientDet-D0 is deliberately absent. Its pipeline is use_trace=False with a single
+  # command queue, so throughput is host-dispatch bound and swung 7.49 -> 6.52 fps (13%)
+  # between runs 32378297838 and 32388317325 while these three moved 0.2-1.3%. Tier 3
+  # carries no perf obligation, so it is left unmeasured rather than gated on runner CPU
+  # contention.
+  #
+  # fps resolves to the ("inference", "fps") measurement pair, emitted by
+  # report_vision_fps in models/demos/utils/common_demo_utils.py. prep_perf_report's own
+  # payload writes throughput_iter_per_s under an "end_to_end_perf" step, which no target
+  # metric maps to -- do not add its model_name strings (efficientdet_d0-notrace-1cq,
+  # ssd512-trace-2cq, ttnn_mobilenetV3_trace_2cqs_batch_size1) as aliases here, or that
+  # payload resolves to this entry and hard-fails on a missing fps measurement.
+  mobilenetv3:
+    aliases: ["mobilenetv3", "MobileNetV3", "mobileNetV3"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf:
+              fps: 263.29
+              fps_tolerance: 0.10
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+
+  ssd512:
+    aliases: ["ssd512", "SSD512"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf:
+              fps: 40.83
+              fps_tolerance: 0.10
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+
+  yunet:
+    aliases: ["yunet", "YuNet", "YUNet"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf:
+              fps: 76.0
+              fps_tolerance: 0.10
+            owner_id: U0978501V8B # CODEOWNERS @tvardhineniTT
             team: models

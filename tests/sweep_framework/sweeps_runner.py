@@ -30,7 +30,7 @@ except ImportError:
 from framework.device_fixtures import default_device
 from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
-from framework.constants import parse_mesh_suffix
+from framework.constants import CCL_OP_TOKENS, parse_mesh_suffix
 from framework.statuses import TestStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
@@ -340,7 +340,11 @@ def run(input_queue, output_queue, config: SweepsConfig):
         except Exception as e:
             logger.warning(f"Could not enable operation tracing: {e}")
 
-    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import clear_job_device_program_cache, close_job_device
+    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+        clear_job_device_program_cache,
+        close_job_device,
+        device_canary,
+    )
 
     module_cache = {}
     cur_module = None
@@ -405,6 +409,17 @@ def run(input_queue, output_queue, config: SweepsConfig):
                     status, message, e2e_perf, device_perf, peak_memory = run_single(
                         test_module, test_vector, cur_device, config
                     )
+                # Probe the device ONLY when the vector failed. On the happy path this costs
+                # nothing; on a failure it answers the question the exception text cannot --
+                # did this op compute the wrong answer, or is the device returning garbage to
+                # everyone? 2+2 across the batch's own mesh, ~1 ms warm.
+                canary_detail = None
+                if not status and cur_device is not None:
+                    healthy, canary_detail = device_canary(cur_device)
+                    if healthy:
+                        canary_detail = None  # nothing to report; the failure stands on its own
+                    else:
+                        logger.error(f"Device canary FAILED after a failing vector: {canary_detail}")
                 output_queue.put(
                     [
                         status,
@@ -412,12 +427,19 @@ def run(input_queue, output_queue, config: SweepsConfig):
                         e2e_perf,
                         device_perf if config.measure_device_perf else None,
                         peak_memory if config.measure_memory else None,
+                        canary_detail,
                     ]
                 )
             except Exception as e:
                 if config.main_proc_verbose:
                     logger.exception(e)
-                output_queue.put([False, str(e), None, None, None])
+                canary_detail = None
+                if cur_device is not None:
+                    healthy, detail = device_canary(cur_device)
+                    if not healthy:
+                        canary_detail = detail
+                        logger.error(f"Device canary FAILED after a raised vector: {detail}")
+                output_queue.put([False, str(e), None, None, None, canary_detail])
     finally:
         _exhaust_fixture()
         close_job_device()
@@ -528,6 +550,9 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
         response[3],
         response[4],
     )
+    # 6th element (optional, so older/other producers of this tuple still unpack): set only
+    # when the vector FAILED and the post-failure device canary also failed.
+    canary_detail = response[5] if len(response) > 5 else None
     result["message"] = message
 
     logger.info(f"Test status: {status}")
@@ -572,7 +597,30 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
             result["status"] = TestStatus.PASS
     else:
         result["exception"] = message
-        if config.measure_device_perf and device_perf == DEVICE_PERF_READBACK_FAILED:
+        if canary_detail:
+            # The vector failed AND the device then failed to compute 2+2 across its own mesh.
+            # A device that cannot do that is not evidence about this op, so the failure is
+            # unattributable: mark NOT_RUN and stop rather than book it -- and rather than keep
+            # feeding vectors to a device that will manufacture more.
+            #
+            # This is what run 31295900210 needed. On UF-MN-B4-GWH03 a device timeout was
+            # followed by add/linear/nlp_create_qkv_heads_decode each returning PCC exactly 0.0;
+            # all three were booked as test failures and all three pass in other runs on other
+            # boxes. The exception text alone could not tell them apart from real regressions --
+            # a health probe can.
+            #
+            # Deliberately ahead of the profiler-readback rule below: both mean "the device is
+            # bad", and the canary is the more direct measurement of the two.
+            logger.error(
+                f"Device canary failed after input_hash='{input_hash}' failed: {canary_detail}. "
+                "The failure is unattributable to this vector -- marking NOT_RUN and ending the run."
+            )
+            result["status"] = TestStatus.NOT_RUN
+            result["exception"] = f"DEVICE CANARY FAILED (result not attributable to this vector): {canary_detail}"
+            result["device_perf"] = None
+            result["_abort_suite"] = True
+            result["_infra_abort"] = True
+        elif config.measure_device_perf and device_perf == DEVICE_PERF_READBACK_FAILED:
             # The vector FAILED and the profiler readback ALSO threw. Two independent
             # readers of the device disagreeing with expectations at once is treated as
             # evidence the device itself is bad, not that this vector is a bad test: the
@@ -712,6 +760,38 @@ def _is_device_fatal_message(message) -> bool:
     return any(sig in msg for sig in _DEVICE_FATAL_SIGNATURES)
 
 
+# Signatures of HOST/driver resource exhaustion — the vector could not be set up because the
+# machine ran out of a kernel-driver resource, not because the op is wrong. Seen on lead-models
+# run 31308857249 job mesh4x8_col_2d_p1 (runner OM1-01A01-STGWH03):
+#
+#   Failed to allocate TLB window. Look at /sys/kernel/debug/tenstorrent/16/mappings and
+#   /proc/driver/tenstorrent/16/pids for more information.
+#   Error: tt_tlb_alloc failed with error code -12 for TLB size 1048576.
+#
+# -12 is ENOMEM, and the message itself points at the driver's mappings/pids tables, i.e. TLB
+# windows held by this or an earlier process. It was booked as a plain test failure because it
+# matched no signature, which is exactly the phantom-failure mode these lists exist to remove:
+# nothing about the op was exercised.
+#
+# Treated as sticky like the other infra classes. Address-space exhaustion does not heal while
+# the holder still holds it, so continuing would feed more vectors to a host that cannot map
+# device memory. Matched on the specific invariants ("failed to allocate tlb window",
+# "tt_tlb_alloc failed"), never on a bare filename — see the note on topology_mapper.cpp.
+_HOST_RESOURCE_SIGNATURES = (
+    "failed to allocate tlb window",
+    "tt_tlb_alloc failed",
+)
+
+
+def _is_host_resource_message(message) -> bool:
+    """Return True if a returned exception indicates host/driver resource exhaustion
+    (no device TLB window could be mapped), rather than a fault in the vector."""
+    if not message:
+        return False
+    msg = str(message).lower()
+    return any(sig in msg for sig in _HOST_RESOURCE_SIGNATURES)
+
+
 # Signatures of a transient kernel-ELF build/load failure. When the persisted
 # cache is cold (CI clears it before the job) and FABRIC_2D opens all chips at
 # once, the fabric_erisc_router ELF is built+loaded concurrently across devices;
@@ -757,6 +837,74 @@ _FABRIC_INFRA_SIGNATURES = (
     "mapping_result.success",
     "inter-mesh mapping failed",
     "intra-mesh mapping failed",
+    # An ethernet core's firmware heartbeat never started or advanced, so topology discovery
+    # could not bring the cluster up. Raised by UMD as EthFirmwareHeartbeatError from
+    # topology_discovery.cpp (see third_party/umd/device/topology/topology_discovery_error.cpp):
+    #   Timed out waiting for ETH heartbeat on device ASIC ID: 159090777772799065,
+    #   ETH core e9-6 (NOC0) to advance. Stuck at 0xabcdfad8
+    # Same class as the mapping failures above -- it happens during DISCOVERY, before any op
+    # kernel runs -- and equally sticky: a dead ETH core does not restart within the job. Seen on
+    # scheduled lead-models run 32208327970 job mesh1x32_col_1d (runner OM1-01A03-STGWH03), where
+    # two vectors were booked as FAIL_ASSERT_EXCEPTION with this exact text before a later vector
+    # tripped a signature that WAS recognised and aborted the run -- so the same host fault
+    # produced both phantom failures and a correct NOT_RUN, purely by ordering.
+    # Matched on the invariant phrase, not on an ASIC ID or core coordinate, both of which vary.
+    "timed out waiting for eth heartbeat",
+    # The sibling error from the same UMD file, raised by the same discovery step: an ETH core's
+    # routing firmware is in the wrong state, so the cluster never comes up. UMD reports it as
+    # UnexpectedRoutingFirmwareConfigError from verify_routing_firmware_state
+    # (topology_discovery_wormhole.cpp:200):
+    #   Routing firmware for device ASIC ID: 87033183734870352 ETH core e9-0 (NOC0) is
+    #   unexpectedly enabled.
+    # It was named as a candidate when the heartbeat signature went in but deliberately left out
+    # until it was actually seen, rather than added on speculation. Scheduled lead-models run
+    # 32439829508 saw it: 3 vectors (2 add, 1 linear) booked as FAIL_ASSERT_EXCEPTION on one host,
+    # for a fault that happens before any op kernel runs.
+    # Matched on the invariant phrase -- the ASIC ID, the core and enabled/disabled all vary.
+    "routing firmware for device asic id",
+    # The kernel driver cannot enumerate a PCI device, so Cluster construction never completes. UMD
+    # raises it from pci_device.cpp:442 with the strerror text appended, e.g.
+    #   Query mappings failed on device 17: No such device
+    #   Location: .../umd/device/pcie/pci_device.cpp:442
+    #    1. TTDevice::create -> 2. TopologyDiscovery::get_connected_devices ->
+    #    3. create_ethernet_map -> 4. discover -> 5. Cluster::Cluster
+    # Same discovery path as the two signatures above, and equally sticky: a device that is not
+    # enumerable does not reappear mid-job. Seen escalating on consecutive scheduled lead-models runs
+    # -- 32612848099 booked 2 such failures, 32683040586 booked 84, all against add_model_traced on a
+    # single host each time, for a fault that happens before any op kernel runs.
+    # Matched on the invariant phrase: the device number and the strerror string both vary
+    # ("No such device" is ENODEV, but the same call reports other errno values).
+    "query mappings failed on device",
+    # The host came up with fewer chips than the traced topology needs, so mesh open fails
+    # before any kernel runs. Seen on main run 30681057227 job 91319472767 (runner g03glx03):
+    #   TT_FATAL @ tt_metal/distributed/system_mesh.cpp:159: requested_size <= system_size
+    #   Requested mesh shape MeshShape([1, 32]) requires 32 devices, but only 16 devices are
+    #   available in the system mesh MeshShape([4, 4]).
+    # Every Galaxy-traced vector asks for 32 devices, so a half-populated box failed all 65
+    # of them identically and they were booked as FAIL_ASSERT_EXCEPTION -- 65 phantom test
+    # failures for one broken runner. Nothing was tested, so this is NOT_RUN + abort.
+    "devices are available in the system mesh",
+    "requested_size <= system_size",
+    # The fabric routers never reached the synced state, so the control plane never came up and
+    # no kernel ran. Seen on lead-models run 30696173498 job mesh4x4_col_2d_conv2d (a HEALTHY
+    # 32-chip runner, topology OK):
+    #   TT_THROW @ tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp:271
+    #   Fabric Router Sync: Timeout after 10000 ms on Device 19: expected status 0xa2b2c2d2.
+    #   Master chan=4 got 0xa1b1c1d1
+    # followed by a cascade of "Read unexpected run_mailbox value from core 25-17" as the
+    # half-initialized device is reused. The run_mailbox wedge IS already a signature, but the
+    # exception that propagates to the sweep is this fabric-init throw, so 8 vectors were booked
+    # as FAIL_ASSERT_EXCEPTION. Nothing was tested -> NOT_RUN + abort.
+    #
+    # NOTE: unlike the half-populated-box signatures above, a router-sync timeout on a healthy
+    # box is a genuine fabric bring-up defect, not just a bad runner. Classifying it here stops
+    # the phantom test failures; it does NOT make the underlying timeout acceptable and it is
+    # being raised with the fabric owners separately.
+    #
+    # Keyed on the sync message itself, NOT on "fabric_firmware_initializer.cpp": that file
+    # raises for other conditions too, and a filename-only signature would reclassify any of
+    # them as a sticky infra abort (same trap as topology_mapper.cpp above).
+    "fabric router sync",
 )
 
 
@@ -779,8 +927,12 @@ def _is_infra_failure_message(message) -> bool:
     does not recover within the job (a wedge cascades into dispatch hangs, slow
     Galaxy resets, and all-zero/garbage outputs that mis-report as PCC failures).
     So rather than reset+continue on a machine that "once degraded is always
-    degraded", we classify the vector NOT_RUN and exit the whole run early."""
-    return _is_fabric_infra_message(message) or _is_device_fatal_message(message)
+    degraded", we classify the vector NOT_RUN and exit the whole run early.
+
+    Also covers host/driver resource exhaustion (no TLB window could be mapped):
+    the setup failed before the op ran, and the resource does not free itself
+    while its holder still holds it."""
+    return _is_fabric_infra_message(message) or _is_device_fatal_message(message) or _is_host_resource_message(message)
 
 
 def _set_crash_hang_defaults(result):
@@ -1556,17 +1708,13 @@ def run_sweeps(
     job_child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
     job_worker = None
     if job_child_mode and _is_galaxy_job():
-        # Prime the device-count cache in THIS (main) process before the worker
-        # opens the job device — result export's card-type fallback queries the
-        # count (constructs a cluster), which would collide with the worker's held
-        # device (CHIP_IN_USE) if queried live. No-op when RUNNER_LABEL is set (CI).
-        if not os.environ.get("RUNNER_LABEL"):
-            try:
-                from framework.result_destination import prime_device_count
-
-                prime_device_count()
-            except Exception:
-                pass
+        # NOTE: the main process deliberately does NOT touch the device here. A
+        # prime_device_count() call used to sit at this point to warm a device-count cache for
+        # a cosmetic results label; on Galaxy it constructed a MetalContext in the PARENT, and
+        # the child's subsequent mesh open then forced a MetalContext teardown + dispatch
+        # relaunch, hanging the first vector until the 300s timeout. See the removal note in
+        # result_destination.get_card_type(). Keep this path device-free: the whole
+        # one-device-per-job design rests on exactly one MetalContext existing per job.
         # Enable job-level device reuse in create_mesh_device (inherited by the
         # forked worker). Only vectors sharing a device config reach a given
         # process (two-pass splits by dispatch axis), so the cached device is
@@ -1813,8 +1961,7 @@ def _is_multidevice_ccl_module(module_name):
     profiler is safe to enable for the run -- see _should_skip_device_profiler."""
     if not module_name:
         return False
-    _ccl = ("all_gather", "all_reduce", "reduce_scatter", "all_to_all", "all_broadcast")
-    return any(any(c in m for c in _ccl) for m in str(module_name).split(",") if m)
+    return any(any(c in m for c in CCL_OP_TOKENS) for m in str(module_name).split(",") if m)
 
 
 def _should_skip_device_profiler(config):
@@ -1842,6 +1989,50 @@ def _should_skip_device_profiler(config):
     FAIL_UNSUPPORTED_DEVICE_PERF) -- see _populate_result_from_response."""
     if _is_multidevice_ccl_module(config.module_name) and config.mesh_dims != "1d":
         return True
+
+    # The same overflow, reached a second way. mesh_tensor_utils configures the fabric on the
+    # GENERIC device path too (fabric_config_for_mesh), so a non-CCL batch on a 2D mesh also
+    # opens under FABRIC_2D -- and the overflow is a property of FABRIC_2D + profiler at mesh
+    # open, not of the op that happens to run afterwards. Without this gate those jobs wedge at
+    # open (run_mailbox 0x40) instead of reporting results. TTNN_SWEEP_FABRIC=off disables the
+    # fabric configuration and, with it, this gate.
+    try:
+        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import fabric_config_for_mesh
+        import ttnn
+
+        mesh_shape = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
+        if mesh_shape and "x" in mesh_shape:
+            rows, cols = (int(x) for x in mesh_shape.split("x", 1))
+            if fabric_config_for_mesh((rows, cols)) == ttnn.FabricConfig.FABRIC_2D:
+                logger.info(
+                    f"Skipping device profiler: mesh {mesh_shape} opens under FABRIC_2D, and "
+                    "FABRIC_2D + profiler overflows the idle-erisc code region at mesh open "
+                    "(idle_erisc.elf 0x5544 > 0x5390). Vectors report device-perf N/A and PASS."
+                )
+                return True
+        elif fabric_config_for_mesh((2, 2)) is not None:
+            # No declared mesh, and the fabric is enabled. We cannot resolve the real mesh here:
+            # this runs in the MAIN process before any device is opened, and the open path's
+            # fallback (get_mesh_shape -> hardware auto-detect) constructs a cluster. Doing that
+            # in the parent is what wedges Galaxy dispatch when the worker later opens the mesh
+            # -- see the note on get_card_type/prime_device_count.
+            #
+            # get_model_traced_mesh_shape's own docstring records the consequence: with
+            # MESH_DEVICE_SHAPE unset, auto-detect returns (4, 8) on a Galaxy, so the open WOULD
+            # enable FABRIC_2D while the profiler is on -> overflow at mesh open. The two errors
+            # are not symmetric (lose device-perf vs. wedge the run), so be conservative and skip.
+            # The probe shape (2, 2) only asks "is fabric enabled for a 2D mesh at all?", so
+            # TTNN_SWEEP_FABRIC=off correctly falls through and keeps device-perf.
+            logger.info(
+                "Skipping device profiler: MESH_DEVICE_SHAPE is unset and the fabric is enabled, "
+                "so the mesh the open path auto-detects may be 2D (FABRIC_2D + profiler overflows "
+                "idle-erisc at mesh open). Set MESH_DEVICE_SHAPE to the batch's mesh, or "
+                "TTNN_SWEEP_FABRIC=off, to get device-perf back."
+            )
+            return True
+    except Exception as e:
+        logger.warning(f"Could not evaluate the fabric profiler gate ({e}); leaving the profiler as-is.")
+
     return False
 
 

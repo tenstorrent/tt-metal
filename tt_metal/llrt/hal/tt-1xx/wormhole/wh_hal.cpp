@@ -91,6 +91,9 @@ public:
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        // Upper bound: tmu-crt0.o, the 2 ncrisc entry objs and substitutes.o. noc.o only applies to
+        // processor_id 0, so it can never coexist with the ncrisc ones.
+        objs.reserve(4);
         if (params.is_fw and params.core_type != HalProgrammableCoreType::ACTIVE_ETH) {
             objs.push_back("runtime/hw/lib/wormhole/tmu-crt0.o");
         }
@@ -117,6 +120,8 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        // Upper bound: 8 common includes plus at most 3 from the core type switch.
+        includes.reserve(11);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/common");

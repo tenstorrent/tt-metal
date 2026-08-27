@@ -26,7 +26,6 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose.h"
 #include "sdpa_bw_compute_utils.hpp"
 
 // ----------------------------------------------------------------------
@@ -55,11 +54,15 @@
 //     for each query head h in group:
 //       for each query row q:
 //         P[q,k] = softmax(Q[q] @ K[k]^T / sqrt(d) + mask[q,k])  // recomputed
-//         dV[k] += P[q,k]^T @ dO[q]                               // accumulate
-//         u_scalar = rowsum(dO[q] ⊙ O[q])
 //         dP[q,k] = dO[q] @ V[k]^T
-//         dS[q,k] = P[q,k] * (dP[q,k] - u_scalar) * scale
+//         dS[q,k] = P[q,k] * (dP[q,k] - u_scalar) * scale         // + P^T, dS^T in DST
+//         dV[k] += P[q,k]^T @ dO[q]                               // accumulate
 //         dK[k] += dS[q,k]^T @ Q[q]                               // accumulate
+//
+// P^T and dS^T are produced by in-DST 32-bit transpose_dest right after the dS
+// elementwise chain (P is already resident in DST for the dS multiply), so neither
+// transpose needs a pack->CB->unpack roundtrip. u_scalar = rowsum(dO ⊙ O) is
+// precomputed by the Q kernel.
 // ----------------------------------------------------------------------
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
@@ -86,8 +89,8 @@ constexpr uint32_t cb_grad_value_accum = tt::CBIndex::c_8;    // L1 accumulator 
 constexpr uint32_t cb_grad_key_accum = tt::CBIndex::c_9;      // L1 accumulator for grad_key
 constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;  // Recomputed attention weights = softmax(QK^T / sqrt(Et))
 constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_11;  // Gradient w.r.t. attention: dL/dP
-constexpr uint32_t cb_grad_scores = tt::CBIndex::c_12;        // Gradient w.r.t. QK scores
-constexpr uint32_t cb_transpose_wh = tt::CBIndex::c_13;       // Transpose of attention weights
+constexpr uint32_t cb_grad_scores_transposed = tt::CBIndex::c_12;   // dS^T, packed directly from DST
+constexpr uint32_t cb_attn_weights_transposed = tt::CBIndex::c_13;  // P^T, packed directly from DST
 constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per row (precomputed by Q kernel)
 constexpr uint32_t cb_grad_key = tt::CBIndex::c_15;           // Output: grad_K
 constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;         // Output: grad_V
@@ -105,6 +108,12 @@ const uint32_t num_of_interm_tiles = 1U;  // single FP32 logsumexp tile per Q ro
 FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_wait_front(cb_key, qk_tiles);
     cb_wait_front(cb_value, v_tiles);
+
+    // The last PACK targets of the previous row are the BF16 outputs (pack_tiles_to_output),
+    // while every PACK target inside the loop below is Float32. Reconfigure once per row here
+    // so the 2-arg (conditional) pack_reconfig calls in the loop can skip the reprogram — the
+    // 1-arg form would pay an unconditional reprogram (and implicit SFPU drain) every iteration.
+    pack_reconfig_data_format(cb_grad_key, cb_attention_weights);
 
 #ifdef CAUSAL_MASK
     const uint32_t k_row_tile = global_row_idx % Ht;
@@ -160,14 +169,30 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             tile_regs_commit();
             tile_regs_wait();
             cb_reserve_back(cb_attention_weights, onetile);
-            pack_reconfig_data_format(cb_attention_weights);
+            // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured
+            // one. The previous PACK target is cb_grad_key_accum (update_grad_key of the previous
+            // iteration); on the first iteration of a row the actual format is set by the row-start
+            // reconfig above, so the skip stays correct.
+            pack_reconfig_data_format(cb_grad_key_accum, cb_attention_weights);
             pack_tile(matmul_accum_reg, cb_attention_weights);
             tile_regs_release();
             cb_push_back(cb_attention_weights, onetile);
 
-            update_grad_value(
+            // u_scaler is precomputed by Q kernel and loaded by reader into cb_u_scalar_row
+
+            compute_grad_attn_weights(
+                cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, cb_attention_weights, scaler_bits);
+
+            compute_grad_scores_and_transposes(
+                cb_grad_attn_weights,
                 cb_attention_weights,
-                cb_transpose_wh,
+                cb_u_scalar_row,
+                scaler_bits,
+                cb_grad_scores_transposed,
+                cb_attn_weights_transposed);
+
+            update_grad_value(
+                cb_attn_weights_transposed,
                 cb_grad_output,
                 cb_grad_value_accum,
                 v_tiles,
@@ -175,27 +200,19 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
                 /* do_accumulate */ q_idx > 0 || head_idx > 0);
             cb_wait_front(cb_grad_value_accum, v_tiles);
 
-            // u_scaler is precomputed by Q kernel and loaded by reader into cb_u_scalar_row
-
-            compute_grad_attn_weights(
-                cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, cb_grad_value_accum, scaler_bits);
-
-            compute_grad_scores(
-                cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
-
             update_grad_key(
-                cb_grad_scores,
+                cb_grad_scores_transposed,
                 cb_query,
-                cb_transpose_wh,
                 cb_grad_key_accum,
                 qk_tiles,
                 block_size_q,
+                /* cb_prev_pack */ cb_grad_value_accum,
+                /* cb_prev_srca */ cb_grad_output,
                 /* do_accumulate */ q_idx > 0 || head_idx > 0);
             cb_wait_front(cb_grad_key_accum, qk_tiles);
 
             cb_pop_front(cb_u_scalar_row, onetile);
             cb_pop_front(cb_grad_attn_weights, onetile);
-            cb_pop_front(cb_grad_scores, onetile);
             cb_pop_front(cb_attention_weights, onetile);
             cb_pop_front(cb_intermediates, num_of_interm_tiles);
 
@@ -222,11 +239,12 @@ void kernel_main() {
 #endif
 
     init_sfpu(cb_query, cb_key);
-    binary_op_init_common(cb_grad_output, cb_query, cb_key);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(cb_grad_output, cb_query, cb_key);
 
     cb_wait_front(cb_mat_mul_reduction, onetile);
 
-    // binary_op_init_common above does the one-time HW config; each matmul site below
+    // compute_kernel_hw_startup above does the one-time HW config; each matmul site below
     // re-establishes its state with reconfig_data_format + matmul_init.
     matmul_init(cb_query, cb_key);
 

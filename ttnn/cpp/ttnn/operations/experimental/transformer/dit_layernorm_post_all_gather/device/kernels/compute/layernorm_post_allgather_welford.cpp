@@ -57,7 +57,7 @@ void kernel_main() {
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(1);
 
-    binary_op_init_common(dfb_inp_id, dfb_inp_id, dfb_stats_reduced_id);
+    compute_kernel_hw_startup(dfb_inp_id, dfb_inp_id, dfb_stats_reduced_id);
 
     dfb_eps.wait_front(1);  // broadcast epsilon is ready
 
@@ -80,7 +80,7 @@ void kernel_main() {
         reconfig_data_format(dfb_stats_reduced_id, dfb_eps_id);
         pack_reconfig_data_format(dfb_recip_sqrt_var_id);
 
-        add_tiles_init(dfb_stats_reduced_id, dfb_eps_id);
+        add_init(dfb_stats_reduced_id, dfb_eps_id);
         rsqrt_tile_init<true>();
         tile_regs_acquire();
         tile_regs_wait();
@@ -97,7 +97,7 @@ void kernel_main() {
             // 1) x_minus_mean
             reconfig_data_format(dfb_inp_id, dfb_stats_reduced_id);
             pack_reconfig_data_format(dfb_intermediate_id);
-            sub_bcast_cols_init_short(dfb_inp_id, dfb_stats_reduced_id);
+            sub_bcast_cols_init(dfb_inp_id, dfb_stats_reduced_id);
             dfb_inp.wait_front(block_size);
             dfb_intermediate.reserve_back(block_size);
             tile_regs_acquire();
@@ -116,7 +116,7 @@ void kernel_main() {
             DataflowBuffer norm_target_dfb_obj(norm_target_dfb);
             reconfig_data_format(dfb_intermediate_id, dfb_recip_sqrt_var_id);
             pack_reconfig_data_format(norm_target_dfb);
-            mul_bcast_cols_init_short(dfb_intermediate_id, dfb_recip_sqrt_var_id);
+            mul_bcast_cols_init(dfb_intermediate_id, dfb_recip_sqrt_var_id);
             dfb_intermediate.wait_front(block_size);
             dfb_recip_sqrt_var.wait_front(1);
             tile_regs_acquire();
@@ -143,7 +143,7 @@ void kernel_main() {
                 DataflowBuffer gamma_out_dfb_obj(gamma_out_dfb);
                 reconfig_data_format(norm_target_dfb, dfb_gamma_id);
                 pack_reconfig_data_format(gamma_out_dfb);
-                mul_bcast_rows_init_short(norm_target_dfb, dfb_gamma_id);
+                mul_bcast_rows_init(norm_target_dfb, dfb_gamma_id);
 
                 dfb_gamma.wait_front(col_tile + block_size);
                 norm_target_dfb_obj.wait_front(block_size);
@@ -171,7 +171,7 @@ void kernel_main() {
                 // Input is always in cb_intermediate_id, output is always cb_out_id
                 reconfig_data_format(dfb_intermediate_id, dfb_beta_id);
                 pack_reconfig_data_format(dfb_out_id);
-                add_bcast_rows_init_short(dfb_intermediate_id, dfb_beta_id);
+                add_bcast_rows_init(dfb_intermediate_id, dfb_beta_id);
 
                 dfb_beta.wait_front(col_tile + block_size);
                 dfb_intermediate.wait_front(block_size);

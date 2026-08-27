@@ -139,4 +139,22 @@ __attribute__((noinline)) inline bool validate_tensor_shape_tile_dependent_ops_(
            (face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16) && (face_c_dim == 16);
 }
 
+/**
+ * @brief Whether a tile shape is supported by the SDPA blocked bcast-col SUB path.
+ *
+ * Stricter than @ref validate_tensor_shape_tile_dependent_ops_ on purpose: the COL face pattern needs
+ * two full 16-row faces per face-row (the math walk covers a face-row with four 8-row ops and reads
+ * the face-row's first SrcB face twice), so only a 2-face-column grid of full faces works - 32x32
+ * (2x2 faces) or 16x32 (1x2 faces). A shape with one face column (32x16) or short faces
+ * (face_r_dim < 16) would make the walk write more dest rows than the tile owns.
+ *
+ * One predicate for all three call sites of the op: Unpack init, Math init, and the math
+ * execute that derives the dest slot stride from the same shape, instead of hand-synced copies.
+ **/
+constexpr bool validate_tensor_shape_sub_bcast_col_custom_(const TensorShape& tensor_shape)
+{
+    return tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.face_c_dim == MAX_FACE_C_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM &&
+           (tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM || tensor_shape.num_faces_r_dim == 1);
+}
+
 } // namespace ckernel

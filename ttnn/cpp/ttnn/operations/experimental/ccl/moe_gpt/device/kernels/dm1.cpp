@@ -346,16 +346,12 @@ void kernel_main() {
     }
 
     // Signal combine cores that all expert data is written
-    uint32_t combine_semaphore_addr = get_semaphore(combine_semaphore_id);
+    Semaphore<> combine_sem(combine_semaphore_id);
     for (uint32_t y = 0; y < height_shard_dim; ++y) {
         uint32_t idx = combine_core_x + y * width_shard_dim;
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-        // (combine destination semaphore) cannot be wrapped by Semaphore<>::inc
-        uint64_t dest_sem_noc_addr =
-            get_noc_addr(output_shard_core_map[2 * idx], output_shard_core_map[2 * idx + 1], combine_semaphore_addr);
-        noc_semaphore_inc(dest_sem_noc_addr, 1, 1, vchannel);
+        combine_sem.up(noc1_obj, output_shard_core_map[2 * idx], output_shard_core_map[2 * idx + 1], 1, vchannel);
     }
-    // The noc_semaphore_inc calls above issue on NoC 1 (matching the original
+    // The combine_sem.up() calls above issue on NoC 1 (matching the original
     // noc_async_atomic_barrier(/*noc=*/1) call), so barrier on noc1_obj.
     noc1_obj.async_atomic_barrier();
 }

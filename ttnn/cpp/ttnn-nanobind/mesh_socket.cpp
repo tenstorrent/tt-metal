@@ -74,11 +74,13 @@ void py_module_types(nb::module_& mod) {
                 tt::tt_metal::BufferType,
                 uint32_t,
                 std::optional<tt::tt_metal::SubDeviceId>,
-                std::optional<tt::tt_metal::SubDeviceId>>(),
+                std::optional<tt::tt_metal::SubDeviceId>,
+                bool>(),
             nb::arg("socket_storage_type"),
             nb::arg("fifo_size"),
             nb::arg("sender_sub_device") = nb::none(),
             nb::arg("receiver_sub_device") = nb::none(),
+            nb::arg("per_core_allocation") = false,
             R"doc(
                 Initialize a SocketMemoryConfig with socket storage type, fifo size, sender sub device and receiver sub device.
 
@@ -87,7 +89,20 @@ void py_module_types(nb::module_& mod) {
                     fifo_size (int): The size of the fifo
                     sender_sub_device (SubDeviceId, optional): The sub device of the sender
                     receiver_sub_device (SubDeviceId, optional): The sub device of the receiver
-            )doc");
+                    per_core_allocation (bool, optional): When True and socket_storage_type is L1, allocate the
+                        receiver data (FIFO) buffer with the per-core (HYBRID) allocator so it only occupies L1 on
+                        the receiver connection core instead of every worker core. Requires the device to be opened
+                        with TT_METAL_ALLOCATOR_MODE_HYBRID=1. Defaults to False (no behavior change).
+            )doc")
+        .def_rw(
+            "per_core_allocation",
+            &tt::tt_metal::distributed::SocketMemoryConfig::per_core_allocation,
+            "Whether the receiver data buffer uses per-core (HYBRID) allocation")
+        .def_rw(
+            "socket_storage_type",
+            &tt::tt_metal::distributed::SocketMemoryConfig::socket_storage_type,
+            "The buffer type used for the socket data buffer")
+        .def_rw("fifo_size", &tt::tt_metal::distributed::SocketMemoryConfig::fifo_size, "The size of the socket FIFO");
     nb::class_<tt::tt_metal::distributed::SocketConfig>(mod, "SocketConfig")
         .def(
             "__init__",

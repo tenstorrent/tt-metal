@@ -646,7 +646,8 @@ MatmulProgramConfig get_matmul_program_config(
     // TODO: allow overwriting of grid size by user_core_coord after allowing
     // support of arbitrary compute grid and more generic sharded output tensor
     // creation
-    auto grid_size = input_tensor_a.shard_spec().value().grid.bounding_box().grid_size();
+    const auto grid_bbox = input_tensor_a.shard_spec().value().grid.bounding_box();
+    auto grid_size = grid_bbox.grid_size();
 
     const auto& a_shape_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
     const auto& b_shape_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
@@ -659,9 +660,8 @@ MatmulProgramConfig get_matmul_program_config(
             input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Input tensor B must have INTERLEAVED memory layout, got: {}",
             input_tensor_b.memory_config().memory_layout());
-        if ((input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or
-             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) and
-            (grid_size.x > 1 or grid_size.y > 1)) {
+        if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             TT_FATAL(
                 input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
                 "Input tensor A must have ROW_MAJOR shard orientation, got: {}",
@@ -721,6 +721,10 @@ MatmulProgramConfig get_matmul_program_config(
                 /*adjust_in0_block_w=*/false);
             uint32_t out_block_h = mutlti_dim_per_core_factor[0];
             uint32_t out_block_w = mutlti_dim_per_core_factor[1];
+            // Sharded output requires out_block_h == 1 unless out_block_w == per_core_N.
+            if (per_core_N_equals_subblock_w_constraint && out_block_w != per_core_N) {
+                out_block_h = 1;
+            }
 
             auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
                 out_block_h, out_block_w, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
@@ -739,6 +743,7 @@ MatmulProgramConfig get_matmul_program_config(
                 .fuse_batch = true,
                 .fused_activation = fused_activation,
                 .mcast_in0 = mcast_in0,
+                .allowed_worker_cores = CoreRangeSet(grid_bbox),
             };
         }
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
@@ -917,48 +922,47 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const std::optional<unary::UnaryWithParam>& user_fused_activation,
     const bool user_run_batched,
     const tt::tt_metal::DataType output_dtype) {
-    const bool has_user_grid = user_core_coord.has_value();
-    if (has_user_grid || !input_tensor_a.is_sharded()) {
-        CoreCoord core_coord;
-        if (has_user_grid) {
-            core_coord = user_core_coord.value();
-            return create_matmul_program_config(
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                bias_single_tile_size,
-                user_core_coord,
-                user_fused_activation,
-                compute_kernel_config,
-                mem_config,
-                output_dtype);
-        }
-        tt::tt_metal::IDevice* device = input_tensor_a.device();
-        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-        return create_simple_matmul_program_config(
+    // For sharded A, derive config from the tensor's shard_spec (not user core_grid).
+    if (input_tensor_a.is_sharded()) {
+        bool bmm = user_run_batched;
+        return get_matmul_program_config(
             input_tensor_a,
             input_tensor_b,
             transpose_a,
             transpose_b,
             bias_single_tile_size,
+            mem_config,
+            std::nullopt,
+            !bmm,
+            user_core_coord,
             compute_kernel_config,
-            compute_with_storage_grid_size,
+            output_dtype);
+    }
+    const bool has_user_grid = user_core_coord.has_value();
+    if (has_user_grid) {
+        return create_matmul_program_config(
+            input_tensor_a,
+            input_tensor_b,
+            transpose_a,
+            transpose_b,
+            bias_single_tile_size,
+            user_core_coord,
+            user_fused_activation,
+            compute_kernel_config,
             mem_config,
             output_dtype);
     }
-    bool bmm = user_run_batched;
-    return get_matmul_program_config(
+    tt::tt_metal::IDevice* device = input_tensor_a.device();
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    return create_simple_matmul_program_config(
         input_tensor_a,
         input_tensor_b,
         transpose_a,
         transpose_b,
         bias_single_tile_size,
-        mem_config,
-        std::nullopt,
-        !bmm,
-        user_core_coord,
         compute_kernel_config,
+        compute_with_storage_grid_size,
+        mem_config,
         output_dtype);
 }
 
@@ -1149,6 +1153,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
         compute_kernel_config,
         output_dtype);
     per_core_N = per_core_M;
+    per_core_M = std::min(per_core_M, Mt);
+    per_core_N = std::min(per_core_N, Nt);
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     num_blocks_y = (Mt - 1) / per_core_M + 1;
@@ -1288,10 +1294,24 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
             uint32_t out_block_h = per_core_M;
             uint32_t out_block_w = per_core_N;
-            out_subblock_h = 4;
-            out_subblock_w = 2;
-            if (out_subblock_w != per_core_N) {
-                out_subblock_h = 1;
+            const bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
+            auto subblock_hw =
+                bmm_op_utils::get_matmul_subblock_params(per_core_M, per_core_N, false, false, fp32_dest_acc_en);
+            out_subblock_h = std::get<0>(subblock_hw);
+            out_subblock_w = std::get<1>(subblock_hw);
+            // Sharded output additionally requires out_subblock_w == per_core_N or out_subblock_h == 1.
+            if (out_subblock_h != 1 and out_subblock_w != per_core_N) {
+                for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+                    out_subblock_h = std::get<0>(subblock_hw);
+                    out_subblock_w = std::get<1>(subblock_hw);
+                    if (fp32_dest_acc_en and (out_subblock_h * out_subblock_w) > 4) {
+                        continue;
+                    }
+                    if ((out_subblock_h == 1 or out_subblock_w == per_core_N) and per_core_M % out_subblock_h == 0 and
+                        per_core_N % out_subblock_w == 0) {
+                        break;
+                    }
+                }
             }
             if (all_dram_interleaved) {
                 in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1)
@@ -1314,8 +1334,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 out_block_w = mutlti_dim_per_core_factor[1];
                 in0_block_w = mutlti_dim_per_core_factor[2];
 
-                bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
-                auto subblock_hw =
+                subblock_hw =
                     bmm_op_utils::get_matmul_subblock_params(out_block_h, out_block_w, false, false, fp32_dest_acc_en);
                 out_subblock_h = std::get<0>(subblock_hw);
                 out_subblock_w = std::get<1>(subblock_hw);
@@ -1331,7 +1350,10 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 .per_core_N = per_core_N,
                 .transpose_mcast = transpose_mcast,
                 .fused_activation = std::nullopt,
-                .fuse_batch = false,
+                // Sharded out CB cannot hold a batch loop. Fold A's batch into M when B is
+                // unbatched (fuse_batch requires B batch == 1).
+                .fuse_batch = mem_config.is_sharded() and get_batch_size(a_shape_padded) > 1 and
+                              get_batch_size(b_shape_padded) == 1,
             };
         }
     }

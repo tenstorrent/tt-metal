@@ -60,6 +60,24 @@ class ThroughputCallback(TrainerCallback):
         self._tokens_in_step = 0
 
 
+class EpochCallback(TrainerCallback):
+    """Print `Epoch N completed` each time training crosses a full pass over the corpus."""
+
+    def __init__(self, steps_per_epoch: float) -> None:
+        self._steps_per_epoch = steps_per_epoch
+        self._completed = 0
+
+    def on_train_begin(self, trainer: SFTTrainer) -> None:
+        # Baseline from the starting step so resuming mid-run doesn't replay past epochs.
+        self._completed = int(trainer.step / self._steps_per_epoch)
+
+    def on_step_end(self, trainer: SFTTrainer, step: int, *args: Any, **kwargs: Any) -> None:
+        completed = int(step / self._steps_per_epoch)
+        while self._completed < completed:
+            self._completed += 1
+            print(f"Epoch {self._completed} completed")
+
+
 class MemoryTrackerCallback(TrainerCallback):
     """In-loop FORWARD_PASS / BACKWARD_PASS / FIRST_ITERATION_COMPLETE snapshots over step 1, then deregister.
 
@@ -67,11 +85,20 @@ class MemoryTrackerCallback(TrainerCallback):
     snapshots are included); this callback only adds the per-step snapshots and closes the session.
     """
 
+    def __init__(self) -> None:
+        self._micro_step = 0
+
+    def _snapshot_name(self, trainer: SFTTrainer, name: str) -> str:
+        if trainer.config.gradient_accumulation_steps > 1:
+            return f"{name}_micro_{self._micro_step}"
+        return name
+
     def on_after_forward(self, trainer: SFTTrainer, batch: Batch, loss: float) -> None:
-        MemoryUsageTracker.snapshot("FORWARD_PASS")
+        MemoryUsageTracker.snapshot(self._snapshot_name(trainer, "FORWARD_PASS"))
 
     def on_after_backward(self, trainer: SFTTrainer, batch: Batch) -> None:
-        MemoryUsageTracker.snapshot("BACKWARD_PASS")
+        MemoryUsageTracker.snapshot(self._snapshot_name(trainer, "BACKWARD_PASS"))
+        self._micro_step += 1
 
     def on_step_end(self, trainer: SFTTrainer, step: int, *args: Any, **kwargs: Any) -> None:
         MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")

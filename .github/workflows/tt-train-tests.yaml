@@ -20,7 +20,7 @@ on:
       enabled-skus:
         required: true
         type: string
-        description: "Comma-separated SKUs (e.g. wh_n150_civ2,wh_n300_civ2). Maps to runs_on via .github/sku_config.yaml."
+        description: "Comma-separated SKUs (e.g. bh_p100,bh_p150b_civ2). Maps to runs_on via .github/sku_config.yaml."
       enable-watcher:
         required: false
         type: boolean
@@ -63,6 +63,10 @@ on:
           Max allowed timeout (minutes) for any individual test SKU entry in the
           tests yaml. Verified during load-test-matrix via verify_time_budget.py.
           Empty skips the per-test ceiling check.
+
+permissions:
+  contents: read
+  packages: read
 
 jobs:
   load-test-matrix:
@@ -176,16 +180,7 @@ jobs:
       - name: Install ttml module
         if: ${{ inputs.wheel-artifact-name }}
         timeout-minutes: 10
-        run: |
-          SITE_PACKAGES=$(uv pip show ttnn | sed -n 's/^Location: //p')
-          if [[ -z "$SITE_PACKAGES" ]]; then
-            echo "ERROR: Could not determine site-packages from ttnn. Is the wheel installed?"
-            exit 1
-          fi
-          TTML_SRC_DIR="$TT_METAL_HOME/tt-train/sources/ttml"
-          TTML_BUILD_DIR="$TT_METAL_HOME/build/tt-train/sources/ttml"
-          echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
-          echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
+        run: bash -c ./tt-train/scripts/setup_pth.sh
 
       - name: Install Python dependencies for metrics
         if: ${{ inputs.test-category == 'perf' }}
@@ -200,6 +195,26 @@ jobs:
             --backend sysfs \
             --out /work/power_report.json \
             -- bash -c '${{ matrix.test-group.cmd }}'
+
+      - name: Upload loss plot
+        id: upload-loss-plot
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          # Set archive: false to get a direct link to the PNG. run_models.py prefixes
+          # each PNG filename with the model + card, so avoiding collision between each
+          # matrix job.
+          name: loss-plot-${{ matrix.test-group.name }}-${{ matrix.test-group.sku }}
+          path: /work/generated/tt-train-metrics/plots/*losses.png
+          if-no-files-found: warn
+          retention-days: 30
+          archive: false
+
+      - name: Add loss plot to summary
+        if: ${{ !cancelled() && steps.upload-loss-plot.outputs.artifact-url != '' }}
+        run: |
+          cat /work/generated/tt-train-metrics/plots/*losses.md >> $GITHUB_STEP_SUMMARY
+          echo "[Download full loss plot image](${{ steps.upload-loss-plot.outputs.artifact-url }})" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload power report
         if: ${{ !cancelled() }}

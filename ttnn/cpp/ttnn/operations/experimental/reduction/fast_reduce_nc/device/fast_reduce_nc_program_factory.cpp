@@ -293,6 +293,7 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
     // the tile_offset is incremented by it for the reader to adjust it's
     // reading pattern.
     std::vector<CoreCoord> ordered_cores;
+    ordered_cores.reserve(use_sub_core_grids ? all_cores.num_cores() : num_cores_to_be_used);
     if (use_sub_core_grids) {
         for (const auto& range : all_cores.ranges()) {
             for (auto y = range.start_coord.y; y <= range.end_coord.y; ++y) {

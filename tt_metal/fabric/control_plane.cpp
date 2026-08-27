@@ -285,8 +285,10 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
         TT_FATAL(
             *ctx.size() == 1 && *ctx.rank() == 0,
             "Not specifying both TT_MESH_ID and TT_MESH_HOST_RANK is only supported for single host systems.");
+        const auto all_mesh_ids = this->mesh_graph_->get_all_mesh_ids();
         std::vector<MeshId> local_mesh_ids;
-        for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
+        local_mesh_ids.reserve(all_mesh_ids.size());
+        for (const auto& mesh_id : all_mesh_ids) {
             // TODO: #24528 - Move this to use TopologyMapper once Topology mapper works for multi-mesh systems
             const auto& host_ranks = this->mesh_graph_->get_host_ranks(mesh_id);
             TT_FATAL(
@@ -365,6 +367,7 @@ void ControlPlane::initialize_distributed_contexts() {
             distributed_contexts_.emplace(local_mesh_id, host_local_context_);
         } else {
             std::vector<int> mpi_neighbors;
+            mpi_neighbors.reserve(mesh_host_ranks->second.size());
             // Sort mesh_host_ranks->second for deterministic iteration across hosts
             std::vector<std::pair<MeshHostRankId, tt::tt_metal::distributed::multihost::Rank>> sorted_host_ranks(
                 mesh_host_ranks->second.begin(), mesh_host_ranks->second.end());
@@ -476,7 +479,9 @@ void ControlPlane::init_control_plane(
         // Append MGD many-to-many pinning groups directly (no flattening).
         if (this->mesh_graph_->get_mesh_graph_descriptor_path().has_value()) {
             const auto& mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
-            pinning_groups.insert(pinning_groups.end(), mgd_pinnings.begin(), mgd_pinnings.end());
+            for (const auto& [_, groups] : mgd_pinnings) {
+                pinning_groups.insert(pinning_groups.end(), groups.begin(), groups.end());
+            }
         }
 
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
@@ -1386,9 +1391,14 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
 
 std::vector<chan_id_t> ControlPlane::get_valid_eth_chans_on_routing_plane(
     FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const {
+    const auto& eth_chans_by_direction = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
+    size_t total_eth_chans = 0;
+    for (const auto& [direction, eth_chans] : eth_chans_by_direction) {
+        total_eth_chans += eth_chans.size();
+    }
     std::vector<chan_id_t> valid_eth_chans;
-    for (const auto& [direction, eth_chans] :
-         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
+    valid_eth_chans.reserve(total_eth_chans);
+    for (const auto& [direction, eth_chans] : eth_chans_by_direction) {
         for (const auto& eth_chan : eth_chans) {
             if (this->get_routing_plane_id(eth_chan, eth_chans) == routing_plane_id) {
                 valid_eth_chans.push_back(eth_chan);
@@ -1570,6 +1580,7 @@ std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
     std::vector<chan_id_t> forwarding_channels;
     const auto& active_channels =
         this->get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction);
+    forwarding_channels.reserve(active_channels.size());
     for (const auto& src_chan_id : active_channels) {
         // check for end-to-end route before accepting this channel
         if (this->get_fabric_route(src_fabric_node_id, dst_fabric_node_id, src_chan_id).empty()) {
@@ -2396,6 +2407,7 @@ std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     const auto& mesh_id_bindings = this->local_mesh_binding_.mesh_ids;
     const auto& user_mesh_ids = this->get_user_physical_mesh_ids();
     std::vector<MeshId> local_mesh_ids;
+    local_mesh_ids.reserve(mesh_id_bindings.size());
     for (const auto& mesh_id : mesh_id_bindings) {
         if (std::find(user_mesh_ids.begin(), user_mesh_ids.end(), mesh_id) != user_mesh_ids.end()) {
             local_mesh_ids.push_back(mesh_id);
@@ -2827,6 +2839,7 @@ std::vector<PortDescriptor> ControlPlane::gather_intermesh_cables_for_exit_nodes
     // and assigns the port_id on each side. This avoids the per-host greedy port exhaustion where a
     // host that processed a shared exit chip first could strand a later ring-closing boundary.
     std::vector<PortDescriptor> gathered_cables;
+    gathered_cables.reserve(exit_nodes.size());
     for (const auto& exit_node : exit_nodes) {
         FabricNodeId exit_node_fabric_node_id = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
 
@@ -2873,8 +2886,10 @@ PortDescriptorTable ControlPlane::generate_port_descriptor_table() {
 
     // Iterate neighbors in a stable (neighbor mesh_id, hostname) order rather than get_host_neighbors()'s
     // hostname-keyed unordered_map order, so the gathered record order is host-independent.
+    const auto neighbor_hosts = physical_system_descriptor_->get_host_neighbors(my_host);
     std::vector<std::pair<MeshId, std::string>> sorted_neighbors;
-    for (const auto& neighbor_host : physical_system_descriptor_->get_host_neighbors(my_host)) {
+    sorted_neighbors.reserve(neighbor_hosts.size());
+    for (const auto& neighbor_host : neighbor_hosts) {
         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
         auto neighbor_rank = tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)};
         // Skip if neighbor host is not in our global logical bindings.
@@ -3951,6 +3966,7 @@ bool ControlPlane::is_local_host_on_switch_mesh() const {
 
     std::optional<MeshId> local_switch_mesh_id = std::nullopt;
     std::vector<MeshId> local_compute_mesh_ids;
+    local_compute_mesh_ids.reserve(local_mesh_ids.size());
     for (const auto& mesh_id : local_mesh_ids) {
         if (mesh_graph.is_switch_mesh(mesh_id)) {
             if (local_switch_mesh_id.has_value()) {
@@ -3979,6 +3995,7 @@ std::vector<ChipId> ControlPlane::get_switch_mesh_device_ids() const {
     for (const auto& mesh_id : local_mesh_ids) {
         if (mesh_graph.is_switch_mesh(mesh_id)) {
             const auto& chip_ids = mesh_graph.get_chip_ids(mesh_id);
+            switch_device_ids.reserve(switch_device_ids.size() + chip_ids.values().size());
             for (const auto& chip_id : chip_ids.values()) {
                 auto fabric_node_id = FabricNodeId(mesh_id, chip_id);
                 auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);

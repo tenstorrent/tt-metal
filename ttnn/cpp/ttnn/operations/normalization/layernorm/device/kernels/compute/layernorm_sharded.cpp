@@ -12,6 +12,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #ifdef DO_COL_MASK
 #include "ttnn/operations/normalization/kernel_util/compute/col_mask.h"
@@ -19,30 +20,55 @@
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
-    constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(3);
-    constexpr uint32_t block_w = get_compile_time_arg_val(5);
-    constexpr uint32_t block_h_const = get_compile_time_arg_val(4);
-    volatile uint32_t block_h_volatile = get_compile_time_arg_val(4);
-    constexpr uint32_t subblock_w_const = get_compile_time_arg_val(6);
-    volatile uint32_t subblock_w_volatile = get_compile_time_arg_val(6);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(7);
-    const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
-    constexpr bool FP32_DEST_ACC = compute_kernel_lib::get_fp32_dest_acc_enabled();
-    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
+    // An idle core sits in a hole of a non-rectangular shard grid. It carries this program's dataflow
+    // buffers so the reduction's multicast has somewhere to land, and does no work of its own, so its
+    // whole body is compiled out.
+#ifndef IDLE_CORE
 
-    const uint32_t num_reduce_tiles_per_block_h =
-        get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
-                                   // In that case, skip reduce for padding tiles.
-    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
-    const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
-    const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
+    constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
+    constexpr auto block_w = get_arg(args::block_w);
+    constexpr auto block_h_const = get_arg(args::block_h);
+    volatile uint32_t block_h_volatile = get_arg(args::block_h);
+    constexpr auto subblock_w_const = get_arg(args::subblock_w);
+    volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
+    constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
+    constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
+    constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
+    constexpr bool FP32_DEST_ACC = compute_kernel_lib::get_fp32_dest_acc_enabled();
+    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
+    constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
+    // gamma and beta each gate a buffer that only exists when their tensor was supplied, so the flag
+    // has to reach the preprocessor as well as `if constexpr`.
+#ifdef FUSE_GAMMA
+    constexpr bool do_gamma = true;
+#else
+    constexpr bool do_gamma = false;
+#endif
+#ifdef FUSE_BETA
+    constexpr bool do_beta = true;
+#else
+    constexpr bool do_beta = false;
+#endif
+    // Only the cores that gather read the three cross-core reduce arguments below, so the distinction
+    // is a compile-time one: their runtime-argument schemas differ.
+#ifdef IS_ALLGATHER_WORKER
+    constexpr bool is_allgather_worker = true;
+#else
+    constexpr bool is_allgather_worker = false;
+#endif
+
+    const uint32_t num_reduce_tiles_per_block_h = get_arg(
+        args::num_reduce_tiles_per_block_h);  // This value is the same for all cores, except ones that have
+                                              // padding tiles in it. In that case, skip reduce for padding tiles.
+#ifdef IS_ALLGATHER_WORKER
+    const uint32_t num_tiles_per_allgather_worker = get_arg(args::num_rows_per_all_to_all_worker);
+    const bool use_two_stage_reduce = get_arg(args::use_two_stage_reduce) == 1;
+    const bool is_second_stage_reader = get_arg(args::is_second_stage_reader) == 1;
+#else
+    const uint32_t num_tiles_per_allgather_worker = 0;
+    const bool use_two_stage_reduce = false;
+    const bool is_second_stage_reader = false;
+#endif
 
     uint32_t num_blocks_reduce;
     if (is_second_stage_reader) {
@@ -61,40 +87,48 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t scaler0 = 0;
 
-    constexpr uint32_t dfb_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t dfb_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t dfb_scaler_id = get_named_compile_time_arg_val("cb_scaler");
-    constexpr uint32_t dfb_eps = get_named_compile_time_arg_val("cb_eps");
-    constexpr uint32_t dfb_scaler_global_id = get_named_compile_time_arg_val("cb_scaler_global");
-    constexpr uint32_t dfb_gamma_id = get_named_compile_time_arg_val("cb_gamma");
-    constexpr uint32_t dfb_beta_id = get_named_compile_time_arg_val("cb_beta");
-    constexpr uint32_t dfb_x = get_named_compile_time_arg_val("cb_x");  // x minus mean
+    constexpr uint32_t dfb_in0 = dfb::in0;
+    constexpr uint32_t dfb_scaler_id = dfb::scaler;
+    constexpr uint32_t dfb_eps = dfb::eps;
+    constexpr uint32_t dfb_scaler_global_id = dfb::scaler_global;
+    constexpr uint32_t dfb_x = dfb::x;  // x minus mean
+#ifdef FUSE_PRE_ADD
+    constexpr uint32_t dfb_in1 = dfb::in1;
+#endif
+#ifdef FUSE_GAMMA
+    constexpr uint32_t dfb_gamma_id = dfb::gamma;
+#endif
+#ifdef FUSE_BETA
+    constexpr uint32_t dfb_beta_id = dfb::beta;
+#endif
 #if defined RMSNORM and not defined FUSE_PRE_ADD
     constexpr uint32_t dfb_xmm_id = dfb_in0;  // x minus mean
 #else
-    constexpr uint32_t dfb_xmm_id = get_named_compile_time_arg_val("cb_xmm");  // x minus mean
+    constexpr uint32_t dfb_xmm_id = dfb::xmm;  // x minus mean
 #endif
-    constexpr uint32_t dfb_ex_partial_id = get_named_compile_time_arg_val("cb_ex_partial");  // E[x] partial reduce
-    constexpr uint32_t dfb_ex_id = get_named_compile_time_arg_val("cb_ex");                  // E[x] global reduce
-    constexpr uint32_t dfb_ex_external_id = get_named_compile_time_arg_val("cb_ex_external");
-    constexpr uint32_t dfb_ex_partial2_id =
-        get_named_compile_time_arg_val("cb_ex_partial2");                      // E[(x-E[x])^2] partial reduce
-    constexpr uint32_t dfb_ex2_id = get_named_compile_time_arg_val("cb_ex2");  // E[(x-E[x])^2] global reduce
-    constexpr uint32_t dfb_ex_external2_id = get_named_compile_time_arg_val("cb_ex_external2");
-    constexpr uint32_t dfb_ex_global_id = get_named_compile_time_arg_val("cb_ex_global");   // E[x] global reduce
-    constexpr uint32_t dfb_xmm2_id = dfb_x;                                                 // xmm^2
-    constexpr uint32_t dfb_ex2pe_id = get_named_compile_time_arg_val("cb_ex2pe");           // E[(x-E[x])^2]+eps
-    constexpr uint32_t dfb_fusion_id =
-        get_named_compile_time_arg_val("cb_xmm");  // stream gamma/beta (alias of cb_xmm_id)
-    constexpr uint32_t dfb_out_id = get_named_compile_time_arg_val("cb_out");
+    // RMSNorm normalizes by the mean of squares, so it has no mean to reduce and the E[x] chain's
+    // buffers are not declared.
+#ifndef RMSNORM
+    constexpr uint32_t dfb_ex_partial_id = dfb::ex_partial;    // E[x] partial reduce
+    constexpr uint32_t dfb_ex_id = dfb::ex;                    // E[x] global reduce
+    constexpr uint32_t dfb_ex_external_id = dfb::ex_external;  // partial E[x] from the other cores
+#endif
+    constexpr uint32_t dfb_ex_partial2_id = dfb::ex_partial2;    // E[(x-E[x])^2] partial reduce
+    constexpr uint32_t dfb_ex2_id = dfb::ex2;                    // E[(x-E[x])^2] global reduce
+    constexpr uint32_t dfb_ex_external2_id = dfb::ex_external2;  // partial Var[x] from the other cores
+    constexpr uint32_t dfb_ex_global_id = dfb::ex_global;        // E[x] global reduce
+    constexpr uint32_t dfb_xmm2_id = dfb_x;                      // xmm^2
+    constexpr uint32_t dfb_ex2pe_id = dfb::ex2pe;                // E[(x-E[x])^2]+eps
+    constexpr uint32_t dfb_fusion_id = dfb::xmm;                 // stream gamma/beta (alias of dfb_xmm_id)
+    constexpr uint32_t dfb_out_id = dfb::out;
 #ifdef DO_COL_MASK
 #ifndef RMSNORM
     // Scratch buffer holding the input with any padding columns zeroed, so those
-    // columns contribute 0 to the E[x] sum. dfb_in stays intact for the (x - E[x]) pass;
-    // the masking itself uses the column mask (cb_col_mask_packed) below.
+    // columns contribute 0 to the E[x] sum. The input buffer stays intact for the (x - E[x]) pass;
+    // the masking itself uses the column mask below.
     // RMSNorm needs no such copy: it masks the squared input in place (a fresh intermediate,
-    // not dfb_in), so dfb_in is never overwritten in the first place.
-    constexpr uint32_t dfb_mask_scratch_id = get_named_compile_time_arg_val("cb_mask_scratch");
+    // not the input), so the input is never overwritten in the first place.
+    constexpr uint32_t dfb_mask_scratch_id = dfb::mask_scratch;
     DataflowBuffer dfb_mask_scratch(dfb_mask_scratch_id);
 #endif
     // Multiplicative mask that keeps tile padding out of the statistics. Each row of the input is
@@ -103,20 +137,26 @@ void kernel_main() {
     // logical width is not a multiple of 32, the columns beyond the logical width hold padding
     // that needs to be ignored. This buffer holds the mask: block_w tiles, one for each input data tile.
     // The writer fills this buffer; this kernel waits for it once below, reads tiles by index during the
-    // body (the same mask is reused at every masking site), and pops it once at the end so the CB is
+    // body (the same mask is reused at every masking site), and pops it once at the end so the buffer is
     // left balanced.
-    constexpr uint32_t dfb_col_mask_packed_id = get_named_compile_time_arg_val("cb_col_mask_packed");
+    constexpr uint32_t dfb_col_mask_packed_id = dfb::col_mask;
     DataflowBuffer dfb_col_mask_packed(dfb_col_mask_packed_id);
 #endif
 
     DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
+#ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma(dfb_gamma_id);
+#endif
+#ifdef FUSE_BETA
     DataflowBuffer dfb_beta(dfb_beta_id);
+#endif
     DataflowBuffer dfb_xmm(dfb_xmm_id);
+#ifndef RMSNORM
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
     DataflowBuffer dfb_ex_external(dfb_ex_external_id);
+#endif
     DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
     DataflowBuffer dfb_ex2(dfb_ex2_id);
     DataflowBuffer dfb_ex_external2(dfb_ex_external2_id);
@@ -126,13 +166,13 @@ void kernel_main() {
     DataflowBuffer dfb_fusion(dfb_fusion_id);
     DataflowBuffer dfb_out(dfb_out_id);
 
-    binary_op_init_common(dfb_in0, dfb_in0, dfb_x);
+    compute_kernel_hw_startup(dfb_in0, dfb_in0, dfb_x);
 
 #ifdef DO_COL_MASK
     // The column mask has block_w tiles, one per tile across the shard width.
     // Wait once for it here; the masking sites below read it by tile index without
     // re-waiting (it is reused across all rows and masking sites).
-    // It is popped once at the end of the kernel so the CB is left balanced.
+    // It is popped once at the end of the kernel so the buffer is left balanced.
     dfb_col_mask_packed.wait_front(block_w);
 #endif
 
@@ -162,7 +202,7 @@ void kernel_main() {
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     reconfig_data_format_srcb(dfb_in0, dfb_in1);
-    add_tiles_init(dfb_in0, dfb_in1);
+    add_init(dfb_in0, dfb_in1);
     dfb_in.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -197,13 +237,13 @@ void kernel_main() {
 
 #ifndef RMSNORM
 #ifdef DO_COL_MASK
-    // Zero any padding columns of the input into cb_mask_scratch so they do not contribute
-    // to E[x]; the reduce below consumes the masked copy instead of dfb_in.
-    // dfb_in itself is left intact for the (x - E[x]) pass that follows. cb_col_mask_packed is the
+    // Zero any padding columns of the input into the mask scratch so they do not contribute
+    // to E[x]; the reduce below consumes the masked copy instead of the input.
+    // The input itself is left intact for the (x - E[x]) pass that follows. The column mask is the
     // writer-generated mask (1.0 valid / 0.0 padding), already waited on above and read by
     // tile index.
     reconfig_data_format(dfb_in_id, dfb_col_mask_packed_id);
-    mul_tiles_init(dfb_in_id, dfb_col_mask_packed_id);
+    mul_init(dfb_in_id, dfb_col_mask_packed_id);
     dfb_mask_scratch.reserve_back(num_tiles_per_block);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
@@ -240,7 +280,7 @@ void kernel_main() {
 #endif
     reconfig_data_format(dfb_ex_external_id, dfb_scaler_id);
 
-    // global reduce, cb_ex_id <-- cb_ex_external_id, cb_ex_partial_id
+    // global reduce, dfb_ex_id <-- dfb_ex_external_id, dfb_ex_partial_id
     if constexpr (is_allgather_worker) {
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external_id);
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb_ex_external_id, dfb_scaler_global_id, dfb_ex_id);
@@ -276,7 +316,7 @@ void kernel_main() {
     }
     index_h_offset = 0;
     reconfig_data_format_srca(dfb_ex_external_id, dfb_in_id);
-    sub_bcast_cols_init_short(dfb_in_id, dfb_ex_global_id);
+    sub_bcast_cols_init(dfb_in_id, dfb_ex_global_id);
     dfb_xmm.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -307,10 +347,10 @@ void kernel_main() {
 
 #if defined(DO_COL_MASK) && !defined(RMSNORM)
     // Zero the padding columns of (x - E[x]) so the variance excludes them, using the writer-generated
-    // mask (cb_col_mask_packed - 1.0 in valid columns, 0.0 in padding).
-    // Applied in place by re-circulating dfb_xmm (which also zeroes the padding for the final
-    // (x - E[x]) * 1/sqrt(var+eps); that padding output is discarded). Mask tile index tracks wt
-    // (the tile's position across the width). cb_col_mask_packed was waited on once near the top of
+    // mask (1.0 in valid columns, 0.0 in padding).
+    // Applied in place by re-circulating the (x - E[x]) buffer (which also zeroes the padding for the
+    // final (x - E[x]) * 1/sqrt(var+eps); that padding output is discarded). Mask tile index tracks wt
+    // (the tile's position across the width). The column mask was waited on once near the top of
     // the kernel and is read by tile index here (never popped).
     // SrcA already holds the (x - E[x]) tiles' format; only SrcB changes for this multiply, to read the
     // mask in its own data format (the mask format need not match the compute tiles).
@@ -322,8 +362,8 @@ void kernel_main() {
     reconfig_data_format_srcb(dfb_xmm_id);
 #endif
 
-    // (x - E[x])^2, cb_mm2 <-- cb_xmm_id
-    mul_tiles_init(dfb_xmm_id, dfb_xmm_id);
+    // (x - E[x])^2, dfb_xmm2 <-- dfb_xmm_id
+    mul_init(dfb_xmm_id, dfb_xmm_id);
     index_h_offset = 0;
     dfb_xmm2.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -350,7 +390,7 @@ void kernel_main() {
     // RMSNorm has no mean-subtraction stage, so its statistic is the mean of squares of the input
     // (the raw input, or the fused residual sum a + b). Squaring it leaves the padding columns holding
     // (pad_value)^2; zero them in place before the reduce so they do not enter the mean of squares.
-    // The writer-generated mask (cb_col_mask_packed) carries each block's own validity (full, partial,
+    // The writer-generated mask carries each block's own validity (full, partial,
     // or all-padding tiles). It was waited on once near the top of the kernel and is read by tile index
     // here (never popped).
     reconfig_data_format(dfb_xmm2_id, dfb_col_mask_packed_id);
@@ -382,7 +422,7 @@ void kernel_main() {
     reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
     dfb_xmm2.pop_front(num_tiles_per_block);
 
-    // global reduce, cb_ex_id <-- cb_ex_external_id, cb_ex_partial_id
+    // global reduce, dfb_ex2_id <-- dfb_ex_external2_id, dfb_ex_partial2_id
     if constexpr (is_allgather_worker) {
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external2_id);
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb_ex_external2_id, dfb_scaler_global_id, dfb_ex2_id);
@@ -417,7 +457,7 @@ void kernel_main() {
                 dfb_ex2.wait_front(1);
                 dfb_ex2pe.reserve_back(1);
                 tile_regs_acquire();
-                add_tiles_init(dfb_ex2_id, dfb_eps);
+                add_init(dfb_ex2_id, dfb_eps);
                 add_tiles(dfb_ex2_id, dfb_eps, i, 0, dst0);
                 tile_regs_wait();
                 rsqrt_tile_init<LEGACY_RSQRT>();
@@ -446,7 +486,7 @@ void kernel_main() {
         reconfig_data_format(dfb_xmm_id, dfb_ex_global_id);
     }
 #endif
-    mul_bcast_cols_init_short(dfb_xmm_id, dfb_ex_global_id);
+    mul_bcast_cols_init(dfb_xmm_id, dfb_ex_global_id);
     index_h_offset = 0;
     dfb_im.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -486,12 +526,13 @@ void kernel_main() {
     dfb_xmm.pop_front(num_tiles_per_block);
     dfb_im.wait_front(num_tiles_per_block);
 
-    if constexpr (do_gamma) {
+#ifdef FUSE_GAMMA
+    {
         reconfig_data_format(dfb_im_id, dfb_gamma_id);
         if constexpr (do_beta == 0) {
             pack_reconfig_data_format(dfb_out_id);
         }
-        mul_bcast_rows_init_short(dfb_im_id, dfb_gamma_id);
+        mul_bcast_rows_init(dfb_im_id, dfb_gamma_id);
         dfb_gamma.wait_front(block_w);
         index_h_offset = 0;
         dfb_outgamma.reserve_back(num_tiles_per_block);
@@ -526,11 +567,13 @@ void kernel_main() {
         dfb_im.pop_front(num_tiles_per_block);
         dfb_outgamma.wait_front(num_tiles_per_block);
     }
+#endif
 
-    if constexpr (do_beta) {
+#ifdef FUSE_BETA
+    {
         reconfig_data_format(dfb_fusion_id, dfb_beta_id);
         pack_reconfig_data_format(dfb_out_id);
-        add_bcast_rows_init_short(dfb_fusion_id, dfb_beta_id);
+        add_bcast_rows_init(dfb_fusion_id, dfb_beta_id);
         dfb_beta.wait_front(block_w);
         index_h_offset = 0;
         dfb_out.reserve_back(num_tiles_per_block);
@@ -560,18 +603,21 @@ void kernel_main() {
         dfb_fusion.pop_front(num_tiles_per_block);
         dfb_out.wait_front(num_tiles_per_block);
     }
+#endif
     // The single scaler tile is waited by both reductions (E[x] and Var[x]) but never popped;
-    // pop it once at the end so the CB is left balanced.
+    // pop it once at the end so the buffer is left balanced.
     dfb_scaler.pop_front(1);
     if constexpr (is_allgather_worker) {
         // The global-reduce scaler tile is pushed once (only on all-gather worker cores) and read by
         // tile index across the E[x] and Var[x] global reductions without being popped. Pop it once
-        // here, under the same guard that gated the waits, so the CB is left balanced on every core.
+        // here, under the same guard that gated the waits, so the buffer is left balanced on every core.
         dfb_scaler_global.pop_front(1);
     }
 #ifdef DO_COL_MASK
     // The column mask is waited once near the top of the kernel and read by tile index at every masking
-    // site; pop its block_w tiles once here so the CB is left balanced.
+    // site; pop its block_w tiles once here so the buffer is left balanced.
     dfb_col_mask_packed.pop_front(block_w);
 #endif
+
+#endif  // IDLE_CORE
 }

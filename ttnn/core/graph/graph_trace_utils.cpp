@@ -58,6 +58,7 @@ ttnn::Shape parse_shape(std::string_view shape_string) {
 }  // namespace
 
 uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
+    // Circular buffers, dataflow buffers and scratchpads: one program-scope L1 running total.
     uint32_t total_cb = 0;
     uint32_t total_buffer = 0;
     uint32_t peak_memory_usage = 0;
@@ -81,8 +82,14 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
                 --i;  // adjust for loop increment
             }
             current_op.push_back(v[kParams][kName]);
-        } else if (v[kNodeType] == kNodeCBAllocate) {
+        } else if (v[kNodeType] == kNodeCBAllocate || v[kNodeType] == kNodeScratchpadAllocate) {
             total_cb += json_to_int(v[kParams][kSize]);
+        } else if (v[kNodeType] == kNodeDataflowBufferAllocate) {
+            // Same program-scope L1 as a CB for a single peak figure; a borrowed buffer's bytes
+            // belong to a tensor that is counted in total_buffer.
+            if (json_to_int(v[kParams][kBorrowsMemory]) != 1) {
+                total_cb += json_to_int(v[kParams][kSize]);
+            }
         } else if (v[kNodeType] == kNodeCBDeallocateAll) {
             total_cb = 0;
         } else if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "L1") {
@@ -161,6 +168,7 @@ std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohma
 
 std::vector<std::string> extract_calltrace(const nlohmann::json& trace) {
     std::vector<std::string> op_calls;
+    op_calls.reserve(trace.size());
     size_t i = 0;
 
     while (i < trace.size()) {
@@ -182,6 +190,7 @@ nlohmann::json extract_levelized_graph(const nlohmann::json& trace, size_t max_l
 
 std::vector<OperationInfo> extract_arguments(const nlohmann::json& trace) {
     std::vector<OperationInfo> operations;
+    operations.reserve(trace.size());
     size_t i = 0;
     while (i < trace.size()) {
         const auto& v = trace[i];
@@ -190,7 +199,7 @@ std::vector<OperationInfo> extract_arguments(const nlohmann::json& trace) {
         if (!v[kArguments].empty()) {
             info.operation_name = v[kParams][kName];
             info.arguments = v[kArguments];
-            operations.push_back(info);
+            operations.push_back(std::move(info));
         }
     }
 
@@ -238,6 +247,7 @@ std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace)
 std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace) {
     std::vector<TensorInfo> output;
     auto output_tensors = extract_output_tensors(trace);
+    output.reserve(output_tensors.size());
 
     for (const auto& node : trace) {
         if (node[kNodeType] != kNodeBuffer) {
@@ -279,15 +289,11 @@ uint32_t extract_l1_output_buffer_allocation_size_per_core(const Tensor& output_
 }
 
 uint32_t extract_l1_buffer_allocation_peak_size_per_core(const nlohmann::json& trace) {
-    const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
-        extract_resource_usage_per_core(trace);
-    return l1_buffers_peak_per_core;
+    return extract_resource_usage_per_core(trace).peak_l1;
 }
 
 uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace) {
-    const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
-        extract_resource_usage_per_core(trace);
-    return cb_peak_size_per_core;
+    return extract_resource_usage_per_core(trace).peak_cb;
 }
 
 // calculate the size of buffer allocated/deallocated on each core
@@ -296,14 +302,15 @@ static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node) {
 }
 
 uint32_t extract_peak_memory_usage(const nlohmann::json& trace) {
-    const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
-        extract_resource_usage_per_core(trace);
-    return peak_memory_usage_per_core;
+    return extract_resource_usage_per_core(trace).peak_total;
 }
 
 PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& trace) {
     size_t current_cb = 0, peak_cb = 0;
     size_t current_l1 = 0, peak_l1 = 0;
+    // Program-scope L1 of a Metal 2.0 program, tracked per kind. Released together with the CBs.
+    size_t current_dfb = 0, peak_dfb = 0;
+    size_t current_scratchpad = 0, peak_scratchpad = 0;
     size_t current_total = 0, peak_total = 0;
 
     size_t counter_expected = 0;
@@ -324,9 +331,27 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
                 current_total += alloc_size;
                 peak_total = std::max(peak_total, current_total);
             }
+        } else if (node.at(kNodeType) == kNodeDataflowBufferAllocate) {
+            // A borrowed buffer is a view onto a tensor's L1, which the tensor already reports.
+            bool borrows_memory = json_to_int(node.at(kParams).at(kBorrowsMemory)) == 1;
+            if (!borrows_memory) {
+                uint32_t alloc_size = json_to_int(node.at(kParams).at(kSize));
+                current_dfb += alloc_size;
+                peak_dfb = std::max(peak_dfb, current_dfb);
+                current_total += alloc_size;
+                peak_total = std::max(peak_total, current_total);
+            }
+        } else if (node.at(kNodeType) == kNodeScratchpadAllocate) {
+            uint32_t alloc_size = json_to_int(node.at(kParams).at(kSize));
+            current_scratchpad += alloc_size;
+            peak_scratchpad = std::max(peak_scratchpad, current_scratchpad);
+            current_total += alloc_size;
+            peak_total = std::max(peak_total, current_total);
         } else if (node.at(kNodeType) == kNodeCBDeallocateAll) {
-            current_total -= current_cb;
+            current_total -= current_cb + current_dfb + current_scratchpad;
             current_cb = 0;
+            current_dfb = 0;
+            current_scratchpad = 0;
         } else if (node.at(kNodeType) == kNodeBufferAllocate || node.at(kNodeType) == kNodeBufferDeallocate) {
             if (node.at(kParams).at(kType) == "DRAM") {
                 continue;
@@ -343,7 +368,12 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
             }
         }
     }
-    return PeakMemoryUsagePerCore{.peak_cb = peak_cb, .peak_l1 = peak_l1, .peak_total = peak_total};
+    return PeakMemoryUsagePerCore{
+        .peak_cb = peak_cb,
+        .peak_l1 = peak_l1,
+        .peak_dataflow_buffer = peak_dfb,
+        .peak_scratchpad = peak_scratchpad,
+        .peak_total = peak_total};
 }
 
 DRAMUsage extract_dram_usage(const nlohmann::json& trace) {

@@ -26,7 +26,7 @@ void kernel_main() {
 
     constexpr uint32_t num_input_tiles_iter = num_input_tiles / input_granularity;
 
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
     cb_in1_obj.wait_front(onetile);
 
     // For each assigned output tile, process the input tiles in a doubly nested
@@ -34,7 +34,7 @@ void kernel_main() {
     // input_granularity. The outer loop executes num_input_tiles / input_granularity
     // times.
     for (uint32_t i = 0; i < num_output_tiles; i++) {
-        add_tiles_init(cb_in0, cb_in1, true);
+        add_init(cb_in0, cb_in1, true);
         reconfig_data_format(cb_in0, cb_in1);
         tile_regs_acquire();
         for (uint32_t j = 0; j < num_input_tiles_iter; ++j) {

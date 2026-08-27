@@ -17,7 +17,6 @@
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
-
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
@@ -56,6 +55,40 @@ void py_module_types(nb::module_& mod) {
                     buffer_type (BufferType): Memory type for the device-side FIFO buffer (L1 or DRAM).
                     fifo_size (int): Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
                     h2d_mode (H2DMode): Transfer mode: HOST_PUSH or DEVICE_PULL.
+            )doc")
+        .def(
+            nb::init<
+                tt::tt_metal::distributed::MeshDevice&,
+                const tt::tt_metal::distributed::MeshCoreCoord&,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                tt::tt_metal::distributed::H2DMode>(),
+            nb::arg("mesh_device"),
+            nb::arg("recv_l2cpu"),
+            nb::arg("fifo_size"),
+            nb::arg("config_buffer_address"),
+            nb::arg("data_fifo_address"),
+            nb::arg("h2d_mode") = tt::tt_metal::distributed::H2DMode::HOST_PUSH,
+            R"doc(
+                Construct an H2DSocket targeting an L2CPU receiver.
+
+                Behaves as the standard constructor, with an L2CPU tile as the receiver.
+                L2CPU LIM has no allocator in tt-metal, so the config buffer and data FIFO
+                addresses are caller-supplied rather than allocated here.
+
+                Args:
+                    mesh_device (MeshDevice): Mesh containing the receiver L2CPU.
+                    recv_l2cpu (MeshCoreCoord): The receiving L2CPU tile. ``core_coord`` must
+                        be the TRANSLATED NOC coord of an L2CPU tile on the target device.
+                    fifo_size (int): Size of the circular FIFO buffer in bytes. Must be
+                        PCIe-aligned.
+                    config_buffer_address (int): LIM address for the socket metadata.
+                    data_fifo_address (int): LIM address for the data FIFO. In HOST_PUSH this
+                        is the ring itself and must fit with fifo_size inside the L2CPU's
+                        static TLB window; in DEVICE_PULL the ring lives in pinned host memory
+                        and this is the base the device computes ring offsets against.
+                    h2d_mode (H2DMode, optional): Transfer mode. Defaults to ``HOST_PUSH``.
             )doc")
         .def(
             "get_page_size",
@@ -234,6 +267,31 @@ void py_module_types(nb::module_& mod) {
                     mesh_device (MeshDevice): The mesh device containing the sender core.
                     sender_core (MeshCoreCoord): The source core coordinate that sends data.
                     fifo_size (int): Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
+            )doc")
+        .def(
+            nb::init<
+                tt::tt_metal::distributed::MeshDevice&,
+                const tt::tt_metal::distributed::MeshCoreCoord&,
+                uint32_t,
+                uint32_t>(),
+            nb::arg("mesh_device"),
+            nb::arg("sender_l2cpu"),
+            nb::arg("fifo_size"),
+            nb::arg("config_buffer_address"),
+            R"doc(
+                Construct a D2HSocket with an L2CPU sender.
+
+                Behaves as the standard constructor, with an L2CPU tile as the sender.
+                L2CPU LIM has no allocator in tt-metal, so the config buffer address is
+                caller-supplied rather than allocated here.
+
+                Args:
+                    mesh_device (MeshDevice): Mesh containing the sender L2CPU.
+                    sender_l2cpu (MeshCoreCoord): The sending L2CPU tile. ``core_coord`` must
+                        be the TRANSLATED NOC coord of an L2CPU tile on the target device.
+                    fifo_size (int): Size of the circular FIFO buffer in bytes. Must be
+                        PCIe-aligned.
+                    config_buffer_address (int): LIM address for the socket metadata.
             )doc")
         .def(
             "get_page_size",

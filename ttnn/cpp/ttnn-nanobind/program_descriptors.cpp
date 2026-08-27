@@ -686,7 +686,11 @@ void py_module_types(nb::module_& mod) {
         .def_rw(
             "math_approx_mode",
             &tt::tt_metal::ComputeConfigDescriptor::math_approx_mode,
-            "Approximation mode for mathematical operations");
+            "Approximation mode for mathematical operations")
+        .def_rw(
+            "enable_trisc2_rvv",
+            &tt::tt_metal::ComputeConfigDescriptor::enable_trisc2_rvv,
+            "Compile the TRISC2 (pack) binary with the RISC-V Vector (Zve32f) extension (Blackhole only)");
 
     // TODO_NANOBIND: do we still need this?
     // export_enum<tt::tt_metal::KernelDescriptor::SourceType>(mod, "SourceType");
@@ -720,11 +724,22 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::KernelDescriptor::CompileTimeArgs compile_time_args,
                tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs named_compile_time_args,
                tt::tt_metal::KernelDescriptor::Defines defines,
-               tt::tt_metal::KernelDescriptor::RuntimeArgs runtime_args,
+               const nb::object& runtime_args,
                tt::tt_metal::KernelDescriptor::CommonRuntimeArgs common_runtime_args,
                std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level,
                tt::tt_metal::KernelDescriptor::ConfigDescriptor config,
                tt::tt_metal::KernelDescriptor::IncludePaths compiler_include_paths) {
+                // Accept RuntimeArgsWrapper, RuntimeArgsView, or the raw RuntimeArgs type, mirroring
+                // the .runtime_args property setter rather than relying on the generic sequence
+                // caster falling back to the wrapper's __iter__.
+                tt::tt_metal::KernelDescriptor::RuntimeArgs runtime_args_cpp;
+                if (nb::isinstance<RuntimeArgsWrapper>(runtime_args)) {
+                    runtime_args_cpp = nb::cast<RuntimeArgsWrapper&>(runtime_args).get();
+                } else if (nb::isinstance<RuntimeArgsView>(runtime_args)) {
+                    runtime_args_cpp = nb::cast<RuntimeArgsView&>(runtime_args).get_ref();
+                } else {
+                    runtime_args_cpp = nb::cast<tt::tt_metal::KernelDescriptor::RuntimeArgs>(runtime_args);
+                }
                 new (self) tt::tt_metal::KernelDescriptor{
                     kernel_source,
                     source_type,
@@ -732,7 +747,7 @@ void py_module_types(nb::module_& mod) {
                     std::move(compile_time_args),
                     std::move(named_compile_time_args),
                     std::move(defines),
-                    std::move(runtime_args),
+                    std::move(runtime_args_cpp),
                     std::move(common_runtime_args),
                     ////////////////////////////////////////////////////////////
                     // Blaze-only experimental named args
@@ -871,11 +886,13 @@ void py_module_types(nb::module_& mod) {
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
                 self.blaze_named_args.named_per_core_runtime_args.clear();
+                self.blaze_named_args.named_per_core_runtime_args.reserve(args.size());
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
                     auto dict = nb::cast<nb::dict>(tup[1]);
                     std::vector<std::pair<CoreCoord, uint32_t>> core_values;
+                    core_values.reserve(dict.size());
                     for (const auto& [k, v] : dict) {
                         core_values.emplace_back(nb::cast<CoreCoord>(k), nb::cast<uint32_t>(v));
                     }
@@ -900,11 +917,13 @@ void py_module_types(nb::module_& mod) {
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
                 self.blaze_named_args.named_common_runtime_arg_arrays.clear();
+                self.blaze_named_args.named_common_runtime_arg_arrays.reserve(args.size());
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
                     auto values_list = nb::cast<nb::list>(tup[1]);
                     std::vector<uint32_t> values;
+                    values.reserve(values_list.size());
                     for (auto v : values_list) {
                         values.push_back(nb::cast<uint32_t>(v));
                     }
@@ -933,14 +952,17 @@ void py_module_types(nb::module_& mod) {
             },
             [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
                 self.blaze_named_args.named_per_core_runtime_arg_arrays.clear();
+                self.blaze_named_args.named_per_core_runtime_arg_arrays.reserve(args.size());
                 for (auto item : args) {
                     auto tup = nb::cast<nb::tuple>(item);
                     auto name = nb::cast<std::string>(tup[0]);
                     auto dict = nb::cast<nb::dict>(tup[1]);
                     std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> core_values;
+                    core_values.reserve(dict.size());
                     for (const auto& [k, v] : dict) {
                         auto values_list = nb::cast<nb::list>(v);
                         std::vector<uint32_t> values;
+                        values.reserve(values_list.size());
                         for (auto val : values_list) {
                             values.push_back(nb::cast<uint32_t>(val));
                         }

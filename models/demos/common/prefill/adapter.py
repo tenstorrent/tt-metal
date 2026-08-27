@@ -5,7 +5,7 @@
 
 The prefill runner (``prefill_runner.py``) is a model-agnostic orchestration
 engine: it owns rank topology, the layer split, the H2D/D2D sockets, the
-request/standalone loops, lease/reclaim, LayerAck, and shutdown. Everything that
+the request serving loop, lease/reclaim, LayerAck, and shutdown. Everything that
 differs per model lives behind a ``PrefillModelAdapter``.
 
 To add a model you implement (or subclass) one adapter and register it; the
@@ -72,6 +72,16 @@ class PrefillRunParams:
     # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
     # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
     sparse_kv_cache_format: Optional[object] = None
+    # Capture the per-chunk forward as a (segmented) ttnn trace and replay it every chunk, instead of
+    # re-dispatching op-by-op. Requires the mesh opened with a trace_region_size > 0. See prefill_runner.
+    use_trace: bool = False
+    # MoE shared-expert ∥ dispatch overlap (default on). Off => single-segment trace (no per-chunk
+    # sub-device swaps), faster replay at the cost of the overlap. See TtPrefillRuntimeConfig.
+    overlap_shared_expert_with_dispatch: bool = True
+    # Build the DFlash drafter context-KV cache during prefill. Opt-in / default False so adding this
+    # feature never breaks existing PrefillRunParams constructors (which need not pass it); the runner
+    # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.
+    dflash_enabled: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -85,7 +95,7 @@ class PrefillRunParams:
 class KvCaches(ABC):
     """Opaque handle for a model's on-device KV cache(s), returned by ``allocate_kv_cache``. The engine
     never introspects it: it allocates it once, OWNS its lifetime, passes it back into every runtime call
-    that touches it (compile / prefill_chunk / build_kv_chunk_table / kv_cache_pcc_check / read_slot_kv),
+    that touches it (compile / prefill_chunk / build_kv_chunk_table),
     and frees it with the mesh at shutdown. Each model returns its own concrete subclass shaped however
     fits its cache (a named struct of one or more device tensors), so the engine imposes no structure and
     growing/renaming a model's caches never touches it."""
@@ -119,6 +129,8 @@ class PrefillModelAdapter(ABC):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
     pipeline_activation_emb_tp_sharded: bool = True
+    # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
+    supports_dflash: bool = False
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
@@ -173,7 +185,7 @@ class PrefillModelAdapter(ABC):
         is stateless w.r.t. the KV cache — it receives the engine-owned ``KvCaches`` as an
         argument on each call. The engine then calls ``.compile(kv_caches)`` and drives
         it (make_chunk_input, prefill_chunk, and — when enabled — build_kv_chunk_table /
-        kv_cache_pcc_check / set_layer_ack_channel). ``params`` carries the per-rank knobs."""
+        set_layer_ack_channel). ``params`` carries the per-rank knobs."""
 
     # =====================================================================
     # Test-only metadata (HF download coordinates + reference modeling).
@@ -194,6 +206,11 @@ class PrefillModelAdapter(ABC):
     moe_pcc_threshold: float = 0.999
     mla_pcc_threshold: float = 0.999
     supports_pretrained: bool = True
+    # Model layer whose ``self_attn.*`` holds the MLA weights; None if no checkpoint is reachable.
+    pretrained_mla_layer: Optional[int] = 0
+    # This variant's OWN golden MLA-trace dirs (each holding mla_io/ + kv_cache/), for the
+    # MLA-level trace tests; one per user, cycled. Empty = no trace was ever recorded for it.
+    mla_trace_defaults: tuple[str, ...] = ()
     # Whether the tokenizer needs trust_remote_code=True (custom tokenizer code shipped in the repo,
     # e.g. Kimi's tiktoken-backed BBPE). DeepSeek-V3 uses a stock fast tokenizer, so it turns this off
     # to avoid the flat-config trust_remote_code import path that otherwise breaks its load.

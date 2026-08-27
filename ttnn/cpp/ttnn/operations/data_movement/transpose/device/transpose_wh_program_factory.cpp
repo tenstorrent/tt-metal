@@ -212,8 +212,8 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     }
 
     std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> reader_common_runtime_args;
     if (row_major) {
+        reader_compile_time_args.reserve(9);
         reader_compile_time_args.push_back(ht);
         reader_compile_time_args.push_back(H > TILE_HEIGHT ? TILE_HEIGHT : H % TILE_HEIGHT);
         reader_compile_time_args.push_back(H % TILE_HEIGHT == 0 ? TILE_HEIGHT : H % TILE_HEIGHT);
@@ -224,11 +224,9 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
         reader_compile_time_args.push_back(wt * input_tensor.element_size() * TILE_WIDTH);
         reader_compile_time_args.push_back(src0_buffer->aligned_page_size());
     }
-    TensorAccessorArgs(*src0_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(reader_compile_time_args, reader_common_runtime_args);
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-    std::vector<uint32_t> writer_common_runtime_args;
     if (row_major) {
         writer_compile_time_args.push_back(ht);
         writer_compile_time_args.push_back(H);
@@ -240,8 +238,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
         writer_compile_time_args.push_back(ht * output_tensor.element_size() * TILE_HEIGHT);
         writer_compile_time_args.push_back(dst_buffer->aligned_page_size());
     }
-    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(writer_compile_time_args, writer_common_runtime_args);
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = row_major ? "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
@@ -252,7 +249,6 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.common_runtime_args = std::move(reader_common_runtime_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -264,10 +260,10 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
 
     std::vector<uint32_t> compute_kernel_args = {};
     if (row_major) {
+        compute_kernel_args.reserve(3);
         compute_kernel_args.push_back(ht);
         compute_kernel_args.push_back(wt);
         compute_kernel_args.push_back(ht * wt);

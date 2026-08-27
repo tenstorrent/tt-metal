@@ -101,8 +101,8 @@ operations:
         src_b: "input_B"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
-        unpack_transpose_within_face: true
-        unpack_transpose_faces: true
+        transpose_within_face: true
+        transpose_faces: true
         math_fidelity: "LoFi"
         acc_to_dest: true
       - type: "UnarySfpu"

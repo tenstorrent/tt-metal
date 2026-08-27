@@ -53,6 +53,7 @@
 #include "dispatch/dispatch_mem_map.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "llrt/hal.hpp"
+#include "program/program_impl.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/data_collector.hpp"
@@ -739,7 +740,7 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             CreateKernel(
                 realtime_profiler_program, realtime_profiler_push_kernel_path, realtime_profiler_core, ncrisc_config);
 
-            tt::tt_metal::detail::CompileProgram(device, realtime_profiler_program, /*force_slow_dispatch=*/true);
+            realtime_profiler_program.impl().compile(device, /*force_slow_dispatch=*/true);
             ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(
                 device, realtime_profiler_program, /*force_slow_dispatch=*/true);
             ::tt::tt_metal::detail::LaunchProgram(
@@ -1163,7 +1164,9 @@ void RealtimeProfilerManager::on_callback_unregistered(tt::ProgramRealtimeProfil
 RealtimeProfilerManager::~RealtimeProfilerManager() { shutdown(); }
 
 void RealtimeProfilerManager::shutdown() {
+    // Upper bound on the wait for the push kernel to finish draining; see the poll below.
     constexpr auto kShutdownKernelExitGrace = std::chrono::milliseconds(100);
+    constexpr auto kShutdownKernelExitPollBackoff = std::chrono::microseconds(50);
     MetalContext::instance(context_id_).data_collector()->DetachRealtimeProfilerCallbackListener(this);
 
     // Re-write ring_buffer->terminate as a safety net, then let the push kernel deliver the last PCIe page.
@@ -1188,8 +1191,60 @@ void RealtimeProfilerManager::shutdown() {
             }
         }
     }
-    if (!devices_.empty()) {
-        std::this_thread::sleep_for(kShutdownKernelExitGrace);
+    // Wait for the push kernel to hand over its last PCIe page and exit. It drains the ring and returns once
+    // it observes terminate with an empty ring, and it bumps read_index only after that page's write barrier
+    // has retired, so read_index == write_index means every entry has landed in the host ring. Poll for that
+    // equality rather than waiting out kShutdownKernelExitGrace: draining takes microseconds, and shutdown()
+    // runs on every close_device, where suites with a function-scoped `device` fixture pay it per test.
+    const auto deadline = std::chrono::steady_clock::now() + kShutdownKernelExitGrace;
+    for (auto& dev_state : devices_) {
+        if (dev_state.core_l1.ring_buffer == 0 || !dev_state.device) {
+            continue;
+        }
+        const uint32_t indices_addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, write_index);
+        static_assert(
+            offsetof(RtProfilerRingBuffer, read_index) ==
+                offsetof(RtProfilerRingBuffer, write_index) + sizeof(uint32_t),
+            "write_index and read_index must be adjacent to be read in one shot");
+        bool drained = false;
+        while (true) {
+            std::vector<uint32_t> indices(2, 0);
+            try {
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    dev_state.device,
+                    dev_state.realtime_profiler_core,
+                    indices_addr,
+                    2 * sizeof(uint32_t),
+                    indices,
+                    CoreType::WORKER);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Failed to read ring indices while draining device {}: {}",
+                    dev_state.chip_id,
+                    e.what());
+                break;
+            }
+            if (indices[0] == indices[1]) {
+                drained = true;
+                break;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {} push kernel did not drain within {} ms "
+                    "(write_index={}, read_index={}); trailing records may be lost",
+                    dev_state.chip_id,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(kShutdownKernelExitGrace).count(),
+                    indices[0],
+                    indices[1]);
+                break;
+            }
+            std::this_thread::sleep_for(kShutdownKernelExitPollBackoff);
+        }
+        if (drained) {
+            log_debug(tt::LogMetal, "[Real-time profiler] Device {} push kernel drained", dev_state.chip_id);
+        }
     }
 
     if (receiver_thread_.joinable()) {
@@ -1260,6 +1315,7 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
         uint64_t device_time;  // Device wall clock cycles
     };
     std::vector<SyncSample> samples;
+    samples.reserve(num_samples);
 
     // Discard pre-existing pages before sync (their PCIe-mapped bytes can be undefined on a fresh MeshDevice);
     // discard_pending_pages rebases bytes_acked and notifies the device.
@@ -1387,7 +1443,7 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
         dev_state.first_timestamp = static_cast<uint64_t>(intercept);
         dev_state.sync_host_start = host_start_time;
 
-        log_info(
+        log_debug(
             tt::LogMetal,
             "[Real-time profiler] Device {} sync complete: {} samples, frequency={:.6f} GHz, "
             "device_time_at_sync={} cycles",

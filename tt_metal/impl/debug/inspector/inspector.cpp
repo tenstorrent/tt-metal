@@ -295,6 +295,45 @@ void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_
     }
 }
 
+void Inspector::mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
+    try {
+        if (data->mesh_buffer_logging_enabled) {
+            data->logger.log_mesh_buffer_allocated(mesh_buffer);
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->mesh_buffers_data.insert(mesh_buffer);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh buffer allocated: {}", e.what());
+    }
+}
+
+void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        if (data->mesh_buffer_logging_enabled) {
+            data->logger.log_mesh_buffer_deallocated(mesh_buffer);
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->mesh_buffers_data.erase(mesh_buffer);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh buffer deallocated: {}", e.what());
+    }
+}
+
 void Inspector::mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
     if (!is_enabled()) {
         return;
@@ -400,7 +439,7 @@ void Inspector::emit_debug_entry(
             slot.operation_name = operation_name;
             slot.tensor_specs = std::move(tensor_specs);
             slot.trace_id = trace_id;
-            if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
+            if (data->runtime_entries_logging_enabled) {
                 data->logger.log_runtime_entry(slot);
             }
         } else {
@@ -417,7 +456,7 @@ void Inspector::emit_debug_entry(
             } else {
                 data->runtime_entries_write_pos++;
             }
-            if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
+            if (data->runtime_entries_logging_enabled) {
                 data->logger.log_runtime_entry(slot);
             }
         }

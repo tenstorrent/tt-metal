@@ -65,6 +65,32 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         activations_stride_elm == expected_activations_stride_elm,
         "The token activations tensor is expected to have aligned 2 * experts_per_device + 1 elements per token");
+
+    // dense_token_maps rows are (total_tokens + 1) token indices (the extra slot is the -1 terminator), each index
+    // padded for NoC DMA. The kernels walk the maps CB as (e * (total_tokens + 1) + t) * dense_token_maps_stride_elm,
+    // with the stride derived on the host as last_dim / (total_tokens + 1). Two things must hold for that indexing to
+    // land on the right expert page, otherwise one expert's page silently aliases another's (or the walk runs off the
+    // end of the CB): the row must divide evenly into (total_tokens + 1) indices, and the row must need no further
+    // padding to reach the L1 page alignment the reader gives each expert page.
+    const auto& dense_token_maps_tensor = tensor_args.dense_token_maps_tensor;
+    const auto maps_row_elms = dense_token_maps_tensor.logical_shape()[-1];
+    const auto maps_datum_size =
+        tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(dense_token_maps_tensor.dtype()));
+
+    TT_FATAL(
+        maps_row_elms % (total_tokens + 1) == 0,
+        "The dense token maps tensor is expected to hold (total_tokens + 1) = {} equally strided token indices per "
+        "expert, but its last dim ({}) is not a multiple of that",
+        total_tokens + 1,
+        maps_row_elms);
+
+    const auto maps_row_bytes = maps_row_elms * maps_datum_size;
+    TT_FATAL(
+        tt::align(maps_row_bytes, tt::tt_metal::hal::get_l1_alignment()) == maps_row_bytes,
+        "The dense token maps tensor row ({} bytes) must already be L1 aligned ({} bytes); otherwise the per-expert "
+        "page padding breaks the kernels' maps indexing",
+        maps_row_bytes,
+        tt::tt_metal::hal::get_l1_alignment());
 }
 
 SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombineDeviceOperation::compute_output_specs(

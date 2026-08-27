@@ -92,17 +92,21 @@ def print_l1_small_buffers(device, name):
     print_buffers(device, name, ttnn.BufferType.L1_SMALL)
 
 
-def adjust_shapes_for_testing(config, mesh_device):
-    """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct."""
+def adjust_shapes_for_testing(config, mesh_device, tile_align_width: bool = True):
+    """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct.
+
+    `tile_align_width` rounds the model dim up so the per-device width (config.dim / n_tp_devices) is
+    a multiple of 32. An L1-sharded gate input needs that -- a shard width must be whole tiles -- so
+    it is the default, and it is a no-op for every model whose per-device width already is (only
+    GPT-OSS is not: 2880 -> 720/device, 22.5 tiles). Pass False when the input is DRAM-interleaved,
+    where TILE_LAYOUT padding covers the ragged width and the test can hold the deployed dim exactly.
+    """
     _, n_tp_devices = mesh_device.shape
     if n_tp_devices != 4:
         config.dim = config.dim // (4 // n_tp_devices)
-    # The gate input/weight are width-sharded across the TP axis, so the per-device width
-    # (config.dim / n_tp_devices) must be tile-aligned (a multiple of 32). Round the model dim up to
-    # a multiple of 32 * n_tp_devices when it does not divide evenly (e.g. GPT-OSS 2880 -> 720/device,
-    # which is 22.5 tiles). This is a no-op for models whose per-device width is already tile-aligned.
-    tile_multiple = 32 * n_tp_devices
-    config.dim = ((config.dim + tile_multiple - 1) // tile_multiple) * tile_multiple
+    if tile_align_width:
+        tile_multiple = 32 * n_tp_devices
+        config.dim = ((config.dim + tile_multiple - 1) // tile_multiple) * tile_multiple
 
 
 def get_input_mem_config(config, mesh_shape):
@@ -360,3 +364,81 @@ def dequantize_state_dict(
     if is_pack_quantized_int4(quant_cfg):
         return _dequantize_pack_quantized_state_dict(state_dict, quant_cfg, dtype=dtype)
     return _fp8_dequantize_state_dict(state_dict, hf_config, dtype)
+
+
+def passthrough_state_dict(state_dict: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Materialize an already-dequantized (sub-)state_dict, preserving each tensor's source dtype.
+
+    Both dequantizers need quantization metadata before they can touch a single tensor (fp8 reads
+    `weight_block_size`, INT4 reads its config group), so a checkpoint that carries none needs this
+    separate route rather than a no-op trip through `dequantize_state_dict`.
+
+    Source dtypes are preserved for the same reason `_dequantize_pack_quantized_state_dict` preserves
+    them on its non-quantized tensors: the fp32 `e_score_correction_bias` feeding the router top-k must
+    not be downcast to bf16. A dequantized checkpoint already stores the dtypes the model expects
+    (Kimi K2.6: bf16 weights, fp32 router bias), so there is nothing to convert.
+    """
+    out: dict[str, torch.Tensor] = {}
+    for name in sorted(state_dict.keys()):
+        # A dequantized checkpoint carries no quantized payload. If one turns up, the weights are
+        # quantized but config.json lost its metadata -- say so instead of emitting garbage tensors.
+        if name.endswith(("_scale_inv", "_packed")):
+            raise ValueError(
+                f"Found quantized tensor '{name}' in a checkpoint whose config has no `quantization_config`. "
+                "The dequantization metadata is missing from config.json."
+            )
+        tensor = state_dict[name]
+        if tensor is None:
+            raise ValueError(f"Expected tensor {name} to exist in state_dict but it was None")
+        if tensor.dtype == torch.float8_e4m3fn:
+            raise ValueError(
+                f"Found float8 tensor '{name}' in a checkpoint whose config has no `quantization_config`. "
+                "The dequantization metadata is missing from config.json."
+            )
+        out[name] = tensor.contiguous().clone()  # passthrough: preserve source dtype
+    return out
+
+
+_LOGGED_CONVERSION_MODES: set[str] = set()
+
+
+def _log_conversion_mode(message: str) -> None:
+    """Log the quantized/dequantized conclusion once per process; repeats drop to debug.
+
+    `convert_state_dict` runs per module and per layer (60+ times for a full checkpoint), so logging at
+    info every time would bury the rest of the weight-load output.
+    """
+    if message in _LOGGED_CONVERSION_MODES:
+        logger.debug(message)
+        return
+    _LOGGED_CONVERSION_MODES.add(message)
+    logger.info(message)
+
+
+def convert_state_dict(
+    state_dict: Mapping[str, torch.Tensor],
+    hf_config: Any,
+    dtype: torch.dtype = torch.bfloat16,
+) -> dict[str, torch.Tensor]:
+    """Convert an HF (sub-)state_dict, dequantizing only when the checkpoint is actually quantized.
+
+    Every model here ships as both a quantized and a dequantized checkpoint behind one loading path,
+    and only `hf_config.quantization_config` tells them apart: present means quantized weights, so hand
+    off to `dequantize_state_dict` (Kimi INT4 pack-quant or DeepSeek fp8 block-wise); absent means the
+    checkpoint is already dequantized, so pass the weights through untouched.
+    """
+    quant_cfg = _get_quantization_config_dict(hf_config)
+
+    if quant_cfg is None:
+        _log_conversion_mode(
+            "No `quantization_config` found in hf_config -> checkpoint is already dequantized; "
+            "passing weights through without dequantization."
+        )
+        return passthrough_state_dict(state_dict)
+
+    quant_method = quant_cfg.get("quant_method") if isinstance(quant_cfg, dict) else None
+    _log_conversion_mode(
+        f"Found `quantization_config` in hf_config (quant_method={quant_method!r}) -> checkpoint is "
+        "quantized; dequantizing weights."
+    )
+    return dequantize_state_dict(state_dict, hf_config, dtype)

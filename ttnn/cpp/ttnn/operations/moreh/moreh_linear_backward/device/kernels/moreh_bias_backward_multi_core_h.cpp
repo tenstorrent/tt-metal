@@ -5,30 +5,27 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     constexpr int onetile = 1;
-    ArgFetcher arg_fetcher;
-    const uint32_t batch_num = arg_fetcher.get_next_arg_val<uint32_t>();
-    const uint32_t Ht = arg_fetcher.get_next_arg_val<uint32_t>();
-    const uint32_t Wt_per_core = arg_fetcher.get_next_arg_val<uint32_t>();
-    const bool do_mask_h = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
-    const bool do_mask_w = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
+    const uint32_t batch_num = get_arg(args::batch_num);
+    const uint32_t Ht = get_arg(args::Ht);
+    const uint32_t Wt_per_core = get_arg(args::Wt_per_core);
+    const bool do_mask_h = (get_arg(args::do_mask_h) == 1);
+    const bool do_mask_w = (get_arg(args::do_mask_w) == 1);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    DataflowBuffer dfb_in0_obj(cb_in0);
-    constexpr auto cb_scaler = tt::CBIndex::c_1;
-    DataflowBuffer dfb_scaler_obj(cb_scaler);
-    constexpr auto cb_mask_h_w = tt::CBIndex::c_2;
-    DataflowBuffer dfb_mask_h_w_obj(cb_mask_h_w);
-    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
-    DataflowBuffer dfb_intermed0_obj(cb_intermed0);
-    constexpr auto cb_intermed1 = tt::CBIndex::c_25;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    // in0 holds the output_grad tiles the reader streams in; scaler and mask_h_w are the reader's
+    // prepared constant tiles; intermed0 stages a masked input tile; intermed1 carries the running
+    // reduction accumulator; out is the bias_grad tile the writer drains.
+    DataflowBuffer dfb_in0_obj(dfb::in0);
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
+    DataflowBuffer dfb_mask_h_w_obj(dfb::mask_h_w);
+    DataflowBuffer dfb_intermed0_obj(dfb::intermed0);
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
 
-    binary_op_init_common(cb_in0, cb_in0, cb_out0);
+    compute_kernel_hw_startup(dfb::in0, dfb::in0, dfb::out);
     dfb_scaler_obj.wait_front(onetile);
 
     if (do_mask_h || do_mask_w) {
@@ -50,27 +47,27 @@ void kernel_main() {
                     dfb_in0_obj.wait_front(onetile);
                     tile_regs_acquire();
 #if defined FP32_DEST_ACC_EN
-                    reconfig_data_format_srca(cb_in0);
+                    reconfig_data_format_srca(dfb::in0);
 #endif
-                    copy_tile_to_dst_init_short(cb_in0);
-                    copy_tile(cb_in0, 0, dst0);
+                    copy_tile_to_dst_init_short(dfb::in0);
+                    copy_tile(dfb::in0, 0, dst0);
 
                     if (do_mask_h && last_row) {
 #if defined FP32_DEST_ACC_EN
-                        reconfig_data_format_srca(cb_mask_h_w);
+                        reconfig_data_format_srca(dfb::mask_h_w);
 #endif
-                        copy_tile_to_dst_init_short(cb_mask_h_w);
-                        copy_tile(cb_mask_h_w, 0, dst1);
+                        copy_tile_to_dst_init_short(dfb::mask_h_w);
+                        copy_tile(dfb::mask_h_w, 0, dst1);
                         mask_tile_init();
                         mask_tile(dst0, dst1);
                     }
 
                     if (do_mask_w && last_col) {
 #if defined FP32_DEST_ACC_EN
-                        reconfig_data_format_srca(cb_mask_h_w);
+                        reconfig_data_format_srca(dfb::mask_h_w);
 #endif
-                        copy_tile_to_dst_init_short(cb_mask_h_w);
-                        copy_tile(cb_mask_h_w, 1, dst1);
+                        copy_tile_to_dst_init_short(dfb::mask_h_w);
+                        copy_tile(dfb::mask_h_w, 1, dst1);
                         mask_tile_init();
                         mask_tile(dst0, dst1);
                     }
@@ -79,9 +76,9 @@ void kernel_main() {
                     tile_regs_wait();
                     dfb_intermed0_obj.reserve_back(onetile);
 #if defined FP32_DEST_ACC_EN
-                    pack_reconfig_data_format(cb_intermed0);
+                    pack_reconfig_data_format(dfb::intermed0);
 #endif
-                    pack_tile(dst0, cb_intermed0);
+                    pack_tile(dst0, dfb::intermed0);
                     dfb_intermed0_obj.push_back(onetile);
                     tile_regs_release();
 
@@ -90,21 +87,21 @@ void kernel_main() {
 
                 const auto reduce_block = compute_kernel_lib::ReduceInputBlockShape::single();
                 const auto reduce_layout = compute_kernel_lib::ReduceInputMemoryLayout::contiguous();
-                const auto reduce_accum = compute_kernel_lib::Accumulate::at(cb_intermed1, num_tile_done);
+                const auto reduce_accum = compute_kernel_lib::Accumulate::at(dfb::intermed1, num_tile_done);
                 if (do_mask) {
                     if (last_out) {
-                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_intermed0, cb_scaler, cb_out0>(
+                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::intermed0, dfb::scaler, dfb::out>(
                             reduce_block, reduce_layout, reduce_accum);
                     } else {
-                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_intermed0, cb_scaler, cb_intermed1>(
+                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::intermed0, dfb::scaler, dfb::intermed1>(
                             reduce_block, reduce_layout, reduce_accum);
                     }
                 } else {
                     if (last_out) {
-                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_in0, cb_scaler, cb_out0>(
+                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::in0, dfb::scaler, dfb::out>(
                             reduce_block, reduce_layout, reduce_accum);
                     } else {
-                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_in0, cb_scaler, cb_intermed1>(
+                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::in0, dfb::scaler, dfb::intermed1>(
                             reduce_block, reduce_layout, reduce_accum);
                     }
                 }

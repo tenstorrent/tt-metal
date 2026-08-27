@@ -30,9 +30,11 @@ exit 0); otherwise comma-separated logical SKUs intersected with coverage.
 `weights-cache-mode` is an optional per-SKU field in sku_config.yaml; when present,
 it is copied into each output matrix entry.
 
+`ttsim_lib` is likewise copied through, and the distinct values are emitted as the JSON-array
+`sim-libs` output so a caller can run one fetch-ttsim leg per simulator binary it needs.
+
 Examples:
     python prepare_test_matrix.py tests/pipeline_reorg/galaxy_e2e_tests.yaml "wh_galaxy,bh_galaxy" .github/sku_config.yaml
-    python prepare_test_matrix.py tests/pipeline_reorg/galaxy_demo_tests.yaml ALL_SKUS_IN_TESTS .github/sku_config.yaml
     python prepare_test_matrix.py tests/pipeline_reorg/blackhole_demo_tests.yaml ALL_SKUS_IN_TESTS .github/sku_config.yaml --event merge_group
 """
 
@@ -145,17 +147,38 @@ def load_sku_config(sku_config_path):
     return config["skus"]
 
 
-def substitute_cmd_placeholders(entry):
+def strip_cmd_comments(cmd):
+    """Drop whole-line shell comments from a multi-line cmd string."""
+    kept = [line for line in cmd.split("\n") if not line.lstrip().startswith("#")]
+    return "\n".join(kept)
+
+
+def substitute_cmd_placeholders(entry, allow_missing_cmd=False):
     """
     Replace placeholders in entry["cmd"] with values from the same entry.
 
     Placeholders use the form {key_name}; e.g. {tt_cache_path} is replaced with
     entry["tt_cache_path"]. This allows per-SKU values (e.g. different TT_CACHE_PATH
     paths) to be injected into the same base command.
+
+    By default every entry must carry a non-empty `cmd`. Pipelines that build the
+    command in the impl workflow from structured per-entry fields (e.g. vLLM Model
+    Tests) opt out of that requirement with allow_missing_cmd=True, which permits an
+    *absent* `cmd` key. A present-but-empty `cmd` ("" / whitespace) is always an
+    error — it would yield a matrix leg that runs nothing and reports success.
     """
     cmd = entry.get("cmd")
-    if not cmd or not isinstance(cmd, str):
+    if cmd is None:
+        if allow_missing_cmd:
+            return
+        raise ValueError(f"cmd is missing for test '{entry.get('name', 'Unnamed Test')}'")
+    if not isinstance(cmd, str):
         raise ValueError(f"cmd is not a string: {cmd}")
+
+    cmd = strip_cmd_comments(cmd)
+    entry["cmd"] = cmd
+    if not cmd.strip():
+        raise ValueError(f"cmd is present but empty for test '{entry.get('name', 'Unnamed Test')}'")
     for key, value in entry.items():
         placeholder = "{" + key + "}"
         if placeholder in cmd:
@@ -191,7 +214,7 @@ def load_tests(tests_yaml_path):
     return tests
 
 
-def build_test_matrix(tests, enabled_skus, sku_config, event=None):
+def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing_cmd=False):
     """
     Filter tests based on enabled SKUs and expand multi-SKU entries into flat matrix entries.
 
@@ -265,33 +288,50 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None):
             sku_entry = sku_config[concrete_sku]
             if "weights-cache-mode" in sku_entry:
                 entry["weights-cache-mode"] = sku_entry["weights-cache-mode"]
-            # SKUs carrying an `allocation` block are exabox multihost SKUs (runs_on
-            # exabox-multihost-with-nfs) that need the ttop allocation/reset lifecycle rather than
-            # the single-host container path. Mark the leg so consumers can route it accordingly.
-            entry["multihost"] = "allocation" in sku_entry
-            substitute_cmd_placeholders(entry)
+            # Simulator SKUs name the libttsim binary they run on; carrying it here lets the
+            # impl's fetch-ttsim job download only the libs this matrix actually needs.
+            if "ttsim_lib" in sku_entry:
+                entry["ttsim_lib"] = sku_entry["ttsim_lib"]
+            # Exabox multihost SKUs: runs_on contains an exabox-multihost* label
+            # (e.g. exabox-multihost-ci-sc4). The multihost-ci runner hook provisions
+            # workers from container.image. A legacy `allocation` block also marks
+            # multihost if present.
+            runs_on = sku_entry.get("runs_on") or []
+            entry["multihost"] = "allocation" in sku_entry or any(
+                isinstance(label, str) and "exabox-multihost" in label for label in runs_on
+            )
+            substitute_cmd_placeholders(entry, allow_missing_cmd=allow_missing_cmd)
             filtered_tests.append(entry)
 
-    if not filtered_tests:
-        print(f"::error::No tests selected for enabled SKUs '{','.join(enabled_skus)}'. Failing pipeline.")
+    if not tests:
+        return []
+    elif not filtered_tests:
+        print(f"::error::No tests selected for enabled SKUs '{','.join(enabled_skus)}'.")
         sys.exit(1)
 
     return filtered_tests
 
 
 def write_matrix_output(filtered_matrix):
-    """Print and optionally write matrix to GITHUB_OUTPUT."""
+    """Print and optionally write matrix + sim-libs to GITHUB_OUTPUT."""
     print(f"\nFiltered test matrix ({len(filtered_matrix)} tests):")
     json_output_pretty = json.dumps(filtered_matrix, indent=2)
     print(json_output_pretty)
 
     json_output_compact = json.dumps(filtered_matrix)
+    # Simulator binaries this matrix needs, as a JSON array so the caller can feed it straight
+    # to a fetch-ttsim matrix. "[]" when the matrix has no sim SKUs, which is also how impls
+    # tell whether to run that job at all.
+    sim_libs = json.dumps(sorted({entry["ttsim_lib"] for entry in filtered_matrix if entry.get("ttsim_lib")}))
+
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
         with open(github_output, "a") as f:
             f.write(f"matrix<<EOF\n{json_output_compact}\nEOF\n")
+            f.write(f"sim-libs={sim_libs}\n")
     else:
         print(f"\nmatrix={json_output_compact}")
+        print(f"sim-libs={sim_libs}")
 
 
 def main(argv=None):
@@ -313,6 +353,13 @@ def main(argv=None):
         "--sku-allowlist",
         default=None,
         help="Omit for no filter; empty string skips all; else CSV of logical SKUs",
+    )
+    parser.add_argument(
+        "--allow-missing-cmd",
+        action="store_true",
+        help="Allow entries without a `cmd` key (for pipelines that build the command "
+        "in the impl from structured fields, e.g. vLLM Model Tests). A present-but-empty "
+        "cmd is still rejected.",
     )
     args = parser.parse_args(argv)
 
@@ -346,7 +393,13 @@ def main(argv=None):
         write_matrix_output([])
         return 0
 
-    filtered_matrix = build_test_matrix(tests, enabled_skus, sku_config, event=args.event)
+    filtered_matrix = build_test_matrix(
+        tests, enabled_skus, sku_config, event=args.event, allow_missing_cmd=args.allow_missing_cmd
+    )
+
+    if not filtered_matrix:
+        print(f"::warning::No tests present in test YAML '{args.tests_yaml_path}'.")
+
     write_matrix_output(filtered_matrix)
     return 0
 

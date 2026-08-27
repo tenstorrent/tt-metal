@@ -110,7 +110,7 @@ void kernel_main() {
         noc.async_read(
             dram_bank,
             dfb_in3,
-            in3_block_tiles * get_tile_size(dfb_id_in3),
+            in3_block_tiles * dfb_in3.get_tile_size(),
             {.bank_id = dram_bank_id, .addr = in3_tensor_addr},
             {.offset_bytes = 0});
         noc.async_read_barrier();

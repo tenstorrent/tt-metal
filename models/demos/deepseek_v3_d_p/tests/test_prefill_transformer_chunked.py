@@ -40,19 +40,26 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers, resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
+    full_indexer_rank,
+    get_fused_ring_host_timing,
+    reset_fused_ring_host_timing,
+    resolve_has_indexer,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_cache_host,
     blockcyclic_positions,
     rotated_chip_positions,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary, render_table
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
+from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     cache_half_pccs,
     gather_cache_tp0,
@@ -129,22 +136,77 @@ LAYER_PCC_THRESHOLD = 0.88
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
 
-# Per-chunk baseline medians (seconds) for the no-PCC perf gate, pulled from a known-good CI run. Keyed
-# by (num_layers, n_chunks, num_iters) so only the exact config we have a CI number for is gated; every
-# other combo in the no-PCC sweep stays record-only. Each list has one entry per chunk (index c ==
-# chunk c). A single margin (the perf_margin pytest arg) is applied to every chunk. Recalibrate by
-# re-reading the "chunk timing stats" table from a fresh green CI run.
-KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S = {
-    # test_kimi_prefill_transformer_chunked_no_pcc[...-L61-chunks_eleven-ten_iters] (55k / code_debug).
-    # TODO: populate the 11 per-chunk medians from the first green code_debug 55k CI run's
-    # "chunk timing stats" table; until then this config runs record-only (no perf gate). The old 5-chunk
-    # longbook baseline was [1.330, 1.326, 1.326, 1.340, 1.369] (run 28753487696) -- chunks 0-4 should be
-    # ~unchanged (chunk c attends to KV[0:c*CHUNK] regardless of n_chunks); chunks 5-10 are new.
-    # (61, 11, 10): [...],
+# Per-chunk baseline medians (seconds) for the perf gate, derived from completed CI runs. Keyed by
+# (num_layers, n_chunks, num_iters) so only exact configs with CI numbers are gated; every other combo
+# in the sweep stays record-only. Each list has one entry per chunk (index c == chunk c). Recalibrate
+# from the per-chunk median across multiple independent Galaxy runs rather than copying one run's
+# measurements directly.
+#
+# Traced and untraced get SEPARATE tables and SEPARATE margins, selected by mode in
+# `kimi_chunked_perf_gate` -- a traced baseline can never gate an untraced run or vice versa. The two
+# are different regimes, not a small delta: traced measures 0.6-0.95 s/chunk (a ramp, since chunk c
+# attends to KV[0:c*CHUNK]) while untraced is a flat ~1.04 s/chunk, host-dispatch bound so the op2op
+# gap swamps the depth ramp entirely.
+KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
+    # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
+    # (55k / code_debug). Re-centered 2026-08-24 (issue #54220): the op got 2-6% FASTER and 7/11 chunks
+    # fell out the bottom of the old band -- the baseline was stale, not the margin too tight. Likely
+    # source is #53968 (active-ERISC __global_pointer$ link fix); a branch that is 08-23 main with
+    # #53968 reverted (run 32666670314) still measures the pre-shift level.
+    #
+    # These are the per-chunk medians of run 32722605093/job 97446035784 (main) verbatim -- the current
+    # level, measured on main, is the baseline. Run 32731794058/job 97448128368 independently agrees to
+    # <=0.010 s on every chunk, so it also sits well inside the +/- 3% band around these numbers.
+    (61, 11, 10): [
+        0.547,
+        0.550,
+        0.596,
+        0.624,
+        0.660,
+        0.691,
+        0.705,
+        0.744,
+        0.798,
+        0.835,
+        0.875,
+    ],
 }
-# Default +/- tolerance band around each baseline chunk median (fraction). Overridable per test via the
-# perf_margin pytest argument (see test_prefill_block_perf.py's `margin` column for the design).
-DEFAULT_PERF_MARGIN = 0.05
+KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
+    # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
+    # (55k / code_debug), 2026-08-21 on an 8x4 galaxy, with the routed experts folded into one program
+    # on a Fabric2D mesh. One run's per-chunk medians -- unlike the traced twin, a single run is thin
+    # evidence here, so re-cut this from a set of green runs the first time it disagrees.
+    #
+    # WITHIN a run the untraced spread is huge -- per-chunk stddev reaches 0.33 s (~30%), because every
+    # iteration re-dispatches every op from host and pays a fresh, variable op2op gap. The MEDIAN of the
+    # 9 post-warmup iterations is not: on the previous baseline no chunk median across 32 recorded runs
+    # landed further than 3.2% from its median-of-runs value. So the gate is on the median, with
+    # UNTRACED_PERF_MARGIN rather than the traced 3%.
+    #
+    # If this goes flaky, re-center on the median over several runs before widening. Widening to 10% is
+    # the fallback after that -- a band that needs more than 10% is a regression, not noise.
+    (61, 11, 10): [1.043, 1.036, 1.037, 1.047, 1.044, 1.034, 1.034, 1.034, 1.046, 1.041, 1.044],
+}
+# Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
+# program, so the device is its only noise source; untraced re-dispatches from host every iteration and
+# carries the op2op gap, so it needs the wider band. Overridable per test via the perf_margin pytest
+# argument (None = use the mode default; see test_prefill_block_perf.py's `margin` column).
+#
+# 5% untraced is deliberately tight: the worst per-chunk deviation over all 32 recorded runs is 3.2%,
+# so CI noise already spends ~2/3 of the band. That is the intended bar -- catch a >5% eager-dispatch
+# regression -- but it leaves little slack, so triage a failure as noise-vs-regression (compare the
+# other chunks and the traced twin from the same run) before touching the number.
+TRACED_PERF_MARGIN = 0.03
+UNTRACED_PERF_MARGIN = 0.05
+
+# Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
+# accumulation headroom is pinned.
+GATED_LAYER_DEPTH = 10
+# KV-cache PCC bar for the trace-correctness tests (_record_kv_cache_pcc with
+# assert_layer_depth=GATED_LAYER_DEPTH): the KV the traced forward wrote vs the golden
+# kv_post_transform, over the SHALLOW gated layers only. Distinct from KV_CACHE_PCC_THRESHOLD above,
+# which is the full-depth floor (deep bf8_b layers drift well below this bar).
+TRACE_KV_CACHE_PCC_THRESHOLD = 0.96
 
 
 def _load_metadata_token_ids(trace_dir: Path, total_len: int) -> torch.Tensor:
@@ -186,11 +248,28 @@ def _ref_layer_slice(trace_dir: Path, layout: str, layer: int, start: int, end: 
 
 
 def _record_kv_cache_pcc(
-    trace_dir, layout, tt_kvpe_cache, mesh_device, sp, num_layers, seq_len_cache, total_len, kv_lora
+    trace_dir,
+    layout,
+    tt_kvpe_cache,
+    mesh_device,
+    sp,
+    num_layers,
+    seq_len_cache,
+    total_len,
+    kv_lora,
+    assert_threshold=KV_CACHE_PCC_THRESHOLD,
+    assert_layer_depth=None,
+    return_per_layer=False,
 ):
     """Gather the device KV cache, un-rotate the block-cyclic layout, and PCC each layer's valid region
     [:total_len] against the golden kv_post_transform trace ([nope | pe], the pe half re-based to the
-    device Meta interleave via cache_half_pccs). Per-layer cache — slot == layer."""
+    device Meta interleave via cache_half_pccs). Per-layer cache — slot == layer.
+
+    Returns the min PCC across all layers (or `(min, per_layer_dict)` with return_per_layer). The min
+    is asserted >= `assert_threshold`; pass None to make the check record-only. With
+    `assert_layer_depth` set, only layers 0..assert_layer_depth (inclusive) are asserted — deeper
+    layers are recorded only, mirroring the decoder-output GATED_LAYER_DEPTH policy (deep KV PCC
+    drifts under bf8_b)."""
     logger.info("Device KV cache vs golden kv_post_transform:")
     cache_full = gather_cache_tp0(tt_kvpe_cache.storage, mesh_device)  # [num_layers, seq_len_cache, kvpe]
     p = blockcyclic_positions(sp, CHUNK, seq_len_cache)
@@ -201,11 +280,25 @@ def _record_kv_cache_pcc(
         pcc_nope, pcc_pe = cache_half_pccs(g_post, dev_cache, kv_lora, pe_interleave=True)
         cache_min_pcc[i] = min(pcc_nope, pcc_pe)
         logger.info(f"  cache layer {i} PCC: nope={pcc_nope:.6f} pe(interleaved)={pcc_pe:.6f}")
-        if cache_min_pcc[i] < KV_CACHE_PCC_THRESHOLD:
-            logger.warning(f"  KV cache layer {i} PCC {cache_min_pcc[i]:.6f} below {KV_CACHE_PCC_THRESHOLD}")
+        if assert_threshold is not None and cache_min_pcc[i] < assert_threshold:
+            logger.warning(f"  KV cache layer {i} PCC {cache_min_pcc[i]:.6f} below {assert_threshold}")
     kv_min = min(cache_min_pcc.values())
     logger.info(f"KV cache min PCC across layers: {kv_min:.6f}")
-    assert kv_min >= KV_CACHE_PCC_THRESHOLD, f"KV cache min PCC {kv_min:.6f} < {KV_CACHE_PCC_THRESHOLD}"
+    if assert_threshold is not None:
+        if assert_layer_depth is not None:
+            gated_min = min(v for i, v in cache_min_pcc.items() if i <= assert_layer_depth)
+            logger.info(
+                f"KV cache min PCC over asserted layers 0..{assert_layer_depth}: {gated_min:.6f} "
+                f"(layers >{assert_layer_depth} recorded only)"
+            )
+            assert (
+                gated_min >= assert_threshold
+            ), f"KV cache min PCC {gated_min:.6f} (layers 0..{assert_layer_depth}) < {assert_threshold}"
+        else:
+            assert kv_min >= assert_threshold, f"KV cache min PCC {kv_min:.6f} < {assert_threshold}"
+    if return_per_layer:
+        return kv_min, cache_min_pcc
+    return kv_min
 
 
 def _record_indexer_k_cache_pcc(
@@ -220,7 +313,7 @@ def _record_indexer_k_cache_pcc(
     indexer_k is captured for a subset of layers (glm_5_1: all; glm_5_2: 0-2 + every 4th) — layers without
     a golden are skipped. GLM DSA variants only."""
     logger.info("Device indexer-K cache vs golden dsa/indexer_k:")
-    cache_full = gather_cache_tp0(tt_index_kv_cache, mesh_device)  # [num_full_indexer_layers or num_layers, T, D]
+    cache_full = gather_cache_tp0(tt_index_kv_cache, mesh_device)  # [full layers built, T, D]
     layers = [i for i in range(num_layers) if (trace_dir / "dsa" / f"indexer_k_layer_{i}").exists()]
     if not layers:
         logger.info("  (no indexer_k golden layers present -- skipping)")
@@ -317,7 +410,8 @@ def _preload_indexer_k_prefix_from_trace(
     trace, so a measured chunk at KV depth preload_isl has a REAL indexer prefix (representative top-k
     selection at depth) rather than a zero prior. Only "full" indexer layers own a cache slot / have a
     golden (glm_5_1: all; glm_5_2: 0-2 + every 4th); layer i is written to its compacted slot
-    full_indexer_rank(config, i), and the cache is strided by num_full_indexer_layers. The golden
+    full_indexer_rank(config, i), and the cache is strided by the full-layer count over the built
+    layers. The golden
     index_head_dim key is [rope | nope] already in the device's interleaved basis (GLM), so it is written
     verbatim -- no re-interleave (unlike KVPE's k_pe half-split -> interleaved). Rows past the trace are
     random (timing-representative). Mirrors _preload_kvpe_prefix_from_trace otherwise."""
@@ -325,7 +419,7 @@ def _preload_indexer_k_prefix_from_trace(
     if not full_layers:
         logger.info(f"no indexer_k golden in trace {trace_dir}; leaving the indexer prefix zero")
         return
-    num_slots = num_full_indexer_layers(config) or num_layers
+    num_slots = full_indexer_rank(config, num_layers)
     real_len = min(preload_isl, trace_len)
     rand_len = preload_isl - real_len
     logger.info(
@@ -652,15 +746,15 @@ def run_chunked_transformer(
     # forward, exactly like the KVPE cache. It is user-major layer-stacked
     # [num_users*index_cache_layers, 1, T, D_idx], so the indexer addresses slot
     # user*index_cache_layers + cache_layer_idx. Unlike the per-layer KVPE cache, the indexer stride is the
-    # COMPACTED full-indexer count (num_full_indexer_layers) for GLM-5.2 cross-layer reuse — "shared" layers
-    # reuse a "full" layer's cache and get no slot of their own — falling back to num_layers when there is no
-    # indexer_types map. bf8 (half the memory, top-k within bf16 noise). Dense variants get None.
+    # COMPACTED full-indexer count over the layers this instance builds — GLM-5.2 "shared" layers reuse a
+    # "full" layer's cache and get no slot of their own, and full_indexer_rank returns num_layers unchanged
+    # without an indexer_types map. bf8 (half the memory, top-k within bf16 noise). Dense variants get None.
     tt_index_kv_cache = None
     if has_indexer:
         # A sparse config must carry index_head_dim; assert rather than silently defaulting so a
         # misconfigured (missing-field) sparse setup fails loudly with a clear message.
         assert getattr(config, "index_head_dim", None) is not None, "sparse config must provide index_head_dim"
-        index_cache_layers = num_full_indexer_layers(config) or num_layers
+        index_cache_layers = full_indexer_rank(config, num_layers)
         tt_index_kv_cache = init_kvpe_cache(
             kvpe_cache_head_dim=config.index_head_dim,
             mesh_device=mesh_device,
@@ -802,20 +896,14 @@ def run_chunked_transformer(
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -832,8 +920,8 @@ def test_ds_prefill_transformer_chunked(
     num_layers,
     n_chunks,
     num_links,
-    topology,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer(
         variant,
         config_only,
@@ -850,20 +938,14 @@ def test_ds_prefill_transformer_chunked(
 @pytest.mark.parametrize("splits", [_PADDED_FULL_55K], ids=["full55k"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -880,8 +962,8 @@ def test_ds_prefill_transformer_chunked_padded(
     num_layers,
     splits,
     num_links,
-    topology,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer_padded(
         variant,
         config_only,
@@ -895,103 +977,36 @@ def test_ds_prefill_transformer_chunked_padded(
     )
 
 
-# ---------------------------------------------------------------------------
-# Kimi K2.6 variants
-# ---------------------------------------------------------------------------
-# Same chunked-prefill validation as the DeepSeek tests, with the kimi_k2_6 variant and the on-device
-# gate (GateComputeMode.DEVICE_FP32 — Kimi has a single expert group, so it uses the grouped-topk
-# fp32 device path) + KimiK26Config fabric payload. These skip until the Kimi golden trace lands (set
-# PREFILL_TRACE_DIR; see tt/runners/adapters/).
+# Execution modes for the padded chunked test (pytest param `mode`). Both run the SAME splits through
+# the SAME harness (run_chunked_transformer_padded_trace) and assert the same thing — per-layer
+# KV-cache PCC vs the golden — so the pair is a direct trace-vs-no-trace comparison:
+#   notrace — the harness's "scalar" variant: per-chunk actual_start/actual_end passed as host
+#             scalars (metadata=None), forward run eagerly per split.
+#   traced  — the metadata variant: per-chunk scalars read on-device from the metadata tensors, and
+#             the forward captured ONCE as a ttnn trace and replayed per split.
+#
+# NOTE when selecting with -k: "notrace" CONTAINS the substring "trace", so `-k trace` matches BOTH
+# modes. Use `-k notrace` / `-k traced` to pin one.
+_PADDED_MODES = ["notrace", "traced"]
 
 
-@pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
-@pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-                # Carve a small L1_SMALL region so the MoE routing all-gather can place its global
-                # semaphores there (use_l1_small_for_semaphores) instead of pinning the main-L1 floor.
-                # Kept minimal: L1_SMALL is carved from the top of L1, so a large value would shift the
-                # main-L1 buffer floor down and could re-introduce the clash.
-                "l1_small_size": 512,
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.timeout(0)
-def test_kimi_prefill_transformer_chunked(
-    variant,
-    config_only,
-    mesh_device,
-    device_params,
-    weight_cache_path,
-    num_layers,
-    n_chunks,
-    num_links,
-    topology,
-):
-    run_chunked_transformer(
-        variant,
-        config_only,
-        mesh_device,
-        weight_cache_path,
-        num_layers,
-        n_chunks,
-        GateComputeMode.DEVICE_FP32,
-        num_links,
-        topology,
-        routing_use_l1_small_for_semaphores=True,
-    )
-
-
+@pytest.mark.parametrize("mode", _PADDED_MODES, ids=_PADDED_MODES)
 @pytest.mark.parametrize("splits", [_PADDED_MID_15K, _PADDED_FULL_55K], ids=["mid15k", "full55k"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-                # Carve a small L1_SMALL region so the MoE routing all-gather can place its global
-                # semaphores there (use_l1_small_for_semaphores) instead of pinning the main-L1 floor.
-                # Kept minimal: L1_SMALL is carved from the top of L1, so a large value would shift the
-                # main-L1 buffer floor down and could re-introduce the clash.
-                "l1_small_size": 512,
-            },
+            # L1_SMALL holds the routing semaphores plus sparse-MLA high-bandwidth-gather semaphores.
+            torus_xy_device_params(
+                fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=768,
+                trace_region_size=256 * 1024 * 1024,
+            ),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                # FABRIC_2D + Topology.Linear: the transport this config ships on, and what the Blaze
-                # "Chunked Kimi Padded Accuracy" job runs. RELAXED_INIT is required for FABRIC_2D
-                # bring-up on BH Galaxy. L1_SMALL as in the 1D param above.
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "l1_small_size": 512,
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1008,9 +1023,13 @@ def test_kimi_prefill_transformer_chunked_padded(
     num_layers,
     splits,
     num_links,
-    topology,
+    mode,
 ):
-    run_chunked_transformer_padded(
+    """Padded/rotated chunked prefill, traced vs untraced (see _PADDED_MODES). Both modes exercise
+    padding-aware MoE over the same `splits` and assert per-layer KV-cache PCC against the golden, so
+    a traced-vs-notrace diff isolates the trace/metadata path itself rather than harness differences."""
+    topology = per_axis_topology(device_params["fabric_config"])
+    common = (
         variant,
         config_only,
         mesh_device,
@@ -1020,7 +1039,12 @@ def test_kimi_prefill_transformer_chunked_padded(
         GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
+    )
+    # The harness names its untraced variant "scalar"; here the only question is trace or no trace.
+    run_chunked_transformer_padded_trace(
+        *common,
         routing_use_l1_small_for_semaphores=True,
+        mode="traced" if mode == "traced" else "scalar",
     )
 
 
@@ -1041,21 +1065,16 @@ def test_kimi_prefill_transformer_chunked_padded(
 )
 @pytest.mark.parametrize("num_layers", [1, 10, 78], ids=["L1", "L10", "L78"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
-                # Small L1_SMALL region for the MoE routing all-gather's global semaphores
-                # (use_l1_small_for_semaphores); see the Kimi chunked test for the rationale.
-                "l1_small_size": 512,
-            },
+            # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores
+            # and retain the existing reserve for other needs.
+            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=1152),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1073,8 +1092,8 @@ def test_glm_prefill_transformer_chunked(
     n_chunks,
     preload_isl,
     num_links,
-    topology,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer(
         variant,
         config_only,
@@ -1090,7 +1109,7 @@ def test_glm_prefill_transformer_chunked(
     )
 
 
-def run_chunked_transformer_no_pcc(
+def run_chunked_transformer_updated(
     variant,
     config,
     mesh_device,
@@ -1105,6 +1124,8 @@ def run_chunked_transformer_no_pcc(
     baseline_chunk_times_s=None,
     perf_margin=None,
     preload_isl=0,
+    check_pcc=False,
+    use_trace=False,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
@@ -1151,6 +1172,11 @@ def run_chunked_transformer_no_pcc(
             raise ValueError(
                 f"baseline_chunk_times_s has {len(baseline_chunk_times_s)} entries but n_chunks={n_chunks}"
             )
+        if gated and perf_margin is None:
+            # perf_margin defaults to None ("use the mode default", resolved by kimi_chunked_perf_gate).
+            # Reaching the gate with it still None means a caller wired up a baseline without a band;
+            # falling through to 0.0 would collapse the band to zero width and fail every chunk.
+            raise ValueError("baseline_chunk_times_s was given without a perf_margin")
         margin = perf_margin if perf_margin is not None else 0.0
 
         headers = ["chunk", "median_time", "stddev"]
@@ -1211,6 +1237,17 @@ def run_chunked_transformer_no_pcc(
         f"num_iters={num_iters}"
     )
 
+    # Trace is DENSE-MLA ONLY. Asserted here (not just deep in set_trace_controller) so a sparse model
+    # fails before the multi-minute weight load. GLM (glm_5_1 / glm_5_2) carries the DSA indexer fields,
+    # whose ops have no per-element-tensor metadata overload yet — and the captured forward never threads
+    # index_kv_cache, so a traced sparse run would silently skip the indexer and write wrong KV.
+    if use_trace:
+        assert not resolve_has_indexer(config), (
+            "use_trace=True is not supported for sparse/DSA (indexer) attention — GLM (glm_5_1 / "
+            "glm_5_2) and friends. Supported traced models are the dense-MLA ones (deepseek_v3, "
+            "kimi_k2_6, kimi_k2_7); port the indexer ops to the metadata form first."
+        )
+
     iteration_chunk_times: list[list[float]] = []
 
     # Token ids: prefer the real (code_debug/longbook) ids from the golden trace (same source as the PCC
@@ -1270,6 +1307,13 @@ def run_chunked_transformer_no_pcc(
         lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
+        # Strip the tail (LM head + final norm + sampling): the populated KV cache is this runner's
+        # output, so the tail is dead work that would otherwise land inside the measured per-chunk
+        # time. It is also what makes the forward DEVICE-ONLY and therefore capturable — the LM head
+        # does an all-gather + a host read, and a read inside begin_capture() is a hard TT_FATAL
+        # ("Reads are not supported during trace capture"). Set for BOTH modes, not just use_trace,
+        # so traced and untraced timings measure the same work and stay comparable.
+        kv_only_last_layer=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
     ttnn.synchronize_device(mesh_device)
@@ -1293,9 +1337,9 @@ def run_chunked_transformer_no_pcc(
     )
 
     # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
-    # forward, exactly like the KVPE cache. Strided by the compacted full-indexer count
-    # (num_full_indexer_layers, >1 for glm_5_2 cross-layer reuse; num_layers without an indexer_types map)
-    # so it matches the indexer's cache_batch stride. bf8 TILE. Dense variants get None.
+    # forward, exactly like the KVPE cache. Strided by the compacted full-indexer count over the built
+    # layers (>1 for glm_5_2 cross-layer reuse; num_layers without an indexer_types map) so it matches the
+    # indexer's cache_batch stride. bf8 TILE. Dense variants get None.
     tt_index_kv_cache = None
     if resolve_has_indexer(config):
         assert getattr(config, "index_head_dim", None) is not None, "sparse config must provide index_head_dim"
@@ -1305,7 +1349,7 @@ def run_chunked_transformer_no_pcc(
             seq_len=SEQ_CACHE_NOPCC,
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
-            num_kvpe_cache_layers=num_full_indexer_layers(config) or num_layers,
+            num_kvpe_cache_layers=full_indexer_rank(config, num_layers),
             num_users=1,
             dtype=ttnn.bfloat8_b,
         )
@@ -1387,12 +1431,90 @@ def run_chunked_transformer_no_pcc(
         logger.info("[profile] warmup chunk 0 complete (kernels JITted); measured region begins")
         signpost("PROFILE_MEASURE_START")
 
+    # use_trace: capture the chunk forward ONCE, then replay it per chunk. The per-chunk scalars
+    # (slot_id / actual_start / actual_end) cannot be host arguments on a captured program, so they move
+    # into 1-element uint32 DRAM tensors the metadata ops read on-device; the token input moves into a
+    # persistent buffer refreshed in place. kv_only_last_layer=True (set on the transformer above) is what makes the forward
+    # device-only and therefore capturable at all.
+    trace_controller = None
+    trace_input = None
+    trace_metadata = None
+    if use_trace:
+        rep = ttnn.ReplicateTensorToMesh(mesh_device)
+
+        def _meta1(val, on_device=True):
+            t = torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1)
+            kw = dict(dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
+            if on_device:
+                kw.update(device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            return ttnn.from_torch(t, **kw)
+
+        trace_input = ttnn.from_torch(
+            chunk_tok_host[0],
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+        )
+        trace_metadata = (_meta1(0), _meta1(preload_isl), _meta1(preload_isl + CHUNK))
+        host_tok = [
+            ttnn.from_torch(
+                chunk_tok_host[c],
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+            )
+            for c in range(n_chunks)
+        ]
+        host_meta = [
+            (_meta1(0, False), _meta1(preload_isl + c * CHUNK, False), _meta1(preload_isl + (c + 1) * CHUNK, False))
+            for c in range(n_chunks)
+        ]
+
+        def _fwd_meta():
+            return transformer.forward(
+                trace_input,
+                tt_kvpe_cache,
+                actual_isl=CHUNK,
+                actual_start=None,
+                actual_end=None,
+                cache_user_id=0,
+                return_intermediates=False,
+                metadata=trace_metadata,
+            )
+
+        trace_controller = SubDeviceTraceController(mesh_device)
+        transformer.set_trace_controller(trace_controller)
+        _fwd_meta()  # warm/compile the metadata-variant programs before recording
+        ttnn.synchronize_device(mesh_device)
+        trace_controller.begin_capture()
+        _fwd_meta()
+        trace_controller.end_capture()
+        ttnn.synchronize_device(mesh_device)
+        logger.info(
+            f"[no-pcc trace] captured {num_layers}-layer forward = {trace_controller.num_segments} segments, "
+            f"{trace_controller.trace_bytes() / 1024 / 1024:.2f} MB"
+        )
+        # A zero-segment capture would make every replay a no-op: the timings would collapse and any
+        # check_pcc would compare the warm pass's (correct) KV. Fail instead of reporting that.
+        assert trace_controller.num_segments > 0, "use_trace captured 0 segments — nothing to replay"
+
     profiler.start("tt_forward")
     for it in range(num_iters):
         iter_start = time.time()
         chunk_times: list[float] = []
         for c in range(n_chunks):
             kv_actual = preload_isl + c * CHUNK
+            if use_trace:
+                ttnn.copy_host_to_device_tensor(host_tok[c], trace_input)
+                for src, dst in zip(host_meta[c], trace_metadata):
+                    ttnn.copy_host_to_device_tensor(src, dst)
+                chunk_start = time.time()
+                trace_controller.replay()
+                ttnn.synchronize_device(mesh_device)
+                chunk_times.append(time.time() - chunk_start)
+                continue
             tt_tokens = ttnn.from_torch(
                 chunk_tok_host[c],
                 device=mesh_device,
@@ -1405,6 +1527,7 @@ def run_chunked_transformer_no_pcc(
             # forward with return_intermediates=False: nothing is cloned to host, no PCC. Chunked
             # prefill is full-chunk (all positions real) so actual_end is kv_actual + CHUNK; forward
             # uses self.indexed_rope. The small (first_token) return is discarded.
+            reset_fused_ring_host_timing()
             transformer.forward(
                 tt_tokens,
                 tt_kvpe_cache,
@@ -1416,8 +1539,16 @@ def run_chunked_transformer_no_pcc(
                 index_kv_cache=tt_index_kv_cache,
             )
             ttnn.synchronize_device(mesh_device)
+            fused_host_calls, fused_host_seconds = get_fused_ring_host_timing()
             ttnn.deallocate(tt_tokens)
-            chunk_times.append(time.time() - chunk_start)
+            chunk_seconds = time.time() - chunk_start
+            chunk_times.append(chunk_seconds)
+            if fused_host_calls:
+                logger.info(
+                    f"[fused-indexer host timing] iter={it} chunk={c} calls={fused_host_calls} "
+                    f"host_submit={fused_host_seconds * 1000:.2f} ms "
+                    f"({fused_host_seconds / chunk_seconds * 100:.1f}% of {chunk_seconds * 1000:.2f} ms chunk)"
+                )
         iter_total = time.time() - iter_start
         iteration_chunk_times.append(chunk_times)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
@@ -1507,14 +1638,87 @@ def run_chunked_transformer_no_pcc(
         logger.info(render(rows[-1]))
         logger.info(sep)
 
+    # Optional accuracy check on the same run that produced the timings, so a perf number is never
+    # reported for a functionally wrong prefill. Off by default: this runner's whole point is to need no
+    # golden trace, and enabling it makes one mandatory.
+    if check_pcc:
+        assert (
+            trace_dir is not None and trace_dir.exists()
+        ), "check_pcc=True needs the golden trace (set PREFILL_TRACE_DIR); this runner does not require it otherwise"
+        # This runner only ever reads token_ids from the trace, so it never resolved the tensor layout;
+        # the KV comparison needs it.
+        layout = variant.prefill_trace_layout
+        _record_kv_cache_pcc(
+            trace_dir,
+            layout,
+            tt_kvpe_cache,
+            mesh_device,
+            sp,
+            num_layers,
+            # SEQ_CACHE_NOPCC, not SEQ_CACHE: this runner allocates the 100k cache, and
+            # _record_kv_cache_pcc derives blockcyclic_positions from this length — passing the 55k
+            # constant made the un-rotate scatter a [102400, 576] gather into a [56320, 576] index.
+            SEQ_CACHE_NOPCC,
+            total_len,
+            config.kv_lora_rank,
+            assert_threshold=TRACE_KV_CACHE_PCC_THRESHOLD,
+            assert_layer_depth=GATED_LAYER_DEPTH,
+        )
+
+    # Release the captured trace + the sub-device managers that own its buffers BEFORE the mesh
+    # closes. Without this the MeshTraceBuffers are freed via SubDeviceManager's dtor after the
+    # allocator is gone and teardown segfaults in BankManager::deallocate_buffer — the test itself
+    # PASSES and the process still exits 139, which reads as a red CI job. Same failure the runner
+    # hit (see TtPrefillRuntime.release_trace); the trace path needs the release wherever it lives.
+    if trace_controller is not None:
+        trace_controller.release()
+        transformer.set_trace_controller(None)
+    transformer.release_sub_device_managers()
+
     # Assert AFTER the table is logged so the full per-chunk breakdown is always visible on failure.
     assert not perf_failures, "chunk timing out of baseline tolerance:\n  " + "\n  ".join(perf_failures)
+
+
+def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None):
+    """Resolve the chunked-Kimi perf gate for one parametrization: returns
+    ``(baseline_chunk_times_s, margin)`` for run_chunked_transformer_updated.
+
+    A baseline of None leaves the run record-only (print_duration_table prints the table and does not
+    assert), which is what every combo outside the two calibrated CI configs gets. Two conditions on
+    top of the table lookup:
+
+      use_trace   -- picks WHICH table and WHICH default margin. The two modes are separate regimes
+                     (see the tables), so this is a hard fork, not a shared table with a mode column:
+                     a traced baseline can never arm an untraced run, or the reverse.
+      preload_isl -- the baselines only mean anything at 0 (the recorded runs started from an empty
+                     cache); any preload depth stays record-only.
+
+    `perf_margin` overrides the mode default when not None, so a caller can still pin a band explicitly.
+    """
+    table, default_margin = (
+        (KIMI_TRACED_BASELINE_CHUNK_TIMES_S, TRACED_PERF_MARGIN)
+        if use_trace
+        else (KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S, UNTRACED_PERF_MARGIN)
+    )
+    baseline = table.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
+    return baseline, (default_margin if perf_margin is None else perf_margin)
 
 
 # No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
 # trace dependency, no intermediate readback, and no PCC. Requires only the Kimi TTNN weight cache (set
 # TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is optional.
-@pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin5pct"])
+# Two independent axes on top of the existing perf sweep:
+#   check_pcc — also PCC the populated KV against the golden (needs PREFILL_TRACE_DIR)
+#   use_trace — capture the chunk forward once and replay it per chunk
+# The nopcc x {trace, notrace} pair is what CI runs: it times the real path and passes on
+# completion, with no golden dependency. Renamed from *_no_pcc now that PCC is optional, so the
+# name no longer contradicts the flag.
+# ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
+# modes and silently double a CI job. Matches the padded test's convention.
+@pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
+# None = take the band from the mode (TRACED_PERF_MARGIN / UNTRACED_PERF_MARGIN, resolved by
+# kimi_chunked_perf_gate). The two bands differ by more than 3x, so no single literal serves both.
+@pytest.mark.parametrize("perf_margin", [None], ids=["margin_auto"])
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
 )
@@ -1535,20 +1739,18 @@ def run_chunked_transformer_no_pcc(
 )
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-                # L1_SMALL region for the MoE routing all-gather's semaphores (see TtMoERoutingSetup).
-                "l1_small_size": 512,
-            },
+            torus_xy_device_params(
+                fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=768,
+                trace_region_size=256 * 1024 * 1024,
+            ),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1560,7 +1762,7 @@ def run_chunked_transformer_no_pcc(
     reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
 )
 @pytest.mark.timeout(0)
-def test_kimi_prefill_transformer_chunked_no_pcc(
+def test_kimi_prefill_transformer_chunked_perf(
     variant,
     config_only,
     mesh_device,
@@ -1570,19 +1772,20 @@ def test_kimi_prefill_transformer_chunked_no_pcc(
     n_chunks,
     num_iters,
     num_links,
-    topology,
     perf_margin,
+    use_trace,
     preload_isl,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
-    # Gate against the CI baseline only for the exact config we have a recorded number for; every other
-    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). The
-    # baseline is only meaningful at preload_isl=0 (the recorded runs started from an empty cache).
-    baseline_chunk_times_s = (
-        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
+    # Gate against the CI baseline only for the exact configs we have recorded numbers for; every other
+    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). Both
+    # modes are gated, each against its own table and its own band -- see kimi_chunked_perf_gate.
+    baseline_chunk_times_s, perf_margin = kimi_chunked_perf_gate(
+        use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin
     )
-    run_chunked_transformer_no_pcc(
+    run_chunked_transformer_updated(
         variant,
         config_only,
         mesh_device,
@@ -1597,6 +1800,99 @@ def test_kimi_prefill_transformer_chunked_no_pcc(
         baseline_chunk_times_s=baseline_chunk_times_s,
         perf_margin=perf_margin,
         preload_isl=preload_isl,
+        check_pcc=False,  # timing only — accuracy lives in test_kimi_prefill_transformer_chunked
+        use_trace=use_trace,
+    )
+
+
+# ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
+# modes and silently double a CI job. Matches the padded test's convention.
+@pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
+# None = take the band from the mode (TRACED_PERF_MARGIN / UNTRACED_PERF_MARGIN, resolved by
+# kimi_chunked_perf_gate). The two bands differ by more than 3x, so no single literal serves both.
+@pytest.mark.parametrize("perf_margin", [None], ids=["margin_auto"])
+@pytest.mark.parametrize(
+    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
+)
+@pytest.mark.parametrize(
+    "n_chunks",
+    [1, 2, 5, 10, 11, 20],
+    ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks_eleven", "chunks20"],
+)
+# preload_isl (multiple of CHUNK): pretend the cache already holds this many prior KV tokens so the
+# measured chunks run at KV depth [preload_isl, preload_isl + n_chunks*CHUNK) WITHOUT first running prefill
+# up to that point. Pair with n_chunks=1 to sweep the single-chunk MLA/MoE ratio vs depth. 0 = start from
+# empty cache. Depths within the golden trace use real KV; the rest fill random KV beyond the trace (still
+# non-degenerate for routing) so larger ISLs than the trace can be measured. Requires a golden trace when >0.
+@pytest.mark.parametrize(
+    "preload_isl",
+    [0, 5 * CHUNK, 10 * CHUNK, 19 * CHUNK],
+    ids=["preload0", "preload25k", "preload50k", "preload95k"],
+)
+@pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=768,
+                trace_region_size=256 * 1024 * 1024,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.timeout(0)
+def test_kimi_prefill_transformer_chunked(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    num_layers,
+    n_chunks,
+    num_iters,
+    num_links,
+    perf_margin,
+    use_trace,
+    preload_isl,
+):
+    topology = per_axis_topology(device_params["fabric_config"])
+    if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
+        pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
+    # ALWAYS record-only -- this accuracy test is never perf-gated. It shares the perf test's
+    # parametrization but NOT its is_high_power() skipif, so it can run on a standard-power Blackhole,
+    # where the baseline tables -- measured on a >=130W galaxy -- describe nothing. Gating here would fail
+    # an accuracy run for a timing reason, on hardware the baseline never covered, and the timing table is
+    # incidental to this test anyway (see check_pcc below). The perf gate belongs to, and stays in,
+    # test_kimi_prefill_transformer_chunked_perf.
+    baseline_chunk_times_s = None
+    run_chunked_transformer_updated(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        n_chunks,
+        GateComputeMode.DEVICE_FP32,
+        num_links,
+        topology,
+        num_iters,
+        routing_use_l1_small_for_semaphores=True,
+        baseline_chunk_times_s=baseline_chunk_times_s,
+        # Inert while baseline_chunk_times_s is None (print_duration_table only uses the margin when it
+        # has a baseline); kept for id/signature symmetry with the perf test.
+        perf_margin=perf_margin,
+        preload_isl=preload_isl,
+        check_pcc=True,  # this test exists for the KV PCC; the timing table is incidental
+        use_trace=use_trace,
     )
 
 
@@ -1613,20 +1909,14 @@ def test_kimi_prefill_transformer_chunked_no_pcc(
 )
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1644,9 +1934,9 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     n_chunks,
     num_iters,
     num_links,
-    topology,
 ):
-    run_chunked_transformer_no_pcc(
+    topology = per_axis_topology(device_params["fabric_config"])
+    run_chunked_transformer_updated(
         variant,
         config_only,
         mesh_device,
@@ -1688,24 +1978,16 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 )
 @pytest.mark.parametrize("num_layers", [1, 10, 78], ids=["L1", "L10", "L78"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                # FABRIC_2D + Topology.Linear: the production transport for the GLM chunked-prefill
-                # perf measurement. RELAXED_INIT is required for FABRIC_2D bring-up on BH Galaxy.
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                # Small L1_SMALL region for the MoE routing all-gather's global semaphores
-                # (use_l1_small_for_semaphores); see test_glm_prefill_transformer_chunked.
-                "l1_small_size": 512,
-            },
+            # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores
+            # and retain the existing reserve for other needs.
+            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=1152),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1727,12 +2009,12 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     n_chunks,
     num_iters,
     num_links,
-    topology,
     preload_isl,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
-    run_chunked_transformer_no_pcc(
+    run_chunked_transformer_updated(
         variant,
         config_only,
         mesh_device,
@@ -1746,3 +2028,338 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         routing_use_l1_small_for_semaphores=True,
         preload_isl=preload_isl,
     )
+
+
+def run_chunked_transformer_padded_trace(
+    variant,
+    config,
+    mesh_device,
+    weight_cache_path,
+    num_layers,
+    splits,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    routing_use_l1_small_for_semaphores=False,
+    mode="traced",
+):
+    """VARIABLE/partial-chunk prefill on ONE kv_only build, in one of three independent modes (pytest
+    param `mode`), each asserted ONLY against the golden kv_post_transform (no cross-path comparison):
+      - "scalar":  untraced scalar path (host actual_start/actual_end, metadata=None);
+      - "eager":   metadata path run eagerly per split (per-chunk scalars read on-device from a
+                   persistent metadata tensor), no capture;
+      - "traced":  the SAME metadata forward captured once as a ttnn trace and replayed per split.
+    Each mode runs a single pass and asserts its per-layer KV-cache PCC (vs the golden) meets
+    LAYER_PCC_THRESHOLD for the asserted layer depth.
+
+    All three modes DO exercise padding-aware MoE (they did not while the trace layer force-disabled it
+    by clearing actual_isl), and they cover both producers of the padding config:
+      * "scalar" builds it on HOST (build_padding_config, rotated branch: metadata=None with a real
+        partial actual_isl and actual_start). `splits` repeats ISLs at different starts (e.g. 5120 at
+        10240/20480/35168), so this also covers the build_padding_config memo being keyed on
+        actual_start -- keying on actual_isl alone silently reused the first chunk's rotated config.
+      * "eager"/"traced" build it ON DEVICE (moe_padding_config) from the actual_start/actual_end
+        metadata tensors. They pass actual_isl=CHUNK, which now only flags padding awareness as ON --
+        the real per-chunk bound comes from those tensors, which is what makes ONE capture replay
+        correctly across chunks."""
+    if weight_cache_path is None:
+        pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+    trace_dir = _resolve_trace_dir(variant)
+    if not trace_dir.exists():
+        pytest.skip(f"golden trace not found: {trace_dir}")
+    layout = variant.prefill_trace_layout
+
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+    sp, tp = mesh_shape[sp_axis], mesh_shape[tp_axis]
+    assert (sp, tp) == (8, 4), f"this test targets mesh-8x4, got {mesh_shape}"
+    tile = ttnn.TILE_SIZE
+    chunk_local = CHUNK // sp
+    total_len = sum(splits)
+    for v in splits:
+        assert 0 < v <= CHUNK and v % tile == 0, f"split {v} must be tile-aligned and <= {CHUNK}"
+
+    # Slab-aligned cache covering the largest rotated write (mirror run_chunked_transformer_padded).
+    max_window, ka = CHUNK * 2, 0
+    for v in splits:
+        max_window = max(max_window, ka + CHUNK)
+        ka += v
+    seq_len_cache = ((max_window + CHUNK - 1) // CHUNK) * CHUNK
+
+    kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    config.max_seq_len = seq_len_cache
+    logger.info(
+        f"chunked-padded TRACE: num_layers={num_layers} mesh={mesh_shape} splits={splits} "
+        f"total_len={total_len} cache={seq_len_cache} chunk={CHUNK}"
+    )
+    token_ids_full = _load_metadata_token_ids(trace_dir, total_len)
+
+    effective_cache_path = weight_cache_path / f"{sp}x{tp}"
+    experts_per_chip = variant.model_config.NUM_ROUTED_EXPERTS // (sp * tp)
+    assert TtPrefillTransformer.check_cache_complete(
+        effective_cache_path,
+        num_layers,
+        experts_per_chip=experts_per_chip,
+        first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
+
+    transformer = TtPrefillTransformer(
+        mesh_device=mesh_device,
+        config=config,
+        model_cfg=variant.model_config,
+        state_dict={},
+        num_layers=num_layers,
+        seq_len=CHUNK,
+        max_seq_len=seq_len_cache,
+        dispatch_buffer_capacity_factor=8,
+        num_links=num_links,
+        topology=topology,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        gate_fallback_mode=gate_fallback_mode,
+        weight_cache_path=effective_cache_path,
+        lm_head_is_column_parallel=True,
+        is_chunked=True,
+        slot_num=1,
+        # kv_only_last_layer -> device-only forward (no host readback) so ttnn trace can capture it.
+        kv_only_last_layer=True,
+        overlap_shared_expert_with_dispatch=True,
+        routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+    )
+    ttnn.synchronize_device(mesh_device)
+    gc.collect()
+    mesh_device.enable_program_cache()
+
+    # Per-split padded token tile (block-cyclic gather; positions >= valid_end -> pad token 0) + scalars.
+    def _padded_chunk_tok(kv_actual, isl):
+        valid_end = kv_actual + isl
+        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+        flat = [positions[ch][r] for ch in range(sp) for r in range(chunk_local)]
+        gather_idx = torch.tensor([min(gp, total_len - 1) for gp in flat], dtype=torch.long)
+        tok = token_ids_full[gather_idx].clone()
+        tok[torch.tensor([gp >= valid_end for gp in flat])] = 0
+        return tok.reshape(sp, 1, chunk_local)
+
+    starts, ka = [], 0
+    for isl in splits:
+        starts.append((ka, ka + isl))  # (kv_actual, valid_end)
+        ka += isl
+    chunk_tok_host = [_padded_chunk_tok(ks, e - ks) for (ks, e) in starts]
+
+    def _make_cache():
+        return init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BFP8_TILE,
+            hf_config=config,
+            mesh_device=mesh_device,
+            seq_len=seq_len_cache,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=num_layers,
+            num_users=1,
+        )
+
+    sp_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None))
+    rep_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+
+    # Each mode runs a SINGLE pass and asserts its own per-layer KV-cache PCC against the GOLDEN trace.
+    # There is no scalar-vs-metadata cross-comparison: the scalar, metadata(eager) and trace(replay)
+    # paths are independent tests, each validated only against the golden.
+
+    # ---- SCALAR mode: untraced scalar path (host actual_start/actual_end), asserted vs GOLDEN. ----
+    if mode == "scalar":
+        cache = _make_cache()
+        # UNTRACED ONLY: also PCC each layer's DECODER OUTPUT, not just the KV cache. This needs
+        # return_intermediates=True, whose _to_host(h) + synchronize_device is a host readback and so
+        # cannot live inside a trace capture — which is why the metadata/traced modes below assert KV
+        # PCC alone. Running it here keeps the stronger check on the untraced reference rather than
+        # losing it entirely.
+        #
+        # Layers 0..num_layers-2 only: the transformer is built kv_only_last_layer=True, so the LAST
+        # layer is kv_only (attn_norm + the KV branch) and never produces a hidden state — the loop
+        # returns before snapshotting it (tt_prefill_transformer: `if self.kv_only_last_layer and
+        # i == len(self.layers)-1: return None, None, intermediates`). Its correctness is covered by
+        # the KV PCC below. The norm / LM head / logits tail is likewise not built in this config.
+        emb_dim = config.hidden_size
+        n_decoder_layers = num_layers - 1
+        layer_min_pcc = {i: 1.0 for i in range(n_decoder_layers)}
+        for c, ((ks, e), tok) in enumerate(zip(starts, chunk_tok_host)):
+            isl = e - ks
+            # Same rotated layout _padded_chunk_tok gathered with: recomputed here (cheap, host-side)
+            # so the valid rows can be un-rotated back to natural order for the golden comparison.
+            positions = rotated_chip_positions(ks, sp, chunk_local)
+            flat = [positions[ch][r] for ch in range(sp) for r in range(chunk_local)]
+            valid_pairs = [(row, gp) for row, gp in enumerate(flat) if gp < e]
+            src = torch.tensor([row for row, _ in valid_pairs], dtype=torch.long)
+            dst = torch.tensor([gp - ks for _, gp in valid_pairs], dtype=torch.long)  # 0..isl-1
+            tt_tokens = ttnn.from_torch(
+                tok,
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=sp_mapper,
+            )
+            _, _, layer_outputs = transformer.forward(
+                tt_tokens,
+                cache,
+                actual_isl=isl,
+                actual_start=ks,
+                actual_end=e,
+                cache_user_id=0,
+                metadata=None,
+                return_intermediates=True,
+            )
+            ttnn.deallocate(tt_tokens)
+            ttnn.synchronize_device(mesh_device)
+            for i in range(n_decoder_layers):
+                # host snapshot [1, CHUNK, emb] (SP-seq + TP-hidden concatenated); [0] -> [CHUNK, emb].
+                out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
+                natural = torch.zeros(isl, emb_dim, dtype=torch.float32)
+                natural[dst] = out_flat[src]  # un-rotate valid rows -> natural [ks, e)
+                ref = _ref_layer_slice(trace_dir, layout, i, ks, e)
+                _, pcc = comp_pcc(ref, natural)
+                layer_min_pcc[i] = min(layer_min_pcc[i], pcc)
+                logger.info(f"  chunk {c} (kv_actual={ks} isl={isl}) layer {i} decoder PCC: {pcc:.6f}")
+                if pcc < LAYER_PCC_THRESHOLD:
+                    logger.warning(f"  chunk {c} layer {i} decoder PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD}")
+        ttnn.synchronize_device(mesh_device)
+
+        logger.info("[padded-trace] NOTRACE per-layer min decoder-output PCC across chunks:")
+        for i in range(n_decoder_layers):
+            logger.info(f"  layer {i}: {layer_min_pcc[i]:.6f}")
+        if layer_min_pcc:
+            decoder_min = min(layer_min_pcc.values())
+            logger.info(f"[padded-trace] NOTRACE decoder-output min PCC across all layers = {decoder_min:.6f}")
+            # FULL DEPTH, not gated to GATED_LAYER_DEPTH: this mirrors run_chunked_transformer_padded,
+            # which asserts min decoder PCC over every layer and runs at L61 in the Blaze CI job — so a
+            # full-depth decoder bar is known stable. The KV check below deliberately stays gated: deep
+            # KV PCC is the quantity with unpinned accumulation headroom (and a known L61 run-to-run
+            # spread), not the decoder output.
+            assert (
+                decoder_min >= LAYER_PCC_THRESHOLD
+            ), f"decoder-output min PCC {decoder_min:.6f} < {LAYER_PCC_THRESHOLD}"
+
+        logger.info("[padded-trace] SCALAR path done; recording per-layer KV PCC vs GOLDEN")
+        _record_kv_cache_pcc(
+            trace_dir,
+            layout,
+            cache,
+            mesh_device,
+            sp,
+            num_layers,
+            seq_len_cache,
+            total_len,
+            config.kv_lora_rank,
+            assert_threshold=LAYER_PCC_THRESHOLD,
+            assert_layer_depth=(GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
+        )
+        ttnn.deallocate(cache.storage)
+        transformer.release_sub_device_managers()
+        logger.success("[padded-trace] SCALAR run complete (asserted vs golden)")
+        return
+
+    # ---- METADATA modes (eager / traced): on-device per-split scalars, asserted vs GOLDEN. ----
+    cache_B = _make_cache()  # persistent (captured) cache
+    trace_input = ttnn.from_torch(
+        chunk_tok_host[0],
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=sp_mapper,
+    )
+
+    # Per-element-tensor metadata: 3 persistent 1-element tensors (slot_id, actual_start, actual_end).
+    def _meta1_dev(val):
+        return ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=rep_mapper,
+        )
+
+    def _meta1_host(val):
+        return ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=rep_mapper,
+        )
+
+    trace_metadata = (_meta1_dev(0), _meta1_dev(starts[0][0]), _meta1_dev(starts[0][1]))
+    tok_host_tt = [
+        ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=sp_mapper)
+        for t in chunk_tok_host
+    ]
+    meta_host_tt = [(_meta1_host(0), _meta1_host(ks), _meta1_host(e)) for (ks, e) in starts]
+
+    def _fwd_meta():
+        transformer.forward(
+            trace_input,
+            cache_B,
+            actual_isl=CHUNK,
+            actual_start=None,
+            actual_end=None,
+            cache_user_id=0,
+            metadata=trace_metadata,
+        )
+
+    # Metadata execution mode (pytest param `mode`). "traced" captures the metadata forward ONCE and
+    # replays it per split (the traced-metadata path). "eager" runs the SAME metadata forward EAGERLY
+    # per split (no capture/replay). ("scalar" mode returned above and never reaches here.)
+    _PADDED_TRACE = mode == "traced"
+    if _PADDED_TRACE:
+        controller = SubDeviceTraceController(mesh_device)
+        transformer.set_trace_controller(controller)
+        _fwd_meta()  # warmup (compile metadata program variants)
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"[padded-trace] TRACED metadata: capturing {num_layers}-layer forward...")
+        controller.begin_capture()
+        _fwd_meta()
+        controller.end_capture()
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"[padded-trace] {controller.num_segments} segments, {controller.trace_bytes()/1024/1024:.2f} MB")
+        # Prove we are actually testing the traced path. Without this, a capture that recorded nothing
+        # would still "pass": every replay would be a no-op, the KV cache would keep whatever the warm
+        # pass left in it, and the KV PCC below would compare that stale-but-correct data against the
+        # golden and succeed — a green run that exercised no trace at all.
+        assert controller.num_segments > 0, "traced mode captured 0 segments — nothing was recorded to replay"
+
+        for c, (ks, e) in enumerate(starts):
+            ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
+            for src, dst in zip(meta_host_tt[c], trace_metadata):
+                ttnn.copy_host_to_device_tensor(src, dst)
+            controller.replay()
+        ttnn.synchronize_device(mesh_device)
+        controller.release()
+        transformer.set_trace_controller(None)
+    else:
+        logger.info("[padded-trace] EAGER metadata (eager mode): per-split forward, no capture")
+        for c, (ks, e) in enumerate(starts):
+            ttnn.copy_host_to_device_tensor(tok_host_tt[c], trace_input)
+            for src, dst in zip(meta_host_tt[c], trace_metadata):
+                ttnn.copy_host_to_device_tensor(src, dst)
+            _fwd_meta()
+        ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(trace_input)
+    for t in trace_metadata:
+        ttnn.deallocate(t)
+    logger.info(f"[padded-trace] {mode} metadata path done; recording per-layer KV PCC vs GOLDEN")
+    _record_kv_cache_pcc(
+        trace_dir,
+        layout,
+        cache_B,
+        mesh_device,
+        sp,
+        num_layers,
+        seq_len_cache,
+        total_len,
+        config.kv_lora_rank,
+        assert_threshold=LAYER_PCC_THRESHOLD,
+        assert_layer_depth=(GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
+    )
+    transformer.release_sub_device_managers()
+    logger.success(f"[padded-trace] {mode} metadata run complete (asserted vs golden)")

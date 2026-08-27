@@ -65,6 +65,7 @@ struct MoEComputeParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(11);
         attrs.emplace_back("layer_id", layer_id);
         attrs.emplace_back("output_height_shard_dim", output_height_shard_dim);
         attrs.emplace_back("intermediate_size", intermediate_size);

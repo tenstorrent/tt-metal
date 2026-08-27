@@ -16,12 +16,12 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 
 # from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
-    create_fabric_router_config,
     extract_mesh_config,
     get_ep_mesh_composer,
     get_gate_outputs,
@@ -37,6 +37,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_replication,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
@@ -49,63 +50,21 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (4, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
+            (2, 2),
+            fabric2d_device_params(fabric_payload_size=7 * 1024),
             2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="fabric2d-mesh-4x2",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-mesh-2x2",
         ),
         pytest.param(
             (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
-            },
+            fabric2d_device_params(fabric_payload_size=7 * 1024),
             2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
+            id="fabric2d-mesh-2x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -120,7 +79,7 @@ def test_prep_dispatch_combine(
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     num_links,
-    topology,
+    device_params,
     use_predictable_data,
     padded_percent,
 ):
@@ -149,6 +108,7 @@ def test_prep_dispatch_combine(
             dispatch_group_size dimension). Equals global_expert_offsets minus the
             per-source-device local offset.
     """
+    topology = per_axis_topology(device_params["fabric_config"])[0]
     torch.manual_seed(42)
     num_devices = mesh_device.get_num_devices()
 

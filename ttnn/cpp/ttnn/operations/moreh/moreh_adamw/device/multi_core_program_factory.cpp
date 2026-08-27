@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <bit>
+#include <cmath>
 #include <optional>
 
 #include "moreh_adamw_device_operation.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -52,7 +55,7 @@ AdamwWorkSplit compute_adamw_work_split(const Tensor& param_in) {
 
 }  // namespace
 
-ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
+ProgramDescriptor MorehAdamWDeviceOperation::MorehAdamWProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -347,17 +350,81 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     return desc;
 }
 
-void MorehAdamWDeviceOperation::override_runtime_arguments(
+void MorehAdamWDeviceOperation::MorehAdamWProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Re-derive the descriptor from the single source of truth (create_descriptor) and re-apply its per-core
-    // args + tensor-backed CB/buffer addresses to the cached program. No rebuild; supersedes
-    // get_dynamic/resolve_bindings.
-    auto desc = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
-    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+    // attribute_names excludes lr and step, so those two plus the beta exponents derived from step and
+    // the buffer addresses are all that vary per dispatch; the work split is keyed by the shapes.
+    const auto& param_in = tensor_args.param_in;
+    const auto& max_exp_avg_sq_in = tensor_args.max_exp_avg_sq_in;
+    auto& param_out = tensor_return_value.at(0).value();
+    auto& exp_avg_out = tensor_return_value.at(1).value();
+    auto& exp_avg_sq_out = tensor_return_value.at(2).value();
+    // create_descriptor drops this output when amsgrad is off; the hit path has to match or it patches
+    // an address the miss path never baked.
+    const std::optional<Tensor> max_exp_avg_sq_out =
+        operation_attributes.amsgrad ? tensor_return_value.at(3) : std::nullopt;
+
+    constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1, kComputeKernelIdx = 2;
+    constexpr uint32_t kLrIdx = 5, kBeta1ExpIdx = 10, kBeta2ExpIdx = 11, kReaderStepIdx = 12;
+
+    const std::array<uint32_t, 5> reader_addrs{
+        param_in.buffer()->address(),
+        tensor_args.grad.buffer()->address(),
+        tensor_args.exp_avg_in.buffer()->address(),
+        tensor_args.exp_avg_sq_in.buffer()->address(),
+        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in->buffer()->address() : 0u};
+    const std::array<uint32_t, 4> writer_addrs{
+        param_out.buffer()->address(),
+        exp_avg_out.buffer()->address(),
+        exp_avg_sq_out.buffer()->address(),
+        max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out->buffer()->address() : 0u};
+
+    const uint32_t step = operation_attributes.step;
+    const uint32_t f2u_lr = std::bit_cast<uint32_t>(operation_attributes.lr);
+    const uint32_t f2u_beta1_exponent =
+        std::bit_cast<uint32_t>(static_cast<float>(std::pow(operation_attributes.beta1, step)));
+    const uint32_t f2u_beta2_exponent =
+        std::bit_cast<uint32_t>(static_cast<float>(std::pow(operation_attributes.beta2, step)));
+
+    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx)) {
+        for (auto& a : col) {
+            if (a.size() <= kReaderStepIdx) {
+                continue;
+            }
+            for (uint32_t i = 0; i < reader_addrs.size(); ++i) {
+                a[i] = reader_addrs[i];
+            }
+            a[kLrIdx] = f2u_lr;
+            a[kBeta1ExpIdx] = f2u_beta1_exponent;
+            a[kBeta2ExpIdx] = f2u_beta2_exponent;
+            a[kReaderStepIdx] = step;
+        }
+    }
+    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx)) {
+        for (auto& a : col) {
+            for (uint32_t i = 0; i < writer_addrs.size() && i < a.size(); ++i) {
+                a[i] = writer_addrs[i];
+            }
+        }
+    }
+
+    // step also feeds the compute kernel(s); the second one exists only when the split has a remainder
+    // group, so reuse create_descriptor's own work-split helper rather than rebuilding the descriptor.
+    const auto split = compute_adamw_work_split(param_in);
+    const uint32_t num_compute_kernels = split.core_group_2.ranges().empty() ? 1u : 2u;
+    for (uint32_t k = 0; k < num_compute_kernels; ++k) {
+        for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx + k)) {
+            for (auto& a : col) {
+                if (a.size() > 0) {
+                    a[0] = step;
+                }
+            }
+        }
+    }
 }
 
 }  // namespace ttnn::operations::moreh::moreh_adamw

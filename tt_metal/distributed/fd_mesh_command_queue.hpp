@@ -6,6 +6,8 @@
 
 #include "mesh_command_queue_base.hpp"
 
+#include <unordered_map>
+
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/cq_shared_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -57,10 +59,11 @@ private:
         bool stall_first,
         bool stall_before_program,
         std::unordered_set<uint32_t>& chip_ids_in_workload);
-    // For a given MeshWorkload, a subgrid is unused if no programs are run on it.  Go signals
-    // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
-    // This function generates and writes dispatch commands forwarding go signals to these subgrids.
-    void write_go_signal_to_unused_sub_grids(
+    // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
+    // must be sent to this subgrid to ensure consistent global state across the Virtual Mesh.
+    // This function generates and writes dispatch commands forwarding go signal sequences to
+    // these subgrids.
+    void write_go_signal_sequences_to_unused_sub_grids(
         std::unordered_set<uint32_t>& chip_ids_in_workload,
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
@@ -89,6 +92,11 @@ private:
 
     DispatchArray<uint32_t> expected_num_workers_completed_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
+    // CrossNode programs rewrite a program-owned config Buffer at launch. For each
+    // program id, remember the worker-completion count that launch will report when
+    // finished so a later enqueue of the same program can wait only for that prior to
+    // launch.
+    DispatchArray<std::unordered_map<uint64_t, uint32_t>> cross_node_program_completion_counts_;
 
     DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
     DispatchArray<uint32_t> expected_num_workers_completed_reset_{};

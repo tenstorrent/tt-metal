@@ -48,19 +48,24 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint1
     uint32_t tile_width = 32) {
     const auto config_opt = find_topk_core_config(
         width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tile_width);
-    if (config_opt.has_value()) {
-        const auto& config = config_opt.value();
-        return {
-            config.num_cores + 1,
-            config.split_size,
-            config.rem,
-            config.final_input_size,
-            config.selected_x,
-            config.selected_y};
-    }
-    const auto max_cores =
-        (core_range.end_coord.y - core_range.start_coord.y - 1) * (core_range.end_coord.x - core_range.start_coord.x);
-    return {max_cores + 1, width, 0, width * k, 0, 0};
+    // select_program_factory only picks the multi-core factory after verify_multi_core_cost
+    // succeeded with the same arguments, so a valid config must exist here. The old fallback
+    // fabricated a config with selected_x/selected_y = 0 (and an unsigned-underflow-prone core
+    // count), which only failed later with a confusing "Failed to select local cores range".
+    TT_FATAL(
+        config_opt.has_value(),
+        "TopK multi-core factory selected but no valid core configuration exists for width={} k={} grid={}",
+        width,
+        k,
+        core_range.str());
+    const auto& config = config_opt.value();
+    return {
+        config.num_cores + 1,
+        config.split_size,
+        config.rem,
+        config.final_input_size,
+        config.selected_x,
+        config.selected_y};
 }
 
 tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory::create_descriptor(
@@ -80,12 +85,23 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Data format configuration for all circular buffers
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
-    const tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
-    const bool is32_bit_data = index_cb_data_format == tt::DataFormat::UInt32;
+    tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
+    const bool has_32bit_index =
+        index_cb_data_format == tt::DataFormat::UInt32 || index_cb_data_format == tt::DataFormat::Int32;
+    // The sort datapath handles 32-bit indices as UInt32. INT32 shares the same 4-byte little-endian layout for
+    // the non-negative positions TopK produces, so run the compute in UInt32 and let the writer copy the raw tile
+    // bytes into the (INT32-typed) output buffer unchanged.
+    if (index_cb_data_format == tt::DataFormat::Int32) {
+        index_cb_data_format = tt::DataFormat::UInt32;
+    }
 
     // Use bf16 for compute intermediate buffers to avoid precision loss from bfp8/bfp4
     // shared-exponent grouping during sort (e.g. a single inf in a block makes all other
     // elements in that block encode to 0, corrupting the sort result).
+    // fp32 is kept full-width (no downcast): with fp32_dest_acc_en + UnpackToDestFp32 the value CBs
+    // stay fp32 and the sort's default SFPLOAD mode resolves to FP32, so the inter-core transfer
+    // and compute buffers stay fp32.
+    const bool has_fp32_values = input_cb_data_format == tt::DataFormat::Float32;
     const tt::DataFormat compute_cb_data_format =
         (input_cb_data_format == tt::DataFormat::Bfp8_b || input_cb_data_format == tt::DataFormat::Bfp4_b)
             ? tt::DataFormat::Float16_b
@@ -452,13 +468,26 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(args.stable),          // Stable sort: ties keep the lowest index
     };
 
+    // fp32: unpack the value-holding CBs straight to fp32 dest (fp32 dest acc) so the sort's
+    // default SFPLOAD mode resolves to FP32 and reads full-precision values.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_local(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (has_fp32_values) {
+        unpack_local[input_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_local[input_transposed_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     KernelDescriptor compute_local_desc;
     compute_local_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp";
     compute_local_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_local_desc.core_ranges = local_cores_range_set;  // Runs on all local processing cores
     compute_local_desc.compile_time_args = compute_args;
+    // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
+    // survive the transpose/sort datapath without truncation.
     compute_local_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = has_fp32_values || has_32bit_index,
         .dst_full_sync_en = false,
+        .unpack_to_dest_mode = unpack_local,
     };
 
     // Final compute - Global TopK Bitonic Merge
@@ -482,13 +511,25 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(args.stable),          // Stable sort: ties keep the lowest index
     };
 
+    // Final-core value CBs (gathered input + final workspace) also unpack to fp32 dest.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_final(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (has_fp32_values) {
+        unpack_final[gathered_values_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_final[final_values_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     KernelDescriptor compute_final_desc;
     compute_final_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp";
     compute_final_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_final_desc.core_ranges = final_cores_range_set;  // Runs only on final aggregation core
     compute_final_desc.compile_time_args = compute_args_final;
+    // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
+    // survive the merge datapath without truncation.
     compute_final_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = has_fp32_values || has_32bit_index,
         .dst_full_sync_en = false,
+        .unpack_to_dest_mode = unpack_final,
     };
 
     uint32_t core_id = 0;            // Width offset counter for core assignment
@@ -500,10 +541,10 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         reader_local_desc.emplace_runtime_args(
             core,
             {
-                input_tensor,                          // DRAM address of input values tensor
-                0u,                                    // Height offset (no height parallelism currently)
-                core_id * Wt_local,                    // Width offset for this core's chunk
-                static_cast<uint32_t>(is32_bit_data),  // Flag indicating if data is 32-bit
+                input_tensor,                            // DRAM address of input values tensor
+                0u,                                      // Height offset (no height parallelism currently)
+                core_id * Wt_local,                      // Width offset for this core's chunk
+                static_cast<uint32_t>(has_32bit_index),  // Flag indicating if data is 32-bit
                 input_indices_tensor.has_value()
                     ? std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>{std::cref(*input_indices_tensor)}
                     : std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>{0u},  // DRAM address of input

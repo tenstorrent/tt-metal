@@ -45,6 +45,8 @@ Data::Data(std::optional<int> rank, ContextId context_id) :
     context_id(context_id), logger(MetalContext::instance().rtoptions().get_inspector_log_path(), rank) {
     // Initialize RPC server if enabled
     const auto& rtoptions = MetalContext::instance().rtoptions();
+    mesh_buffer_logging_enabled = rtoptions.get_inspector_log_mesh_buffers();
+    runtime_entries_logging_enabled = rtoptions.get_inspector_log_runtime_entries();
     if (rtoptions.get_inspector_rpc_server_enabled()) {
         try {
             int port = rtoptions.get_inspector_rpc_server_port();
@@ -376,11 +378,15 @@ void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builde
         std::vector<std::pair<uint32_t, uint32_t>> active_eth_xy;
         std::vector<std::pair<uint32_t, uint32_t>> idle_eth_xy;
 
-        for (const CoreCoord& logical_core : control_plane.get_active_ethernet_cores(device_id)) {
+        const auto active_eth_cores = control_plane.get_active_ethernet_cores(device_id);
+        active_eth_xy.reserve(active_eth_cores.size());
+        for (const CoreCoord& logical_core : active_eth_cores) {
             active_eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
-        for (const CoreCoord& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
+        const auto idle_eth_cores = control_plane.get_inactive_ethernet_cores(device_id);
+        idle_eth_xy.reserve(idle_eth_cores.size());
+        for (const CoreCoord& logical_core : idle_eth_cores) {
             idle_eth_xy.emplace_back(logical_core.x, logical_core.y);
         }
 
@@ -665,6 +671,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(inspector_rpc_server_port);
     RT(inspector_capture_tensor_specs);
     RT(inspector_log_runtime_entries);
+    RT(inspector_log_mesh_buffers);
     RT_CUSTOM("inspector_log_path", rt.get_inspector_log_path().string());
     RT(serialize_inspector_on_dispatch_timeout);
     RT(riscv_debug_info_enabled);

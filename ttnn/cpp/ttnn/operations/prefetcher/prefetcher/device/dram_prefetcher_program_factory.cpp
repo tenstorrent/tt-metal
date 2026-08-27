@@ -114,11 +114,12 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     const auto& all_reader_core_range = global_cb.sender_cores();
     auto reader_core_range_vec = corerange_to_cores(all_reader_core_range, std::nullopt, true);
     std::vector<CoreRange> active_reader_core_range_vec;
+    active_reader_core_range_vec.reserve(num_readers);
     for (uint32_t i = 0; i < num_readers; ++i) {
         auto core = reader_core_range_vec[i];
         active_reader_core_range_vec.push_back(CoreRange{core, core});
     }
-    auto reader_core_range = CoreRangeSet{active_reader_core_range_vec};
+    auto reader_core_range = CoreRangeSet{std::move(active_reader_core_range_vec)};
 
     /* read cb setup */
     uint32_t reader_cb_single_tile_size = max_tile_size;
@@ -218,9 +219,13 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     /* Runtime args */
     std::vector<uint32_t> page_sizes;
     std::vector<uint32_t> block_num_pages;
+    page_sizes.reserve(num_tensors);
+    block_num_pages.reserve(num_tensors);
 
     std::vector<uint32_t> coalesced_page_sizes;
     std::vector<uint32_t> coalesced_num_pages;
+    coalesced_page_sizes.reserve(num_tensors);
+    coalesced_num_pages.reserve(num_tensors);
 
     uint32_t max_page_size = 8192;
 
@@ -238,6 +243,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     }
 
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(reader_core_range.num_cores());
     const auto& reader_cores = corerange_to_cores(reader_core_range, std::nullopt, true);
 
     KernelDescriptor reader_desc;
@@ -281,7 +287,9 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
             }
         }
 
-        std::vector<uint32_t> reader_rt_args = {bank_id, vc, total_num_blocks_in_buffer};
+        std::vector<uint32_t> reader_rt_args;
+        reader_rt_args.reserve(3 + 3 * num_tensors);
+        reader_rt_args.insert(reader_rt_args.end(), {bank_id, vc, total_num_blocks_in_buffer});
         reader_rt_args.insert(reader_rt_args.end(), page_sizes.begin(), page_sizes.end());
         reader_rt_args.insert(reader_rt_args.end(), block_num_pages.begin(), block_num_pages.end());
         reader_rt_args.insert(reader_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
@@ -290,6 +298,7 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
 
         /* writer kernel */
         std::vector<uint32_t> writer_rt_args;
+        writer_rt_args.reserve(5 * num_tensors);
         writer_rt_args.insert(writer_rt_args.end(), coalesced_page_sizes.begin(), coalesced_page_sizes.end());
         writer_rt_args.insert(writer_rt_args.end(), coalesced_num_pages.begin(), coalesced_num_pages.end());
         writer_rt_args.insert(writer_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());

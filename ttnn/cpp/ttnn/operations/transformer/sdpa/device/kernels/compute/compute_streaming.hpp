@@ -112,7 +112,6 @@ template <
     uint32_t NeginfTileIdx,
     uint32_t CausalDiagTileIdx,
     uint32_t LocalNPaddedTiles,
-    uint32_t JointNPaddedTiles,
     uint32_t GlobalNPartialCol,
     uint32_t JointLPartialCol,
     uint32_t GlobalNPartialTileIdx,
@@ -122,13 +121,13 @@ struct RingStreamingMaskCtx {
     // Per-ring-iter runtime fields (the only ones needing stack storage):
     bool is_causal = false;
     uint32_t global_n_padded_tiles = 0;
+    uint32_t joint_n_padded_tiles = 0;
     uint32_t straddle_num_padded_tiles = 0;
     // Compile-time-constant fields (no per-instance storage):
     static constexpr uint32_t neginf_tile_idx = NeginfTileIdx;
     static constexpr uint32_t causal_diag_tile_idx = CausalDiagTileIdx;
     static constexpr uint32_t primary_diag_tile_idx = CausalDiagTileIdx;
     static constexpr uint32_t local_n_padded_tiles = LocalNPaddedTiles;
-    static constexpr uint32_t joint_n_padded_tiles = JointNPaddedTiles;
     static constexpr uint32_t global_n_partial_col = GlobalNPartialCol;
     static constexpr uint32_t joint_l_partial_col = JointLPartialCol;
     static constexpr uint32_t global_n_partial_tile_idx = GlobalNPartialTileIdx;
@@ -255,7 +254,7 @@ ALWI void recip_tile_first_column_wh_idst0_direct() {
 
 #pragma GCC unroll 0
     for (int face = 0; face < 2; face++) {
-        ckernel::sfpu::calculate_recip_first_column();
+        ckernel::sfpu::calculate_recip_first_column</*legacy_compat=*/true, DST_ACCUM_MODE>();
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
@@ -567,7 +566,7 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
     const uint32_t global_row_base = q_subblock * tiles_per_row;
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
 
     CircularBuffer(in0_cb).wait_front((q_subblock + 1) * tiles_per_row);
     CircularBuffer(in1_cb).wait_front((q_subblock + 1) * tiles_per_row);
@@ -628,7 +627,7 @@ void salad_correct_fused(
     const uint32_t sum_row_base = sum_q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
 
-    mul_bcast_cols_init_short(out_in_cb, bcast_cb);
+    mul_bcast_cols_init(out_in_cb, bcast_cb);
 
     CircularBuffer(out_in_cb).wait_front((ob_q_subblock + 1) * tiles_per_row * tiles_per_column);
     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row);
@@ -731,11 +730,11 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 // DST[1] = exp((sink[s] - max[row_offset+s]) * scale); DST[0] += DST[1].
                 // max - sink with a negated scale is equivalent and avoids expanding the sink
                 // scalar to a first-column vector for every Q tile.
-                sub_tiles_bcast_scalar_init_short(cur_max_cb_rt, cb_attention_sink);
+                sub_bcast_scalar_init(cur_max_cb_rt, cb_attention_sink);
                 sub_tiles_bcast_scalar(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, 0, 1);
                 // The custom first-column exp needs generic unary SFPU addrmod state, but not the
                 // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
-                MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>()));
+                MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, DST_ACCUM_MODE>()));
                 constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
                 constexpr uint16_t negated_scale_bf16 = scale_bf16 ^ 0x8000;
                 MATH((exp_tile_first_column<EXP_APPROX_MODE, negated_scale_bf16>(1)));
@@ -764,7 +763,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
             constexpr uint32_t batch = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
-            mul_bcast_cols_init_short(cur_out_cb, scratch_cb);
+            mul_bcast_cols_init(cur_out_cb, scratch_cb);
             // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
             sdpa_maybe_pack_reconfig_data_format<scratch_cb, normalized_out_cb>();
             CircularBuffer(cur_out_cb).wait_front(head_dim_t_);
@@ -2266,6 +2265,10 @@ template <
     uint32_t ring_size = 1,
     bool use_attention_sink = false,
     uint32_t cb_attention_sink = INVALID_CB,
+    // Sharded joint: skip joint K chunks that lie entirely in the padded joint tail, mirroring the
+    // reader's kv_chunk_is_beyond_logical_l skip so the K/V CB producer/consumer counts stay aligned.
+    bool joint_n_skip_enabled = false,
+    uint32_t joint_local_padded_Nt = 0,  // Lt_local: per-device joint tile count (sharded path)
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2289,7 +2292,9 @@ void sdpa_ring_v2(
     const bool skip_first_half_q = false,
     const bool use_zigzag_balancing = false,
     const ChunkedContext& chunked = {},
-    const bool is_first_active_iter = true) {
+    const bool is_first_active_iter = true,
+    // True (unpadded) joint length in tiles; joint K chunks starting at/after it are pure padding.
+    const uint32_t logical_lt = 0) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2388,6 +2393,12 @@ void sdpa_ring_v2(
     // Skip KV chunks beyond the logical sequence length (padding tiles).
     auto try_skip_oob_kv = [&](uint32_t source_ring_id, uint32_t k_chunk, bool kv_chunk_is_joint) -> bool {
         if (kv_chunk_is_joint) {
+            // Skip joint chunk at/after logical_lt - pure padding
+            if constexpr (joint_n_skip_enabled) {
+                const uint32_t joint_global_start_tile =
+                    ring_id * joint_local_padded_Nt + (k_chunk - num_local_k_chunks) * Sk_chunk_t;
+                return joint_global_start_tile >= logical_lt;
+            }
             return false;
         }
         return !kv_chunk_starts_before_logical_end<
@@ -2558,7 +2569,11 @@ void sdpa_ring_v2(
                 apply_mask = apply_mask || is_global_n_mask_chunk;
             }
             if constexpr (joint_n_mask_enabled) {
-                apply_mask = apply_mask || is_joint_n_mask_chunk;
+                // Mirror the spatial local_n strategy for the joint chunk. The exp variant's LightweightMaskContext
+                // keeps it runtime.
+                if (lw_mask.joint_l_partial_col > 0) {
+                    apply_mask = apply_mask || is_joint_n_mask_chunk;
+                }
             }
 
             // Resolve lightweight mask params for partial tile masking

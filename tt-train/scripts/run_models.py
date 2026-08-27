@@ -23,6 +23,7 @@ import yaml
 import tt_train_metrics
 import analyze_memory
 import analyze_steps
+import plot_training_comparison
 from model_tracer.generic_ops_tracer import get_machine_info
 
 
@@ -307,14 +308,38 @@ def main() -> int:
 
         set_model_status(filename=model_filename, status="✅", elapsed_time=elapsed_time, log_path=str(log_path))
 
+        # Export loss plots into PNG and Mermaid markdown. The Mermaid markdown will be
+        # used in Github CI Summary to display the plots inline.
+        plot_dir = output_dir / "plots"
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Plot directory: {plot_dir}")
+        # To prevent filenaming conflicts, a prefix will be added to the output files
+        # instead of using per-model subdirectories.
+        file_prefix = f"{model_filename}_{card_type}_"
+        plot_training_comparison.main(
+            [
+                "--baseline",
+                str(log_path),
+                "--output-dir",
+                str(plot_dir),
+                "--mermaid",
+                "--file-prefix",
+                file_prefix,
+            ]
+        )
+
     # Show summary and display to Github if environment variable exists
     df = pd.DataFrame(model_status)
     df_md = df.to_markdown(index=False)
     print("Summary:")
     print(df_md)
-    if "GITHUB_STEP_SUMMARY" in os.environ:
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
-            print(df_md, file=fh)
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        if os.path.exists(summary_path):
+            with open(summary_path, "a") as fh:
+                print(df_md, file=fh)
+        else:
+            print(f"GITHUB_STEP_SUMMARY file not found: {summary_path}")
 
     # Return error code 1 if any tests have failed
     return 1 if any(s["run status"] == "❌" for s in model_status) else 0

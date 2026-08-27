@@ -20,7 +20,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 #include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
 
@@ -78,12 +78,12 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
 
     const uint32_t working_reg = 0;
 
-    init_bcast<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(
-        cb_attention_weights, cb_intermediates, cb_attention_weights);
+    compute_kernel_hw_startup(cb_attention_weights, cb_intermediates, cb_attention_weights);
+    bcast_init<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(cb_attention_weights, cb_intermediates);
 
     reconfig_data_format(cb_attention_weights, cb_intermediates);
     tile_regs_acquire();
-    sub_bcast_cols_init_short(cb_attention_weights, cb_intermediates);
+    sub_bcast_cols_init(cb_attention_weights, cb_intermediates);
     sub_tiles_bcast_cols(cb_attention_weights, cb_intermediates, /* tile_idx */ 0, /* tile_idx */ 0, working_reg);
 
     sdpa_exp_tile_init();
@@ -128,26 +128,6 @@ void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t c
     sdpa_exp_tile(scores_reg);
 }
 
-// Transposes a single tile using the FPU transpose_wh path (reads via SrcA).
-inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint32_t cb_transpose_wh) {
-    cb_wait_front(cb_input, onetile);
-
-    tile_regs_acquire();
-    reconfig_data_format_srca(cb_input);
-    transpose_init(cb_input);
-    transpose_tile(cb_input, /* tile idx */ 0, /* reg idx */ 0);
-    tile_regs_commit();
-
-    cb_reserve_back(cb_transpose_wh, onetile);
-    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
-    // In both callers (update_grad_value, update_grad_key) the previous PACK target equals cb_input.
-    pack_reconfig_data_format(cb_input, cb_transpose_wh);
-    tile_regs_wait();
-    pack_tile(0, cb_transpose_wh);
-    tile_regs_release();
-    cb_push_back(cb_transpose_wh, onetile);
-}
-
 // Computes the per-row scalar u = sum(dO * O) needed for softmax backward.
 // This is part of the softmax gradient: dS = P * (dP - u), where u = sum(P * dP) per row.
 // Since O = P @ V, we have dP = dO @ V^T, and u = sum(dO * O) row-wise.
@@ -165,7 +145,7 @@ void compute_u_scalar_row(
     const uint32_t scaler_bits,
     const uint32_t cb_u_scaler_output) {
     const uint32_t accum_register = 0;
-    // using binary_tiles_init function instead of specific mul_tiles_init() because specific one doesn't support
+    // using binary_tiles_init function instead of specific mul_init() because specific one doesn't support
     // accumulation to dest regs
     reconfig_data_format(cb_grad_output, cb_attn_output);
     binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(cb_grad_output, cb_attn_output, /*acc_to_dest*/ true);
@@ -270,7 +250,7 @@ void compute_grad_scores(
 
     tile_regs_acquire();
     reconfig_data_format(cb_grad_attn_weights, cb_u_scalar_row);
-    sub_bcast_cols_init_short(cb_grad_attn_weights, cb_u_scalar_row);
+    sub_bcast_cols_init(cb_grad_attn_weights, cb_u_scalar_row);
     sub_tiles_bcast_cols(
         cb_grad_attn_weights,
         cb_u_scalar_row,
@@ -296,6 +276,77 @@ void compute_grad_scores(
     pack_tile(grad_reg, cb_grad_scores);
     tile_regs_release();
     cb_push_back(cb_grad_scores, onetile);
+}
+
+// KV-kernel variant of the softmax backward: computes dS and, from the same DST acquire
+// region, produces both transposed matmul operands:
+//   dS   = P * (dP - u) * scale         (same op order as compute_grad_scores — bit-identical)
+//   dS^T -> cb_grad_scores_transposed   (for dK = dS^T @ Q)
+//   P^T  -> cb_attn_weights_transposed  (for dV = P^T @ dO)
+// P is already resident in DST for the dS multiply (full-FP32 copy_tile from
+// cb_attention_weights, which mul_binary_tile leaves intact), and dS is produced in DST —
+// so both are transposed in place with the 32-bit transpose_dest and packed directly.
+// This removes the former pack->CB->unpack roundtrip per transpose (transpose_tile_fpu)
+// from the inner loop. The transposes are lossless permutations of FP32 DST values, so
+// results are bit-identical to the UnpackToDestFp32 roundtrip path this replaces — that
+// path was already exact; the precision gain over the original TF32-SrcA transposes came
+// from the earlier UnpackToDestFp32 change, not from this restructuring.
+//
+// transpose_dest_init records math replay-buffer slots [16,32) and reprograms the math
+// MOP/addr-mods. That is safe here: every MOP-driven op of this region (bcast sub,
+// copy_tile) has already executed by then, and downstream consumers re-init their own
+// state per call (matmul_init per phase, sub_bcast_cols_init per iteration).
+void compute_grad_scores_and_transposes(
+    const uint32_t cb_grad_attn_weights,
+    const uint32_t cb_attention_weights,
+    const uint32_t cb_u_scalar_row,
+    const uint32_t scaler_bits,
+    /* output dS^T */ const uint32_t cb_grad_scores_transposed,
+    /* output P^T */ const uint32_t cb_attn_weights_transposed) {
+    cb_wait_front(cb_grad_attn_weights, onetile);
+    cb_wait_front(cb_attention_weights, onetile);
+    cb_wait_front(cb_u_scalar_row, onetile);
+
+    const uint32_t grad_reg = 0;
+    const uint32_t attn_weights_reg = 1U;
+
+    tile_regs_acquire();
+    reconfig_data_format(cb_grad_attn_weights, cb_u_scalar_row);
+    sub_bcast_cols_init(cb_grad_attn_weights, cb_u_scalar_row);
+    sub_tiles_bcast_cols(
+        cb_grad_attn_weights,
+        cb_u_scalar_row,
+        /* tile_idx */ 0,
+        /* tile_idx */ 0,
+        grad_reg);
+
+    copy_tile_to_dst_init_short_with_dt(cb_grad_attn_weights, cb_attention_weights, /*transpose=*/0);
+    copy_tile(cb_attention_weights, /* tile_idx */ 0, /* register idx */ attn_weights_reg);
+
+    mul_binary_tile_init();
+    mul_binary_tile(grad_reg, attn_weights_reg, grad_reg);
+
+    binop_with_scalar_tile_init();
+    mul_unary_tile(grad_reg, scaler_bits);
+
+    // In-place 32-bit tile transposes (DST holds FP32; one init serves both calls).
+    transpose_dest_init</* is_32bit */ true>(cb_attention_weights);
+    transpose_dest</* is_32bit */ true>(grad_reg);          // dS -> dS^T
+    transpose_dest</* is_32bit */ true>(attn_weights_reg);  // P  -> P^T
+
+    tile_regs_commit();
+
+    tile_regs_wait();
+    cb_reserve_back(cb_grad_scores_transposed, onetile);
+    cb_reserve_back(cb_attn_weights_transposed, onetile);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    pack_reconfig_data_format(cb_grad_attn_weights, cb_grad_scores_transposed);
+    pack_tile(grad_reg, cb_grad_scores_transposed);
+    pack_reconfig_data_format(cb_grad_scores_transposed, cb_attn_weights_transposed);
+    pack_tile(attn_weights_reg, cb_attn_weights_transposed);
+    tile_regs_release();
+    cb_push_back(cb_grad_scores_transposed, onetile);
+    cb_push_back(cb_attn_weights_transposed, onetile);
 }
 
 // Computes gradient w.r.t. Query tensor: dQ = dS @ K
@@ -353,22 +404,23 @@ void update_grad_query(
 }
 
 // Computes gradient w.r.t. Value tensor: dV = P^T @ dO
+// P^T is produced in DST and packed to cb_attn_weights_transposed by
+// compute_grad_scores_and_transposes — no transpose roundtrip here.
 // Uses L1 accumulation to accumulate across sequence blocks and query heads (do_accumulate=true).
-// Uses cb_transpose_wh as scratch space for transposed attention weights.
 void update_grad_value(
-    const uint32_t cb_attention_weights,
-    const uint32_t cb_transpose_wh,
+    const uint32_t cb_attn_weights_transposed,
     const uint32_t cb_grad_output,
     const uint32_t cb_grad_value_accum,
     const uint32_t tiles_per_row,
     const uint32_t block_size,
     const bool do_accumulate = false) {
-    transpose_tile_fpu(cb_attention_weights, cb_transpose_wh);
-
     // grad_V = Attention^T @ grad_output
-    cb_wait_front(cb_transpose_wh, onetile);
+    cb_wait_front(cb_attn_weights_transposed, onetile);
 
-    pack_reconfig_data_format(cb_transpose_wh, cb_grad_value_accum);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    // The previous PACK target is cb_attn_weights_transposed (packed last by
+    // compute_grad_scores_and_transposes).
+    pack_reconfig_data_format(cb_attn_weights_transposed, cb_grad_value_accum);
     // First iteration: reserve space for result
     // Subsequent iterations: enable L1 accumulation to add to existing values
     if (!do_accumulate) {
@@ -380,10 +432,10 @@ void update_grad_value(
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
         tile_regs_acquire();
         reconfig_data_format_srca(cb_grad_value_accum, cb_grad_output);
-        matmul_init(cb_transpose_wh, cb_grad_output, /*transpose*/ 0);
+        matmul_init(cb_attn_weights_transposed, cb_grad_output, /*transpose*/ 0);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             matmul_tiles(
-                cb_transpose_wh,
+                cb_attn_weights_transposed,
                 cb_grad_output,
                 /* tile_idx */ 0,
                 /* tile_idx */ tile_idx + block_idx,
@@ -404,24 +456,29 @@ void update_grad_value(
     }
 
     cb_push_back(cb_grad_value_accum, tiles_per_row);
-    cb_pop_front(cb_transpose_wh, onetile);
+    cb_pop_front(cb_attn_weights_transposed, onetile);
 }
 
 // Computes gradient w.r.t. Key tensor: dK = dS^T @ Q
+// dS^T is produced in DST and packed to cb_grad_scores_transposed by
+// compute_grad_scores_and_transposes — no transpose roundtrip here.
+// cb_prev_pack / cb_prev_srca are the actual previous PACK target and UNPACK-A operand
+// (cb_grad_value_accum / cb_grad_output when called after update_grad_value), so the
+// conditional reconfigs skip when formats match.
 // Uses L1 accumulation to accumulate across sequence blocks and query heads (do_accumulate=true).
-// Uses cb_transpose_wh as scratch space for transposed grad scores.
 void update_grad_key(
-    const uint32_t cb_grad_scores,
+    const uint32_t cb_grad_scores_transposed,
     const uint32_t cb_query,
-    const uint32_t cb_transpose_wh,
     const uint32_t cb_grad_key_accum,
     const uint32_t tiles_per_row,
     const uint32_t block_size,
+    const uint32_t cb_prev_pack,
+    const uint32_t cb_prev_srca,
     const bool do_accumulate = false) {
-    transpose_tile_fpu(cb_grad_scores, cb_transpose_wh);
-    cb_wait_front(cb_transpose_wh, onetile);
+    cb_wait_front(cb_grad_scores_transposed, onetile);
 
-    pack_reconfig_data_format(cb_transpose_wh, cb_grad_key_accum);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    pack_reconfig_data_format(cb_prev_pack, cb_grad_key_accum);
     if (!do_accumulate) {
         cb_reserve_back(cb_grad_key_accum, tiles_per_row);
     } else {
@@ -430,11 +487,11 @@ void update_grad_key(
 
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
         tile_regs_acquire();
-        reconfig_data_format_srca(cb_grad_key_accum, cb_query);
-        matmul_init(cb_transpose_wh, cb_query, /*transpose*/ 0);
+        reconfig_data_format_srca(cb_prev_srca, cb_query);
+        matmul_init(cb_grad_scores_transposed, cb_query, /*transpose*/ 0);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             matmul_tiles(
-                cb_transpose_wh,
+                cb_grad_scores_transposed,
                 cb_query,
                 /* tile_idx */ 0,
                 /* tile_idx */ tile_idx + block_idx,
@@ -455,5 +512,5 @@ void update_grad_key(
     }
 
     cb_push_back(cb_grad_key_accum, tiles_per_row);
-    cb_pop_front(cb_transpose_wh, onetile);
+    cb_pop_front(cb_grad_scores_transposed, onetile);
 }

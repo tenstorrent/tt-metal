@@ -267,6 +267,7 @@ private:
 
         std::vector<std::vector<CoreEntry>> entries_per_active_cq;
         const uint8_t num_cqs = control->num_hw_cqs;
+        entries_per_active_cq.reserve(num_cqs);
 
         for (uint8_t cq = 0; cq < num_cqs; ++cq) {
             const auto core_coords = control->cq_dispatch_core_coords[cq];
@@ -277,6 +278,7 @@ private:
             }
 
             std::vector<CoreEntry> cq_entries;
+            cq_entries.reserve(3);
 
             auto smc_xy_to_virtual_core = [](uint32_t xy) {
                 return CoreCoord{
