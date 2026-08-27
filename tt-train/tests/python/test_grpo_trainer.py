@@ -56,10 +56,33 @@ _GRPO_EXAMPLES_DIR = os.path.join(
     "examples",
     "grpo",
 )
-if _GRPO_EXAMPLES_DIR not in sys.path:
-    sys.path.insert(0, _GRPO_EXAMPLES_DIR)
+# Force the grpo example dir to the front of sys.path so ``import utils`` resolves
+# here even if a sibling example dir is already on the path.
+if _GRPO_EXAMPLES_DIR in sys.path:
+    sys.path.remove(_GRPO_EXAMPLES_DIR)
+sys.path.insert(0, _GRPO_EXAMPLES_DIR)
 
-from utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
+# examples/grpo ships a top-level ``utils`` package, and so do sibling example dirs
+# (examples/grpo_remote_rollout, examples/qwen3). In a single pytest session another
+# module may have imported its own ``utils`` first, caching it in sys.modules and
+# shadowing ours -- tests/python/grpo_remote_rollout/conftest.py puts
+# examples/grpo_remote_rollout on sys.path while conftests load, which is before this
+# module is imported. sys.path.insert cannot override an already-imported module, so
+# evict any cached ``utils*`` for the imports below, then restore the sibling's modules
+# so we do not break whichever test imported them. Same dance as
+# test_tp_vocab_padding.py and test_qwen3_fused_kv_roundtrip.py.
+#
+# ``llama_completer`` is bound here rather than re-imported inside the fixture below:
+# after the restore, a runtime ``from utils import ...`` would resolve against the
+# sibling package again.
+_saved_utils = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "utils" or k.startswith("utils.")}
+try:
+    from utils import llama_completer as _llama_completer  # noqa: E402
+    from utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
+finally:
+    for _k in [k for k in list(sys.modules) if k == "utils" or k.startswith("utils.")]:
+        del sys.modules[_k]
+    sys.modules.update(_saved_utils)
 
 
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
@@ -178,10 +201,8 @@ class _RecordingCallback(TrainerCallback):
 @pytest.fixture
 def patch_llama_weight_loading(monkeypatch):
     """Skip the HF download / safetensors load so the tiny model keeps random init."""
-    from utils import llama_completer
-
-    monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: "/tmp/unused")
-    monkeypatch.setattr(llama_completer, "load_from_safetensors", lambda *args, **kwargs: None)
+    monkeypatch.setattr(_llama_completer, "snapshot_download", lambda *args, **kwargs: "/tmp/unused")
+    monkeypatch.setattr(_llama_completer, "load_from_safetensors", lambda *args, **kwargs: None)
 
 
 @pytest.mark.requires_device
