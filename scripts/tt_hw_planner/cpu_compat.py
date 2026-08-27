@@ -32,6 +32,10 @@ from typing import List
 
 _MARKER = "_TT_CPU_COMPAT"
 
+# How many entries a dict must share with the real packages_distributions() mapping
+# before it is accepted as a copy of it. Shape alone is ambiguous.
+_SNAPSHOT_MIN_AGREEMENT = 5
+
 _ACCEL_PACKAGES = frozenset(
     {
         "mamba_ssm",
@@ -297,22 +301,35 @@ def _publish_stub_distributions(names: List[str]) -> None:
         setattr(packages_distributions, _MARKER, True)
         _md.packages_distributions = packages_distributions
 
-    # Repair snapshots already taken by imported frameworks. A snapshot is
-    # identified structurally -- a dict of import-name -> list-of-distribution
-    # names that already describes real packages -- never by module or attribute
-    # name, so this keeps working if a framework renames its constant.
-    probe_key = next((k for k in stub_entries), None)
+    # Repair snapshots already taken by imported frameworks, identified by CONTENT
+    # rather than by module/attribute name so this keeps working if a framework
+    # renames its constant.
+    #
+    # Matching on shape alone is not enough: a dict of str -> list[str] also
+    # describes a lazy-import structure (module -> [class names]), and injecting
+    # package names into one of those makes the framework look for classes that do
+    # not exist. So a candidate must AGREE with the real mapping on several
+    # entries before it is treated as a copy of it.
+    real_mapping = real() if callable(real) else {}
+    witness = [(k, v) for k, v in real_mapping.items() if isinstance(v, list) and v][:64]
+    if len(witness) < _SNAPSHOT_MIN_AGREEMENT:
+        return
+    probe_key = next(iter(stub_entries), None)
     for module in list(sys.modules.values()):
         ns = getattr(module, "__dict__", None)
         if not isinstance(ns, dict):
             continue
         for value in list(ns.values()):
-            if not isinstance(value, dict) or len(value) < 8 or probe_key in value:
+            # Plain dicts only. packages_distributions() returns one, while a
+            # framework's own registries are often mapping subclasses with their
+            # own lookup semantics -- probing those can raise or trigger imports.
+            if type(value) is not dict or probe_key in value:
                 continue
-            sample = next(iter(value.items()), None)
-            if not sample or not isinstance(sample[0], str) or not isinstance(sample[1], list):
+            try:
+                agree = sum(1 for k, v in witness if value.get(k) == v)
+            except Exception:
                 continue
-            if not all(isinstance(x, str) for x in sample[1]):
+            if agree < _SNAPSHOT_MIN_AGREEMENT:
                 continue
             for k, v in stub_entries.items():
                 value.setdefault(k, list(v))
