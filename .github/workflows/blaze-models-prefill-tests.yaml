@@ -17,6 +17,7 @@ on:
           kimi_k3_moe, kimi_moe, kimi_moe_perf, kv_cache_table,
           minimax_prefill_kv_pcc, minimax_prefill_perf, mla_chunked, moe_gate,
           prefill_runner, prefill_runner_kv_pcc, ring_joint_sdpa_perf.
+          Tags (each runs every matching stage): block, ccl, dflash, dsv4_flash, gate, glm_5_2, hca, kimi_k2_6, kimi_k2_7, kimi_k3, kv_cache, minimax_m3, mla, moe, runner, sdpa, transformer.
         required: false
         type: string
         default: "all"
@@ -139,7 +140,16 @@ jobs:
     # invocation because the impl filters the matrix by sp_config, and this is the only
     # sc4 entry (the sc1 job's enabled-skus + sp_config filters already exclude it).
     # Runs for the default "all", for the "module" group, and when its own stage is selected.
-    if: ${{ needs.validate-test-type.outputs.test-type == 'all' || contains(needs.validate-test-type.outputs.test-type, 'module') || contains(needs.validate-test-type.outputs.test-type, 'prefill_runner_kv_pcc') }}
+    # Tokens that can select an sc4 entry: its test_type, its test_group, or any of its
+    # test_tags (kimi_k2_7 / glm_5_2 / runner / kv_cache). Firing this caller for a selection
+    # with no sc4 entry fails on an empty matrix, so the list stays exact.
+    if: ${{ needs.validate-test-type.outputs.test-type == 'all'
+      || contains(needs.validate-test-type.outputs.test-type, 'module')
+      || contains(needs.validate-test-type.outputs.test-type, 'prefill_runner_kv_pcc')
+      || contains(needs.validate-test-type.outputs.test-type, 'kimi_k2_7')
+      || contains(needs.validate-test-type.outputs.test-type, 'glm_5_2')
+      || contains(needs.validate-test-type.outputs.test-type, 'runner')
+      || contains(needs.validate-test-type.outputs.test-type, 'kv_cache') }}
     permissions:
       id-token: write
       contents: read

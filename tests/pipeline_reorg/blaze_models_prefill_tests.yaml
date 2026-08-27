@@ -28,6 +28,13 @@
 #   cmd: The exact command to run (env vars must be inlined).
 #   test_type: Test type identifier for filtering (workflow_dispatch test-type selection).
 #   test_group: Group identifier for selecting multiple related tests at once.
+#   test_tags: Optional list of coarse selectors for workflow_dispatch, matched exactly and
+#              OR-ed with test_type / test_group. Two vocabularies in one list: the model a
+#              leg covers (kimi_k2_6, kimi_k2_7, kimi_k3, glm_5_2, dsv4_flash, minimax_m3)
+#              and the unit under test (moe, gate, mla, hca, sdpa, ccl, block, transformer,
+#              kv_cache, dflash, runner). So `moe` runs every MoE leg and `kimi_k3` every K3
+#              leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
+#              leg plus every K3 leg, not the K3 MoE legs.
 #   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
@@ -55,6 +62,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "torus-xy-8x4"
     '
   test_type: moe_gate
+  test_tags: [moe, gate]
   test_group: module
   skus:
     bh_sc1:
@@ -74,6 +82,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and torus-xy-8x4 and k2_6 and no_determinism" -vvv --tb=short
     '
   test_type: mla_chunked
+  test_tags: [kimi_k2_6, mla]
   test_group: module
   skus:
     bh_sc1:
@@ -93,6 +102,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and torus-xy-8x4 and scalar and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism))" -vvv --tb=short
     '
   test_type: k3_mla
+  test_tags: [kimi_k3, mla]
   test_group: module
   skus:
     bh_sc1:
@@ -112,6 +122,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and production-50k+5k and trace and torus-xy-8x4 and scalar and no_determinism" -vvv --tb=short
     '
   test_type: k3_mla_trace
+  test_tags: [kimi_k3, mla]
   test_group: module
   skus:
     bh_sc1:
@@ -130,6 +141,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
     '
   test_type: k3_mla_perf
+  test_tags: [kimi_k3, mla]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -147,6 +159,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_hca.py::test_hca_chunked_prefill_mesh -k "flash and chunk5120-varying and torus-xy-8x4" -vvv --tb=short
     '
   test_type: hca_chunked
+  test_tags: [dsv4_flash, hca]
   test_group: module
   skus:
     bh_sc1:
@@ -164,6 +177,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_ttnn_hca_perf.py -k "flash and torus-xy-8x4" -vvv --tb=short
     '
   test_type: hca_perf
+  test_tags: [dsv4_flash, hca]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -190,6 +204,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
     '
   test_type: kv_cache_table
+  test_tags: [kimi_k2_6, glm_5_2, kv_cache]
   test_group: module
   skus:
     bh_sc1:
@@ -212,6 +227,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and torus-xy-8x4 and L61 and mid15k and notrace" -vvv --tb=short
     '
   test_type: kimi_chunked_padded
+  test_tags: [kimi_k2_6, transformer]
   test_group: module
   skus:
     bh_sc1:
@@ -240,6 +256,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and torus-xy-8x4 and L61 and mid15k and traced" -vvv --tb=short
     '
   test_type: kimi_chunked_padded
+  test_tags: [kimi_k2_6, transformer]
   test_group: module
   skus:
     bh_sc1:
@@ -265,6 +282,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_2 and shape-8x4" -vvv --tb=short
     '
   test_type: dsa_mla_glm
+  test_tags: [glm_5_2, mla]
   test_group: module
   skus:
     bh_sc1:
@@ -283,6 +301,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "torus-xy-8x4 and pcc-device-glm-256" -vvv --tb=short
     '
   test_type: glm_moe
+  test_tags: [glm_5_2, moe]
   test_group: module
   skus:
     bh_sc1:
@@ -308,6 +327,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and torus-xy-8x4 and glm52" -vvv --tb=short --timeout=300
     '
   test_type: glm_prefill_block
+  test_tags: [glm_5_2, block]
   test_group: module
   skus:
     bh_sc1:
@@ -325,6 +345,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "torus-xy-8x4 and kimi-5k-pcc" -vvv --tb=short
     '
   test_type: kimi_moe
+  test_tags: [kimi_k2_6, moe]
   test_group: module
   skus:
     bh_sc1:
@@ -342,6 +363,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_k3_moe -k "torus-xy-8x4 and kimi_k3-5k-pcc" -vvv --tb=short
     '
   test_type: kimi_k3_moe
+  test_tags: [kimi_k3, moe]
   test_group: module
   skus:
     bh_sc1:
@@ -359,6 +381,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -vvv --tb=short
     '
   test_type: kimi_moe_perf
+  test_tags: [kimi_k2_6, kimi_k3, moe]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -388,6 +411,7 @@
       exit $rc
     '
   test_type: ring_joint_sdpa_perf
+  test_tags: [kimi_k2_6, kimi_k3, sdpa, mla]
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
@@ -408,6 +432,7 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q
     '
   test_type: high_bw_all_gather_perf
+  test_tags: [ccl]
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
@@ -439,6 +464,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: kimi_chunked
+  test_tags: [kimi_k2_6, transformer]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -475,6 +501,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
     '
   test_type: kimi_chunked
+  test_tags: [kimi_k2_6, transformer]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -498,6 +525,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters" -xvs
     '
   test_type: glm_chunked
+  test_tags: [glm_5_2, transformer]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -519,6 +547,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache" -xvs
     '
   test_type: glm_chunked_accuracy
+  test_tags: [glm_5_2, transformer]
   test_group: module
   skus:
     bh_sc1:
@@ -539,6 +568,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_multiturn_pcc -k "torus-xy-8x4 and pretrained and (aligned_min or midchip_straddle or lastchip or rot_partial)" -vvv --tb=short
     '
   test_type: kimi_dflash
+  test_tags: [kimi_k2_6, dflash]
   test_group: module
   skus:
     bh_sc1:
@@ -568,6 +598,7 @@
       python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1800
     '
   test_type: prefill_runner
+  test_tags: [kimi_k2_6, runner]
   test_group: module
   skus:
     bh_sc1:
@@ -589,6 +620,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
   test_type: prefill_runner_kv_pcc
+  test_tags: [kimi_k2_7, runner, kv_cache]
   test_group: module
   skus:
     bh_sc4:
@@ -614,6 +646,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52
   test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_2, runner, kv_cache]
   test_group: module
   skus:
     bh_sc4:
@@ -647,6 +680,7 @@
       python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
     '
   test_type: minimax_prefill_kv_pcc
+  test_tags: [minimax_m3, transformer, kv_cache]
   test_group: module
   skus:
     bh_sc1:
@@ -689,6 +723,7 @@
       python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
     '
   test_type: minimax_prefill_perf
+  test_tags: [minimax_m3, transformer]
   test_group: module
   skus:
     bh_sc1_high_power:
