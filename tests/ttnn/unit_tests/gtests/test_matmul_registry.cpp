@@ -2270,7 +2270,7 @@ TEST(MatmulConfigRegistry, CompactEntryIdentityStaysOutsideProgramCacheIdentity)
         ttsl::hash::hash_objects_with_default_seed(*first_parameters),
         ttsl::hash::hash_objects_with_default_seed(*second_parameters));
 
-    second.replay.compute_kernel_config.math_approx_mode = false;
+    second.replay.program_config.out_subblock_w = 1;
     const auto changed_recipe = materialize_matmul_registry_recipe(second);
     ASSERT_TRUE(changed_recipe.recipe.has_value());
     const auto changed_parameters = materialize_parameters_for_execution(
