@@ -99,9 +99,11 @@ enum class ZoneKind : uint32_t { Start = 0, End = 1 };
 TT_ZONE_DEFINE_ID(PROFILER_STALL_ZONE_ID, "PRODUCER-STALL");
 
 // Wire encode; MUST stay in sync with tt_metal/tools/profiler/spsc_packet.h (inlined because the JIT
-// build lacks that include path). word0 = type(5) | low27. A zone ships WHOLE as one 3-word
-// ZONE_ATOMIC packet (id | end timer_low | duration) at scope close; the legacy 2-word START/END
-// markers survive only for the stall zone and the >3.2s fallback. Lane identity and time's high half
+// build lacks that include path). word0 = type(5) | low27. A zone ships WHOLE at scope close, sized
+// by need: a 2-word ZONE_S when its end sits within 2^16 cycles of the lane cursor (the previous
+// S/ATOMIC zone's end) and its duration fits 16 bits, else the 3-word ZONE_ATOMIC (id | end timer_low
+// | duration), which also re-anchors the cursor; the legacy 2-word START/END markers survive only for
+// the stall zone and the >3.2s fallback. Lane identity and time's high half
 // are host-reconstructed from stickies: STICKY_PROG (runtime host-id, 1 word; 2-word PROG_EXT past
 // 2^27), STICKY_TIMER (timer_hi, on high-half tick), STICKY_SRC (injected by the drainer reader).
 struct ppfmt {
@@ -113,6 +115,7 @@ struct ppfmt {
     static constexpr uint32_t T_ZONE_START = 0u;        // PP_ZONE_START (stall zone + long-zone fallback only)
     static constexpr uint32_t T_ZONE_END = 1u;          // PP_ZONE_END   (stall zone + long-zone fallback only)
     static constexpr uint32_t T_ZONE_ATOMIC = 2u;       // PP_ZONE_ATOMIC (3 words: id | end_lo | duration)
+    static constexpr uint32_t T_ZONE_S = 3u;            // PP_ZONE_S (2 words: id | end_delta16<<16 | dur16)
     static constexpr uint32_t T_STICKY_PROG = 8u;       // PP_STICKY_PROG
     static constexpr uint32_t T_STICKY_PROG_EXT = 14u;  // PP_STICKY_PROG_EXT
     static constexpr uint32_t T_STICKY_TIMER = 9u;      // PP_STICKY_TIMER
@@ -129,6 +132,8 @@ struct ppfmt {
     }
     // ZONE_ATOMIC header: one whole zone per packet, emitted at scope close.
     static inline uint32_t zone_atomic_w0(uint32_t id) { return w0(T_ZONE_ATOMIC, id & LOW27_MASK); }
+    // ZONE_S: the 2-word small zone -- end as a 16-bit delta off the lane cursor, 16-bit duration.
+    static inline uint32_t zone_s_w0(uint32_t id) { return w0(T_ZONE_S, id & LOW27_MASK); }
     // PP_DATA: word0 shaped exactly like a zone marker's; the payload length rides in its own word2.
     static inline uint32_t data_w0(uint32_t id) { return w0(T_DATA, id & LOW27_MASK); }
     static inline uint32_t data_w2(uint32_t size_words) { return (size_words & DATA_SIZE_MASK) << DATA_SIZE_SHIFT; }
@@ -140,6 +145,12 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 
 // Last high half emitted in a STICKY_TIMER; ~0 forces a fresh sticky on a launch's first marker.
 [[maybe_unused]] static uint32_t g_prev_timer_hi = 0xFFFFFFFFu;
+
+// Lane cursor: the end of the last S/ATOMIC zone this producer emitted -- the base a ZONE_S's 16-bit
+// end delta counts from, mirrored exactly by the decoder. hi = ~0 is INVALID (no S can match it, so
+// the next zone ships ATOMIC and re-anchors both sides); set at init and on the idle-launch rewind.
+[[maybe_unused]] static uint32_t g_cursor_lo = 0;
+[[maybe_unused]] static uint32_t g_cursor_hi = 0xFFFFFFFFu;
 
 // Producer-cached drainer head. The head only ADVANCES, so a stale copy is conservative: the room
 // fast path compares against this local word and touches L1 only when the cached room is exhausted
@@ -296,12 +307,27 @@ __attribute__((noinline)) void mark_zone_long(
 // jump on the lane. Worst case is 1-word sticky + the 3-word packet, so the check runs once.
 // The duration is a 64-bit subtract done as sub + borrow (rv32); hi_d != 0 means >= 2^32 cycles.
 inline __attribute__((always_inline)) void mark_zone_close(uint32_t timer_id, uint32_t start_hi, uint32_t start_lo) {
-    ring_ensure_room(SPSC_ATOMIC_ZONE_WORDS + 1);
+    ring_ensure_room(SPSC_ATOMIC_ZONE_WORDS + 1);  // worst case (ATOMIC + sticky); an S zone simply uses less
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
     const uint32_t lo_d = lo - start_lo;
     const uint32_t hi_d = hi - start_hi - (lo < start_lo);
+    // ZONE_S class test, one OR-tree into one branch: the end-to-end cursor delta AND the duration
+    // both fit 16 bits, and neither 64-bit subtract borrowed into its high word. An invalid cursor
+    // (hi = ~0) fails via c_hi_d != 0, no separate validity check. Laid out as the fall-through: on a
+    // dense lane this is the dominant case, and it saves one L1 store (2 words instead of 3).
+    const uint32_t c_lo_d = lo - g_cursor_lo;
+    const uint32_t c_hi_d = hi - g_cursor_hi - (lo < g_cursor_lo);
+    if (__builtin_expect((((c_lo_d | lo_d) >> 16) | c_hi_d | hi_d) == 0, 1)) {
+        ring_write_word(ppfmt::zone_s_w0(timer_id));
+        ring_write_word((c_lo_d << 16) | lo_d);
+        g_cursor_lo = lo;
+        g_cursor_hi = hi;
+        publish_tail_batched(2);
+        return;
+    }
     if (__builtin_expect(hi_d != 0, 0)) {
+        // Long fallback: does NOT touch the cursor (the decoder's pair path doesn't either).
         mark_zone_long(timer_id, start_hi, start_lo, hi, lo);
         return;
     }
@@ -309,6 +335,8 @@ inline __attribute__((always_inline)) void mark_zone_close(uint32_t timer_id, ui
     ring_write_word(ppfmt::zone_atomic_w0(timer_id));
     ring_write_word(lo);
     ring_write_word(lo_d);
+    g_cursor_lo = lo;  // ZONE_ATOMIC re-anchors the cursor (decoder: cursor = sticky_hi<<32 | end_lo)
+    g_cursor_hi = hi;
     publish_tail_batched(SPSC_ATOMIC_ZONE_WORDS + 1);
 }
 
@@ -335,8 +363,10 @@ inline __attribute__((always_inline)) void set_profiler_zone_valid(bool conditio
         publish_tail();
     } else {
         // Idle launch: rewind to the last committed tail; nothing from this launch is published and
-        // the next launch overwrites the stale words.
+        // the next launch overwrites the stale words. The rewound words may have moved our cursor
+        // past anything the decoder will ever see -- invalidate it so the next zone re-anchors.
         wIndex = profiler_control_buffer[TAIL_INDEX];
+        g_cursor_hi = 0xFFFFFFFFu;
     }
 }
 
@@ -362,6 +392,9 @@ __attribute__((noinline)) void init_profiler(
 
     // Fresh STICKY_TIMER on this launch's first marker (guards the idle-launch rewind).
     g_prev_timer_hi = 0xFFFFFFFFu;
+    // Invalidate the lane cursor: the decoder's cursor is wherever the last PUBLISHED zone left it,
+    // which after a rewind is not where ours is -- force the first zone to be an absolute re-anchor.
+    g_cursor_hi = 0xFFFFFFFFu;
 
     // Validators defer publishing until DeviceValidateProfiler resolves the launch.
     if constexpr (PROFILER_VALIDATES_ZONE) {

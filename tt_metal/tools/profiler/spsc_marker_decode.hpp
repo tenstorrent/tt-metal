@@ -78,6 +78,12 @@ static_assert(kSpscMaxFrameWords == 2656 && kSpscMaxFramePages == 166);
 // Decode state for one socket's frame stream. Written only by that socket's decode thread.
 struct SpanDecodeState {
     std::vector<uint32_t> timer_hi;  // per lane: sticky wall-clock high half
+    // Per lane: the end of the last ZONE_S/ZONE_ATOMIC zone -- the base a ZONE_S's 16-bit end delta
+    // counts from. Mirrors the producer's g_cursor exactly: only those two types move it, and the
+    // producer guarantees the first zone after any launch/rewind is an absolute ZONE_ATOMIC, so a
+    // ZONE_S is never decoded against a cursor the producer didn't set (resync is the one exception;
+    // timestamps recover at the next ZONE_ATOMIC, and resyncs are already counted and flagged).
+    std::vector<uint64_t> cursor;
     std::vector<uint32_t> prog;      // per lane: sticky runtime host-id (every RISC emits its own at launch)
     std::vector<uint32_t> head;      // per lane: monotonic words-consumed mirror; head(N) == tail(N-1)
     std::vector<uint8_t> seeded;
@@ -97,6 +103,7 @@ struct SpanDecodeState {
 
     void reset(uint32_t num_cores) {
         timer_hi.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
+        cursor.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
         prog.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
         head.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
         seeded.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
@@ -448,6 +455,7 @@ inline uint32_t spsc_decode_frame(
         lw += run;
         uint32_t th = st.timer_hi[lane];
         uint32_t pg = st.prog[lane];
+        uint64_t cur = st.cursor[lane];
         // ONE DECODE PATH FOR BOTH FRAME LAYOUTS. A raw frame carries whole 512-word rings and is read
         // circularly; a packed frame is already contiguous. That is a difference in ADDRESSING, not in
         // decoding, and keeping two copies of the walk meant every improvement had to be made twice -- the
@@ -526,6 +534,9 @@ inline uint32_t spsc_decode_frame(
                     if (got != 0) {
                         va += got;
                         vac++;
+                        // The block is atomics only (a sticky ends it), so th is constant across it and
+                        // the LAST atomic's absolute end re-anchors the lane cursor.
+                        cur = pp_full_ts(th, p[i + 3u * (got - 1u) + 1u]);
                         i += 3 * got;
                         continue;
                     }
@@ -577,8 +588,20 @@ inline uint32_t spsc_decode_frame(
                     st.anomalies++;
                     break;
                 }
-                emit(lane, t, pp_low27(w0), pp_full_ts(th, p[i + 1]), pg, p[i + 2]);
+                cur = pp_full_ts(th, p[i + 1]);  // absolute end re-anchors the lane cursor
+                emit(lane, t, pp_low27(w0), cur, pg, p[i + 2]);
                 i += 3;
+            } else if (t == PP_ZONE_S) {
+                if (i + 2 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                const uint32_t w1 = p[i + 1];
+                cur += pp_zone_s_delta(w1);  // 64-bit add: crosses the lo-wrap with no sticky
+                // Normalized at this boundary: an S emits as a ZONE_ATOMIC record with its end resolved
+                // off the lane cursor, so nothing downstream knows the wire had size classes.
+                emit(lane, PP_ZONE_ATOMIC, pp_low27(w0), cur, pg, pp_zone_s_dur(w1));
+                i += 2;
             } else if (t == PP_STICKY_TIMER) {
                 th = pp_timer_hi(w0);
                 i += 1;
@@ -606,6 +629,7 @@ inline uint32_t spsc_decode_frame(
         }
         st.timer_hi[lane] = th;
         st.prog[lane] = pg;
+        st.cursor[lane] = cur;
     }
     st.vec_zone_recs += vz;
     st.vec_atomic_recs += va;
