@@ -173,11 +173,14 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
     per-component iterate) to take over.
     """
     probe = probe_model(new_model_id)
-    if not probe.raw_config:
-        raise ScaffoldError(f"could not load config.json for {new_model_id} — set HF_TOKEN for gated repos")
-
+    # Composite first: a composite repo legitimately has no root config.json, so
+    # the guard below would misreport it as a gating/auth failure. Report what is
+    # actually wrong (issue #5 hard-stop) instead.
     if getattr(probe, "is_composite", False):
         raise CompositeScaffoldError(new_model_id, getattr(probe, "submodels", []))
+
+    if not probe.raw_config:
+        raise ScaffoldError(f"could not load config.json for {new_model_id} — set HF_TOKEN for gated repos")
 
     if probe.category not in {"LLM", "VLM"}:
         return _plan_demo_folder_scaffold(new_model_id=new_model_id, probe=probe)
@@ -480,6 +483,7 @@ def _plan_demo_folder_scaffold(*, new_model_id: str, probe: Any) -> ScaffoldPlan
         model_type=model_type,
         pipeline_tag=pipeline_tag,
         architectures=architectures,
+        pipeline_class=getattr(probe, "pipeline_class", None),
         is_encoder_decoder=(probe.raw_config or {}).get("is_encoder_decoder"),
     )
     if backend is None:

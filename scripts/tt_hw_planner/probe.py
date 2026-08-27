@@ -541,6 +541,10 @@ class ModelProbe:
 
     is_composite: bool = False
     submodels: List[str] = field(default_factory=list)
+    # Composite repos have no root model_type. The diffusers recipe
+    # (model_index.json "_class_name", e.g. "Flux2KleinPipeline") is the only
+    # architecture identity they expose; backend routing uses it as a surrogate.
+    pipeline_class: Optional[str] = None
 
 
 def _classify_category(pipeline_tag: Optional[str], tags: List[str], library: Optional[str]) -> str:
@@ -772,6 +776,46 @@ def _maybe_fetch_config(model_id: str) -> Optional[dict]:
             return json.load(f)
     except Exception:
         return None
+
+
+COMPOSITE_INDEX_FILE = "model_index.json"
+ROOT_CONFIG_FILE = "config.json"
+
+
+def fetch_repo_json(model_id: str, filename: str) -> Optional[dict]:
+    """Download and parse one JSON file from a model repo (or read it from a local
+    model dir). Returns ``None`` on any failure -- missing file, no access, bad
+    JSON. Shared by every caller that needs a raw repo-side JSON document."""
+    try:
+        safe_id = _validate_hf_id(model_id)
+    except Exception:
+        return None
+    if _is_local_model_dir(safe_id):
+        path = os.path.join(safe_id, filename)
+        try:
+            with open(path) as f:
+                doc = json.load(f)
+            return doc if isinstance(doc, dict) else None
+        except Exception:
+            return None
+    try:
+        from huggingface_hub import hf_hub_download
+
+        with open(hf_hub_download(safe_id, filename)) as f:
+            doc = json.load(f)
+        return doc if isinstance(doc, dict) else None
+    except Exception:
+        return None
+
+
+def _maybe_fetch_pipeline_class(model_id: str) -> Optional[str]:
+    """Read ``model_index.json["_class_name"]`` -- the pipeline class (e.g.
+    ``Flux2KleinPipeline``). For a composite repo this is the only architecture
+    identity on offer, since there is no root ``model_type``; the backend router
+    uses it as a surrogate so routing stays deterministic instead of falling
+    through to the LLM sibling ranker."""
+    cls = (fetch_repo_json(model_id, COMPOSITE_INDEX_FILE) or {}).get("_class_name")
+    return cls if isinstance(cls, str) and cls else None
 
 
 def _read_model_card_frontmatter(model_dir: str) -> dict:
@@ -1013,6 +1057,8 @@ def probe_model(model_id: str) -> ModelProbe:
     # therefore run BEFORE the config-failure early return, or diffusers-style
     # repos (model_index.json + per-subfolder configs) are never detected.
     probe.is_composite, probe.submodels = _detect_composite(info.siblings, cfg)
+    if probe.is_composite:
+        probe.pipeline_class = _maybe_fetch_pipeline_class(model_id)
     if cfg is None:
         probe.config_status = "failed"
         return probe

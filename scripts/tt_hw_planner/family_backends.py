@@ -363,6 +363,34 @@ def pick_backend(
     return backend
 
 
+def composite_type_candidates(pipeline_class: Optional[str]) -> List[str]:
+    """Ordered ``model_type`` surrogates derived from a diffusers pipeline class.
+
+    Composite repos expose no root ``model_type``, so deterministic routing has
+    nothing to match and degrades to the LLM sibling ranker. Diffusers classes are
+    named ``<Family><Variant>Pipeline`` (``Flux2KleinPipeline``,
+    ``StableDiffusionXLPipeline``), and registry keys are the pipeline directory
+    name (``flux2``, ``sd35``). Yield most-specific-first so a variant-specific
+    backend wins over the family one; every candidate is still required to match a
+    registered key exactly, so a miss falls through to today's behaviour.
+
+    ``Flux2KleinPipeline`` -> ``["flux2klein", "flux2"]``
+    """
+    if not pipeline_class:
+        return []
+    # Split CamelCase into groups, keeping trailing version digits with their word
+    # ("Flux2KleinPipeline" -> ["Flux2", "Klein", "Pipeline"]). No suffix list is
+    # stripped: shortening prefixes already yields the family token, and any
+    # convention word left on the longest candidate simply fails to match.
+    parts = re.findall(r"[A-Z][a-z0-9]*", pipeline_class) or [pipeline_class]
+    out: List[str] = []
+    for n in range(len(parts), 0, -1):
+        cand = _norm_mt("".join(parts[:n]))
+        if cand and cand not in out:
+            out.append(cand)
+    return out
+
+
 def pick_backend_with_quality(
     *,
     category: str,

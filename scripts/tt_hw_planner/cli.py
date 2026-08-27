@@ -1707,6 +1707,7 @@ def _enforce_backend_match_quality_or_abort(
         model_type=model_type,
         pipeline_tag=pipeline_tag,
         architectures=architectures,
+        pipeline_class=getattr(probe, "pipeline_class", None),
         is_encoder_decoder=is_encoder_decoder,
     )
     try:

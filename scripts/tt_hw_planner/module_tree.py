@@ -34,6 +34,7 @@ component list came from.
 
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -534,41 +535,190 @@ def _pkg_from_import_error(exc: BaseException) -> str:
     return pkg.split(".")[0]
 
 
+def _root_cause(exc: BaseException) -> BaseException:
+    """Walk ``__cause__``/``__context__`` to the exception that actually failed.
+
+    Lazy-import wrappers (diffusers, transformers) re-raise the real error inside a
+    generic ``RuntimeError: Failed to import X because ...``, so classifying the
+    OUTER exception reads the wrapper's text and mis-diagnoses the cause."""
+    seen = set()
+    cur = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        nxt = cur.__cause__ or cur.__context__
+        if nxt is None:
+            return cur
+        cur = nxt
+    return exc
+
+
+def _failed_import_target(exc: BaseException) -> str:
+    """Pull the dotted module a lazy-import wrapper was trying to load, from
+    ``Failed to import <dotted.path> because ...``."""
+    m = re.search(r"[Ff]ailed to import ([\w.]+)", str(exc))
+    return m.group(1) if m else ""
+
+
+def _pkg_from_traceback(exc: BaseException) -> str:
+    """Top-level package of the deepest traceback frame that lives inside an
+    installed dependency (site-packages / dist-packages).
+
+    Derived from the traceback rather than matched against a list of known
+    packages, so a new library that breaks tomorrow is diagnosed the same way as
+    one that broke today -- no per-package rules to keep up to date."""
+    import os
+
+    tb = getattr(exc, "__traceback__", None)
+    found = ""
+    while tb is not None:
+        path = (tb.tb_frame.f_code.co_filename or "").replace(os.sep, "/")
+        for marker in ("/site-packages/", "/dist-packages/"):
+            if marker in path:
+                tail = path.split(marker, 1)[1].split("/")
+                if tail and tail[0] and not tail[0].startswith("_"):
+                    found = tail[0].removesuffix(".py")
+                break
+        tb = tb.tb_next
+    return found
+
+
+def _installed_version(pkg: str) -> str:
+    try:
+        import importlib.metadata as _md
+
+        return _md.version(pkg)
+    except Exception:
+        return "?"
+
+
+def _latest_version(pkg: str, timeout: float = 4.0) -> str:
+    """Newest release of ``pkg`` on PyPI, so the fix can name a concrete target
+    instead of a bare ``--upgrade``. Best-effort: any failure (offline, private
+    index, unknown name) returns "" and the caller degrades to ``--upgrade``."""
+    try:
+        import json as _json
+        import urllib.request as _ur
+
+        with _ur.urlopen(f"https://pypi.org/pypi/{pkg}/json", timeout=timeout) as r:
+            return str(_json.load(r)["info"]["version"])
+    except Exception:
+        return ""
+
+
+def _version_floor_from_model_config(model_id: str, pkg: str) -> str:
+    """The version of ``pkg`` that CREATED this model, from its own HF config.
+
+    Every HF config records the writing library's version -- ``transformers_version``
+    in a transformers config, ``_diffusers_version`` in a diffusers one. The key name
+    itself identifies the package (``_diffusers_version`` -> ``diffusers``), so this
+    needs no table of known libraries and works for any library that follows the
+    same convention. That version is a FLOOR: the model cannot predate it.
+
+    Returns a release string ("0.37.0.dev0" -> "0.37.0") or "" when unavailable."""
+    from .probe import COMPOSITE_INDEX_FILE, ROOT_CONFIG_FILE, fetch_repo_json
+
+    for fname in (COMPOSITE_INDEX_FILE, ROOT_CONFIG_FILE):
+        cfg = fetch_repo_json(model_id, fname)
+        if not cfg:
+            continue
+        for key, val in cfg.items():
+            if not isinstance(val, str) or "version" not in key.lower():
+                continue
+            owner = key.lower().strip("_")
+            if owner.endswith("version"):
+                owner = owner[: -len("version")].strip("_")
+            if owner and owner == pkg.lower():
+                return re.sub(r"\.dev\d*$", "", val).strip()
+    return ""
+
+
+def _upgrade_hint(pkg: str, model_id: str = "") -> Tuple[str, str]:
+    """``(version-phrase, pip-command)`` for fixing ``pkg``.
+
+    Prefers the floor recorded in the MODEL's own config (the version that wrote
+    it) over "newest on PyPI", so a model that needs an older release is not sent
+    to the latest one. Degrades to newest-on-PyPI, then to a bare ``--upgrade``."""
+    have = _installed_version(pkg)
+    floor = _version_floor_from_model_config(model_id, pkg) if model_id else ""
+    if floor:
+        return (
+            f"installed {have}; this model was created with {pkg} {floor}, so it needs at least that",
+            f'-m pip install "{pkg}>={floor}"',
+        )
+    latest = _latest_version(pkg)
+    if latest and latest != have:
+        return (
+            f"installed {have}, newest available is {latest}",
+            f'-m pip install --upgrade "{pkg}=={latest}"',
+        )
+    if latest and latest == have:
+        return (f"installed {have}, which is already the newest on PyPI", f"-m pip install --upgrade {pkg}")
+    return (f"installed {have}", f"-m pip install --upgrade {pkg}")
+
+
 def _reference_loader_next_steps(model_id: str, exc: BaseException, loader_file) -> str:
+    import importlib.util as _ilu
     import sys as _sys
 
     err = f"{type(exc).__name__}: {exc}"
-    low = str(exc).lower()
     py = _sys.executable
 
-    if isinstance(exc, ModuleNotFoundError) or "no module named" in low:
-        pkg = _pkg_from_import_error(exc) or "<the-model-package>"
-        problem = (
-            f"the model's code needs the Python package '{pkg}', which is not installed in the tool's environment."
-        )
-        solution = f"{py} -m pip install {pkg}"
-    elif ("flash_attn" in low) or ("attn_implementation" in low) or ("attention_functions" in low):
-        cur = "?"
+    root = _root_cause(exc)
+    target = _failed_import_target(exc) or _failed_import_target(root)
+    if root is not exc:
+        err = f"{err}\n          root cause: {type(root).__name__}: {root}"
+
+    # A submodule that does not exist inside an INSTALLED package is a version
+    # problem, not a missing dependency -- report the installed version and say
+    # upgrade, rather than telling the user to install what they already have.
+    top = target.split(".")[0] if target else ""
+    if top and "." in target and _ilu.find_spec(top) is not None:
+        have_sub = False
         try:
-            import transformers as _tf
-
-            cur = _tf.__version__
+            have_sub = _ilu.find_spec(target) is not None
         except Exception:
-            pass
-        problem = (
-            f"the model's package is incompatible with transformers {cur} in this env (it needs transformers < 5)."
-        )
-        solution = f'{py} -m pip install "transformers<5"'
-    else:
-        problem = f"the reference model could not be built ({err}) — usually a missing package or a dependency version mismatch."
-        solution = f"{py} -m pip install <the-model-package>   # package name is in the error above"
+            have_sub = False
+        if not have_sub:
+            phrase, cmd = _upgrade_hint(top, model_id)
+            problem = f"'{top}' is installed but does not provide '{target}' -- {phrase}."
+            return _next_steps_block(model_id, problem, err, f"{py} {cmd}")
 
+    missing = _pkg_from_import_error(root)
+    if missing and _ilu.find_spec(missing) is None:
+        latest = _latest_version(missing)
+        ver = f" (newest on PyPI: {latest})" if latest else ""
+        problem = (
+            f"the model's code needs the Python package '{missing}', which is not "
+            f"installed in this environment{ver}."
+        )
+        solution = f"{py} -m pip install {missing}" + (f"=={latest}" if latest else "")
+    else:
+        # No hardcoded package rules: ask the traceback which installed package
+        # actually raised, and report THAT with its version. An error thrown from
+        # inside an installed dependency is a version incompatibility, whatever
+        # the package happens to be.
+        blame = _pkg_from_traceback(root)
+        if blame:
+            phrase, cmd = _upgrade_hint(blame, model_id)
+            problem = (
+                f"the failure was raised inside installed package '{blame}' ({phrase}) -- "
+                f"most likely a version incompatibility between '{blame}' and this model's code."
+            )
+            solution = f"{py} {cmd}   # or pin the version this model expects"
+        else:
+            problem = f"the reference model could not be built ({err}) -- usually a missing package or a dependency version mismatch."
+            solution = f"{py} -m pip install <the-model-package>   # package name is in the error above"
+
+    return _next_steps_block(model_id, problem, err, solution)
+
+
+def _next_steps_block(model_id: str, problem: str, err: str, solution: str) -> str:
     return "\n".join(
         [
             f"Could not build a reference model for '{model_id}' → discovery found 0 components, nothing to bring up.",
             f"PROBLEM:  {problem}",
             f"CAUSE:    {err}",
-            "SOLUTION — run this exact command, then re-run the bring-up, and it will work:",
+            "SUGGESTED FIX — try this, then re-run the bring-up:",
             f"    {solution}",
             "(If that package/version would conflict with other tt-metal models in this env, run the",
             " same command inside a dedicated venv and launch the bring-up from there instead.)",

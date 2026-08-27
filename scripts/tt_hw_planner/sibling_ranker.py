@@ -343,6 +343,7 @@ def resolve_backend_with_quality(
     pipeline_tag: Optional[str] = None,
     architectures: Optional[List[str]] = None,
     notes: str = "",
+    pipeline_class: Optional[str] = None,
     use_llm: Optional[bool] = None,
     components: Optional[List[dict]] = None,
     is_encoder_decoder: Optional[bool] = None,
@@ -357,7 +358,7 @@ def resolve_backend_with_quality(
     LLM is unavailable / unconfident, so behaviour never hard-regresses. Gated by
     ``TT_HW_PLANNER_LLM_ROUTE`` (default on; set ``=0`` for pure-deterministic).
     Result is cached per model so the LLM fires at most once per run."""
-    from .family_backends import pick_backend_with_quality
+    from .family_backends import _norm_mt, pick_backend_with_quality
 
     if use_llm is None:
         use_llm = os.environ.get("TT_HW_PLANNER_LLM_ROUTE", "1") != "0"
@@ -365,6 +366,26 @@ def resolve_backend_with_quality(
     det_backend, det_quality = pick_backend_with_quality(
         category=category, model_type=model_type, pipeline_tag=pipeline_tag
     )
+    if det_quality != "exact" and pipeline_class and not _norm_mt(model_type):
+        # Composite repo: no root model_type, so the deterministic pass had
+        # nothing to match on. The diffusers pipeline class is the architecture
+        # identity -- try its surrogates (most specific first) and take only a
+        # genuine exact key hit, so routing stays deterministic instead of
+        # falling through to the LLM ranker (which picked tt_dit/flux2 for FLUX
+        # by luck, with SD1.4 top of the deterministic candidate list).
+        from .family_backends import all_backends, composite_type_candidates
+
+        for cand in composite_type_candidates(pipeline_class):
+            cb, cq = pick_backend_with_quality(category=category, model_type=cand, pipeline_tag=pipeline_tag)
+            if cq == "exact":
+                return cb, "exact"
+            # No exact key, but a registry key may be a more-qualified spelling of
+            # the same family ("stablediffusionxl" -> "stablediffusionxlbase").
+            # Accept only an UNAMBIGUOUS prefix hit, so a truncated/generic
+            # candidate can never silently pick one of several siblings.
+            pref = [b for b in all_backends() if any(_norm_mt(k).startswith(cand) for k in b.model_type_keys)]
+            if len(pref) == 1:
+                return pref[0], "exact"
     if not use_llm or det_quality == "exact":
         return det_backend, det_quality
 
