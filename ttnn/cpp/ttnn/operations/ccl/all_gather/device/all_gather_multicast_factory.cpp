@@ -324,7 +324,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
                                     tt::tt_fabric::is_ring_or_torus(operation_attributes.axis_topology[ax]));
         }
         const bool long_stripe = output_chunks_per_stripe >= 32;
-        packets_per_cb_entry = (!any_ring && long_stripe) ? 1 : 4;  // unicast wants its own value here
+        // ...and only while the link count is low. With 4 links the per-hop send is no longer the
+        // serialising step, so the amortisation a four-packet entry buys comes back (+5.8% measured at
+        // 4 links, against -2% at 2 links and a tie at 1). Measured at all three link counts.
+        const bool few_links = min_num_links <= 2;
+        packets_per_cb_entry = (!any_ring && long_stripe && few_links) ? 1 : 4;  // unicast differs here
         // Past ~8 KB a run gains little packet fill but keeps the walk in one DRAM bank longer. Only chunks
         // big enough to still span a few runs are worth capping; below that the packet's own limit wins.
         run_cap_bytes = output_chunk_size >= 1024 ? 8192 : 0;

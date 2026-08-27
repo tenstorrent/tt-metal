@@ -266,17 +266,28 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 break;
             }
             case tt::ARCH::BLACKHOLE: {
-                // Factory-vs-factory sweep at 8 devices x 2 links, both factories tuned, tile and
-                // row-major. How long unicast's store-and-forward relay takes to pay for itself is what
-                // sets the boundary, so a ring -- which halves the hop count by pulling from both sides --
-                // switches about four times earlier than a line.
+                // Factory-vs-factory sweep with both factories tuned, tile and row-major, on 8
+                // devices x 2 links and on 4 devices x 4 links.
                 //
-                // Volume alone decides it. Page size was swept 64 B..8 KB and stripe length 2..32 chunks,
-                // both at fixed volume, and neither flipped the winner anywhere except within ~1.5% of the
-                // line boundary itself. The previous rule's `page > 1024` term forced unicast for every
-                // tile shape, which cost up to 9% on a small ring; its 512 KB line threshold cost up to
-                // 54%, because multicast still wins by a wide margin there.
-                use_unicast = per_link_bytes >= (is_ring ? 640u * 1024u : 2560u * 1024u);
+                // What multicast is buying is the hops unicast's store-and-forward relay has to pay:
+                // N/2 on a ring, N-1 on a line. So the crossover moves sharply with device count. At 8
+                // devices multicast won a wide band at the small end; at 4 the ring has only 2 hops and
+                // unicast wins outright at every size measured (+13 to +27%), while the line's band
+                // shrinks from 2.5 MB/link to under 0.4 MB/link.
+                //
+                // Page size does not move it (swept 64 B..8 KB at fixed volume), nor does stripe length
+                // (2..32 chunks) beyond ~1.5% right at the line boundary.
+                //
+                // Below is linear in device count through the two machines measured. That is a two-point
+                // fit, not a law: re-measure before trusting it beyond 8 devices. Both thresholds floor
+                // at zero, which is also the right answer for the 2- and 3-device cases they extrapolate
+                // to -- one or two hops of relay is never worth a multicast.
+                const int64_t dev = static_cast<int64_t>(args.num_devices);
+                const int64_t threshold_kb = std::max<int64_t>(
+                    0,
+                    is_ring ? 320 * (dev / 2 - 2)   // 4 dev -> 0,      8 dev -> 640 KB
+                            : 384 + 544 * (dev - 4));  // 4 dev -> 384 KB, 8 dev -> 2560 KB
+                use_unicast = per_link_bytes >= static_cast<uint64_t>(threshold_kb) * 1024u;
                 break;
             }
             default: break;  // uncalibrated arch
