@@ -243,7 +243,7 @@ jobs:
 
       - name: Publish to PyPI (Trusted Publishing)
         if: ${{ !inputs.dry-run }}
-        uses: pypa/gh-action-pypi-publish@ed0c539abdc6b55ad89f3ea7b8e96860a5ddef80 # v1.13.0
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
 
   # A separate job, not another file in the job above's dist/, because PyPI trusted
   # publishing issues a token scoped to a single project: the `pypi` environment's
@@ -282,7 +282,7 @@ jobs:
 
       - name: Publish to PyPI (Trusted Publishing)
         if: ${{ !inputs.dry-run }}
-        uses: pypa/gh-action-pypi-publish@ed0c539abdc6b55ad89f3ea7b8e96860a5ddef80 # v1.13.0
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
 
   create-changelog:
     needs: [create-tag, release-precheck]
