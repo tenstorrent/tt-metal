@@ -26,6 +26,7 @@ wall-clock time: cores drift apart in absolute cycles but stay in logical lockst
 Nth ``ITERATION`` on every core is the same logical iteration.
 """
 
+import bisect
 import json
 import math
 from collections import defaultdict
@@ -163,6 +164,11 @@ def slice_records_by_iteration(
     stats = SliceStats(total_records=len(records), unclosed_windows=unclosed, streams=len(windows))
     slices: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
 
+    # Windows on a stream are sorted and non-overlapping, so the owning window can be found
+    # by binary search. A linear scan would be O(records x iterations), and num_iterations
+    # runs to 100 in the test matrix.
+    starts = {key: [w.start_ts for w in ws] for key, ws in windows.items()}
+
     for rec in records:
         key = stream_key(rec)
         stream_windows = windows.get(key)
@@ -171,16 +177,17 @@ def slice_records_by_iteration(
             continue
 
         ts = rec["timestamp"]
-        for window in stream_windows:
-            if window.truncated and not include_unclosed:
-                continue
-            if window.contains(ts):
-                slices[window.index].append(rec)
-                stats.assigned_records += 1
-                break
-        else:
+        idx = bisect.bisect_right(starts[key], ts) - 1
+        window = stream_windows[idx] if idx >= 0 else None
+
+        if window is None or not window.contains(ts):
             # Falls between iterations (loop epilogue/prologue) or outside the loop entirely.
             stats.unassigned_records += 1
+        elif window.truncated and not include_unclosed:
+            stats.unassigned_records += 1
+        else:
+            slices[window.index].append(rec)
+            stats.assigned_records += 1
 
     for idx, recs in slices.items():
         stats.per_iteration_events[idx] = sum(1 for r in recs if not is_zone_marker(r))
@@ -360,7 +367,9 @@ def analyze_noc_per_iteration(
         return {}
 
     slice_dir = output_dir / "iteration_slices"
-    written = write_iteration_slices(slices, slice_dir, op_name=f"{zone_name.lower()}", program_runtime_id=program_runtime_id)
+    written = write_iteration_slices(
+        slices, slice_dir, op_name=f"{zone_name.lower()}", program_runtime_id=program_runtime_id
+    )
 
     results: Dict[Tuple[int, int], Dict[str, Optional[float]]] = {}
     for iteration, path in sorted(written.items()):
@@ -372,9 +381,7 @@ def analyze_noc_per_iteration(
         if result is None:
             continue
         # Only keep devices that actually contributed NoC events to this slice.
-        devices_present = {
-            r.get("src_device_id") for r in slices[iteration] if not is_zone_marker(r)
-        } - {None}
+        devices_present = {r.get("src_device_id") for r in slices[iteration] if not is_zone_marker(r)} - {None}
         for device_id, metrics in summarize_npe_result(result, devices_present).items():
             results[(device_id, iteration)] = metrics
 
