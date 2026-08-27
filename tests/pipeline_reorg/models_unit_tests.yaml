@@ -1541,7 +1541,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 15
+      timeout: 23
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -1702,6 +1702,68 @@
   skus:
     wh_llmbox:
       timeout: 4
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers RMSNorm 2D module unit tests
+  cmd: |
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+    pytest models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations-min=3.0 \
+      --cov=models.common.modules.rmsnorm.rmsnorm_2d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_galaxy_perf:
+      timeout: 5
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers MLP 2D module unit tests
+  cmd: |
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+    pytest models/common/tests/modules/mlp/test_mlp_2d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations-min=3.0 \
+      --cov=models.common.modules.mlp.mlp_2d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_galaxy_perf:
+      timeout: 5
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers auto-compose 2D unit tests
+  cmd: |
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+    pytest models/common/tests/test_auto_compose.py \
+      --tb=short \
+      --durations-min=3.0 \
+      --cov=models.common.auto_compose \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_galaxy_perf:
+      timeout: 5
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models

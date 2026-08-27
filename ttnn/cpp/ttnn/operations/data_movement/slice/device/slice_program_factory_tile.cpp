@@ -195,4 +195,89 @@ void SliceTileProgramFactory::override_runtime_arguments(
     patch_slice_program_addresses(program, SliceTileProgramFactory{}, args, tensor_args, output);
 }
 
+std::vector<tt::tt_metal::DynamicRuntimeArg> slice_tile_dynamic_args(
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    const Tensor& output,
+    uint32_t start_offset,
+    uint32_t reader_kernel_idx,
+    uint32_t writer_kernel_idx) {
+    // Must reproduce create_descriptor's work split exactly; divergence leaves stale scalars in these slots.
+    const auto& input = tensor_args.input;
+    tt::tt_metal::IDevice* device = input.device();
+    const uint32_t num_unpadded_tiles = output.physical_volume() / TILE_HW;
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        args.sub_core_grids.has_value()
+            ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
+            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
+
+    const auto& input_shape = input.padded_shape();
+    const auto& output_shape = output.padded_shape();
+    const std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
+
+    const uint32_t num_unpadded_Xt = output_shape[-1] / TILE_WIDTH;
+    const uint32_t num_total_Xt = input_shape[-1] / TILE_WIDTH;
+    const uint32_t num_unpadded_Yt = output_shape[-2] / TILE_HEIGHT;
+    const uint32_t num_total_Yt = input_shape[-2] / TILE_HEIGHT;
+
+    std::vector<uint32_t> accumulated_total_per_dim(num_dims);
+    accumulated_total_per_dim[0] = num_total_Xt;
+    accumulated_total_per_dim[1] = num_total_Yt * num_total_Xt;
+    std::vector<uint32_t> num_unpadded_tiles_per_dim(num_dims);
+    num_unpadded_tiles_per_dim[0] = num_unpadded_Xt;
+    num_unpadded_tiles_per_dim[1] = num_unpadded_Yt;
+    for (int32_t i = 2; i < static_cast<int32_t>(num_dims); ++i) {
+        const uint32_t num_unpadded_dim = output_shape[-(i + 1)];
+        const uint32_t num_total_dim = input_shape[-(i + 1)];
+        num_unpadded_tiles_per_dim[i] = num_unpadded_dim;
+        accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
+    }
+
+    const auto cores = corerange_to_cores(all_cores);
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(cores.size() * (2 + num_dims + 2));
+
+    uint32_t num_tiles_written = 0;
+    for (const auto& core : cores) {
+        uint32_t num_tiles_per_core = 0;
+        bool active = true;
+        if (core_group_1.contains(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_2;
+        } else {
+            active = false;
+        }
+
+        uint32_t id0 = 0, start_id = 0;
+        std::vector<uint32_t> id_per_dim(num_dims, 0);
+        if (active) {
+            id0 = num_tiles_written % num_unpadded_tiles_per_dim[0];
+            uint32_t unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
+            start_id = id0 + start_offset;
+            for (uint32_t j = 1; j < num_dims; ++j) {
+                id_per_dim[j] = unpadded_written % num_unpadded_tiles_per_dim[j];
+                unpadded_written = unpadded_written / num_unpadded_tiles_per_dim[j];
+                start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
+            }
+        }
+
+        dynamic_args.push_back({reader_kernel_idx, core, 0, start_id, false});
+        dynamic_args.push_back({reader_kernel_idx, core, 1, num_tiles_per_core, false});
+        dynamic_args.push_back({reader_kernel_idx, core, 2, id0, false});
+        for (uint32_t j = 1; j < num_dims; ++j) {
+            dynamic_args.push_back({reader_kernel_idx, core, 2 + j, id_per_dim[j], false});
+        }
+        // Writer slot 0 (dst buffer) is patched by patch_slot0; re-emit only slots 1 and 2.
+        dynamic_args.push_back({writer_kernel_idx, core, 1, num_tiles_per_core, false});
+        dynamic_args.push_back({writer_kernel_idx, core, 2, num_tiles_written, false});
+
+        if (active) {
+            num_tiles_written += num_tiles_per_core;
+        }
+    }
+    return dynamic_args;
+}
+
 }  // namespace ttnn::prim
