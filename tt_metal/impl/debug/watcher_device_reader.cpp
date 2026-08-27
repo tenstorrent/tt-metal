@@ -710,11 +710,12 @@ void WatcherDeviceReader::Core::Dump() const {
 void WatcherDeviceReader::Core::DumpL1Status() const {
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    const auto l1_base = reader_.env.get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    const auto& hal = reader_.env.get_hal();
+    const auto l1_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
     data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, l1_base, sizeof(uint32_t));
     TT_ASSERT(programmable_core_type_ == HalProgrammableCoreType::TENSIX);
-    uint32_t core_type_idx = reader_.env.get_hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    auto fw_launch_value = reader_.env.get_hal().get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr_value;
+    uint32_t core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    auto fw_launch_value = hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr_value;
     if (data[0] != fw_launch_value) {
         LogRunningKernels();
         TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", virtual_coord_.str(), data[0]);

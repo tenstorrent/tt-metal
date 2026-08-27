@@ -12,7 +12,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include "context/context_types.hpp"
 #include "core_coord.hpp"
 #include "debug_helpers.hpp"
 #include "llrt.hpp"

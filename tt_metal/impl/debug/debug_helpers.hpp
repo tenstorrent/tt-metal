@@ -18,10 +18,7 @@
 #include <fmt/format.h>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "context/metal_env_accessor.hpp"
 #include "llrt/core_descriptor.hpp"
-#include "hostdevcommon/dprint_common.h"
-#include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "llrt.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
