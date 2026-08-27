@@ -28,7 +28,9 @@ What the number excludes, verified on an 8x4 galaxy (warm caches, 58 programs x 
 
 Recalibrating one generation: set its ``expected_ns`` to ``None`` and the test measures and logs
 without gating, printing the value to set it back to. Do that on any box whose baseline you need to
-re-cut. Both generations run in one job (``kimi_moe_perf``); select one with ``-k k2_6`` / ``-k k3``.
+re-cut. One shared codepath, one job per generation: ``kimi_moe_perf`` runs ``-k k2_6`` and
+``kimi_k3_moe_perf`` runs ``-k k3``, so a regression in one generation cannot mask or block the
+other, and each carries its own timeout.
 """
 
 import os
