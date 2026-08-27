@@ -79,6 +79,15 @@ def test_decode_plan_covers_exactly_the_qualified_collectives(model):
         ("all_gather", 1, (1, 1, 32, geometry.decode_reduce_scatter_width), 32),
         ("all_reduce", 0, (1, 1, 32, geometry.local_dim), 32),
         ("all_gather", 1, (1, 1, 32, 32), 32),
+        # The decode LM head's column all-reduce. Missing from this set until now,
+        # which is why the "exactly" in this test's name was not being enforced:
+        # attempt 2 added the collective to the decode plan (it needs its own keyed
+        # persistent buffer, sized for the logits rather than the residual stream)
+        # and this expectation was not extended with it.
+        #
+        # The key carries `local_padded_vocab_size`, the width TTNN reports for the
+        # logits - 16128 for Llama, 19200 for Qwen, both ring-exact since D-B19.
+        ("all_reduce", 1, (1, 1, 32, geometry.local_padded_vocab_size), 32),
     }
 
 

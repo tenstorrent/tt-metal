@@ -288,8 +288,33 @@ class RecordingModel:
 
 
 def patch_compose(monkeypatch: Any, rows_factory) -> None:
-    """Fake ``to_torch_auto_compose`` so the runner's readback is inspectable."""
+    """Fake the runner's logits composition so its readback is inspectable.
 
+    Patches `compose_galaxy_logits`, not `to_torch_auto_compose`.
+    `GalaxyDirectRunner._compose_rows` stopped using auto-composition because it
+    composed the logits along the wrong mesh axis and then narrowed without
+    raising (D-B23 in `tttv2_milestone_b_evidence/llama/REPORT.md`), and the
+    replacement builds a real `ttnn.ConcatMesh2dToTensor`, which a `MagicMock` mesh
+    cannot satisfy:
+
+        TypeError: create_mesh_composer(): incompatible function arguments
+        Invoked with types: unittest.mock.MagicMock, MeshComposerConfig
+
+    The kwargs are swallowed so every existing caller's one-argument factory keeps
+    working unchanged.
+    """
+
+    monkeypatch.setattr(
+        direct_runner_module,
+        "compose_galaxy_logits",
+        lambda tensor, **_: rows_factory(tensor),
+    )
+    # The runner has *two* readback paths and this helper fakes both. The logits go
+    # through `compose_galaxy_logits`; the device-sampled token ids still go through
+    # `to_torch_auto_compose`, which is correct for them - `Sampling2D`'s output
+    # placement is set by a mapper, not produced by a matmul, so its declared
+    # topology is trustworthy. Patching only the first left the sampling tests
+    # reaching a real `tensor_topology()` on a `SimpleNamespace`.
     monkeypatch.setattr(direct_runner_module, "to_torch_auto_compose", rows_factory)
 
 

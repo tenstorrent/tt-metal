@@ -72,11 +72,19 @@ def test_geometry_partitions_the_mesh_consistently(model):
 
 
 def test_geometry_reports_galaxy_aligned_vocabularies():
-    assert galaxy_padded_vocab_size(128256) == 128256
-    assert galaxy_padded_vocab_size(151936) == 152064
-    assert _geometry(LLAMA).padded_vocab_size == 128256
-    assert _geometry(QWEN).padded_vocab_size == 152064
-    assert _geometry(QWEN).local_padded_vocab_size == 152064 // 8
+    # Ring-exact, not minimal: see `galaxy_padded_vocab_size` and D-B19. A width
+    # that is only tile-aligned leaves the LM head's column all-reduce waiting on a
+    # shard that is never full, forever and without an abort.
+    assert galaxy_padded_vocab_size(128256) == 129024
+    assert galaxy_padded_vocab_size(151936) == 153600
+    assert _geometry(LLAMA).padded_vocab_size == 129024
+    assert _geometry(QWEN).padded_vocab_size == 153600
+    assert _geometry(QWEN).local_padded_vocab_size == 153600 // 8
+    # Ring-exact for both: the per-device width is a whole number of 24-core ring
+    # rows, which is what makes `lm_head_reduce_core_count`'s divisor search exact
+    # and what stops `all_reduce_async` waiting on a shard that is never full.
+    for vocab in (128256, 151936):
+        assert (galaxy_padded_vocab_size(vocab) // 8) % (24 * 32) == 0
 
 
 @pytest.mark.parametrize(

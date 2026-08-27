@@ -205,26 +205,56 @@ def test_forced_argmax_and_zero_temperature_agree(vocab_size, padded_vocab_size)
 # ---------------------------------------------------------------------------
 
 
-def test_llama_has_no_vocabulary_padding_at_all():
-    """The step-7 brief assumes Llama pads. On this tree it does not.
+def test_llama_now_pads_and_therefore_masks_like_qwen():
+    """This test used to assert that Llama pads by *nothing*. It now pads by 768.
 
-    128256 = 501 * 256, and the Galaxy alignment is ``8 vocab shards * 32``.
-    ``padded_vocab_size == vocab_size``, ``build_invalid_vocab_mask`` returns
-    ``None``, and ``Sampling2D`` builds no mask buffer. The padded-vocabulary
-    gate is therefore *vacuous* for Llama - there is nothing to mask and nothing
-    that can be sampled. Recorded so nobody reads a Llama pass as evidence that
-    masking works.
+    The step-7 brief assumed Llama pads; the tree it was written against did not,
+    because 128256 = 501 * 256 is already a multiple of the Galaxy alignment
+    (8 vocabulary shards x 32), so `padded_vocab_size == vocab_size`,
+    `build_invalid_vocab_mask` returned None, and the padded-vocabulary gate was
+    *vacuous* for Llama. That was recorded here so nobody would read a Llama pass
+    as evidence that masking works.
+
+    **It is no longer vacuous, and the reason is a hardware constraint, not a
+    preference.** `all_reduce_async`'s reduction kernel waits for a full shard on
+    every output core, so the decode LM head's reduced logits must be an exact
+    multiple of `cores * shard_width`. 16032 columns per device is 501 tiles, and
+    501 has no divisor between 4 and 50, so *no* usable core count divides it: the
+    staging necessarily became 42 x 12 = 504 and the 42nd core waited forever, with
+    no abort and no traceback. See D-B19 in
+    `tttv2_milestone_b_evidence/llama/REPORT.md`.
+
+    So `galaxy_padded_vocab_size` pads to a ring-exact width, Llama gains 768
+    masked entries, and the masking path that only Qwen used to exercise is now
+    exercised by both models - which is strictly better for step 7 than the
+    situation this test was written to warn about.
     """
 
-    assert galaxy_padded_vocab_size(LLAMA_VOCAB_SIZE) == LLAMA_VOCAB_SIZE
-    assert build_invalid_vocab_mask(LLAMA_VOCAB_SIZE, LLAMA_VOCAB_SIZE, GALAXY_PHYSICAL_BATCH) is None
-    assert _sampler(LLAMA_VOCAB_SIZE).config.invalid_vocab_mask is None
+    padded = galaxy_padded_vocab_size(LLAMA_VOCAB_SIZE)
+    assert padded == 129024
+    assert padded - LLAMA_VOCAB_SIZE == 768
+    # Ring-exact: a whole number of 24-core ring rows per device.
+    assert (padded // 8) % (24 * 32) == 0
+
+    mask = _sampler(LLAMA_VOCAB_SIZE).config.invalid_vocab_mask.source
+    assert mask.shape == (1, 1, GALAXY_PHYSICAL_BATCH, padded)
+    assert torch.all(mask[..., :LLAMA_VOCAB_SIZE] == 0)
+    assert torch.all(mask[..., LLAMA_VOCAB_SIZE:] == torch.finfo(torch.bfloat16).min)
+    assert build_invalid_vocab_mask(LLAMA_VOCAB_SIZE, padded, GALAXY_PHYSICAL_BATCH) is not None
 
 
-def test_qwen_pads_by_exactly_one_hundred_and_twenty_eight_masked_entries():
+def test_qwen_pads_to_the_ring_exact_width_and_masks_the_remainder():
+    """1664 masked entries, not 128: the ring-exact width. See D-B19.
+
+    152064 - the minimal Galaxy-aligned width, and what this test used to assert -
+    is 594 tiles per device, which no usable core count divides. 153600 is 600,
+    which 50 cores divide exactly at 12 tiles each.
+    """
+
     padded = galaxy_padded_vocab_size(QWEN_VOCAB_SIZE)
-    assert padded == 152064
-    assert padded - QWEN_VOCAB_SIZE == 128
+    assert padded == 153600
+    assert padded - QWEN_VOCAB_SIZE == 1664
+    assert (padded // 8) % (24 * 32) == 0
 
     mask = _sampler(QWEN_VOCAB_SIZE).config.invalid_vocab_mask.source
     assert mask.shape == (1, 1, GALAXY_PHYSICAL_BATCH, padded)
