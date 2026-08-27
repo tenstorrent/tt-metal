@@ -38,6 +38,7 @@
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -182,6 +183,12 @@ void py_module_types(nb::module_& mod) {
     // ttnn, so it is exported here rather than left unreachable. (The legacy path spells the
     // same choice as ComputeConfigDescriptor's math_approx_mode bool.)
     export_enum<tt::tt_metal::Precision>(mod, "Precision");
+    // Also unbound elsewhere in ttnn, and it MATTERS: KernelSpec defaults every kernel to O2,
+    // where the legacy ComputeConfig defaulted compute to O3 (kernel_types.hpp:132). A compute
+    // kernel built at O2 is slower, and for an LLK-heavy one it can fail to link outright --
+    // constant propagation no longer reaches the addrmod immediates and LTO reports
+    // "impossible constraint in 'asm'".
+    export_enum<tt::tt_metal::KernelBuildOptLevel>(mod, "KernelBuildOptLevel");
 
     // ------------------------------------------------------------- KernelSpec
     auto kernel_spec = nb::class_<exp::KernelSpec>(mod, "KernelSpec", R"pbdoc(
@@ -204,7 +211,8 @@ void py_module_types(nb::module_& mod) {
     nb::class_<exp::KernelSpec::CompilerOptions>(kernel_spec, "CompilerOptions")
         .def(nb::init<>())
         .def_rw("include_paths", &exp::KernelSpec::CompilerOptions::include_paths)
-        .def_rw("defines", &exp::KernelSpec::CompilerOptions::defines);
+        .def_rw("defines", &exp::KernelSpec::CompilerOptions::defines)
+        .def_rw("opt_level", &exp::KernelSpec::CompilerOptions::opt_level);
 
     nb::class_<exp::DFBBinding>(kernel_spec, "DFBBinding", R"pbdoc(
         Declares that this kernel is the producer or the consumer of a dataflow buffer.
