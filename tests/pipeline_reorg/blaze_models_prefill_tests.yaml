@@ -362,7 +362,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 22
+      timeout: 12
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
@@ -379,7 +379,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 15
+      timeout: 10
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
