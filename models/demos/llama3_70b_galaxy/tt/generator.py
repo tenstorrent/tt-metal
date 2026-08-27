@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import os
 from collections import defaultdict
 from dataclasses import fields, replace
@@ -72,6 +73,23 @@ def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
     Returns powers of 2 from 128 up to max_seq_len (inclusive).
     """
     return [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
+
+
+def _corruptible_allocation_scope(mesh_device):
+    """Trace-allocation-tracker scope, or a no-op where ttnn does not provide one.
+
+    ``ttnn.corruptible_allocation_scope`` arrived with the trace allocation safety
+    tracker (#50156), which is not in every ttnn this model runs against -- notably
+    not in the release branch. The scope is purely diagnostic: it is a no-op unless
+    TT_METAL_TRACE_ALLOC_TRACKING=1, and it only classifies allocations for the
+    tracker's report. Falling back to a null context therefore changes nothing about
+    what the model computes; it only means the tracker, if it existed, would not get
+    the hint. Mirrors the getattr guard _mark_trace_io_corruptible already uses.
+    """
+    scope = getattr(ttnn, "corruptible_allocation_scope", None)
+    if scope is None:
+        return contextlib.nullcontext()
+    return scope(mesh_device)
 
 
 def _mark_trace_io_corruptible(tensors):
@@ -1232,7 +1250,7 @@ class Generator(WarmupForwardMixin):
         # Reordering warmup cannot avoid this -- capturing trace N always happens while
         # traces 1..N-1 exist -- so scope the capture window instead, which is what
         # corruptible_allocation_scope is for. No-op unless TT_METAL_TRACE_ALLOC_TRACKING=1.
-        with ttnn.corruptible_allocation_scope(self.mesh_device):
+        with _corruptible_allocation_scope(self.mesh_device):
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
             transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
             (
@@ -1562,7 +1580,7 @@ class Generator(WarmupForwardMixin):
         # Same reasoning as the prefill capture: everything allocated inside the capture window
         # belongs to the trace being recorded and must stay allocated for replay, so scope it
         # rather than let the trace-allocation tracker report it as a survivor.
-        with ttnn.corruptible_allocation_scope(self.mesh_device):
+        with _corruptible_allocation_scope(self.mesh_device):
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
             tt_out_tok = self.model.ttnn_decode_forward(
                 tokens_tt,
