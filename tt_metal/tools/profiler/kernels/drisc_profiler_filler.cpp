@@ -48,7 +48,13 @@ void kernel_main() {
     // Reads take the NoC the writes do not; NOC_INDEX (the kernel's configured NoC) carries egress.
     constexpr uint8_t kReadNoc = NOC_INDEX == 0 ? 1 : 0;
     // Two staging generations: one fills while the other drains.
-    constexpr uint32_t kGenSlots = kNStage / 2;
+    // THREE staging generations of smaller batches, not two of larger: same seven-slot L1 footprint,
+    // but the staging-reuse write barrier trails the pipeline by TWO batches of gather flight instead of
+    // one, so a slow PCIe-tile acceptance has twice the slack before it stretches the sweep. Measured
+    // motivation: with egress ablated entirely the knee floor is ~8 against 13 coupled, and the write
+    // barrier's 0.2-2.4 us per-filler variance is the coupling.
+    constexpr uint32_t kNGens = 3;
+    constexpr uint32_t kGenSlots = (kNStage - 1) / kNGens;
     // The static VC this filler's PCIe pushes ride (0 or 1, the two unicast request VCs). Spread across
     // the fillers by the host: per-hop NoC arbitration is per-VC, so six pushers on one VC gave the far
     // cores a geometrically starved share of the PCIe tile while near ones stayed fast.
@@ -124,14 +130,14 @@ void kernel_main() {
     // own self frame still ships the raw span layout -- its dead bytes stage no reads and ship rarely.
     static_assert(kShipMinPct != 0, "CV-first sweeps exist to feed the per-core ship decision");
     static_assert(
-        kSelfZones != 0 || 2u * kGenSlots < kNStage,
+        kSelfZones != 0 || kNGens * kGenSlots < kNStage,
         "CV staging needs a slot past the 2-generation pipeline (kNStage must be odd when self-zones are off)");
     // The control snapshots land in the ring-1 area of the slot past the pipeline. With self-zones ON that
     // slot holds the self FRAME, and this placement is still safe: only the self frame's ring 0 is ever
     // live, so its ring 1..4 storage (8 KiB) carries no markers -- the raw self frame ships these bytes,
     // but the host walks a lane only between its head and tail, so they are never decoded. That shared
     // dead space is what lets CV-first and drainer self-profiling coexist.
-    constexpr uint32_t kCvSlot = kSelfZones != 0 ? kNStage : 2u * kGenSlots;
+    constexpr uint32_t kCvSlot = kSelfZones != 0 ? kNStage : kNGens * kGenSlots;
     constexpr uint32_t kCvBase = kStageBase + kCvSlot * kSlotBytes + (kPrefix + kCtrlWords + kRingWords) * 4u;
     static_assert(
         kCvReadBytes * kMaxCores <= 4u * kRingWords * 4u,
@@ -338,7 +344,7 @@ void kernel_main() {
     // Which staging generations hold a ship possibly still in flight. Persists ACROSS sweeps: the write
     // wait happens at the slots' next refill, never at sweep end, so a sweep's final ship drains under
     // the pace gap or the next sweep's CV pass instead of on the sweep's critical path.
-    bool gen_shipped[2] = {false, false};
+    bool gen_shipped[kNGens] = {};
     uint32_t credit_timeouts = 0;  // bounded credit wait expired -> frame dropped instead of deadlocking
     uint32_t dropped_frames = 0;
     // ================================ INSTRUMENTATION START (self-zone + NoC-footprint state and marker path) ====
@@ -1144,7 +1150,7 @@ void kernel_main() {
                     pend_n = n;
                     pend_gen = gen;
                     have_pend = true;
-                    gen ^= 1u;
+                    gen = gen + 1u == kNGens ? 0u : gen + 1u;
                 }
                 if (have_pend) {
                     ship_batch(pend_base, pend_n, pend_gen);
