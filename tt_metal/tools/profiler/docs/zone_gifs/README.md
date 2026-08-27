@@ -1,29 +1,13 @@
 # Streaming profiler in the Tracy GUI
 
-**Zones leave the device as they are produced.** Closed zones are drained off-chip and handed to host
-consumers while the workload is still running — a continuous stream, not a buffer read back once the
-program ends. Nothing on the device holds the capture, so its length is
-bounded by how long you care to run and what the host does with the records, not by an on-device
-budget: a full grid sustains tens of millions of zones per second, losslessly, and a producer that
-outruns the drain is stalled rather than dropped.
+Data is streamed off the device as it is produced, so capture runs continuously instead of stopping at
+a kernel or program boundary. Host callbacks receive every record and decide what to do with it (see
+[../../STREAMING_PROFILER.md](../../STREAMING_PROFILER.md)). A Tracy callback ships built in: set
+`TT_METAL_STREAMING_PROFILER_TRACY=1` and every record is pushed to the GUI.
 
-The old DRAM-based profiler is the other model: **125 zones per RISC per dispatch** into a fixed 2 KB
-slot, anything past that dropped (flagged, but gone), flushed only when the kernel ends and read back
-after the program completes.
-
-For [Blaze](https://github.com/tenstorrent/tt-blaze) that difference is decisive. A fused pipeline is
-one **persistent mega-kernel**: the per-dispatch flush point never arrives, there are no per-op
-dispatch boundaries left to hang a measurement on, and 125 zones is a couple of loop iterations.
-Streaming gives unbounded, *intra*-kernel visibility with no host sync — and the sync-event markers
-below then show which fused op is waiting on which CB or semaphore, which is the critical path through
-the pipeline.
-
-This page covers the three device-side instrumentation primitives. For each: the device code, the host
-callback that receives it (the consumer contract from
-[../../STREAMING_PROFILER.md](../../STREAMING_PROFILER.md) — register with
-`perf_debug::register_consumer`, one batch per delivery, records discriminated by `meta.type`), and how
-it renders in Tracy. All three GIFs come from one 50-iteration demo kernel combining the snippets below
-(~20 us of work per iteration); one GPU context per worker core, one row per RISC.
+The three device-side primitives are below — device code, the host callback that receives it, and how
+it renders. All three GIFs come from one 50-iteration demo kernel; one GPU context per worker core,
+one row per RISC.
 
 ## 1. Zone scope — `DeviceZoneScopedN`
 
