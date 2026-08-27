@@ -729,10 +729,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         for (auto cb : {tt::CBIndex::c_7, tt::CBIndex::c_8, tt::CBIndex::c_9, tt::CBIndex::c_10}) {
             unpack_to_dest_mode[static_cast<std::uint32_t>(cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
-        if (fused_pre_add_replay) {
-            unpack_to_dest_mode[static_cast<std::uint32_t>(tt::CBIndex::c_29)] =
-                tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-        }
     }
 
     if (!compute_tilizes) {

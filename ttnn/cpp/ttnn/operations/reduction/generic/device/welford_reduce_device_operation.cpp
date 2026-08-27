@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
@@ -36,6 +38,14 @@ void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensor_args.buffer() != nullptr, "Operands to Std/Var reductions need to be allocated in buffers on device!");
     TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to Std/Var reductions must be tilized");
+    const auto tile = tensor_args.tensor_spec().tile();
+    TT_FATAL(
+        tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+        "Std/Var TILE input requires tile shape {}x{}, got: {}x{}",
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        tile.get_height(),
+        tile.get_width());
     TT_FATAL(
         tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
             tensor_args.dtype() == DataType::BFLOAT8_B,

@@ -114,29 +114,12 @@ ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
         VectorMode::None)));
 }
 
-// Apply (data - mean) * inv_std using column-vector broadcasts in one SFPU
-// traversal of the data tile. All operands and the in-place output are FP32.
-ALWI void sfpu_normalize_bcast_col(uint32_t dst_data_idx, uint32_t dst_mean_col_idx, uint32_t dst_inv_std_col_idx) {
-    MATH(
-        (::ckernel::_sfpu_binary_check_<DST_SYNC_MODE>(
-             dst_inv_std_col_idx, dst_inv_std_col_idx, dst_inv_std_col_idx, VectorMode::None),
-         SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
-             DST_SYNC_MODE,
-             DST_ACCUM_MODE,
-             _calculate_sfpu_normalize_bcast_col_full_tile_,
-             dst_data_idx,
-             dst_mean_col_idx,
-             dst_data_idx,
-             VectorMode::None,
-             dst_inv_std_col_idx)));
-}
-
 // Apply (data + residual - mean) * inv_std in one SFPU traversal.
 ALWI void sfpu_residual_normalize_bcast_col(
     uint32_t dst_data_idx, uint32_t dst_residual_idx, uint32_t dst_mean_col_idx, uint32_t dst_inv_std_col_idx) {
     MATH(
         (::ckernel::_sfpu_binary_check_<DST_SYNC_MODE>(
-             dst_inv_std_col_idx, dst_inv_std_col_idx, dst_inv_std_col_idx, VectorMode::None),
+             dst_mean_col_idx, dst_inv_std_col_idx, dst_mean_col_idx, VectorMode::None),
          SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
              DST_SYNC_MODE,
              DST_ACCUM_MODE,

@@ -973,14 +973,10 @@ void kernel_main() {
                 dfb_inb_obj.pop_front(block.full_block_size());
 
             for (auto block : generic::blocks(Wt, blk)) {
-                if constexpr (fused_pre_add_replay) {
-                    dfb_x_replay_obj.wait_front(block.full_block_size());
-                } else {
-                    dfb_in_obj.wait_front(block.full_block_size());
-                    dfb_inb_obj.wait_front(block.full_block_size());
-                    dfb_in_fp32_obj_eltwise.wait_front(block.full_block_size());
-                    dfb_inb_fp32_obj_eltwise.wait_front(block.full_block_size());
-                }
+                dfb_in_obj.wait_front(block.full_block_size());
+                dfb_inb_obj.wait_front(block.full_block_size());
+                dfb_in_fp32_obj_eltwise.wait_front(block.full_block_size());
+                dfb_inb_fp32_obj_eltwise.wait_front(block.full_block_size());
 
                 dfb_interm_pre_add_obj.wait_front(block.full_block_size());
                 tile_regs_acquire();

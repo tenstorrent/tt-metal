@@ -102,6 +102,20 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
     )
 
 
+@pytest.mark.parametrize("reduce_op", [ttnn.var, ttnn.std])
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16)])
+def test_var_std_reject_off_default_tile(device, reduce_op, tile_shape, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.randn((1, 1, 32, 64), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "Std/Var TILE input requires tile shape 32x32"):
+        reduce_op(input_tensor, dim=-1, correction=False)
+
+
 # Regression test for FP32 variance precision under large mean offsets.
 # Uses a bit-exact integer input where the true variance is known analytically:
 # variance of N consecutive integers is (N^2 - 1) / 12 (population); with N=32 and Bessel's

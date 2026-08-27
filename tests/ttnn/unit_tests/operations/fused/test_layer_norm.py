@@ -153,11 +153,10 @@ def test_layer_norm_welford_large_offset(device, width, has_residual):
     assert actual.mean(dim=-1).abs().max() < 0.004
 
 
-@pytest.mark.parametrize("width", [8192, 16384])
-def test_layer_norm_welford_fp32_residual_large_offset(device, width):
+@pytest.mark.parametrize("rows,width", [(32, 8192), (512, 8192), (1024, 8192), (32, 16384)])
+def test_layer_norm_welford_fp32_residual_large_offset(device, rows, width):
     """Fused FP32 pre-add must preserve variation below a large shared offset."""
     torch.manual_seed(29)
-    rows = 1024
     base = 1_000_000.0
     torch_input = base + 64.0 * torch.randn((rows, width), dtype=torch.float32)
     torch_residual = base + 64.0 * torch.randn((rows, width), dtype=torch.float32)
@@ -207,6 +206,58 @@ def test_layer_norm_welford_off_default_tile(device, tile_shape, expect_error):
     with expect_error(RuntimeError, "LayerNorm TILE input requires tile shape 32x32"):
         ttnn.layer_norm(
             input_tensor,
+            program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+            recip_tensor=create_recip_tensor(device, width, use_welford=True),
+        )
+
+
+def test_layer_norm_rejects_mismatched_residual_tile(device, expect_error):
+    rows, width = 32, 64
+    torch_input = torch.randn((rows, width), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+    )
+    residual_tensor = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((16, 32)),
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "Input and residual tile shapes must match"):
+        ttnn.layer_norm(
+            input_tensor,
+            residual_input_tensor=residual_tensor,
+            program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+            recip_tensor=create_recip_tensor(device, width, use_welford=True),
+        )
+
+
+@pytest.mark.parametrize("parameter_name", ["weight", "bias"])
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16)])
+def test_layer_norm_rejects_mismatched_parameter_tile(device, parameter_name, tile_shape, expect_error):
+    rows, width = 32, 64
+    input_tensor = ttnn.from_torch(
+        torch.randn((rows, width), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+    )
+    parameter = ttnn.from_torch(
+        torch.randn((width,), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+
+    validator_name = "gamma" if parameter_name == "weight" else "beta"
+    with expect_error(RuntimeError, f"Input and {validator_name} tile shapes must match"):
+        ttnn.layer_norm(
+            input_tensor,
+            **{parameter_name: parameter},
             program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
             recip_tensor=create_recip_tensor(device, width, use_welford=True),
         )

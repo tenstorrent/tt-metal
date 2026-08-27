@@ -43,7 +43,6 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     const auto& stats = tensor_args.stats;
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
-
     TT_FATAL(
         a.layout() == Layout::TILE || (a.layout() == Layout::ROW_MAJOR && !a.is_sharded()),
         "Input tensor must have TILE layout (ROW_MAJOR is only supported for non-sharded tensors), got: {}",
@@ -76,6 +75,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     if (b.has_value()) {
         TT_FATAL(
             b.value().layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.value().layout());
+        const auto residual_tile = b.value().tensor_spec().tile();
+        TT_FATAL(
+            residual_tile == a.tensor_spec().tile(),
+            "Input and residual tile shapes must match, got input: {}x{} vs residual: {}x{}",
+            tile_height,
+            tile_width,
+            residual_tile.get_height(),
+            residual_tile.get_width());
         TT_FATAL(
             a.logical_shape() == b.value().logical_shape() && a.padded_shape() == b.value().padded_shape(),
             "Input and residual logical and padded shapes must match, got input: logical={} padded={} vs residual: "
@@ -90,6 +97,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
 
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
+            const auto gamma_tile = gamma.value().tensor_spec().tile();
+            TT_FATAL(
+                gamma_tile == a.tensor_spec().tile(),
+                "Input and gamma tile shapes must match, got input: {}x{} vs gamma: {}x{}",
+                tile_height,
+                tile_width,
+                gamma_tile.get_height(),
+                gamma_tile.get_width());
             TT_FATAL(
                 a.padded_shape()[-1] == gamma.value().padded_shape()[-1] &&
                     gamma.value().logical_shape()[-1] >= a.logical_shape()[-1],
@@ -139,6 +154,14 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
 
     if (beta.has_value()) {
         if (beta.value().layout() == Layout::TILE) {
+            const auto beta_tile = beta.value().tensor_spec().tile();
+            TT_FATAL(
+                beta_tile == a.tensor_spec().tile(),
+                "Input and beta tile shapes must match, got input: {}x{} vs beta: {}x{}",
+                tile_height,
+                tile_width,
+                beta_tile.get_height(),
+                beta_tile.get_width());
             TT_FATAL(
                 a.padded_shape()[-1] == beta.value().padded_shape()[-1] &&
                     beta.value().logical_shape()[-1] >= a.logical_shape()[-1],

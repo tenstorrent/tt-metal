@@ -1785,6 +1785,27 @@ def test_group_norm_negative_tests(
         )
 
 
+@pytest.mark.parametrize("use_welford", [True, False])
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16)])
+def test_group_norm_rejects_off_default_tile(device, use_welford, tile_shape, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.randn((1, 1, 32, 64), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    with expect_error(RuntimeError, "GroupNorm TILE input requires tile shape 32x32"):
+        ttnn.group_norm(
+            input_tensor,
+            num_groups=2,
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            inplace=False,
+            use_welford=use_welford,
+        )
+
+
 def test_group_norm_rejects_non_tile_aligned_spatial(device, expect_error):
     # group_norm reduces over the flattened spatial dimension (N*H*W) in 32-row
     # tiles, so that dimension must be a whole number of tiles -- otherwise the

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "groupnorm_device_operation.hpp"
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/normalization/groupnorm/groupnorm_grid_utils.hpp"
@@ -71,6 +73,15 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+    if (a.layout() == Layout::TILE) {
+        TT_FATAL(
+            tile_height == tt::constants::TILE_HEIGHT && tile_width == tt::constants::TILE_WIDTH,
+            "GroupNorm TILE input requires tile shape {}x{}, got: {}x{}",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            tile_height,
+            tile_width);
+    }
     TT_FATAL(a.padded_shape()[3] % args.num_groups == 0, "channel must be divisible by num_groups!");
     TT_FATAL(a.padded_shape()[1] == 1, "input tensor shape[1] must be 1!");
     TT_FATAL(
