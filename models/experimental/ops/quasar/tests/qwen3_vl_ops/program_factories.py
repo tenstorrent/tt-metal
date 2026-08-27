@@ -8,8 +8,9 @@ Summarize which C++ program factory each ttnn op actually selected in a capture.
         generated/ttnn/reports/<report>/graph_capture.json > PROGRAM_FACTORIES.md
 
 Reads the *C++* graph (``graph_capture.json``), not the python_io sidecar: the factory
-identity is written onto each device op's ``function_start`` params by the graph-trace
-program-factory change (#54158), which the per-op case data does not carry.
+identity lives on each device op's ``function_start`` params, which the per-op case data
+does not carry. That field is not recorded by the graph tracer in this tree, so this
+prints an empty table for a capture taken from it.
 
 Why it is worth having next to the generated tests: a case here reproduces one op with
 one captured config, and this table says which factory that config routes to — so a
@@ -49,7 +50,13 @@ def scan(path):
             if not chunk:
                 break
             text = tail + chunk
+            carried = len(tail)
             for m in _FACTORY_RE.finditer(text):
+                # The carried tail was already scanned last round; only a match that
+                # reaches into the new chunk is new. Without this every match inside the
+                # overlap is counted twice, inflating calls and hit rates.
+                if m.end() <= carried:
+                    continue
                 entry = counts[(m.group("op"), m.group("factory"))]
                 entry[0] += 1
                 entry[1] += m.group("hit") == "true"

@@ -56,15 +56,16 @@ decode path. `ttnn.scatter` and `ttnn.mesh_partition` are Qwen3-VL-specific: the
 vision-token merge and the vision tower's output partition.
 
 `PROGRAM_FACTORIES.md` lists which C++ program factory each device op actually
-selected in this run, with its program-cache hit rate — the identity added by the
-graph-trace program-factory change (#54158), which the llama suite predates. Use it to
-turn a failing case into a named factory to go read.
+selected in this run, with its program-cache hit rate — useful for turning a failing
+case into a named factory to go read. It reads a factory identity that the checked-in
+graph tracer does not record (the capture it was built from came from a branch that
+does), so `program_factories.py` finds nothing in a capture taken from this tree.
 
 ## Regenerating
 
 ```bash
-# 1. capture a model run. Device trace must be off: ttnn logging syncs the device and
-#    reads tensors per op, both hard-fatal inside a trace region.
+# 1. capture a model run. Device trace has to be off (demo.py's `enable_trace`): ttnn
+#    logging syncs the device and reads tensors per op, both hard-fatal in a trace region.
 MESH_DEVICE=N150 HF_MODEL=Qwen/Qwen3-VL-4B-Instruct \
 TTNN_CONFIG_OVERRIDES='{"enable_logging":true,"enable_fast_runtime_mode":false,"enable_graph_report":true,"enable_detailed_buffer_report":false,"report_name":"qwen3_vl_demo"}' \
     pytest models/experimental/ops/quasar/qwen3_vl/demo/demo.py -k "batch-1"
@@ -79,7 +80,8 @@ python models/experimental/llama32_1b_quasar/tests/graph_ops/generate_from_graph
     --capture generated/ttnn/reports/<report>/graph_capture.python_io.slim.json \
     --out    models/experimental/ops/quasar/tests/qwen3_vl_ops
 
-# 4. validate offline (no ttnn, no device): the generated data, then the goldens
+# 4. validate without a device: the generated data (no ttnn), then the goldens (imports
+#    ttnn, opens nothing)
 python models/experimental/ops/quasar/tests/qwen3_vl_ops/validate_cases.py
 python models/experimental/ops/quasar/tests/qwen3_vl_ops/validate_goldens.py
 
@@ -111,7 +113,7 @@ and survives regeneration.
 | `op_utils.py` | The four model-specific hooks `graph_case` needs (mesh parametrization, `from_tt`, `torch_rand`, `assert_pcc`), re-exported from the llama op suite as `tests/yolo_ops` does. |
 | `conftest.py` | Tags emulator-appropriate cases with the `emulator` marker. |
 | `validate_cases.py` | Offline consistency check of generated data vs `graph_case.py`'s tables. |
-| `validate_goldens.py` | Offline check that every `GOLDEN` reference actually runs against its cases (it cannot check the answer, only that the reference does not crash or silently return None). |
+| `validate_goldens.py` | Checks that every `GOLDEN` reference actually runs against its cases — no device, though it imports ttnn. It cannot check the answer, only that the reference does not crash or silently return None. |
 | `slim_python_io.py` | Step 2 above: strips `captured_graph` from a capture, streaming. |
 | `program_factories.py` | Step 5 above: per-op program-factory summary from the C++ graph. |
 | `PROGRAM_FACTORIES.md` | Its output for the current capture. |
@@ -121,18 +123,13 @@ suite; `--out` decides which directory's `graph_case.py` the generated files imp
 
 ## What is different from the llama suite
 
-**Tensor-list arguments now carry their memory configs.** The llama README notes that
-tensors passed inside a python list (`ttnn.concat`) reach the capture as a repr with
-shape/dtype/layout only, so its list elements are uploaded DRAM-interleaved. That
-changed with `ttnn.graph._safe_arg_str` learning to summarize sequences element-wise
-instead of `str()`-ing them — printing a list of ttnn tensors reads every one of them
-back to host, which is fatal inside a device trace capture. The generator understands
-both spellings (`parse_argument`), so this suite's `concat` cases get the real
-placement of each operand, and the llama suite's older capture still parses.
-
-Without that, `ttnn.concat` here was unreconstructible in a very quiet way: each
-element's summary carries its `tensor_id`, so all 804 calls looked distinct, and the
-generator dropped every one of them.
+**Tensor-list arguments.** The committed `concat` cases carry a memory config per list
+element, which the llama suite's cases do not (its README records that list elements
+reach the capture with shape/dtype/layout only and are uploaded DRAM-interleaved).
+Those placements came from the capture these files were generated from. The ttnn
+serializer and generator changes behind it are **not part of this PR**, so step 3 above
+does not reproduce them today — regenerating drops the `concat` cases rather than
+rebuilding them. Known gap between the committed data and the checked-in tooling.
 
 **Goldens added for the ops this model introduced** (`graph_case.GOLDEN`):
 `layer_norm` (the vision norm, weight/bias tile-padded like rms_norm's gamma),
@@ -150,7 +147,7 @@ re-derived, and a subtly wrong reference is worse than the structural checks).
 
 The llama README's fidelity table applies verbatim — random tensor values,
 `compute_kernel_config` dropped, index tensors filled semantically, replicated onto
-the `(1, 1)` mesh the capture ran on — with the tensor-list improvement above. Each
+the `(1, 1)` mesh the capture ran on. Each
 generated file's docstring lists the gaps that apply to *that* op, so a failure can be
 read as a real bug or a reconstruction artifact without guessing.
 

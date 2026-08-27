@@ -32,14 +32,20 @@ CHUNK = 64 << 20
 
 
 def stream_records(path):
-    """Yield each record of the top-level JSON array without holding the whole file."""
+    """Yield each record of the top-level JSON array without holding the whole file.
+
+    Every way of running out of input is an error, never a quiet stop: a capture that
+    was truncated mid-write would otherwise slim down to a syntactically valid array of
+    fewer records, and the suite generated from it would silently be missing model calls
+    with no sign that anything went wrong.
+    """
     decoder = json.JSONDecoder()
     buf = ""
     with open(path) as f:
         while "[" not in buf:
             chunk = f.read(1 << 16)
             if not chunk:
-                return
+                raise ValueError(f"{path}: no JSON array found; not a python_io capture?")
             buf += chunk
         i = buf.index("[") + 1
         while True:
@@ -51,10 +57,10 @@ def stream_records(path):
                 try:
                     record, i = decoder.raw_decode(buf, i)
                     break
-                except ValueError:  # record straddles the buffer end; read more
+                except ValueError as exc:  # incomplete record: more input, or a bad file
                     more = f.read(CHUNK)
                     if not more:
-                        return
+                        raise ValueError(f"{path}: input ended inside a record (truncated capture): {exc}") from exc
                     buf += more
             yield record
             if i > CHUNK:  # drop the consumed prefix so the buffer stays bounded
@@ -74,6 +80,8 @@ def main(src, dst):
             if written % 100000 == 0:
                 print(f"  {written} records", flush=True)
         out.write("]")
+    if not written:
+        raise ValueError(f"{src}: no records; an empty capture would generate an empty suite")
     print(f"wrote {written} records -> {dst}")
     return 0
 

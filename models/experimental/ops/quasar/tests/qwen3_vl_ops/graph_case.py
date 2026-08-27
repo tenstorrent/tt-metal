@@ -1160,6 +1160,24 @@ def _golden_pcc(case, op_name):
     return min(floors)
 
 
+# Kwargs naming a destination the op writes into. When the captured call passed the same
+# tensor as argument 0 — ``ttnn.mul(k_cache, 0, output_tensor=k_cache)``, the demo's
+# KV-cache reset — the op runs in place, which is a different path through the op than
+# writing into a fresh buffer. A case keeps no tensor identity (``tensor_id`` is dropped
+# so repeated calls dedupe into one case), so an identical spec is the only signal left
+# that the two were one tensor; reuse argument 0 on that basis rather than allocating a
+# second destination and never exercising the alias. The cost of guessing wrong is
+# running an in-place call where the capture had two distinct same-shaped tensors.
+_DESTINATION_KWARGS = {"output_tensor"}
+
+
+def _aliased_arg(name, spec, case, args):
+    """Argument 0 when this destination kwarg is indistinguishable from it, else None."""
+    if name not in _DESTINATION_KWARGS or spec.get("k") != "t" or not case["args"]:
+        return None
+    return args[0] if case["args"][0] == spec else None
+
+
 def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     """Materialize one captured call, run it, and check the result.
 
@@ -1170,10 +1188,12 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     torch_inputs: dict[str, torch.Tensor] = {}
 
     args = [_build_value(spec, mesh_device, case, op_name, str(i), torch_inputs) for i, spec in enumerate(case["args"])]
-    kwargs = {
-        name: _build_value(spec, mesh_device, case, op_name, name, torch_inputs)
-        for name, spec in case["kwargs"].items()
-    }
+    kwargs = {}
+    for name, spec in case["kwargs"].items():
+        alias = _aliased_arg(name, spec, case, args)
+        kwargs[name] = (
+            alias if alias is not None else _build_value(spec, mesh_device, case, op_name, name, torch_inputs)
+        )
 
     out = op(*args, **kwargs)
 

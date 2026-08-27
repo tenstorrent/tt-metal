@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Offline check that every GOLDEN reference runs against its cases — no ttnn, no device.
+Check that every GOLDEN reference runs against its cases — no device needed.
 
     python models/experimental/ops/quasar/tests/qwen3_vl_ops/validate_goldens.py
 
@@ -12,24 +12,25 @@ has an entry in ``graph_case.GOLDEN``, build torch inputs shaped like that case 
 the reference.
 
 It exists because a reference that crashes on one case's argument shape is invisible until
-a device run reaches it -- which is how ``ttnn.multiply(cache, 0, output_tensor=cache)``
+a device run reaches it — which is how ``ttnn.multiply(cache, 0, output_tensor=cache)``
 (a scalar right-hand operand, so ``inputs["1"]`` does not exist) and ``_ref_split`` reading
 a literal spec dict where it wanted the literal's value both got through review.
 
-What it does NOT check: that the reference computes the *right* answer. Only a device run
-comparing against it can say that. A reference returning None is reported too -- that is
+What it does NOT check: that a reference computes the *right* answer. Only a device run
+comparing against it can say that. A reference returning None is reported too — that is
 the "no reference applies, fall back to structural checks" path, which is legitimate but
 worth seeing, since a reference that silently returns None for every case looks like it
 passes while checking nothing.
 
-graph_case imports ttnn, so it is never imported here: its module-level defs are exec'd
-individually and the ones that need ttnn (the enum tables) are skipped.
+This imports ``graph_case`` and the generated test modules the ordinary way, so it needs
+``ttnn`` importable (no device is opened, nothing is dispatched). Modules are imported by
+dotted path rather than read as text on purpose: reading a module and exec'ing it would
+be the same work with none of the import system's guarantees.
 """
 
 from __future__ import annotations
 
-import ast
-import math
+import importlib
 import pathlib
 import sys
 
@@ -39,21 +40,14 @@ HERE = pathlib.Path(__file__).resolve().parent
 _INT_DTYPES = {"UINT32", "INT32", "UINT16", "UINT8"}
 
 
-def _load_goldens(path: pathlib.Path):
-    """(GOLDEN table, namespace) from graph_case.py source, without importing ttnn."""
-    tree = ast.parse(path.read_text())
-    ns: dict = {"torch": torch, "math": math}
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.Assign)):
-            try:
-                exec(compile(ast.Module([node], []), str(path), "exec"), ns)
-            except Exception:
-                pass  # needs ttnn (the enum tables); no reference depends on them
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", None) == "GOLDEN":
-            # Values are expressions: a bare name, or _ref_binary(torch.add).
-            return {ast.literal_eval(k): eval(ast.unparse(v), ns) for k, v in zip(node.value.keys, node.value.values)}
-    raise SystemExit(f"{path}: no GOLDEN table found")
+def _package() -> str:
+    """Dotted path of this directory, so the generated modules import as themselves."""
+    root = next((p for p in HERE.parents if (p / ".git").exists()), None)
+    if root is None:
+        raise SystemExit(f"cannot locate the repo root above {HERE}")
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    return ".".join(HERE.relative_to(root).parts)
 
 
 def _data(spec):
@@ -65,37 +59,32 @@ def _data(spec):
 
 def _inputs(case):
     """Mirror the keys graph_case's torch_sink ends up with, list elements included."""
-    out = {}
+    built = {}
 
     def add(key, spec):
         if spec.get("k") == "t":
-            out[key] = _data(spec)
+            built[key] = _data(spec)
         elif spec.get("k") == "tlist":
-            for j, sub in enumerate(spec["tensors"]):
-                out[f"{key}[{j}]"] = _data(sub)
+            for i, sub in enumerate(spec["tensors"]):
+                built[f"{key}[{i}]"] = _data(sub)
 
-    for i, spec in enumerate(case["args"]):
-        add(str(i), spec)
+    for index, spec in enumerate(case["args"]):
+        add(str(index), spec)
     for name, spec in case["kwargs"].items():
         add(name, spec)
-    return out
-
-
-def _cases(path: pathlib.Path):
-    for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
-        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", None) == "CASES":
-            return ast.literal_eval(node.value)
-    return []
+    return built
 
 
 def main():
     torch.manual_seed(0)
-    golden = _load_goldens(HERE / "graph_case.py")
+    package = _package()
+    golden = importlib.import_module(f"{package}.graph_case").GOLDEN
+
     errors, notes = [], []
     ran = 0
-
     for path in sorted(HERE.glob("test_*.py")):
-        for case in _cases(path):
+        cases = getattr(importlib.import_module(f"{package}.{path.stem}"), "CASES", [])
+        for case in cases:
             ref_fn = golden.get(case["op"])
             if ref_fn is None:
                 continue
