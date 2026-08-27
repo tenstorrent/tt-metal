@@ -1492,21 +1492,32 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // KernelSpecs each self-looping the DFB on their disjoint node ranges, while rejecting
             // the case where a self-looping kernel shares the DFB with an unrelated kernel (which
             // would make the producer/consumer mask and lowering semantics ambiguous).
-            std::unordered_set<const KernelSpec*> producer_kernels;
-            std::unordered_set<const KernelSpec*> consumer_kernels;
-            for (const auto& p : endpoints.producers) {
-                producer_kernels.insert(p.kernel);
+            //
+            // Skipped under allow_multi, for the same reason the role-uniformity checks and the
+            // per-node census above are (see the flag's comment at the top of this loop). The
+            // ambiguity this guards against is an ambiguity in the DFB's per-role hardware config,
+            // and under the flag the DFB is a plain shared circular buffer with no such config to
+            // be ambiguous about. On Gen1 a producer that also drains its own buffer alongside a
+            // separate consumer kernel is a legal shape — ttnn's repeat_and_interleave_eltwise_mul
+            // does exactly this, with compute pushing and popping the transposed-in1 buffer while
+            // the reader pops it too — and without this guard the flag cannot express it.
+            if (!allow_multi) {
+                std::unordered_set<const KernelSpec*> producer_kernels;
+                std::unordered_set<const KernelSpec*> consumer_kernels;
+                for (const auto& p : endpoints.producers) {
+                    producer_kernels.insert(p.kernel);
+                }
+                for (const auto& c : endpoints.consumers) {
+                    consumer_kernels.insert(c.kernel);
+                }
+                TT_FATAL(
+                    producer_kernels == consumer_kernels,
+                    "DFB '{}' is self-looped (some kernel appears as both producer and consumer), but "
+                    "the set of producer KernelSpecs differs from the set of consumer KernelSpecs. "
+                    "When a DFB is self-looped, every same-side binding must come from a self-loop "
+                    "participant (i.e. a kernel that appears on both sides).",
+                    dfb.unique_id);
             }
-            for (const auto& c : endpoints.consumers) {
-                consumer_kernels.insert(c.kernel);
-            }
-            TT_FATAL(
-                producer_kernels == consumer_kernels,
-                "DFB '{}' is self-looped (some kernel appears as both producer and consumer), but "
-                "the set of producer KernelSpecs differs from the set of consumer KernelSpecs. "
-                "When a DFB is self-looped, every same-side binding must come from a self-loop "
-                "participant (i.e. a kernel that appears on both sides).",
-                dfb.unique_id);
         }
     }
 
