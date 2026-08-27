@@ -2,20 +2,29 @@
 
 ## Outcome
 
-*(pending verification — construction complete, both factories + both kernels converted; awaiting post-port test run)*
+**PORTED** — both factories (`NLPConcatHeadsDecodeProgramFactory`, `NLPConcatHeadsDecodeSubcoregridsProgramFactory`)
+converted to `ProgramSpecFactoryConcept`, and the confirmed test set passes identically pre- and post-port.
+
+| | Baseline (pre-port, `4a5bfad59c6`) | Post-port |
+|---|---|---|
+| `tests/tt_eager/python_api_testing/unit_testing/misc/test_nlp_concat_heads_decode.py` | 15 passed, 0 failed | **15 passed, 0 failed** (13.59s) |
+| Coverage | all `test_concat_head` (default factory) + all `test_concat_head_subcoregrids` (subcoregrids factory) variants | identical set and tally |
+| Legality checks | n/a (legacy descriptor path) | **live** — `METAL2_CHECKS_FORCED` marker appears 30x in the run log (threshold ≥2), from the `skip_validation` force applied at all 9 sites in `tt_metal/impl/metal2_host_api/` (working-tree scaffold only, never committed) |
+
+Run conditions: JIT kernel cache (`~/.cache/tt-metal-cache`) purged between the baseline and post-port runs;
+post-port run executed from this worktree's own build + venv with `ttnn` / `ttnn._ttnn` verified to load from this
+tree. Factory symbols verified present in the installed `_ttnncpp.so` (`nm -DC`) before trusting results.
 
 ## Provenance
 
 - **Recipe docs (this port):** *not pinnable* — `git log -1 --format='%h %cs %s' -- docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/` prints nothing; the `metal_2.0/` docs tree is untracked in the invoking checkout (read from the main checkout by absolute path; it does not exist in this worktree at all).
 - **Audit docs (inherited):** *not pinnable* — same condition, recorded verbatim from `METAL2_PORT_BRIEF.md`.
 - Port baseline commit: `4a5bfad59c6` (worktree branched at origin/main).
-- Baseline test run: `tests/tt_eager/python_api_testing/unit_testing/misc/test_nlp_concat_heads_decode.py` — **15 passed** (coordinator-run, main checkout byte-identical to `4a5bfad59c6`; both factories covered: all `test_concat_head` and all `test_concat_head_subcoregrids` variants).
 
 ## TTNN ProgramFactory
 
 ### Concept realized
-`ProgramSpecFactoryConcept`, both factories (`NLPConcatHeadsDecodeProgramFactory`,
-`NLPConcatHeadsDecodeSubcoregridsProgramFactory`) — as the audit chose. `create_descriptor` →
+`ProgramSpecFactoryConcept`, both factories — as the audit chose. `create_descriptor` →
 `create_program_artifacts` inside the existing `program_factory_t` variant; the device-operation class is untouched.
 
 ### Device-op-class edits
@@ -52,12 +61,17 @@ the same public op. Flagging for whoever next has TG time, alongside the model_t
   `WriterConfigDescriptor{}` resolution in `tt_metal/impl/kernels/kernel_types.cpp:13-43` (reader RISCV_1/NOC_0,
   writer RISCV_0/NOC_1, both DM_DEDICATED_NOC on all Gen1 arches) before adopting the TTNN
   `create_reader/writer_datamovement_config(arch)` helpers — the values match exactly, so the helpers are faithful.
+- **Recipe's "check that your first commit actually landed" note** fired for real: the clang-format pre-commit hook
+  reformatted the two factory `.cpp`s (pure line-wraps of the `AddRuntimeArgsForNode` calls) and aborted the commit;
+  `git log -1` caught the unmoved HEAD, and the re-staged commit landed. No re-verification needed (whitespace only).
 
 ## Friction
 
 - **Worktree bootstrap:** a fresh `git worktree` has no submodules checked out; the first `./build_metal.sh` failed
   at cmake configure ("Missing submodules"). `git submodule update --init --recursive` inside the worktree fixed it.
-  Worth a line in `workspace_setup.md` for worktree-based porting sessions.
+  Worth a line in `workspace_setup.md` for worktree-based porting sessions. Relatedly, a near-full home partition
+  fails the build late and confusingly (`ccache: error: failed to create temporary file ... No space left on
+  device`, surfacing inside the tracy wasm sub-build); `CCACHE_DIR` on a roomy disk fixed it.
 - **Varargs are per-node duplicated:** the NoC coordinate tables are identical on every node (the host builds them
   once), but the faithful mirror of the legacy per-core RTA lists is `runtime_varargs[core] = noc_coords` for every
   core — a `Table<NodeCoord, vector>` holding N copies of the same vector. `num_common_runtime_varargs` is the
