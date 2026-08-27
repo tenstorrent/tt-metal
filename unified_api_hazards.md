@@ -189,6 +189,18 @@ without a marker are mechanisms the headers document as the caller's responsibil
     interleaved path misbehaves has not been demonstrated -- it needs a test before it is
     called a defect.
 
+28b. **A `custom_compute` routine leaving the compute units reconfigured.** The escape
+    hatch hands out raw circular-buffer ids so a routine can call any LLK, and unpacker,
+    math and packer configuration is per-kernel state: whatever the routine leaves set, the
+    next unified op inherits. The library already lives with this among its own passes --
+    every matmul re-runs `matmul_block_init` because a broadcast or a reduction before it
+    reconfigured the units, and `pack_to` exists for the same reason on the pack side -- so
+    the hazard is not new, but the hatch is the first place a USER can create it. Nothing
+    checks it, and the failure is a silently wrong answer in the op AFTER the routine, which
+    is a bad place to look for a cause. Documented in the `custom_compute` contract in
+    api.h; enforcing it would need the library to snapshot and restore the unit
+    configuration around the call, which it does not do for its own passes either.
+
 29. **Custom `Fn` issuing the wrong kind of traffic. UNVERIFIED.** The contract is writes
     only, on this thread's NOC; the handle's flush covers nothing else, so a read issued
     there would let the pop hand back pages mid-transfer. Unenforced, and untested.
