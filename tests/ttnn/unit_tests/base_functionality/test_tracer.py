@@ -88,6 +88,30 @@ def test_config_changes_do_not_disable_explicit_trace_session():
             assert ttnn.tracer.is_tracing_enabled()
 
 
+@pytest.mark.requires_fast_runtime_mode_off
+def test_config_owned_tracing_is_disabled_when_context_raises(expect_error):
+    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_torch_tracer", False):
+        with expect_error(RuntimeError, "expected failure"):
+            with ttnn.manage_config("enable_torch_tracer", True):
+                assert ttnn.tracer.is_tracing_enabled()
+                raise RuntimeError("expected failure")
+
+        assert not ttnn.tracer.is_tracing_enabled()
+        assert not ttnn.torch_tracer.is_tracing_enabled()
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+def test_graph_report_does_not_enable_torch_tracer_during_dtype_conversion():
+    with ttnn.manage_config("enable_logging", True), ttnn.manage_config(
+        "enable_graph_report", True
+    ), ttnn.manage_config("enable_torch_tracer", False):
+        output = ttnn.from_torch(torch.ones((1, 1), dtype=torch.float32), dtype=ttnn.bfloat16)
+
+        assert output.dtype == ttnn.bfloat16
+        assert not ttnn.tracer.is_tracing_enabled()
+        assert not ttnn.torch_tracer.is_tracing_enabled()
+
+
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("show_modules", [True, False])
