@@ -1,0 +1,7 @@
+=== Wed Aug 26 21:04:17 UTC 2026 ===
+node: models/common/tests/models/galaxy/test_partition_wh_galaxy.py
+commit: 1d4ded04592bc050bd85f1efb592497b06780a71
+devices: 32
+exit=137
+NOTE: the pytest process had to be reaped; the mesh needs a glx_reset.
+holders_after: 0

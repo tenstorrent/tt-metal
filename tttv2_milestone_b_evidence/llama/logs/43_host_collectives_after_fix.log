@@ -1,0 +1,61 @@
+2026-08-26 21:38:43.546 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 600.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 13 items
+
+models/common/tests/models/galaxy/test_collectives.py::test_concat32_qkv_reduction_returns_one_row_per_user PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_concat32_output_reduction_merges_the_rows_before_reducing PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_single_row_prefill_and_decode_are_never_reshaped[None] PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_single_row_prefill_and_decode_are_never_reshaped[recipe1] PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_a_token_stream_that_does_not_split_into_32_rows_fails_closed PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_the_selector_is_the_identity_sharded_over_the_user_axis PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_the_selector_materializes_once PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_selection_returns_one_columns_users PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape0] PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape1] PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape2] PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_release_is_idempotent PASSED
+models/common/tests/models/galaxy/test_collectives.py::test_deallocating_an_already_released_tensor_is_a_no_op PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.16s setup    models/common/tests/models/galaxy/test_collectives.py::test_concat32_qkv_reduction_returns_one_row_per_user
+0.15s setup    models/common/tests/models/galaxy/test_collectives.py::test_concat32_output_reduction_merges_the_rows_before_reducing
+0.15s setup    models/common/tests/models/galaxy/test_collectives.py::test_the_selector_materializes_once
+0.15s setup    models/common/tests/models/galaxy/test_collectives.py::test_selection_returns_one_columns_users
+0.15s setup    models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape0]
+0.15s setup    models/common/tests/models/galaxy/test_collectives.py::test_the_selector_is_the_identity_sharded_over_the_user_axis
+0.15s setup    models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape1]
+0.15s setup    models/common/tests/models/galaxy/test_collectives.py::test_single_row_prefill_and_decode_are_never_reshaped[None]
+0.15s setup    models/common/tests/models/galaxy/test_collectives.py::test_single_row_prefill_and_decode_are_never_reshaped[recipe1]
+0.15s setup    models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape2]
+0.15s setup    models/common/tests/models/galaxy/test_collectives.py::test_release_is_idempotent
+0.15s setup    models/common/tests/models/galaxy/test_collectives.py::test_a_token_stream_that_does_not_split_into_32_rows_fails_closed
+0.15s setup    models/common/tests/models/galaxy/test_collectives.py::test_deallocating_an_already_released_tensor_is_a_no_op
+
+(12 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_concat32_qkv_reduction_returns_one_row_per_user
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_concat32_output_reduction_merges_the_rows_before_reducing
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_single_row_prefill_and_decode_are_never_reshaped[None]
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_single_row_prefill_and_decode_are_never_reshaped[recipe1]
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_a_token_stream_that_does_not_split_into_32_rows_fails_closed
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_the_selector_is_the_identity_sharded_over_the_user_axis
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_the_selector_materializes_once
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_selection_returns_one_columns_users
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape0]
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape1]
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_selection_rejects_anything_but_the_full_physical_batch[shape2]
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_release_is_idempotent
+PASSED models/common/tests/models/galaxy/test_collectives.py::test_deallocating_an_already_released_tensor_is_a_no_op
+============================== 13 passed in 2.25s ==============================
+exit=0

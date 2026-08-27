@@ -1,0 +1,31 @@
+=== Thu Aug 27 00:27:44 UTC 2026 ===
+BLOCKED (infra): WH Galaxy board 7 is wedged on the PCIe bus.
+
+Symptom chain, in order:
+  1. recurring 'Timed out waiting for ETH heartbeat ... ASIC ID 87032054158471220,
+     ETH core e9-0/e8-0' at mesh open, cleared by tt-smi -glx_reset each time
+     (logs 47, 51, 55, 68, 70 and resets 48, 52, 56, 61).
+  2. then 'Read 0xffffffff over PCIe ID 17: the board should be reset'
+     during TopologyDiscovery::init_device (log 84 / this incident).
+  3. tt-smi -ls now aborts inside tt_umd and lists zero boards (log 87).
+  4. tt-smi -glx_reset fails with
+     "Error in resetting galaxy 6u trays! [Errno 6] No such device or address:
+     '/dev/tenstorrent/7'" (log 88) - it cannot reset the mesh because the node
+     it needs is the one that is gone.
+
+Recovery attempts used: 2 of the 2 the brief allows (logs 85 and 88). Both failed.
+
+State at the time of writing:
+  /dev/tenstorrent entries : 32
+  /dev/tenstorrent/7       : node present, chr 238,7, but unreadable (read exit=1)
+  dmesg                    : kernel oops trace with 'irqs disabled' present
+
+This needs host-level intervention - an IPMI power cycle of the tray or a reboot -
+which is outside what this job may do unattended. No further device work was
+attempted after this point, and nothing in this evidence package is inferred from a
+run that did not complete.
+
+=== ls -1 /dev/tenstorrent ===
+0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 
+=== stat /dev/tenstorrent/7 ===
+crw-rw-rw- 1 root root 238, 7 Aug 26 13:37 /dev/tenstorrent/7

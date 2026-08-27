@@ -1,0 +1,349 @@
+=== Wed Aug 26 22:11:12 UTC 2026 ===
+node: models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes
+commit: 1d4ded04592bc050bd85f1efb592497b06780a71
+devices: 32
+2026-08-26 22:11:35.254 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 900.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes[wormhole_b0-8x4-device_params0] Fetching 3 files:   0%|          | 0/3 [00:00<?, ?it/s]Fetching 3 files: 100%|██████████| 3/3 [00:00<00:00, 1748.84it/s]
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+2026-08-26 22:13:24.185 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-26 22:13:24.185 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-26 22:13:24.205 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-26 22:13:24.205 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-26 22:13:24.252 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:575)
+2026-08-26 22:13:24.282 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-26 22:13:25.693 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[17, 21, 20, 19, 18, 23, 22, 16, 28, 25, 30, 29, 26, 31, 27, 24, 8, 12, 14, 13, 10, 15, 9, 11, 3, 5, 6, 4, 1, 7, 0, 2] and remote chip ids {} (cluster.cpp:173)
+2026-08-26 22:13:25.693 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-26 22:13:25.693 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:150)
+2026-08-26 22:13:25.693 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-26 22:13:25.724 | info     |             UMD | Starting devices in cluster (cluster.cpp:1198)
+2026-08-26 22:13:25.784 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1206)
+2026-08-26 22:13:25.882 | INFO     | conftest:mesh_device:612 - No trace region size for (8, 4)
+2026-08-26 22:13:25.883 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-26 22:13:25.883 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-26 22:13:25.890 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2410)
+2026-08-26 22:13:25.890 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2418)
+2026-08-26 22:13:25.963 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:25.978 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:25.994 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.009 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.028 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.043 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.057 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.073 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.087 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.102 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.117 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.131 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.146 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.162 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.177 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.193 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.210 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.225 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.240 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.255 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.270 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.285 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.299 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.313 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.329 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.344 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.359 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.374 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.390 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.405 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.419 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.434 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:13:26.687 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-26 22:13:27.169 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-26 22:13:27.170 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-26 22:13:27.171 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-26 22:13:27.173 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-26 22:13:27.174 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:550)
+2026-08-26 22:13:27.175 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:550)
+2026-08-26 22:13:27.176 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:550)
+2026-08-26 22:13:27.177 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:550)
+2026-08-26 22:13:27.178 | info     |           Metal | Fabric initialized on Device 8 (device.cpp:550)
+2026-08-26 22:13:27.179 | info     |           Metal | Fabric initialized on Device 9 (device.cpp:550)
+2026-08-26 22:13:27.181 | info     |           Metal | Fabric initialized on Device 10 (device.cpp:550)
+2026-08-26 22:13:27.182 | info     |           Metal | Fabric initialized on Device 11 (device.cpp:550)
+2026-08-26 22:13:27.183 | info     |           Metal | Fabric initialized on Device 12 (device.cpp:550)
+2026-08-26 22:13:27.184 | info     |           Metal | Fabric initialized on Device 13 (device.cpp:550)
+2026-08-26 22:13:27.185 | info     |           Metal | Fabric initialized on Device 14 (device.cpp:550)
+2026-08-26 22:13:27.186 | info     |           Metal | Fabric initialized on Device 15 (device.cpp:550)
+2026-08-26 22:13:27.226 | info     |           Metal | Fabric initialized on Device 16 (device.cpp:550)
+2026-08-26 22:13:27.227 | info     |           Metal | Fabric initialized on Device 17 (device.cpp:550)
+2026-08-26 22:13:27.228 | info     |           Metal | Fabric initialized on Device 18 (device.cpp:550)
+2026-08-26 22:13:27.229 | info     |           Metal | Fabric initialized on Device 19 (device.cpp:550)
+2026-08-26 22:13:27.253 | info     |           Metal | Fabric initialized on Device 20 (device.cpp:550)
+2026-08-26 22:13:27.254 | info     |           Metal | Fabric initialized on Device 21 (device.cpp:550)
+2026-08-26 22:13:27.255 | info     |           Metal | Fabric initialized on Device 22 (device.cpp:550)
+2026-08-26 22:13:27.256 | info     |           Metal | Fabric initialized on Device 23 (device.cpp:550)
+2026-08-26 22:13:27.257 | info     |           Metal | Fabric initialized on Device 24 (device.cpp:550)
+2026-08-26 22:13:27.258 | info     |           Metal | Fabric initialized on Device 25 (device.cpp:550)
+2026-08-26 22:13:27.259 | info     |           Metal | Fabric initialized on Device 26 (device.cpp:550)
+2026-08-26 22:13:27.261 | info     |           Metal | Fabric initialized on Device 27 (device.cpp:550)
+2026-08-26 22:13:27.262 | info     |           Metal | Fabric initialized on Device 28 (device.cpp:550)
+2026-08-26 22:13:27.263 | info     |           Metal | Fabric initialized on Device 29 (device.cpp:550)
+2026-08-26 22:13:27.264 | info     |           Metal | Fabric initialized on Device 30 (device.cpp:550)
+2026-08-26 22:13:27.265 | info     |           Metal | Fabric initialized on Device 31 (device.cpp:550)
+2026-08-26 22:13:27.265 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:444)
+2026-08-26 22:13:27.265 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-26 22:13:28.401 | info     |           Metal | [Real-time profiler] Device 20 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=123748156434 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 24 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=123789933747 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 28 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=123743510367 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 25 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=124051082551 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 29 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=123833792577 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=123793992200 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 16 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=123854413885 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 18 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=123799666051 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 14 sync complete: 100 samples, frequency=0.985498 GHz, device_time_at_sync=123768063646 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 27 sync complete: 100 samples, frequency=0.985502 GHz, device_time_at_sync=123898151176 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 26 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=123816069419 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 23 sync complete: 100 samples, frequency=0.985502 GHz, device_time_at_sync=123828790827 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 31 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=123763850575 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 15 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=123696132799 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 30 sync complete: 100 samples, frequency=0.985501 GHz, device_time_at_sync=123810108047 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 21 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=123852036307 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 17 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=123816665780 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 22 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=123934785720 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 19 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=123855694595 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 6 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=123789279221 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=123897632478 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 8 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=123496967799 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 4 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=123864347392 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 7 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=123742183689 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=123707382381 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 5 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=123754211336 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.402 | info     |           Metal | [Real-time profiler] Device 11 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=123540921957 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.403 | info     |           Metal | [Real-time profiler] Device 9 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=123804222162 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.403 | info     |           Metal | [Real-time profiler] Device 10 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=123662833136 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.403 | info     |           Metal | [Real-time profiler] Device 13 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=123577337376 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.403 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=123663600833 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.403 | info     |           Metal | [Real-time profiler] Device 12 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=123766282183 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:13:28.723 | DEBUG    | conftest:mesh_device:630 - multidevice with 32 devices is created
+[stage] enter build
+[stage] leave build
+[stage] enter allocate kv cache
+[stage] leave allocate kv cache
+[stage] enter bind kv cache
+[stage] leave bind kv cache
+[stage] enter activate decode (starts the persistent DRAM prefetch program)
+[stage] leave activate decode (starts the persistent DRAM prefetch program)
+[stage] enter prepare decode rot mats (RotarySetup2D.decode_forward)
+[stage] leave prepare decode rot mats (RotarySetup2D.decode_forward)
+[stage] enter stage current positions
+[stage] leave stage current positions
+[stage] enter embed decode
+[stage] leave embed decode
+[stage] enter decode forward
+2026-08-26 22:13:41.087 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 64, dfb size: 128, return value: 192 (dataflow_buffer.cpp:1656)
+2026-08-26 22:13:41.087 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-26 22:13:41.087 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-26 22:13:41.089 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 64, dfb size: 128, return value: 192 (dataflow_buffer.cpp:1656)
+2026-08-26 22:13:41.089 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-26 22:13:41.089 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-26 22:13:41.439 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:122)
+2026-08-26 22:13:41.439 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-26 22:13:41.440 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.444 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.444 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.445 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.446 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.447 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.447 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.448 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.449 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.450 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.450 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.451 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.452 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.453 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.453 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.454 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.455 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.456 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.456 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.457 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.458 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.459 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.460 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.461 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.462 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.463 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.464 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.465 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.466 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.467 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.469 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:41.470 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.175 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:122)
+2026-08-26 22:13:42.176 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-26 22:13:42.177 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.178 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.178 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.179 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.180 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.180 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.181 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.181 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.182 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.183 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.183 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.184 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.185 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.185 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.186 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.186 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.187 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.187 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.188 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.189 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.189 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.190 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.190 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.191 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.191 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.192 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.192 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.193 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.193 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.194 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.194 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.195 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:13:42.787 | critical |          Always | TT_FATAL: Kernel group cores do not match sub device cores for programmable core type TENSIX (assert.hpp:104)
+[stage] FAILED in decode forward
+Traceback (most recent call last):
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py", line 170, in _stage
+    yield
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py", line 284, in test_one_decode_step_executes
+    output = model.decode_forward(x_embed, tt_positions, rot_mats)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/models/llama33_70b_galaxy/model.py", line 1378, in decode_forward
+    x, h = layer.decode_forward(x, h, rot_mats, metadata)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/models/llama33_70b_galaxy/model.py", line 1176, in decode_forward
+    mlp_input = _relocate(mlp_input, self.config.decode_mlp_input_memcfg, self.config.decode_mlp_input_dtype)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/models/llama33_70b_galaxy/model.py", line 1081, in _relocate
+    recast = ttnn.typecast(tensor, dtype=dtype)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/impl/program/program.cpp:2205: num_intersections == num_cores
+info:
+Kernel group cores do not match sub device cores for programmable core type TENSIX
+backtrace:
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0x90ad40) [0x7dadd999ed40]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/libtt_metal.so(+0x98b50c) [0x7dadd859b50c]
+ --- tt::tt_metal::detail::ProgramImpl::determine_sub_device_ids(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0x235bf44) [0x7daddb3eff44]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0x235b34b) [0x7daddb3ef34b]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim23TypecastDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x83) [0x7daddb3e84c3]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim23TypecastDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x23e) [0x7daddb3e728e]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim23TypecastDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x305) [0x7daddb3e6775]
+ --- ttnn::prim::typecast(ttnn::Tensor const&, tt::tt_metal::DataType, tt::tt_metal::MemoryConfig const&, bool, bool, bool, std::optional<ttnn::Tensor> const&, std::optional<tt::tt_metal::CoreRangeSet> const&)
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0x2352d23) [0x7daddb3e6d23]
+ --- ttnn::typecast(ttnn::Tensor const&, tt::tt_metal::DataType const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::Tensor> const&, std::optional<tt::tt_metal::CoreRangeSet> const&)
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x4f86f3) [0x7daddb99a6f3]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x347f45) [0x7daddb7e9f45]
+ --- python(_PyObject_Call_Prepend+0x116) [0x5b0d8ac076c6]
+ --- python(+0x3b866e) [0x5b0d8ad4d66e]
+ --- python(_PyEval_EvalFrameDefault+0x90c8) [0x5b0d8ac68fc8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x5b0d8ac076c6]
+ --- python(+0x3b866e) [0x5b0d8ad4d66e]
+ --- python(+0x300318) [0x5b0d8ac95318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x5b0d8ac7df57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(+0x30011c) [0x5b0d8ac9511c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x5b0d8ac7dedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x7f02) [0x5b0d8ac67e02]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x7f02) [0x5b0d8ac67e02]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x34f6f) [0x5b0d8ac94e6f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x34f6f) [0x5b0d8ac94e6f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x5b0d8ac679f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x5b0d8ac6982a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(+0x2734d9) [0x5b0d8ac084d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x5b0d8ac6982a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x5b0d8ac076c6]
+ --- python(+0x3b866e) [0x5b0d8ad4d66e]
+ --- python(+0x300318) [0x5b0d8ac95318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x5b0d8ac7df57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x7f02) [0x5b0d8ac67e02]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x5b0d8ac679f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x5b0d8ac6982a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(+0x2734d9) [0x5b0d8ac084d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x5b0d8ac6982a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x5b0d8ac076c6]
+ --- python(+0x3b866e) [0x5b0d8ad4d66e]
+ --- python(_PyEval_EvalFrameDefault+0x90c8) [0x5b0d8ac68fc8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(+0x30011c) [0x5b0d8ac9511c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x5b0d8ac7dedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(+0x2734d9) [0x5b0d8ac084d9]
+ --- python(+0x30011c) [0x5b0d8ac9511c]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x5b0d8ac7df57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(+0x30011c) [0x5b0d8ac9511c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x5b0d8ac7dedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(+0x30011c) [0x5b0d8ac9511c]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x5b0d8ac7df57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x5b0d8ac679f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x5b0d8ac6982a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(+0x2734d9) [0x5b0d8ac084d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x5b0d8ac6982a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x5b0d8ac076c6]
+ --- python(+0x3b866e) [0x5b0d8ad4d66e]
+ --- python(+0x300318) [0x5b0d8ac95318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x5b0d8ac7df57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x5b0d8ac679f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x5b0d8ac6982a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(+0x2734d9) [0x5b0d8ac084d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x5b0d8ac6982a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5b0d8ac06023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x5b0d8ac076c6]
+ --- python(+0x3b866e) [0x5b0d8ad4d66e]
+ --- python(+0x300318) [0x5b0d8ac95318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x5b0d8ac7df57]
+
+[stage] enter close model
+[stage] leave close model
+TIMEOUT after 420s
+  signal -TERM 192109 (comm=python)
+NOTE: reaped on timeout; the mesh needs a glx_reset before the next run.
+exit=124
+holders_after: 0

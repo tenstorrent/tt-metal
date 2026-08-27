@@ -1,0 +1,651 @@
+=== date ===
+Wed Aug 26 19:08:49 UTC 2026
+=== target ===
+ 133937  133936 python          python -m pytest -v -rA --color=no -p no:cacheprovider --timeout=1500 models/common/tests/models/llama33_70b_galaxy/test_bringup
+[New LWP 133998]
+[New LWP 133999]
+[New LWP 134000]
+[New LWP 134001]
+[New LWP 134002]
+[New LWP 134003]
+[New LWP 134004]
+[New LWP 134005]
+[New LWP 134006]
+[New LWP 134007]
+[New LWP 134008]
+[New LWP 134009]
+[New LWP 134010]
+[New LWP 134011]
+[New LWP 134012]
+[New LWP 134013]
+[New LWP 134014]
+[New LWP 134015]
+[New LWP 134016]
+[New LWP 134017]
+[New LWP 134018]
+[New LWP 134019]
+[New LWP 134020]
+[New LWP 134021]
+[New LWP 134022]
+[New LWP 134023]
+[New LWP 134024]
+[New LWP 134025]
+[New LWP 134026]
+[New LWP 134027]
+[New LWP 134028]
+[New LWP 134029]
+[New LWP 134030]
+[New LWP 134031]
+[New LWP 134032]
+[New LWP 134033]
+[New LWP 134034]
+[New LWP 134035]
+[New LWP 134036]
+[New LWP 134037]
+[New LWP 134038]
+[New LWP 134039]
+[New LWP 134040]
+[New LWP 134041]
+[New LWP 134042]
+[New LWP 134043]
+[New LWP 134044]
+[New LWP 134045]
+[New LWP 134046]
+[New LWP 134047]
+[New LWP 134048]
+[New LWP 134049]
+[New LWP 134050]
+[New LWP 134051]
+[New LWP 134052]
+[New LWP 134053]
+[New LWP 134054]
+[New LWP 134055]
+[New LWP 134056]
+[New LWP 134057]
+[New LWP 134058]
+[New LWP 134059]
+[New LWP 134060]
+[New LWP 134097]
+[New LWP 134098]
+[New LWP 134099]
+[New LWP 134100]
+[New LWP 134107]
+[New LWP 134108]
+[New LWP 134109]
+[New LWP 134110]
+[New LWP 134111]
+[New LWP 134112]
+[New LWP 134113]
+[New LWP 134114]
+[New LWP 134115]
+[New LWP 134116]
+[New LWP 134117]
+[New LWP 134118]
+[New LWP 134119]
+[New LWP 134120]
+[New LWP 134121]
+[New LWP 134122]
+[New LWP 134123]
+[New LWP 134124]
+[New LWP 134125]
+[New LWP 134126]
+[New LWP 134127]
+[New LWP 134128]
+[New LWP 134129]
+[New LWP 134130]
+[New LWP 134131]
+[New LWP 134132]
+[New LWP 134133]
+[New LWP 134134]
+[New LWP 134135]
+[New LWP 134136]
+[New LWP 134137]
+[New LWP 134138]
+[New LWP 134139]
+[New LWP 134140]
+[New LWP 134141]
+[New LWP 134142]
+[New LWP 134143]
+[New LWP 134144]
+[New LWP 134145]
+[New LWP 134146]
+[New LWP 134147]
+[New LWP 134148]
+[New LWP 134149]
+[New LWP 134150]
+[New LWP 134151]
+[New LWP 134152]
+[New LWP 134153]
+[New LWP 134154]
+[New LWP 134155]
+[New LWP 134156]
+[New LWP 134157]
+[New LWP 134158]
+[New LWP 134159]
+[New LWP 134160]
+[New LWP 134161]
+[New LWP 134162]
+[New LWP 134163]
+[New LWP 134164]
+[New LWP 134165]
+[New LWP 134166]
+[New LWP 134167]
+[New LWP 134168]
+[New LWP 134169]
+[New LWP 134234]
+[New LWP 134497]
+[New LWP 134498]
+[New LWP 134499]
+[New LWP 134500]
+[New LWP 134501]
+[New LWP 134502]
+[New LWP 134503]
+[New LWP 134504]
+[New LWP 134505]
+[New LWP 134506]
+[New LWP 134507]
+[New LWP 134508]
+[New LWP 134509]
+[New LWP 134510]
+[New LWP 134511]
+[New LWP 134512]
+[New LWP 134513]
+[New LWP 134514]
+[New LWP 134515]
+[New LWP 134516]
+[New LWP 134517]
+[New LWP 134518]
+[New LWP 134519]
+[New LWP 134520]
+[New LWP 134521]
+[New LWP 134522]
+[New LWP 134523]
+[New LWP 134524]
+[New LWP 134525]
+[New LWP 134526]
+[New LWP 134527]
+[New LWP 134549]
+[New LWP 134550]
+[New LWP 134551]
+[New LWP 134552]
+[New LWP 134553]
+[New LWP 134554]
+[New LWP 134555]
+[New LWP 134556]
+[New LWP 134557]
+[New LWP 134558]
+[New LWP 134559]
+[New LWP 134560]
+[New LWP 134561]
+[New LWP 134562]
+[New LWP 134563]
+[New LWP 134564]
+[New LWP 134565]
+[New LWP 134566]
+[New LWP 134567]
+[New LWP 134568]
+[New LWP 134569]
+[New LWP 134570]
+[New LWP 134571]
+[New LWP 134572]
+[New LWP 134573]
+[New LWP 134574]
+[New LWP 134575]
+[New LWP 134576]
+[New LWP 134577]
+[New LWP 134578]
+[New LWP 134579]
+[New LWP 134580]
+[New LWP 134581]
+[New LWP 134582]
+[New LWP 134583]
+[New LWP 134584]
+[New LWP 134585]
+[New LWP 134586]
+[New LWP 134587]
+[New LWP 134588]
+[New LWP 134589]
+[New LWP 134590]
+[New LWP 134591]
+[New LWP 134592]
+[New LWP 134593]
+[New LWP 134594]
+[New LWP 134595]
+[New LWP 134596]
+[New LWP 134597]
+[New LWP 134598]
+[New LWP 134599]
+[New LWP 134600]
+[New LWP 134601]
+[New LWP 134602]
+[New LWP 134603]
+[New LWP 134604]
+[New LWP 134605]
+[New LWP 134606]
+[New LWP 134607]
+[New LWP 134608]
+[New LWP 134609]
+[New LWP 134610]
+[New LWP 134611]
+[New LWP 134612]
+[New LWP 134613]
+[New LWP 134614]
+[New LWP 134651]
+[New LWP 134652]
+[New LWP 134653]
+[New LWP 134654]
+[New LWP 134655]
+[New LWP 134656]
+[New LWP 134657]
+[New LWP 134658]
+[New LWP 134659]
+[New LWP 134660]
+[New LWP 134661]
+[New LWP 134662]
+[New LWP 134663]
+[New LWP 134664]
+[New LWP 134665]
+[New LWP 134666]
+[New LWP 134667]
+[New LWP 134668]
+[New LWP 134669]
+[New LWP 134670]
+[New LWP 134671]
+[New LWP 134672]
+[New LWP 134673]
+[New LWP 134674]
+[New LWP 134675]
+[New LWP 134676]
+[New LWP 134677]
+[New LWP 134678]
+[New LWP 134679]
+[New LWP 134680]
+[New LWP 134681]
+[New LWP 134682]
+[New LWP 134683]
+[New LWP 134684]
+[New LWP 134685]
+[New LWP 134686]
+[New LWP 134687]
+[New LWP 134688]
+[New LWP 134689]
+[New LWP 134690]
+[New LWP 134691]
+[New LWP 134692]
+[New LWP 134693]
+[New LWP 134694]
+[New LWP 134695]
+[New LWP 134696]
+[New LWP 134697]
+[New LWP 134698]
+[New LWP 134699]
+[New LWP 134700]
+[New LWP 134701]
+[New LWP 134702]
+[New LWP 134703]
+[New LWP 134704]
+[New LWP 134705]
+[New LWP 134706]
+[New LWP 134707]
+[New LWP 134708]
+[New LWP 134709]
+[New LWP 134710]
+[New LWP 134711]
+[New LWP 134712]
+[New LWP 134713]
+[New LWP 134714]
+[New LWP 134715]
+[New LWP 134786]
+[New LWP 134787]
+
+warning: Cannot parse .gnu_debugdata section; LZMA support was disabled at compile time
+
+warning: Cannot parse .gnu_debugdata section; LZMA support was disabled at compile time
+
+warning: Cannot parse .gnu_debugdata section; LZMA support was disabled at compile time
+
+warning: Cannot parse .gnu_debugdata section; LZMA support was disabled at compile time
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+[Switching to thread 1 (Thread 0x798cf8540740 (LWP 133937))]
+#0  0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#0  0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+#1  0x0000798cf85d6a01 in pthread_cond_wait () from /lib/x86_64-linux-gnu/libc.so.6
+#2  0x0000798c33ae27a8 in tt::tt_metal::distributed::FDMeshCommandQueue::wait_for_outstanding_reads(std::unique_lock<std::mutex>&) () from /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x0000798c33ae2226 in tt::tt_metal::distributed::FDMeshCommandQueue::clear_expected_num_workers_completed() () from /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x0000798c33ae11c2 in tt::tt_metal::distributed::FDMeshCommandQueue::~FDMeshCommandQueue() () from /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x0000798c33ae23de in tt::tt_metal::distributed::FDMeshCommandQueue::~FDMeshCommandQueue() () from /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/libtt_metal.so
+#6  0x0000798c33af7bff in tt::tt_metal::distributed::MeshDeviceImpl::close_impl(tt::tt_metal::distributed::MeshDevice*) () from /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/libtt_metal.so
+#7  0x0000798c33afea70 in tt::tt_metal::distributed::MeshDevice::close() () from /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/libtt_metal.so
+#8  0x0000798c36a34290 in nanobind::detail::func_create<false, false, nanobind::detail::func_create<false, true, void (*&)(std::shared_ptr<tt::tt_metal::distributed::MeshDevice> const&), void, std::shared_ptr<tt::tt_metal::distributed::MeshDevice> const&, 0ul, nanobind::scope, nanobind::name, nanobind::arg, nanobind::call_guard<nanobind::gil_scoped_release> >(void (*&)(std::shared_ptr<tt::tt_metal::distributed::MeshDevice> const&), void (*)(std::shared_ptr<tt::tt_metal::distributed::MeshDevice> const&), std::integer_sequence<unsigned long, 0ul>, nanobind::scope const&, nanobind::name const&, nanobind::arg const&, nanobind::call_guard<nanobind::gil_scoped_release> const&)::{lambda(std::shared_ptr<tt::tt_metal::distributed::MeshDevice> const&)#1}, void, std::shared_ptr<tt::tt_metal::distributed::MeshDevice> const&, 0ul, nanobind::scope, nanobind::name, nanobind::arg, nanobind::call_guard<nanobind::gil_scoped_release> >(void (*&)(std::shared_ptr<tt::tt_metal::distributed::MeshDevice> const&), void (*)(std::shared_ptr<tt::tt_metal::distributed::MeshDevice> const&), std::integer_sequence<unsigned long, 0ul>, nanobind::scope const&, nanobind::name const&, nanobind::arg const&, nanobind::call_guard<nanobind::gil_scoped_release> const&)::{lambda(void*, _object**, unsigned char*, nanobind::rv_policy, nanobind::detail::cleanup_list*)#1}::__invoke(void*, _object**, unsigned char*, nanobind::rv_policy, nanobind::detail::cleanup_list*) () from /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so
+#9  0x0000798c369e9f45 in nanobind::detail::nb_func_vectorcall_complex(_object*, _object* const*, unsigned long, _object*) () from /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so
+#10 0x0000599be5cac82a in _PyEval_EvalFrameDefault ()
+#11 0x0000599be5c49023 in _PyFunction_Vectorcall ()
+#12 0x0000599be5cac82a in _PyEval_EvalFrameDefault ()
+#13 0x0000599be5c4f4bd in gen_iternext ()
+#14 0x0000599be5ca0c28 in builtin_next ()
+#15 0x0000599be5c6bea2 in cfunction_vectorcall_FASTCALL ()
+#16 0x0000599be5cd811c in call_function ()
+#17 0x0000599be5cc0edb in _PyEval_EvalFrameDefault ()
+#18 0x0000599be5c49023 in _PyFunction_Vectorcall ()
+#19 0x0000599be5e35dec in partial_vectorcall ()
+#20 0x0000599be5cd811c in call_function ()
+#21 0x0000599be5cc0edb in _PyEval_EvalFrameDefault ()
+#22 0x0000599be5c49023 in _PyFunction_Vectorcall ()
+#23 0x0000599be5c4b4d9 in method_vectorcall ()
+#24 0x0000599be5b3480c in PyObject_Call ()
+#25 0x0000599be5e3590c in partial_call ()
+#26 0x0000599be5b33b76 in _PyObject_MakeTpCall ()
+#27 0x0000599be5cd811c in call_function ()
+#28 0x0000599be5cc0edb in _PyEval_EvalFrameDefault ()
+#29 0x0000599be5c49023 in _PyFunction_Vectorcall ()
+#30 0x0000599be5caae02 in _PyEval_EvalFrameDefault ()
+#31 0x0000599be5c49023 in _PyFunction_Vectorcall ()
+#32 0x0000599be5caa9f2 in _PyEval_EvalFrameDefault ()
+#33 0x0000599be5c49023 in _PyFunction_Vectorcall ()
+#34 0x0000599be5cac82a in _PyEval_EvalFrameDefault ()
+#35 0x0000599be5c49023 in _PyFunction_Vectorcall ()
+#36 0x0000599be5c4b4d9 in method_vectorcall ()
+#37 0x0000599be5cac82a in _PyEval_EvalFrameDefault ()
+#38 0x0000599be5c49023 in _PyFunction_Vectorcall ()
+#39 0x0000599be5c4a6c6 in _PyObject_Call_Prepend ()
+  Id   Target Id                                            Frame 
+* 1    Thread 0x798cf8540740 (LWP 133937) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  2    Thread 0x798cf1bff640 (LWP 133998) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  3    Thread 0x798cf13fe640 (LWP 133999) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  4    Thread 0x798cf0bfd640 (LWP 134000) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  5    Thread 0x798cee1ff640 (LWP 134001) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  6    Thread 0x798ce97ff640 (LWP 134002) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  7    Thread 0x798ce8ffe640 (LWP 134003) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  8    Thread 0x798ce45ff640 (LWP 134004) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  9    Thread 0x798ce3dfe640 (LWP 134005) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  10   Thread 0x798ce13ff640 (LWP 134006) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  11   Thread 0x798cdc9ff640 (LWP 134007) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  12   Thread 0x798cdc1fe640 (LWP 134008) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  13   Thread 0x798cd77ff640 (LWP 134009) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  14   Thread 0x798cd4dff640 (LWP 134010) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  15   Thread 0x798cd45fe640 (LWP 134011) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  16   Thread 0x798ccfbff640 (LWP 134012) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  17   Thread 0x798ccd1ff640 (LWP 134013) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  18   Thread 0x798cca7ff640 (LWP 134014) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  19   Thread 0x798cc7dff640 (LWP 134015) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  20   Thread 0x798cc53ff640 (LWP 134016) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  21   Thread 0x798cc29ff640 (LWP 134017) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  22   Thread 0x798cbffff640 (LWP 134018) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  23   Thread 0x798cbd5ff640 (LWP 134019) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  24   Thread 0x798cbabff640 (LWP 134020) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  25   Thread 0x798cba3fe640 (LWP 134021) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  26   Thread 0x798cb59ff640 (LWP 134022) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  27   Thread 0x798cb2fff640 (LWP 134023) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  28   Thread 0x798cb27fe640 (LWP 134024) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  29   Thread 0x798cafdff640 (LWP 134025) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  30   Thread 0x798cab3ff640 (LWP 134026) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  31   Thread 0x798caabfe640 (LWP 134027) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  32   Thread 0x798ca61ff640 (LWP 134028) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  33   Thread 0x798ca37ff640 (LWP 134029) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  34   Thread 0x798ca0dff640 (LWP 134030) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  35   Thread 0x798c9e3ff640 (LWP 134031) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  36   Thread 0x798c9b9ff640 (LWP 134032) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  37   Thread 0x798c98fff640 (LWP 134033) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  38   Thread 0x798c965ff640 (LWP 134034) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  39   Thread 0x798c93bff640 (LWP 134035) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  40   Thread 0x798c911ff640 (LWP 134036) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  41   Thread 0x798c8e7ff640 (LWP 134037) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  42   Thread 0x798c8bdff640 (LWP 134038) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  43   Thread 0x798c893ff640 (LWP 134039) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  44   Thread 0x798c869ff640 (LWP 134040) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  45   Thread 0x798c83fff640 (LWP 134041) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  46   Thread 0x798c815ff640 (LWP 134042) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  47   Thread 0x798c7ebff640 (LWP 134043) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  48   Thread 0x798c7c1ff640 (LWP 134044) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  49   Thread 0x798c797ff640 (LWP 134045) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  50   Thread 0x798c76dff640 (LWP 134046) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  51   Thread 0x798c743ff640 (LWP 134047) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  52   Thread 0x798c719ff640 (LWP 134048) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  53   Thread 0x798c6efff640 (LWP 134049) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  54   Thread 0x798c6c5ff640 (LWP 134050) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  55   Thread 0x798c69bff640 (LWP 134051) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  56   Thread 0x798c671ff640 (LWP 134052) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  57   Thread 0x798c647ff640 (LWP 134053) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  58   Thread 0x798c61dff640 (LWP 134054) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  59   Thread 0x798c5f3ff640 (LWP 134055) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  60   Thread 0x798c5c9ff640 (LWP 134056) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  61   Thread 0x798c59fff640 (LWP 134057) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  62   Thread 0x798c555ff640 (LWP 134058) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  63   Thread 0x798c54dfe640 (LWP 134059) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  64   Thread 0x798c523ff640 (LWP 134060) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  65   Thread 0x798c2d84a640 (LWP 134097) "Tracy Profiler"  0x0000798cf865bc0f in poll () from /lib/x86_64-linux-gnu/libc.so.6
+  66   Thread 0x798c2d049640 (LWP 134098) "Tracy DXT1"      0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  67   Thread 0x798c2c848640 (LWP 134099) "Tracy Symbol Wo" 0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  68   Thread 0x798c211ff640 (LWP 134100) "jemalloc_bg_thd" 0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  69   Thread 0x798b94bff640 (LWP 134107) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  70   Thread 0x798b943fe640 (LWP 134108) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  71   Thread 0x798b93bfd640 (LWP 134109) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  72   Thread 0x798b933fc640 (LWP 134110) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  73   Thread 0x798b92bfb640 (LWP 134111) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  74   Thread 0x798b923fa640 (LWP 134112) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  75   Thread 0x798b91bf9640 (LWP 134113) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  76   Thread 0x798b913f8640 (LWP 134114) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  77   Thread 0x798b90bf7640 (LWP 134115) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  78   Thread 0x798b903f6640 (LWP 134116) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  79   Thread 0x798b8fbf5640 (LWP 134117) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  80   Thread 0x798b8f3f4640 (LWP 134118) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  81   Thread 0x798b8ebf3640 (LWP 134119) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  82   Thread 0x798b8e3f2640 (LWP 134120) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  83   Thread 0x798b8dbf1640 (LWP 134121) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  84   Thread 0x798b8d3f0640 (LWP 134122) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  85   Thread 0x798b8cbef640 (LWP 134123) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  86   Thread 0x798b8c3ee640 (LWP 134124) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  87   Thread 0x798b8bbed640 (LWP 134125) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  88   Thread 0x798b8b3ec640 (LWP 134126) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  89   Thread 0x798b8abeb640 (LWP 134127) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  90   Thread 0x798b8a3ea640 (LWP 134128) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  91   Thread 0x798b89be9640 (LWP 134129) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  92   Thread 0x798b893e8640 (LWP 134130) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  93   Thread 0x798b88be7640 (LWP 134131) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  94   Thread 0x798b883e6640 (LWP 134132) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  95   Thread 0x798b87be5640 (LWP 134133) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  96   Thread 0x798b873e4640 (LWP 134134) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  97   Thread 0x798b86be3640 (LWP 134135) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  98   Thread 0x798b863e2640 (LWP 134136) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  99   Thread 0x798b85be1640 (LWP 134137) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  100  Thread 0x798b853e0640 (LWP 134138) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  101  Thread 0x798b84bdf640 (LWP 134139) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  102  Thread 0x798b843de640 (LWP 134140) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  103  Thread 0x798b83bdd640 (LWP 134141) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  104  Thread 0x798b833dc640 (LWP 134142) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  105  Thread 0x798b82bdb640 (LWP 134143) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  106  Thread 0x798b823da640 (LWP 134144) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  107  Thread 0x798b81bd9640 (LWP 134145) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  108  Thread 0x798b813d8640 (LWP 134146) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  109  Thread 0x798b80bd7640 (LWP 134147) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  110  Thread 0x798b803d6640 (LWP 134148) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  111  Thread 0x798b7fbd5640 (LWP 134149) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  112  Thread 0x798b7f3d4640 (LWP 134150) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  113  Thread 0x798b7ebd3640 (LWP 134151) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  114  Thread 0x798b7e3d2640 (LWP 134152) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  115  Thread 0x798b7dbd1640 (LWP 134153) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  116  Thread 0x798b7d3d0640 (LWP 134154) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  117  Thread 0x798b7cbcf640 (LWP 134155) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  118  Thread 0x798b7c3ce640 (LWP 134156) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  119  Thread 0x798b7bbcd640 (LWP 134157) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  120  Thread 0x798b7b3cc640 (LWP 134158) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  121  Thread 0x798b7abcb640 (LWP 134159) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  122  Thread 0x798b7a3ca640 (LWP 134160) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  123  Thread 0x798b79bc9640 (LWP 134161) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  124  Thread 0x798b793c8640 (LWP 134162) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  125  Thread 0x798b78bc7640 (LWP 134163) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  126  Thread 0x798b783c6640 (LWP 134164) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  127  Thread 0x798b77bc5640 (LWP 134165) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  128  Thread 0x798b773c4640 (LWP 134166) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  129  Thread 0x798b76bc3640 (LWP 134167) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  130  Thread 0x798b763c2640 (LWP 134168) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  131  Thread 0x798b75bc1640 (LWP 134169) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  132  Thread 0x798b6d647640 (LWP 134234) "python"          0x0000798cf85d40d7 in ?? () from /lib/x86_64-linux-gnu/libc.so.6
+  133  Thread 0x798b67fff640 (LWP 134497) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  134  Thread 0x798b677fe640 (LWP 134498) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  135  Thread 0x798b6ce46640 (LWP 134499) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  136  Thread 0x798b64d49640 (LWP 134500) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  137  Thread 0x798b5bfff640 (LWP 134501) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  138  Thread 0x798b5b7fe640 (LWP 134502) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  139  Thread 0x798b5affd640 (LWP 134503) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  140  Thread 0x798b5a7fc640 (LWP 134504) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  141  Thread 0x798b59ffb640 (LWP 134505) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  142  Thread 0x798b597fa640 (LWP 134506) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  143  Thread 0x798b58ff9640 (LWP 134507) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  144  Thread 0x798a497fb640 (LWP 134508) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  145  Thread 0x798a48ffa640 (LWP 134509) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  146  Thread 0x798a487f9640 (LWP 134510) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  147  Thread 0x798a47ff8640 (LWP 134511) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  148  Thread 0x798a477f7640 (LWP 134512) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  149  Thread 0x798a46ff6640 (LWP 134513) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  150  Thread 0x798a467f5640 (LWP 134514) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  151  Thread 0x798a45ff4640 (LWP 134515) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  152  Thread 0x798a457f3640 (LWP 134516) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  153  Thread 0x798a44ff2640 (LWP 134517) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  154  Thread 0x798a447f1640 (LWP 134518) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  155  Thread 0x798a43ff0640 (LWP 134519) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  156  Thread 0x798a437ef640 (LWP 134520) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  157  Thread 0x7988603e9640 (LWP 134521) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  158  Thread 0x79885fbe8640 (LWP 134522) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  159  Thread 0x79885f3e7640 (LWP 134523) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  160  Thread 0x79885ebe6640 (LWP 134524) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  161  Thread 0x79885e3e5640 (LWP 134525) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  162  Thread 0x79885dbe4640 (LWP 134526) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  163  Thread 0x79885d3e3640 (LWP 134527) "python"          0x0000798c4d61de8e in ?? () from /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/lib/python3.10/site-packages/torch/lib/libgomp.so.1
+  164  Thread 0x798b47c66640 (LWP 134549) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  165  Thread 0x798b47465640 (LWP 134550) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  166  Thread 0x798b46c64640 (LWP 134551) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  167  Thread 0x798b46463640 (LWP 134552) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  168  Thread 0x798b45c62640 (LWP 134553) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  169  Thread 0x798b45461640 (LWP 134554) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  170  Thread 0x798b44c60640 (LWP 134555) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  171  Thread 0x798b4445f640 (LWP 134556) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  172  Thread 0x798b43c5e640 (LWP 134557) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  173  Thread 0x798b4345d640 (LWP 134558) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  174  Thread 0x798b42c5c640 (LWP 134559) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  175  Thread 0x798b4245b640 (LWP 134560) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  176  Thread 0x798b41c5a640 (LWP 134561) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  177  Thread 0x798b41459640 (LWP 134562) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  178  Thread 0x798b40c58640 (LWP 134563) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  179  Thread 0x798afffff640 (LWP 134564) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  180  Thread 0x798aff7fe640 (LWP 134565) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  181  Thread 0x798afeffd640 (LWP 134566) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  182  Thread 0x798afe7fc640 (LWP 134567) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  183  Thread 0x798afdffb640 (LWP 134568) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  184  Thread 0x798afd7fa640 (LWP 134569) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  185  Thread 0x798afcff9640 (LWP 134570) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  186  Thread 0x798afc7f8640 (LWP 134571) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  187  Thread 0x798afbff7640 (LWP 134572) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  188  Thread 0x798afb7f6640 (LWP 134573) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  189  Thread 0x798afaff5640 (LWP 134574) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  190  Thread 0x798afa7f4640 (LWP 134575) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  191  Thread 0x798af9ff3640 (LWP 134576) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  192  Thread 0x798af97f2640 (LWP 134577) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  193  Thread 0x798af8ff1640 (LWP 134578) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  194  Thread 0x798af87f0640 (LWP 134579) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  195  Thread 0x798af7fef640 (LWP 134580) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  196  Thread 0x798af77ee640 (LWP 134581) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  197  Thread 0x798af6fed640 (LWP 134582) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  198  Thread 0x798af67ec640 (LWP 134583) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  199  Thread 0x798af5feb640 (LWP 134584) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  200  Thread 0x798af57ea640 (LWP 134585) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  201  Thread 0x798af4fe9640 (LWP 134586) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  202  Thread 0x798af47e8640 (LWP 134587) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  203  Thread 0x798af3fe7640 (LWP 134588) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  204  Thread 0x798af37e6640 (LWP 134589) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  205  Thread 0x798af2fe5640 (LWP 134590) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  206  Thread 0x798af27e4640 (LWP 134591) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  207  Thread 0x798af1fe3640 (LWP 134592) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  208  Thread 0x798af17e2640 (LWP 134593) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  209  Thread 0x798af0fe1640 (LWP 134594) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  210  Thread 0x798af07e0640 (LWP 134595) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  211  Thread 0x798aeffdf640 (LWP 134596) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  212  Thread 0x798aef7de640 (LWP 134597) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  213  Thread 0x798aeefdd640 (LWP 134598) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  214  Thread 0x798aee7dc640 (LWP 134599) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  215  Thread 0x798aedfdb640 (LWP 134600) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  216  Thread 0x798aed7da640 (LWP 134601) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  217  Thread 0x798aecfd9640 (LWP 134602) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  218  Thread 0x798aec7d8640 (LWP 134603) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  219  Thread 0x798aebfd7640 (LWP 134604) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  220  Thread 0x798aeb7d6640 (LWP 134605) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  221  Thread 0x798aeafd5640 (LWP 134606) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  222  Thread 0x798aea7d4640 (LWP 134607) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  223  Thread 0x798ae9fd3640 (LWP 134608) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  224  Thread 0x798ae97d2640 (LWP 134609) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  225  Thread 0x798ae8fd1640 (LWP 134610) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  226  Thread 0x798ae87d0640 (LWP 134611) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  227  Thread 0x798ae7fcf640 (LWP 134612) "python"          0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  228  Thread 0x7987c61ff640 (LWP 134613) "python"          0x0000798cf8668e6e in epoll_wait () from /lib/x86_64-linux-gnu/libc.so.6
+  229  Thread 0x7987c49fe640 (LWP 134614) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  230  Thread 0x7987bffff640 (LWP 134651) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  231  Thread 0x79870c3fd640 (LWP 134652) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  232  Thread 0x79870bbfc640 (LWP 134653) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  233  Thread 0x79870b3fb640 (LWP 134654) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  234  Thread 0x79870abfa640 (LWP 134655) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  235  Thread 0x79870a3f9640 (LWP 134656) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  236  Thread 0x798709bf8640 (LWP 134657) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  237  Thread 0x7987093f7640 (LWP 134658) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  238  Thread 0x798708bf6640 (LWP 134659) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  239  Thread 0x7987083f5640 (LWP 134660) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  240  Thread 0x798707bf4640 (LWP 134661) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  241  Thread 0x7987073f3640 (LWP 134662) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  242  Thread 0x798706bf2640 (LWP 134663) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  243  Thread 0x7987063f1640 (LWP 134664) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  244  Thread 0x798705bf0640 (LWP 134665) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  245  Thread 0x7987053ef640 (LWP 134666) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  246  Thread 0x798704bee640 (LWP 134667) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  247  Thread 0x7987043ed640 (LWP 134668) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  248  Thread 0x798703bec640 (LWP 134669) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  249  Thread 0x7987033eb640 (LWP 134670) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  250  Thread 0x798702bea640 (LWP 134671) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  251  Thread 0x7987023e9640 (LWP 134672) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  252  Thread 0x798701be8640 (LWP 134673) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  253  Thread 0x7987013e7640 (LWP 134674) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  254  Thread 0x798700be6640 (LWP 134675) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  255  Thread 0x7987003e5640 (LWP 134676) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  256  Thread 0x7986ffbe4640 (LWP 134677) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  257  Thread 0x7986ff3e3640 (LWP 134678) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  258  Thread 0x7986febe2640 (LWP 134679) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  259  Thread 0x7986fe3e1640 (LWP 134680) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  260  Thread 0x7986fdbe0640 (LWP 134681) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  261  Thread 0x7986fd3df640 (LWP 134682) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  262  Thread 0x7986fcbde640 (LWP 134683) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  263  Thread 0x7986fc3dd640 (LWP 134684) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  264  Thread 0x7986fbbdc640 (LWP 134685) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  265  Thread 0x7986fb3db640 (LWP 134686) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  266  Thread 0x7986fabda640 (LWP 134687) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  267  Thread 0x7986fa3d9640 (LWP 134688) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  268  Thread 0x7986f9bd8640 (LWP 134689) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  269  Thread 0x7986f93d7640 (LWP 134690) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  270  Thread 0x7986f8bd6640 (LWP 134691) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  271  Thread 0x7986f83d5640 (LWP 134692) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  272  Thread 0x7986f7bd4640 (LWP 134693) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  273  Thread 0x7986f73d3640 (LWP 134694) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  274  Thread 0x7986f6bd2640 (LWP 134695) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  275  Thread 0x7986f63d1640 (LWP 134696) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  276  Thread 0x7986f5bd0640 (LWP 134697) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  277  Thread 0x7986f53cf640 (LWP 134698) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  278  Thread 0x7986f4bce640 (LWP 134699) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  279  Thread 0x7986f43cd640 (LWP 134700) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  280  Thread 0x7986f3bcc640 (LWP 134701) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  281  Thread 0x7986f33cb640 (LWP 134702) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  282  Thread 0x7986f2bca640 (LWP 134703) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  283  Thread 0x7986f23c9640 (LWP 134704) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  284  Thread 0x7986f1bc8640 (LWP 134705) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  285  Thread 0x7986f13c7640 (LWP 134706) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  286  Thread 0x7986f0bc6640 (LWP 134707) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  287  Thread 0x7986f03c5640 (LWP 134708) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  288  Thread 0x7986efbc4640 (LWP 134709) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  289  Thread 0x7986ef3c3640 (LWP 134710) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  290  Thread 0x7986eebc2640 (LWP 134711) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  291  Thread 0x7986ee3c1640 (LWP 134712) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  292  Thread 0x7986edbc0640 (LWP 134713) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  293  Thread 0x7986ed3bf640 (LWP 134714) "python"          0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+  294  Thread 0x7986ecbbe640 (LWP 134715) "python"          0x0000798c3392dca0 in tt::tt_metal::Device::id() const () from /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/libtt_metal.so
+  295  Thread 0x798662ffd640 (LWP 134786) "RtProfilerConsu" 0x0000798cf86618cd in syscall () from /lib/x86_64-linux-gnu/libc.so.6
+  296  Thread 0x7986637fe640 (LWP 134787) "RealtimeProfile" 0x0000798cf86287b8 in clock_nanosleep () from /lib/x86_64-linux-gnu/libc.so.6
+[Inferior 1 (process 133937) detached]
+exit=0

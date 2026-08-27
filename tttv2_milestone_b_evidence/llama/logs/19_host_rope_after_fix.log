@@ -1,0 +1,61 @@
+2026-08-26 19:54:42.505 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 600.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 13 items
+
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_resolves_llama_and_qwen_data[llama-scaled] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_resolves_llama_and_qwen_data[qwen] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fused_qk_keeps_users_grouped_per_column PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_config_is_immutable PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape0-32-Arch.WORMHOLE_B0-shape \\(8, 4\\)] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape1-16-Arch.WORMHOLE_B0-exactly 32] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape2-32-Arch.BLACKHOLE-Wormhole only] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_mismatched_tables_and_bad_batch_group PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_requires_explicit_fabric_safe_grids PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_prepares_grouped_decode_indices_with_resolved_mapper PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_invalid_decode_indices[positions0] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_invalid_decode_indices[positions1] PASSED
+models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_release_is_repeatable PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.16s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_resolves_llama_and_qwen_data[llama-scaled]
+0.15s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fused_qk_keeps_users_grouped_per_column
+0.15s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_resolves_llama_and_qwen_data[qwen]
+0.15s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_prepares_grouped_decode_indices_with_resolved_mapper
+0.15s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_invalid_decode_indices[positions0]
+0.15s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_release_is_repeatable
+0.15s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape2-32-Arch.BLACKHOLE-Wormhole only]
+0.15s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape1-16-Arch.WORMHOLE_B0-exactly 32]
+0.15s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_invalid_decode_indices[positions1]
+0.15s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_config_is_immutable
+0.15s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_mismatched_tables_and_bad_batch_group
+0.15s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape0-32-Arch.WORMHOLE_B0-shape \\(8, 4\\)]
+0.15s setup    models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_requires_explicit_fabric_safe_grids
+
+(12 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_resolves_llama_and_qwen_data[llama-scaled]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_resolves_llama_and_qwen_data[qwen]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fused_qk_keeps_users_grouped_per_column
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_config_is_immutable
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape0-32-Arch.WORMHOLE_B0-shape \\(8, 4\\)]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape1-16-Arch.WORMHOLE_B0-exactly 32]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_fails_closed_on_platform[shape2-32-Arch.BLACKHOLE-Wormhole only]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_mismatched_tables_and_bad_batch_group
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_requires_explicit_fabric_safe_grids
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_prepares_grouped_decode_indices_with_resolved_mapper
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_invalid_decode_indices[positions0]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_rejects_invalid_decode_indices[positions1]
+PASSED models/common/tests/modules/rope/test_rope_2d.py::test_rope_2d_release_is_repeatable
+============================== 13 passed in 2.20s ==============================
+exit=0

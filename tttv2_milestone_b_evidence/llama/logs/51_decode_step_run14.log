@@ -1,0 +1,209 @@
+=== Wed Aug 26 22:07:20 UTC 2026 ===
+node: models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes
+commit: 1d4ded04592bc050bd85f1efb592497b06780a71
+devices: 32
+2026-08-26 22:07:43.322 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 900.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes[wormhole_b0-8x4-device_params0] Fetching 3 files:   0%|          | 0/3 [00:00<?, ?it/s]Fetching 3 files: 100%|██████████| 3/3 [00:00<00:00, 1870.79it/s]
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+2026-08-26 22:09:31.912 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-26 22:09:31.912 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-26 22:09:31.932 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-26 22:09:31.932 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-26 22:09:31.979 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:575)
+ERROR
+
+==================================== ERRORS ====================================
+_ ERROR at setup of test_one_decode_step_executes[wormhole_b0-8x4-device_params0] _
+
+request = <SubRequest 'mesh_device' for <Function test_one_decode_step_executes[wormhole_b0-8x4-device_params0]>>
+silicon_arch_name = 'wormhole_b0'
+device_params = {'dispatch_core_axis': DispatchCoreAxis.COL, 'fabric_config': FabricConfig.FABRIC_1D_RING}
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """
+        Pytest fixture to set up a device mesh for tests.
+    
+        If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+        If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+        a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+    
+        Args:
+            request: Pytest request object.
+            silicon_arch_name: Name of the silicon architecture.
+            device_params: Additional device configuration parameters.
+    
+        Yields:
+            mesh_device: Initialized device mesh object.
+        """
+        import ttnn
+    
+>       request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+conftest.py:558: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+ttnn/ttnn/distributed/distributed.py:635: in get_pcie_device_ids
+    num_pcie_devices = get_num_pcie_devices()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    def get_num_pcie_devices() -> int:
+>       return ttnn._ttnn.device.GetNumPCIeDevices()
+E       RuntimeError: Timed out waiting for ETH heartbeat on device ASIC ID: 87032054158471220, ETH core e9-0 (NOC0) to advance. Stuck at 0xabcd32c1
+E       Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/topology/topology_discovery.cpp:721
+E        1. tt::umd::TopologyDiscovery::eth_heartbeat_running(tt::umd::TTDevice*, unsigned long, tt::umd::CoreCoord)
+E        2. tt::umd::TopologyDiscovery::discover_remote_devices()
+E        3. tt::umd::TopologyDiscovery::create_ethernet_map()
+E        4. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+E        5. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+E        6. tt::Cluster::open_driver(bool const&)
+E        7. tt::Cluster::initialize_device_drivers()
+E        8. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+E        9. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+E       10. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+E       11. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+E       12. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+E       13. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+E       14. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+E       15. tt::tt_metal::GetNumPCIeDevices()
+E       16. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x73d43c4262be]
+E       17. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x73d43c1ea1ef]
+E       18. _PyEval_EvalFrameDefault
+E       19. _PyFunction_Vectorcall
+E       20. python(+0x30011c) [0x59e95b00b11c]
+E       21. _PyEval_EvalFrameDefault
+E       22. _PyFunction_Vectorcall
+E       23. _PyEval_EvalFrameDefault
+E       24. python(+0x2774bd) [0x59e95af824bd]
+E       25. python(+0x2c8c28) [0x59e95afd3c28]
+E       26. python(+0x293ea2) [0x59e95af9eea2]
+E       27. python(+0x30011c) [0x59e95b00b11c]
+E       28. _PyEval_EvalFrameDefault
+E       29. _PyFunction_Vectorcall
+E       30. python(+0x30011c) [0x59e95b00b11c]
+E       31. _PyEval_EvalFrameDefault
+E       32. _PyFunction_Vectorcall
+E       33. _PyEval_EvalFrameDefault
+E       34. _PyFunction_Vectorcall
+E       35. _PyEval_EvalFrameDefault
+E       36. _PyFunction_Vectorcall
+E       37. python(+0x2734d9) [0x59e95af7e4d9]
+E       38. _PyEval_EvalFrameDefault
+E       39. _PyFunction_Vectorcall
+E       40. _PyObject_Call_Prepend
+E       41. python(+0x3b866e) [0x59e95b0c366e]
+E       42. python(+0x300318) [0x59e95b00b318]
+E       43. _PyEval_EvalFrameDefault
+E       44. _PyFunction_Vectorcall
+E       45. python(+0x2734d9) [0x59e95af7e4d9]
+E       46. python(+0x30011c) [0x59e95b00b11c]
+E       47. _PyEval_EvalFrameDefault
+E       48. _PyFunction_Vectorcall
+E       49. _PyEval_EvalFrameDefault
+E       50. _PyFunction_Vectorcall
+E       51. _PyEval_EvalFrameDefault
+E       52. _PyFunction_Vectorcall
+E       53. _PyEval_EvalFrameDefault
+E       54. _PyFunction_Vectorcall
+E       55. _PyEval_EvalFrameDefault
+E       56. _PyFunction_Vectorcall
+E       57. _PyEval_EvalFrameDefault
+E       58. _PyFunction_Vectorcall
+E       59. _PyEval_EvalFrameDefault
+E       60. _PyFunction_Vectorcall
+E       61. _PyEval_EvalFrameDefault
+E       62. _PyFunction_Vectorcall
+
+ttnn/ttnn/distributed/distributed.py:631: RuntimeError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+87.93s setup    models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes[wormhole_b0-8x4-device_params0]
+0.00s teardown models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes[wormhole_b0-8x4-device_params0]
+=========================== short test summary info ============================
+ERROR models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes[wormhole_b0-8x4-device_params0] - RuntimeError: Timed out waiting for ETH heartbeat on device ASIC ID: 87032054158471220, ETH core e9-0 (NOC0) to advance. Stuck at 0xabcd32c1
+Location: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/third_party/umd/device/topology/topology_discovery.cpp:721
+ 1. tt::umd::TopologyDiscovery::eth_heartbeat_running(tt::umd::TTDevice*, unsigned long, tt::umd::CoreCoord)
+ 2. tt::umd::TopologyDiscovery::discover_remote_devices()
+ 3. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 4. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 5. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+ 6. tt::Cluster::open_driver(bool const&)
+ 7. tt::Cluster::initialize_device_drivers()
+ 8. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&)
+ 9. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+10. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+11. std::__detail::_MakeUniq<tt::tt_metal::MetalEnvImpl>::__single_object std::make_unique<tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor>(tt::tt_metal::MetalEnvDescriptor&&)
+12. tt::tt_metal::MetalEnv::MetalEnv(tt::tt_metal::MetalEnvDescriptor)
+13. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+14. tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+15. tt::tt_metal::GetNumPCIeDevices()
+16. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x5842be) [0x73d43c4262be]
+17. /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x3481ef) [0x73d43c1ea1ef]
+18. _PyEval_EvalFrameDefault
+19. _PyFunction_Vectorcall
+20. python(+0x30011c) [0x59e95b00b11c]
+21. _PyEval_EvalFrameDefault
+22. _PyFunction_Vectorcall
+23. _PyEval_EvalFrameDefault
+24. python(+0x2774bd) [0x59e95af824bd]
+25. python(+0x2c8c28) [0x59e95afd3c28]
+26. python(+0x293ea2) [0x59e95af9eea2]
+27. python(+0x30011c) [0x59e95b00b11c]
+28. _PyEval_EvalFrameDefault
+29. _PyFunction_Vectorcall
+30. python(+0x30011c) [0x59e95b00b11c]
+31. _PyEval_EvalFrameDefault
+32. _PyFunction_Vectorcall
+33. _PyEval_EvalFrameDefault
+34. _PyFunction_Vectorcall
+35. _PyEval_EvalFrameDefault
+36. _PyFunction_Vectorcall
+37. python(+0x2734d9) [0x59e95af7e4d9]
+38. _PyEval_EvalFrameDefault
+39. _PyFunction_Vectorcall
+40. _PyObject_Call_Prepend
+41. python(+0x3b866e) [0x59e95b0c366e]
+42. python(+0x300318) [0x59e95b00b318]
+43. _PyEval_EvalFrameDefault
+44. _PyFunction_Vectorcall
+45. python(+0x2734d9) [0x59e95af7e4d9]
+46. python(+0x30011c) [0x59e95b00b11c]
+47. _PyEval_EvalFrameDefault
+48. _PyFunction_Vectorcall
+49. _PyEval_EvalFrameDefault
+50. _PyFunction_Vectorcall
+51. _PyEval_EvalFrameDefault
+52. _PyFunction_Vectorcall
+53. _PyEval_EvalFrameDefault
+54. _PyFunction_Vectorcall
+55. _PyEval_EvalFrameDefault
+56. _PyFunction_Vectorcall
+57. _PyEval_EvalFrameDefault
+58. _PyFunction_Vectorcall
+59. _PyEval_EvalFrameDefault
+60. _PyFunction_Vectorcall
+61. _PyEval_EvalFrameDefault
+62. _PyFunction_Vectorcall
+=================== 2 warnings, 1 error in 95.97s (0:01:35) ====================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+exit=1
+holders_after: 0

@@ -1,0 +1,9 @@
+Thu Aug 27 00:16:38 UTC 2026
+reset after reaping a hung teardown (host_gate_eth)
+[93m Hint: tt-smi -r is now supported on Galaxy 6U. [0m
+[95m Resetting WH Galaxy trays with reset command... [0m
+[94m Issuing USER_RESET on 32 devices before IPMI reset... [0m
+[91m Error in resetting galaxy 6u trays!
+[Errno 6] No such device or address: '/dev/tenstorrent/7'
+ Exiting... [0m
+reset exit=1

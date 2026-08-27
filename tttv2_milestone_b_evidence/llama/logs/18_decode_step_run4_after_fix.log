@@ -1,0 +1,1341 @@
+=== Wed Aug 26 19:47:16 UTC 2026 ===
+node: models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes
+commit: e4c1adfa61f9211d01d4629cf97374d395201ca5
+devices: 32
+holders: 0
+2026-08-26 19:47:38.776 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 1800.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes[wormhole_b0-8x4-device_params0] Fetching 3 files:   0%|          | 0/3 [00:00<?, ?it/s]Fetching 3 files: 100%|██████████| 3/3 [00:00<00:00, 1791.16it/s]
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+2026-08-26 19:49:28.151 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-26 19:49:28.151 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-26 19:49:28.171 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-26 19:49:28.171 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-26 19:49:28.231 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:575)
+2026-08-26 19:49:39.766 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-26 19:49:41.174 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[19, 21, 22, 17, 18, 23, 20, 16, 29, 26, 27, 24, 30, 28, 25, 31, 9, 14, 11, 13, 12, 15, 10, 8, 4, 5, 2, 6, 1, 7, 0, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-26 19:49:41.174 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-26 19:49:41.174 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:150)
+2026-08-26 19:49:41.174 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-26 19:49:41.200 | info     |             UMD | Starting devices in cluster (cluster.cpp:1198)
+2026-08-26 19:49:41.240 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1206)
+2026-08-26 19:49:41.338 | INFO     | conftest:mesh_device:612 - No trace region size for (8, 4)
+2026-08-26 19:49:41.338 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-26 19:49:41.338 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-26 19:49:41.345 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2410)
+2026-08-26 19:49:41.345 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2418)
+2026-08-26 19:49:41.420 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.438 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.453 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.468 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.483 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.500 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.515 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.531 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.546 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.561 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.576 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.591 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.605 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.619 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.634 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.648 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.665 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.680 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.700 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.714 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.730 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.744 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.758 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.773 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.789 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.805 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.820 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.835 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.851 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.868 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.882 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.899 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.916 | info     |           Metal | While initializing device 0, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.928 | info     |           Metal | While initializing device 1, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.928 | info     |           Metal | While initializing device 1, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.928 | info     |           Metal | While initializing device 1, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.929 | info     |           Metal | While initializing device 1, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.933 | info     |           Metal | While initializing device 2, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.937 | info     |           Metal | While initializing device 3, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.941 | info     |           Metal | While initializing device 4, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.941 | info     |           Metal | While initializing device 4, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.941 | info     |           Metal | While initializing device 4, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.941 | info     |           Metal | While initializing device 4, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.941 | info     |           Metal | While initializing device 4, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.941 | info     |           Metal | While initializing device 4, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.941 | info     |           Metal | While initializing device 4, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.941 | info     |           Metal | While initializing device 4, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.941 | info     |           Metal | While initializing device 4, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.941 | info     |           Metal | While initializing device 4, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.941 | info     |           Metal | While initializing device 4, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.941 | info     |           Metal | While initializing device 4, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.942 | info     |           Metal | While initializing device 4, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.942 | info     |           Metal | While initializing device 4, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.942 | info     |           Metal | While initializing device 4, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.942 | info     |           Metal | While initializing device 4, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.946 | info     |           Metal | While initializing device 5, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.950 | info     |           Metal | While initializing device 6, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.954 | info     |           Metal | While initializing device 7, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.958 | info     |           Metal | While initializing device 8, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.963 | info     |           Metal | While initializing device 9, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.967 | info     |           Metal | While initializing device 10, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.971 | info     |           Metal | While initializing device 11, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.975 | info     |           Metal | While initializing device 12, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.979 | info     |           Metal | While initializing device 13, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.980 | info     |           Metal | While initializing device 13, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.984 | info     |           Metal | While initializing device 14, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.988 | info     |           Metal | While initializing device 15, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.988 | info     |           Metal | While initializing device 15, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.988 | info     |           Metal | While initializing device 15, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.988 | info     |           Metal | While initializing device 15, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.988 | info     |           Metal | While initializing device 15, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.988 | info     |           Metal | While initializing device 15, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.988 | info     |           Metal | While initializing device 15, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.988 | info     |           Metal | While initializing device 15, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.988 | info     |           Metal | While initializing device 15, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.989 | info     |           Metal | While initializing device 15, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.989 | info     |           Metal | While initializing device 15, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.989 | info     |           Metal | While initializing device 15, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.989 | info     |           Metal | While initializing device 15, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.989 | info     |           Metal | While initializing device 15, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.989 | info     |           Metal | While initializing device 15, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.989 | info     |           Metal | While initializing device 15, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.992 | info     |           Metal | While initializing device 16, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.992 | info     |           Metal | While initializing device 16, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.992 | info     |           Metal | While initializing device 16, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.992 | info     |           Metal | While initializing device 16, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.993 | info     |           Metal | While initializing device 16, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.993 | info     |           Metal | While initializing device 16, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.993 | info     |           Metal | While initializing device 16, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.993 | info     |           Metal | While initializing device 16, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.993 | info     |           Metal | While initializing device 16, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.993 | info     |           Metal | While initializing device 16, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.993 | info     |           Metal | While initializing device 16, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.993 | info     |           Metal | While initializing device 16, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.993 | info     |           Metal | While initializing device 16, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.993 | info     |           Metal | While initializing device 16, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.993 | info     |           Metal | While initializing device 16, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.993 | info     |           Metal | While initializing device 16, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:41.997 | info     |           Metal | While initializing device 17, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.001 | info     |           Metal | While initializing device 18, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.001 | info     |           Metal | While initializing device 18, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.002 | info     |           Metal | While initializing device 18, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.006 | info     |           Metal | While initializing device 19, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.010 | info     |           Metal | While initializing device 20, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.014 | info     |           Metal | While initializing device 21, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.018 | info     |           Metal | While initializing device 22, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.023 | info     |           Metal | While initializing device 23, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.027 | info     |           Metal | While initializing device 24, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.031 | info     |           Metal | While initializing device 25, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.035 | info     |           Metal | While initializing device 26, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.039 | info     |           Metal | While initializing device 27, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.044 | info     |           Metal | While initializing device 28, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.048 | info     |           Metal | While initializing device 29, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.052 | info     |           Metal | While initializing device 30, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.053 | info     |           Metal | While initializing device 30, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 21-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 22-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 20-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 25-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 18-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 24-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 19-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 23-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 20-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 24-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 22-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 21-16 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 23-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 25-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 18-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.057 | info     |           Metal | While initializing device 31, active ethernet dispatch core 19-17 detected as still running, issuing exit signal. (risc_firmware_initializer.cpp:476)
+2026-08-26 19:49:42.151 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-26 19:49:42.563 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-26 19:49:42.564 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-26 19:49:42.565 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-26 19:49:42.566 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-26 19:49:42.654 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:550)
+2026-08-26 19:49:42.655 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:550)
+2026-08-26 19:49:42.656 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:550)
+2026-08-26 19:49:42.657 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:550)
+2026-08-26 19:49:42.658 | info     |           Metal | Fabric initialized on Device 8 (device.cpp:550)
+2026-08-26 19:49:42.659 | info     |           Metal | Fabric initialized on Device 9 (device.cpp:550)
+2026-08-26 19:49:42.660 | info     |           Metal | Fabric initialized on Device 10 (device.cpp:550)
+2026-08-26 19:49:42.661 | info     |           Metal | Fabric initialized on Device 11 (device.cpp:550)
+2026-08-26 19:49:42.663 | info     |           Metal | Fabric initialized on Device 12 (device.cpp:550)
+2026-08-26 19:49:42.664 | info     |           Metal | Fabric initialized on Device 13 (device.cpp:550)
+2026-08-26 19:49:42.665 | info     |           Metal | Fabric initialized on Device 14 (device.cpp:550)
+2026-08-26 19:49:42.666 | info     |           Metal | Fabric initialized on Device 15 (device.cpp:550)
+2026-08-26 19:49:42.714 | info     |           Metal | Fabric initialized on Device 16 (device.cpp:550)
+2026-08-26 19:49:42.715 | info     |           Metal | Fabric initialized on Device 17 (device.cpp:550)
+2026-08-26 19:49:42.717 | info     |           Metal | Fabric initialized on Device 18 (device.cpp:550)
+2026-08-26 19:49:42.718 | info     |           Metal | Fabric initialized on Device 19 (device.cpp:550)
+2026-08-26 19:49:42.727 | info     |           Metal | Fabric initialized on Device 20 (device.cpp:550)
+2026-08-26 19:49:42.728 | info     |           Metal | Fabric initialized on Device 21 (device.cpp:550)
+2026-08-26 19:49:42.729 | info     |           Metal | Fabric initialized on Device 22 (device.cpp:550)
+2026-08-26 19:49:42.730 | info     |           Metal | Fabric initialized on Device 23 (device.cpp:550)
+2026-08-26 19:49:42.731 | info     |           Metal | Fabric initialized on Device 24 (device.cpp:550)
+2026-08-26 19:49:42.732 | info     |           Metal | Fabric initialized on Device 25 (device.cpp:550)
+2026-08-26 19:49:42.733 | info     |           Metal | Fabric initialized on Device 26 (device.cpp:550)
+2026-08-26 19:49:42.734 | info     |           Metal | Fabric initialized on Device 27 (device.cpp:550)
+2026-08-26 19:49:42.736 | info     |           Metal | Fabric initialized on Device 28 (device.cpp:550)
+2026-08-26 19:49:42.737 | info     |           Metal | Fabric initialized on Device 29 (device.cpp:550)
+2026-08-26 19:49:42.738 | info     |           Metal | Fabric initialized on Device 30 (device.cpp:550)
+2026-08-26 19:49:42.739 | info     |           Metal | Fabric initialized on Device 31 (device.cpp:550)
+2026-08-26 19:49:42.739 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:444)
+2026-08-26 19:49:42.739 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 24 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=559370951461 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 29 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=559482412672 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 28 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=559397478071 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 16 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=559457234675 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 26 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=559457801375 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 20 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=559353804512 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 22 sync complete: 100 samples, frequency=0.985507 GHz, device_time_at_sync=559580281480 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 27 sync complete: 100 samples, frequency=0.985501 GHz, device_time_at_sync=559524417152 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 18 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=559398339079 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 25 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=559648053906 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 13 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=559219935315 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 21 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=559459923358 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=559390648514 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 30 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=559441772162 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 17 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=559371609398 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.847 | info     |           Metal | [Real-time profiler] Device 19 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=559414330275 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=559489311250 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 14 sync complete: 100 samples, frequency=0.985497 GHz, device_time_at_sync=559332576994 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 31 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=559415765975 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=559322172332 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 15 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=559245765615 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 23 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=559403429723 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 7 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=559312240933 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 9 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=559411900804 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 6 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=559372285047 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 12 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=559381622550 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 5 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=559356265649 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 11 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=559129298296 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 4 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=559459607630 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 10 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=559282457692 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 8 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=559093058377 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:43.848 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=559245299866 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 19:49:44.164 | DEBUG    | conftest:mesh_device:630 - multidevice with 32 devices is created
+[stage] enter build
+2026-08-26 19:49:52.199 | critical |          Always | TT_FATAL: Kernel group cores do not match sub device cores for programmable core type TENSIX (assert.hpp:104)
+[stage] FAILED in build
+Traceback (most recent call last):
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py", line 171, in _stage
+    yield
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py", line 262, in test_one_decode_step_executes
+    model = _build(mesh_device, weights, params)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py", line 146, in _build
+    return build_llama33_70b_galaxy_model(
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/models/llama33_70b_galaxy/model.py", line 1583, in build_llama33_70b_galaxy_model
+    model.rope_setup.load_device_weights()
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/modules/rope/rope_2d.py", line 88, in load_device_weights
+    self.cos_matrix_prefill = ttnn.clone(self.cos_matrix, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/impl/program/program.cpp:2205: num_intersections == num_cores
+info:
+Kernel group cores do not match sub device cores for programmable core type TENSIX
+backtrace:
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0x90ad40) [0x7a437ab9ed40]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/libtt_metal.so(+0x98b50c) [0x7a437979b50c]
+ --- tt::tt_metal::detail::ProgramImpl::determine_sub_device_ids(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0xd83458) [0x7a437b017458]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0xd82889) [0x7a437b016889]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations13data_movement5clone14CloneOperationEEEEEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x264) [0x7a437b0127b4]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations13data_movement5clone14CloneOperationEEENT_21tensor_return_value_tERKNS7_22operation_attributes_tERKNS7_13tensor_args_tE+0x29e) [0x7a437b00ffde]
+ --- ttnn::prim::clone(ttnn::Tensor const&, std::optional<tt::tt_metal::DataType> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::ComputeKernelConfig> const&)
+ --- ttnn::clone(ttnn::Tensor const&, std::optional<tt::tt_metal::DataType> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::ComputeKernelConfig> const&)
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x61123c) [0x7a437ccb323c]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x347f45) [0x7a437c9e9f45]
+ --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+ --- python(+0x3b866e) [0x57072f7aa66e]
+ --- python(_PyEval_EvalFrameDefault+0x90c8) [0x57072f6c5fc8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+ --- python(+0x3b866e) [0x57072f7aa66e]
+ --- python(+0x300318) [0x57072f6f2318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x7f02) [0x57072f6c4e02]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x30011c) [0x57072f6f211c]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x30011c) [0x57072f6f211c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x57072f6daedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x34f6f) [0x57072f6f1e6f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x34f6f) [0x57072f6f1e6f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x57072f6c49f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x2734d9) [0x57072f6654d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+ --- python(+0x3b866e) [0x57072f7aa66e]
+ --- python(+0x300318) [0x57072f6f2318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x7f02) [0x57072f6c4e02]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x57072f6c49f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x2734d9) [0x57072f6654d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+ --- python(+0x3b866e) [0x57072f7aa66e]
+ --- python(_PyEval_EvalFrameDefault+0x90c8) [0x57072f6c5fc8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x30011c) [0x57072f6f211c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x57072f6daedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x2734d9) [0x57072f6654d9]
+ --- python(+0x30011c) [0x57072f6f211c]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x30011c) [0x57072f6f211c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x57072f6daedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x30011c) [0x57072f6f211c]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x57072f6c49f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x2734d9) [0x57072f6654d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+ --- python(+0x3b866e) [0x57072f7aa66e]
+ --- python(+0x300318) [0x57072f6f2318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x57072f6c49f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x2734d9) [0x57072f6654d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+ --- python(+0x3b866e) [0x57072f7aa66e]
+ --- python(+0x300318) [0x57072f6f2318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+
+FAILED2026-08-26 19:49:56.209 | INFO     | conftest:pytest_runtest_teardown:1189 - In custom teardown, open device ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
+
+
+=================================== FAILURES ===================================
+________ test_one_decode_step_executes[wormhole_b0-8x4-device_params0] _________
+
+mesh_device = MeshDevice(8x4 grid, 32 devices)
+layer0_weights_and_params = (Llama33_70BGalaxyWeights(embedding=tensor([[ 8.9111e-03, -5.1880e-03,  6.3705e-04,  ..., -3.8300e-03,
+         -2.8229e-03, -1.1444e-03],
+        [ 4.7607e-03, -7.1716e-04,  2.7313e-03,  ...,  7.4463e-03,
+          5.9509e-04,  5.9509e-03],
+        [ 6.6223e-03,  4.9438e-03, -2.4719e-03,  ...,  6.0272e-04,
+          8.2016e-04,  3.6926e-03],
+        ...,
+        [ 3.1665e-08,  1.7346e-08, -2.1979e-07,  ..., -3.7067e-07,
+          6.9384e-08, -2.9244e-07],
+        [ 7.1712e-08, -8.8476e-08,  4.2841e-07,  ..., -2.9430e-07,
+          4.4703e-07, -1.9558e-07],
+        [ 2.1700e-07,  3.4273e-07, -2.6263e-07,  ...,  3.1106e-07,
+          4.5635e-07, -2.3469e-07]], dtype=torch.bfloat16), rope_cos=tensor([[[[ 1.0000,  1.0000,  1.0000,  ...,  1.0000,  1.0000,  1.0000],
+          [ 0.5391,  0.5391,  0.6875,  ...,  1.0000,  1.0000,  1.0000],
+          [-0.4160, -0.4160, -0.0583,  ...,  1.0000,  1.0000,  1.0000],
+          ...,
+          [-0.4258, -0.4258, -0.2676,  ...,  1.0000,  1.0000,  1.0000],
+          [-0.9922, -0.9922,  0.5156,  ...,  1.0000,  1.0000,  1.0000],
+          [-0.6445, -0.6445,  0.9766,  ...,  1.0000,  1.0000,  1.0000]]]],
+       dtype=torch.bfloat16), rope_sin=tensor([[[[ 0.0000e+00,  0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,
+            0.0000e+00,  0.0000e+00],
+          [ 8.3984e-01,  8.3984e-01,  7.2656e-01,  ...,  3.7625e-07,
+            3.0734e-07,  3.0734e-07],
+          [ 9.1016e-01,  9.1016e-01,  1.0000e+00,  ...,  7.5251e-07,
+            6.1467e-07,  6.1467e-07],
+          ...,
+          [ 9.0625e-01,  9.0625e-01, -9.6484e-01,  ...,  3.0823e-03,
+            2.5177e-03,  2.5177e-03],
+          [ 1.3184e-01,  1.3184e-01, -8.5547e-01,  ...,  3.0823e-03,
+            2.5177e-03,  2.5177e-03],
+          [-7.6172e-01, -7.6172e-01, -2.1094e-01,  ...,  3.0823e-03,
+            2.5177e-03,  2.5177e-03]]]], dtype=torch.bfloat16), layers=(Llama33_70BGalaxyLayerWeights(wqkv=tensor([[ 4.5776e-04, -2.5749e-04,  4.2152e-04,  ..., -6.8970e-03,
+         -1.7334e-02, -9.0942e-03],
+        [ 4.9210e-04, -7.0190e-04, -3.5095e-04,  ...,  3.6621e-02,
+         -3.7109e-02,  7.9102e-02],
+        [ 4.3106e-04, -3.4869e-06,  1.6403e-04,  ..., -1.6235e-02,
+          1.2696e-05, -1.0437e-02],
+        ...,
+        [ 5.4240e-06, -1.3649e-05,  6.5267e-06,  ..., -1.1158e-04,
+          1.2451e-02, -1.5869e-02],
+        [ 2.9945e-04, -8.5068e-04, -1.5736e-04,  ..., -2.9755e-03,
+          1.1353e-02, -7.2632e-03],
+        [ 5.5695e-04,  1.3657e-03,  2.7657e-04,  ...,  4.8828e-03,
+          7.8125e-03,  3.0212e-03]], dtype=torch.bfloat16), wo=tensor([[-0.0232, -0.0011,  0.0078,  ...,  0.0018,  0.0093,  0.0089],
+        [-0.0016,  0.0049,  0.0048,  ...,  0.0157, -0.0015, -0.0006],
+        [-0.0066, -0.0018, -0.0060,  ...,  0.0067,  0.0140, -0.0034],
+        ...,
+        [-0.0074,  0.0020,  0.0034,  ...,  0.0121, -0.0078,  0.0020],
+        [-0.0048,  0.0027,  0.0053,  ..., -0.0056,  0.0052, -0.0046],
+        [-0.0061, -0.0060, -0.0005,  ...,  0.0062,  0.0032, -0.0037]],
+       dtype=torch.bfloat16), w1=tensor([[-1.3977e-02,  1.0498e-02, -1.6556e-03,  ..., -3.5095e-03,
+          1.1230e-02,  1.9455e-03],
+        [-9.8877e-03, -3.4637e-03, -8.4839e-03,  ..., -1.7700e-03,
+         -6.1340e-03,  1.9531e-02],
+        [ 2.1210e-03,  3.4180e-03, -2.3499e-03,  ...,  1.2360e-03,
+         -1.0498e-02,  4.6997e-03],
+        ...,
+        [-9.3994e-03, -2.5177e-03,  1.2817e-03,  ...,  6.3896e-05,
+         -4.8218e-03,  4.9744e-03],
+        [-2.2949e-02,  1.0315e-02, -1.2573e-02,  ..., -3.6163e-03,
+         -1.3962e-03, -2.2054e-06],
+        [ 9.5367e-04, -3.4332e-03,  1.7242e-03,  ..., -4.6997e-03,
+         -5.1575e-03, -6.1340e-03]], dtype=torch.bfloat16), w2=tensor([[-0.0101, -0.0046, -0.0247,  ..., -0.0118, -0.0074, -0.0146],
+        [ 0.0014,  0.0197,  0.0071,  ..., -0.0068,  0.0151,  0.0048],
+        [-0.0141,  0.0042,  0.0019,  ..., -0.0095,  0.0102,  0.0019],
+        ...,
+        [-0.0036, -0.0061, -0.0060,  ...,  0.0127, -0.0001, -0.0045],
+        [ 0.0003, -0.0019,  0.0093,  ...,  0.0011,  0.0133,  0.0096],
+        [-0.0178, -0.0100,  0.0049,  ..., -0.0033,  0.0181, -0.0146]],
+       dtype=torch.bfloat16), w3=tensor([[-1.1353e-02,  1.8845e-03, -1.0864e-02,  ..., -1.2268e-02,
+         -6.8665e-03, -4.8828e-03],
+        [-9.5215e-03,  1.7738e-04, -1.1230e-02,  ..., -2.6093e-03,
+          7.7820e-04, -1.5320e-02],
+        [-2.2217e-02, -3.0975e-03,  1.1719e-02,  ...,  1.6479e-03,
+          2.4414e-03,  1.8921e-02],
+        ...,
+        [ 8.4229e-03, -6.2866e-03, -9.5825e-03,  ...,  7.4863e-05,
+         -2.8992e-04, -8.3618e-03],
+        [ 4.5166e-03,  1.1230e-02, -1.2695e-02,  ..., -7.3242e-03,
+          1.9531e-03,  9.2316e-04],
+        [ 8.4229e-03, -6.1798e-04,  6.2561e-03,  ..., -2.5940e-03,
+         -2.6245e-03,  4.7913e-03]], dtype=torch.bfloat16), attention_norm=tensor([ 8.0109e-05, -1.1253e-04,  1.2436e-03,  ...,  8.3542e-04,
+         7.1335e-04,  1.2878e-02]), ff_norm=tensor([0.0244, 0.0303, 0.0220,  ..., 0.0214, 0.0212, 0.0300])),), final_norm=tensor([1.8516, 1.9531, 1.9062,  ..., 1.9531, 2.2031, 1.9219]), lm_head=tensor([[ 1.2573e-02,  3.3875e-03, -2.0599e-03,  ...,  1.6098e-03,
+          1.6098e-03,  1.6098e-03],
+        [-4.3631e-05,  3.8147e-03, -5.4321e-03,  ...,  1.1215e-03,
+          1.1292e-03,  1.1215e-03],
+        [ 1.9409e-02,  1.1353e-02,  3.7384e-03,  ...,  5.8651e-05,
+          5.8651e-05,  5.8651e-05],
+        ...,
+        [ 7.1716e-03,  5.8594e-03,  7.1106e-03,  ..., -3.5706e-03,
+         -3.5706e-03, -3.5706e-03],
+        [-6.8970e-03, -1.1597e-02, -1.6846e-02,  ...,  3.0823e-03,
+          3.0823e-03,  3.0823e-03],
+        [ 3.7537e-03,  1.2131e-03,  1.1047e-02,  ..., -3.0212e-03,
+         -3.0212e-03, -3.0212e-03]], dtype=torch.bfloat16)), Llama33_70BGalaxyModelParameters(dim=8192, n_heads=64, n_kv_heads=8, head_dim=128, hidden_dim=28672, vocab_size=128256, n_layers=1, rms_norm_eps=1e-05, rope_theta=500000.0, rope_scaling_factor=8.0, original_context_len=8192, max_batch_size=32, max_seq_len=2048, prefill_sequence_lengths=(128,), batched_prefill_sequence_lengths=(), chunked_prefill_sequence_lengths=()))
+
+    @galaxy_params
+    @galaxy
+    @torch.no_grad()
+    def test_one_decode_step_executes(mesh_device, layer0_weights_and_params):
+        """RoPE composed with Attention2D, and the decode matmul on the partition.
+    
+        Every device call is its own named stage, so the last ``[stage] enter`` line
+        in the log identifies the aborting call even when the mesh is left
+        un-drainable and the session never prints a failure summary.
+        """
+    
+        weights, params = layer0_weights_and_params
+        ttnn.SetDefaultDevice(mesh_device)
+        torch.manual_seed(21)
+        with _stage("build"):
+>           model = _build(mesh_device, weights, params)
+
+models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py:262: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py:146: in _build
+    return build_llama33_70b_galaxy_model(
+models/common/models/llama33_70b_galaxy/model.py:1583: in build_llama33_70b_galaxy_model
+    model.rope_setup.load_device_weights()
+models/common/modules/rope/rope_2d.py:88: in load_device_weights
+    self.cos_matrix_prefill = ttnn.clone(self.cos_matrix, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = FastOperation(python_fully_qualified_name='ttnn.clone', function=<ttnn._ttnn.operations.data_movement.clone_t object at 0x7a42b96d9b90>, preprocess_golden_function_inputs=<function default_preprocess_golden_function_inputs at 0x7a42b966b910>, golden_function=<function _golden_function at 0x7a42b94da680>, postprocess_golden_function_outputs=<function default_postprocess_golden_function_outputs at 0x7a42b966b9a0>, is_cpp_operation=True, is_experimental=False)
+function_args = (device_id: 24, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 28, MeshCoordinate([0, 1])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 20, MeshCoordinate([0, 2])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 16, MeshCoordinate([0, 3])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 25, MeshCoordinate([1, 0])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 29, MeshCoordinate([1, 1])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 21, MeshCoordinate([1, 2])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 17, MeshCoordinate([1, 3])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 26, MeshCoordinate([2, 0])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 30, MeshCoordinate([2, 1])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 22, MeshCoordinate([2, 2])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 18, MeshCoordinate([2, 3])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 27, MeshCoordinate([3, 0])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 31, MeshCoordinate([3, 1])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 23, MeshCoordinate([3, 2])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 19, MeshCoordinate([3, 3])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 3, MeshCoordinate([4, 0])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 7, MeshCoordinate([4, 1])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 15, MeshCoordinate([4, 2])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 11, MeshCoordinate([4, 3])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 2, MeshCoordinate([5, 0])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 6, MeshCoordinate([5, 1])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 14, MeshCoordinate([5, 2])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 10, MeshCoordinate([5, 3])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 1, MeshCoordinate([6, 0])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 5, MeshCoordinate([6, 1])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 13, MeshCoordinate([6, 2])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 9, MeshCoordinate([6, 3])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 0, MeshCoordinate([7, 0])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 4, MeshCoordinate([7, 1])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 12, MeshCoordinate([7, 2])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+device_id: 8, MeshCoordinate([7, 3])
+ttnn.Tensor([[[[ 1.0000e+00,  1.0000e+00,  ...,  1.0000e+00,  1.0000e+00],
+               [ 5.3906e-01,  5.3906e-01,  ...,  1.0000e+00,  1.0000e+00],
+               ...,
+               [-9.9219e-01, -9.9219e-01,  ...,  1.0000e+00,  1.0000e+00],
+               [-6.4453e-01, -6.4453e-01,  ...,  1.0000e+00,  1.0000e+00]]]], shape=Shape([1, 1, 8192, 128]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR),)
+function_kwargs = {'memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        if self._requires_slow_runtime():
+            return self._slow_operation_instance()(*function_args, **function_kwargs)
+    
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+    
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+    
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+E               RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/impl/program/program.cpp:2205: num_intersections == num_cores
+E               info:
+E               Kernel group cores do not match sub device cores for programmable core type TENSIX
+E               backtrace:
+E                --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0x90ad40) [0x7a437ab9ed40]
+E                --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/libtt_metal.so(+0x98b50c) [0x7a437979b50c]
+E                --- tt::tt_metal::detail::ProgramImpl::determine_sub_device_ids(tt::tt_metal::IDevice const*)
+E                --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+E                --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+E                --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+E                --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0xd83458) [0x7a437b017458]
+E                --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0xd82889) [0x7a437b016889]
+E                --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations13data_movement5clone14CloneOperationEEEEEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x264) [0x7a437b0127b4]
+E                --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations13data_movement5clone14CloneOperationEEENT_21tensor_return_value_tERKNS7_22operation_attributes_tERKNS7_13tensor_args_tE+0x29e) [0x7a437b00ffde]
+E                --- ttnn::prim::clone(ttnn::Tensor const&, std::optional<tt::tt_metal::DataType> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::ComputeKernelConfig> const&)
+E                --- ttnn::clone(ttnn::Tensor const&, std::optional<tt::tt_metal::DataType> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::ComputeKernelConfig> const&)
+E                --- /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x61123c) [0x7a437ccb323c]
+E                --- /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x347f45) [0x7a437c9e9f45]
+E                --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+E                --- python(+0x3b866e) [0x57072f7aa66e]
+E                --- python(_PyEval_EvalFrameDefault+0x90c8) [0x57072f6c5fc8]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+E                --- python(+0x3b866e) [0x57072f7aa66e]
+E                --- python(+0x300318) [0x57072f6f2318]
+E                --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyEval_EvalFrameDefault+0x7f02) [0x57072f6c4e02]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(+0x30011c) [0x57072f6f211c]
+E                --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(+0x30011c) [0x57072f6f211c]
+E                --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x57072f6daedb]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyEval_EvalFrameDefault+0x34f6f) [0x57072f6f1e6f]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyEval_EvalFrameDefault+0x34f6f) [0x57072f6f1e6f]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyEval_EvalFrameDefault+0x7af2) [0x57072f6c49f2]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(+0x2734d9) [0x57072f6654d9]
+E                --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+E                --- python(+0x3b866e) [0x57072f7aa66e]
+E                --- python(+0x300318) [0x57072f6f2318]
+E                --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyEval_EvalFrameDefault+0x7f02) [0x57072f6c4e02]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyEval_EvalFrameDefault+0x7af2) [0x57072f6c49f2]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(+0x2734d9) [0x57072f6654d9]
+E                --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+E                --- python(+0x3b866e) [0x57072f7aa66e]
+E                --- python(_PyEval_EvalFrameDefault+0x90c8) [0x57072f6c5fc8]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(+0x30011c) [0x57072f6f211c]
+E                --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x57072f6daedb]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(+0x2734d9) [0x57072f6654d9]
+E                --- python(+0x30011c) [0x57072f6f211c]
+E                --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(+0x30011c) [0x57072f6f211c]
+E                --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x57072f6daedb]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(+0x30011c) [0x57072f6f211c]
+E                --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyEval_EvalFrameDefault+0x7af2) [0x57072f6c49f2]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(+0x2734d9) [0x57072f6654d9]
+E                --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+E                --- python(+0x3b866e) [0x57072f7aa66e]
+E                --- python(+0x300318) [0x57072f6f2318]
+E                --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyEval_EvalFrameDefault+0x7af2) [0x57072f6c49f2]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(+0x2734d9) [0x57072f6654d9]
+E                --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+E                --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+E                --- python(+0x3b866e) [0x57072f7aa66e]
+E                --- python(+0x300318) [0x57072f6f2318]
+E                --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+E                --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+
+ttnn/ttnn/decorators.py:650: RuntimeError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+103.92s setup    models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes[wormhole_b0-8x4-device_params0]
+8.07s call     models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes[wormhole_b0-8x4-device_params0]
+0.25s teardown models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes[wormhole_b0-8x4-device_params0]
+=========================== short test summary info ============================
+FAILED models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes[wormhole_b0-8x4-device_params0] - RuntimeError: TT_FATAL @ /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/impl/program/program.cpp:2205: num_intersections == num_cores
+info:
+Kernel group cores do not match sub device cores for programmable core type TENSIX
+backtrace:
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0x90ad40) [0x7a437ab9ed40]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/libtt_metal.so(+0x98b50c) [0x7a437979b50c]
+ --- tt::tt_metal::detail::ProgramImpl::determine_sub_device_ids(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::experimental::MakeProgramFromSpec(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::experimental::ProgramSpec const&, bool)
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0xd83458) [0x7a437b017458]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0xd82889) [0x7a437b016889]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations13data_movement5clone14CloneOperationEEEEEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x264) [0x7a437b0127b4]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations13data_movement5clone14CloneOperationEEENT_21tensor_return_value_tERKNS7_22operation_attributes_tERKNS7_13tensor_args_tE+0x29e) [0x7a437b00ffde]
+ --- ttnn::prim::clone(ttnn::Tensor const&, std::optional<tt::tt_metal::DataType> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::ComputeKernelConfig> const&)
+ --- ttnn::clone(ttnn::Tensor const&, std::optional<tt::tt_metal::DataType> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::ComputeKernelConfig> const&)
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x61123c) [0x7a437ccb323c]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x347f45) [0x7a437c9e9f45]
+ --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+ --- python(+0x3b866e) [0x57072f7aa66e]
+ --- python(_PyEval_EvalFrameDefault+0x90c8) [0x57072f6c5fc8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+ --- python(+0x3b866e) [0x57072f7aa66e]
+ --- python(+0x300318) [0x57072f6f2318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x7f02) [0x57072f6c4e02]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x30011c) [0x57072f6f211c]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x30011c) [0x57072f6f211c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x57072f6daedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x34f6f) [0x57072f6f1e6f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x34f6f) [0x57072f6f1e6f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x57072f6c49f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x2734d9) [0x57072f6654d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+ --- python(+0x3b866e) [0x57072f7aa66e]
+ --- python(+0x300318) [0x57072f6f2318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x7f02) [0x57072f6c4e02]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x57072f6c49f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x2734d9) [0x57072f6654d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+ --- python(+0x3b866e) [0x57072f7aa66e]
+ --- python(_PyEval_EvalFrameDefault+0x90c8) [0x57072f6c5fc8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x30011c) [0x57072f6f211c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x57072f6daedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x2734d9) [0x57072f6654d9]
+ --- python(+0x30011c) [0x57072f6f211c]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x30011c) [0x57072f6f211c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x57072f6daedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x30011c) [0x57072f6f211c]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x57072f6c49f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x2734d9) [0x57072f6654d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+ --- python(+0x3b866e) [0x57072f7aa66e]
+ --- python(+0x300318) [0x57072f6f2318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x57072f6c49f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(+0x2734d9) [0x57072f6654d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x57072f6c682a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x57072f6646c6]
+ --- python(+0x3b866e) [0x57072f7aa66e]
+ --- python(+0x300318) [0x57072f6f2318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x57072f6daf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x57072f663023]
+================== 1 failed, 2 warnings in 123.62s (0:02:03) ===================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-08-26 19:49:58.221 | info     |    BuildKernels | JIT cache stats: 82/82 hits (100.0%) [82 cached, 626 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-26 19:49:58.221 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-26 19:49:58.248 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-26 19:49:58.248 | info     |             UMD | Closing devices in cluster (cluster.cpp:1211)
+2026-08-26 19:49:58.362 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1220)
+2026-08-26 19:49:58.363 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-26 19:49:58.363 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+exit=1

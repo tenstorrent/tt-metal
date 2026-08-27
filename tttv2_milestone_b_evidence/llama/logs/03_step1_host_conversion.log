@@ -1,0 +1,244 @@
+2026-08-26 18:38:15.625 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 600.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 9 items
+
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_meta_rope_tables_are_the_hf_rotary_relaid_not_recomputed [transformers] `rope_parameters`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=2048
+PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout FAILED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_production_reverse_permute_matches_the_shared_1d_reference PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_fused_qkv_row_blocks_are_recoverable_projection_slices PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_attention_weights_reproduce_the_hf_attention_output FAILED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_mlp_weights_reproduce_the_hf_mlp_output PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_lm_head_reproduces_the_hf_logits_on_the_real_vocabulary PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_rope_tables_match_an_independent_llama3_scaling Fetching 2 files:   0%|          | 0/2 [00:00<?, ?it/s]Fetching 2 files: 100%|██████████| 2/2 [00:00<00:00, 1346.27it/s]
+PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_layer0_converts_to_the_contracted_shapes PASSED
+
+=================================== FAILURES ===================================
+_____ test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout ______
+
+small_llama = LlamaForCausalLM(
+  (model): LlamaModel(
+    (embed_tokens): Embedding(256, 1024)
+    (layers): ModuleList(
+      (0):...-05)
+    (rotary_emb): LlamaRotaryEmbedding()
+  )
+  (lm_head): Linear(in_features=1024, out_features=256, bias=False)
+)
+
+    @torch.no_grad()
+    def test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout(small_llama):
+        """``reverse_permute`` + interleaved rotation == HF layout + ``rotate_half``.
+    
+        This is the pairing Milestone A never qualified: attention was qualified
+        with an *identity* rotary, and ``RotarySetup2D`` was qualified standalone.
+        Here the two are composed on host, against the real scaled rotary, so a
+        convention mismatch is a host failure rather than a silicon PCC mystery.
+        """
+    
+        from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
+    
+        layer = small_llama.model.layers[0].self_attn
+        config = small_llama.config
+        n_heads, n_kv_heads = config.num_attention_heads, config.num_key_value_heads
+        dim, seq_len = config.hidden_size, 64
+    
+        torch.manual_seed(7)
+        x = torch.randn(1, seq_len, dim, dtype=torch.float32)
+        position_ids = torch.arange(seq_len).unsqueeze(0)
+        cos_hf, sin_hf = small_llama.model.rotary_emb(x, position_ids)
+    
+        # --- Hugging Face side, untouched --------------------------------------
+        q_hf = (x @ layer.q_proj.weight.float().T).view(1, seq_len, n_heads, _HEAD_DIM).transpose(1, 2)
+        k_hf = (x @ layer.k_proj.weight.float().T).view(1, seq_len, n_kv_heads, _HEAD_DIM).transpose(1, 2)
+        q_hf_rot, k_hf_rot = apply_rotary_pos_emb(q_hf, k_hf, cos_hf.float(), sin_hf.float())
+    
+        # --- Galaxy side: production permutation, production rotation ----------
+        cos_meta, sin_meta = weight_utils.build_rope_cos_sin_torch(
+            small_llama.model.rotary_emb, seq_len, _HEAD_DIM, torch.float32
+        )
+        wq_meta = weight_utils.reverse_permute(layer.q_proj.weight.float(), n_heads, n_heads * _HEAD_DIM, dim).T
+        wk_meta = weight_utils.reverse_permute(layer.k_proj.weight.float(), n_kv_heads, n_kv_heads * _HEAD_DIM, dim).T
+        q_meta = (x @ wq_meta).view(1, seq_len, n_heads, _HEAD_DIM).transpose(1, 2)
+        k_meta = (x @ wk_meta).view(1, seq_len, n_kv_heads, _HEAD_DIM).transpose(1, 2)
+>       q_meta_rot = _interleaved_rope(q_meta, cos_meta.transpose(1, 2), sin_meta.transpose(1, 2))
+
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py:211: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+x = tensor([[[[-1.0799, -0.1428, -0.0061,  ...,  1.4681,  0.0058, -0.4948],
+          [ 0.5368,  0.6300,  0.8779,  ...,  0...,  0.2102,  ..., -0.8910,  1.1217, -0.1261],
+          [ 0.8867, -1.3356,  0.1696,  ..., -0.0958, -0.1200, -1.5181]]]])
+cos = tensor([[[[ 1.0000,  1.0000,  1.0000,  ...,  1.0000,  1.0000,  1.0000]],
+
+         [[ 0.5403,  0.5403,  0.6861,  ..., ... 0.9712,  ...,  1.0000,  1.0000,  1.0000]],
+
+         [[ 0.9859,  0.9859,  0.4929,  ...,  1.0000,  1.0000,  1.0000]]]])
+sin = tensor([[[[ 0.0000e+00,  0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,
+            0.0000e+00,  0.0000e+00]],
+
+         ...7e-05]],
+
+         [[ 1.6736e-01,  1.6736e-01,  8.7010e-01,  ...,  2.3734e-05,
+            1.9334e-05,  1.9334e-05]]]])
+
+    def _interleaved_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+        """Apply the rotation the device kernel applies, in the device's own terms.
+    
+        ``x`` is ``[..., head_dim]`` in Meta (interleaved) layout, ``cos``/``sin``
+        are broadcastable Meta-layout tables. The ``trans_mat`` matmul is exactly
+        what ``ttnn.experimental.rotary_embedding_llama`` performs on device, so the
+        sign and pairing convention is taken from production rather than restated.
+        """
+    
+        trans_mat = get_rot_transformation_mat(x.shape[-1])[0, 0].to(x.dtype)
+>       return x * cos + (x @ trans_mat) * sin
+E       RuntimeError: The size of tensor a (8) must match the size of tensor b (64) at non-singleton dimension 1
+
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py:79: RuntimeError
+______ test_converted_attention_weights_reproduce_the_hf_attention_output ______
+
+small_llama = LlamaForCausalLM(
+  (model): LlamaModel(
+    (embed_tokens): Embedding(256, 1024)
+    (layers): ModuleList(
+      (0):...-05)
+    (rotary_emb): LlamaRotaryEmbedding()
+  )
+  (lm_head): Linear(in_features=1024, out_features=256, bias=False)
+)
+
+    @torch.no_grad()
+    def test_converted_attention_weights_reproduce_the_hf_attention_output(small_llama):
+        """Reconstruct HF attention from ``wqkv``/``wo`` alone and compare."""
+    
+        from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
+    
+        layer = small_llama.model.layers[0].self_attn
+        config = small_llama.config
+        n_heads, n_kv_heads = config.num_attention_heads, config.num_key_value_heads
+        dim, seq_len = config.hidden_size, 48
+    
+        torch.manual_seed(9)
+        x = torch.randn(1, seq_len, dim, dtype=torch.float32)
+        position_ids = torch.arange(seq_len).unsqueeze(0)
+        cos_hf, sin_hf = small_llama.model.rotary_emb(x, position_ids)
+        causal = torch.full((seq_len, seq_len), float("-inf")).triu(1)
+    
+        # --- reference: the unmodified HF module -------------------------------
+        reference = _hf_reference.HfAttentionWrapper(layer, _HEAD_DIM, small_llama.model.rotary_emb)
+        reference.reset_cache()
+        expected = reference(x, 0, mask=causal).float()
+    
+        # --- Galaxy: only the converted tensors are allowed as input -----------
+        wqkv, wo = weight_utils.attention_weights_from_hf_layer(layer, rows=_ROWS)
+        cos_meta, sin_meta = weight_utils.build_rope_cos_sin_torch(
+            small_llama.model.rotary_emb, seq_len, _HEAD_DIM, torch.float32
+        )
+        cos_meta, sin_meta = cos_meta.transpose(1, 2), sin_meta.transpose(1, 2)
+    
+        q_width, kv_width = (n_heads // _ROWS) * _HEAD_DIM, (n_kv_heads * _HEAD_DIM) // _ROWS
+        block = q_width + 2 * kv_width
+        projected = x @ wqkv.float()
+    
+        # Unpack per mesh row exactly as the fused create-QKV-heads collective does.
+        q_rows, k_rows, v_rows = [], [], []
+        for row in range(_ROWS):
+            start = row * block
+            q_rows.append(projected[..., start : start + q_width])
+            k_rows.append(projected[..., start + q_width : start + q_width + kv_width])
+            v_rows.append(projected[..., start + q_width + kv_width : start + block])
+        q = torch.cat(q_rows, dim=-1).view(1, seq_len, n_heads, _HEAD_DIM).transpose(1, 2)
+        k = torch.cat(k_rows, dim=-1).view(1, seq_len, n_kv_heads, _HEAD_DIM).transpose(1, 2)
+        v = torch.cat(v_rows, dim=-1).view(1, seq_len, n_kv_heads, _HEAD_DIM).transpose(1, 2)
+    
+>       q = _interleaved_rope(q, cos_meta, sin_meta)
+
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py:309: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+x = tensor([[[[-5.5772e-01,  1.0764e+00,  4.6545e-01,  ..., -9.9627e-01,
+            5.2481e-01, -8.5191e-01],
+          [...575e-01],
+          [ 7.2101e-01,  4.4887e-01, -6.5261e-01,  ...,  2.6681e-01,
+            5.2832e-01,  3.6493e-01]]]])
+cos = tensor([[[[ 1.0000,  1.0000,  1.0000,  ...,  1.0000,  1.0000,  1.0000]],
+
+         [[ 0.5403,  0.5403,  0.6861,  ..., ... 0.9744,  ...,  1.0000,  1.0000,  1.0000]],
+
+         [[-0.9923, -0.9923,  0.8321,  ...,  1.0000,  1.0000,  1.0000]]]])
+sin = tensor([[[[ 0.0000e+00,  0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,
+            0.0000e+00,  0.0000e+00]],
+
+         ...7e-05]],
+
+         [[ 1.2357e-01,  1.2357e-01,  5.5461e-01,  ...,  1.7706e-05,
+            1.4424e-05,  1.4424e-05]]]])
+
+    def _interleaved_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+        """Apply the rotation the device kernel applies, in the device's own terms.
+    
+        ``x`` is ``[..., head_dim]`` in Meta (interleaved) layout, ``cos``/``sin``
+        are broadcastable Meta-layout tables. The ``trans_mat`` matmul is exactly
+        what ``ttnn.experimental.rotary_embedding_llama`` performs on device, so the
+        sign and pairing convention is taken from production rather than restated.
+        """
+    
+        trans_mat = get_rot_transformation_mat(x.shape[-1])[0, 0].to(x.dtype)
+>       return x * cos + (x @ trans_mat) * sin
+E       RuntimeError: The size of tensor a (8) must match the size of tensor b (48) at non-singleton dimension 1
+
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py:79: RuntimeError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+2.60s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_meta_rope_tables_are_the_hf_rotary_relaid_not_recomputed
+2.52s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_layer0_converts_to_the_contracted_shapes
+0.38s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_rope_tables_match_an_independent_llama3_scaling
+0.20s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_mlp_weights_reproduce_the_hf_mlp_output
+0.19s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_production_reverse_permute_matches_the_shared_1d_reference
+0.19s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_lm_head_reproduces_the_hf_logits_on_the_real_vocabulary
+0.19s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_attention_weights_reproduce_the_hf_attention_output
+0.19s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_fused_qkv_row_blocks_are_recoverable_projection_slices
+0.18s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout
+0.18s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_layer0_converts_to_the_contracted_shapes
+0.03s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_attention_weights_reproduce_the_hf_attention_output
+0.03s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_production_reverse_permute_matches_the_shared_1d_reference
+0.02s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_mlp_weights_reproduce_the_hf_mlp_output
+0.02s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout
+0.02s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_fused_qkv_row_blocks_are_recoverable_projection_slices
+0.02s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_lm_head_reproduces_the_hf_logits_on_the_real_vocabulary
+0.01s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_meta_rope_tables_are_the_hf_rotary_relaid_not_recomputed
+
+(8 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_meta_rope_tables_are_the_hf_rotary_relaid_not_recomputed
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_production_reverse_permute_matches_the_shared_1d_reference
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_fused_qkv_row_blocks_are_recoverable_projection_slices
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_mlp_weights_reproduce_the_hf_mlp_output
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_lm_head_reproduces_the_hf_logits_on_the_real_vocabulary
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_rope_tables_match_an_independent_llama3_scaling
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_layer0_converts_to_the_contracted_shapes
+FAILED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout
+FAILED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_attention_weights_reproduce_the_hf_attention_output
+=================== 2 failed, 7 passed, 2 warnings in 17.89s ===================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+exit=1

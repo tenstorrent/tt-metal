@@ -1,0 +1,68 @@
+2026-08-26 18:40:26.714 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 600.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 9 items
+
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_meta_rope_tables_are_the_hf_rotary_relaid_not_recomputed [transformers] `rope_parameters`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=2048
+PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_production_reverse_permute_matches_the_shared_1d_reference PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_fused_qkv_row_blocks_are_recoverable_projection_slices PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_attention_weights_reproduce_the_hf_attention_output PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_mlp_weights_reproduce_the_hf_mlp_output PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_lm_head_reproduces_the_hf_logits_on_the_real_vocabulary PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_rope_tables_match_an_independent_llama3_scaling Fetching 2 files:   0%|          | 0/2 [00:00<?, ?it/s]Fetching 2 files: 100%|██████████| 2/2 [00:00<00:00, 1324.17it/s]
+PASSED
+models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_layer0_converts_to_the_contracted_shapes PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+2.58s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_meta_rope_tables_are_the_hf_rotary_relaid_not_recomputed
+2.49s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_layer0_converts_to_the_contracted_shapes
+0.39s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_rope_tables_match_an_independent_llama3_scaling
+0.19s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_mlp_weights_reproduce_the_hf_mlp_output
+0.19s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_production_reverse_permute_matches_the_shared_1d_reference
+0.19s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_lm_head_reproduces_the_hf_logits_on_the_real_vocabulary
+0.18s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_attention_weights_reproduce_the_hf_attention_output
+0.18s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_fused_qkv_row_blocks_are_recoverable_projection_slices
+0.18s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_layer0_converts_to_the_contracted_shapes
+0.18s setup    models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout
+0.05s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_attention_weights_reproduce_the_hf_attention_output
+0.02s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout
+0.02s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_mlp_weights_reproduce_the_hf_mlp_output
+0.02s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_fused_qkv_row_blocks_are_recoverable_projection_slices
+0.02s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_lm_head_reproduces_the_hf_logits_on_the_real_vocabulary
+0.02s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_production_reverse_permute_matches_the_shared_1d_reference
+0.01s call     models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_meta_rope_tables_are_the_hf_rotary_relaid_not_recomputed
+
+(8 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_meta_rope_tables_are_the_hf_rotary_relaid_not_recomputed
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_permuted_q_with_interleaved_rope_equals_hf_rotary_on_hf_layout
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_production_reverse_permute_matches_the_shared_1d_reference
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_fused_qkv_row_blocks_are_recoverable_projection_slices
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_attention_weights_reproduce_the_hf_attention_output
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_mlp_weights_reproduce_the_hf_mlp_output
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_converted_lm_head_reproduces_the_hf_logits_on_the_real_vocabulary
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_rope_tables_match_an_independent_llama3_scaling
+PASSED models/common/tests/models/llama33_70b_galaxy/test_hf_conversion_host.py::test_real_checkpoint_layer0_converts_to_the_contracted_shapes
+======================== 9 passed, 2 warnings in 14.37s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+exit=0

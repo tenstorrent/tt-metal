@@ -1,0 +1,302 @@
+=== Wed Aug 26 22:28:20 UTC 2026 ===
+node: models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes
+commit: 1d4ded04592bc050bd85f1efb592497b06780a71
+devices: 32
+2026-08-26 22:28:41.806 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 900.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes[wormhole_b0-8x4-device_params0] Fetching 3 files:   0%|          | 0/3 [00:00<?, ?it/s]Fetching 3 files: 100%|██████████| 3/3 [00:00<00:00, 1978.13it/s]
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+2026-08-26 22:30:28.573 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-26 22:30:28.573 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-26 22:30:28.593 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-26 22:30:28.593 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-26 22:30:28.643 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:575)
+2026-08-26 22:30:28.673 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-26 22:30:30.106 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[22, 19, 21, 20, 17, 23, 18, 16, 28, 26, 30, 29, 24, 31, 27, 25, 14, 10, 11, 9, 12, 15, 13, 8, 4, 6, 2, 5, 0, 7, 1, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-26 22:30:30.106 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-26 22:30:30.106 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:150)
+2026-08-26 22:30:30.106 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-26 22:30:30.133 | info     |             UMD | Starting devices in cluster (cluster.cpp:1198)
+2026-08-26 22:30:30.193 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1206)
+2026-08-26 22:30:30.290 | INFO     | conftest:mesh_device:612 - No trace region size for (8, 4)
+2026-08-26 22:30:30.290 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-26 22:30:30.290 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-26 22:30:30.298 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2410)
+2026-08-26 22:30:30.298 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2418)
+2026-08-26 22:30:30.368 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.382 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.396 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.411 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.426 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.440 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.453 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.467 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.483 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.497 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.511 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.526 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.541 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.555 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.570 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.584 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.597 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.612 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.628 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.642 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.657 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.671 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.685 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.699 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.714 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.728 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.742 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.756 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.770 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.786 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.801 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:30.816 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 22:30:31.068 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-26 22:30:31.584 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-26 22:30:31.586 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-26 22:30:31.587 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-26 22:30:31.588 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-26 22:30:31.589 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:550)
+2026-08-26 22:30:31.590 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:550)
+2026-08-26 22:30:31.592 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:550)
+2026-08-26 22:30:31.593 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:550)
+2026-08-26 22:30:31.594 | info     |           Metal | Fabric initialized on Device 8 (device.cpp:550)
+2026-08-26 22:30:31.595 | info     |           Metal | Fabric initialized on Device 9 (device.cpp:550)
+2026-08-26 22:30:31.596 | info     |           Metal | Fabric initialized on Device 10 (device.cpp:550)
+2026-08-26 22:30:31.598 | info     |           Metal | Fabric initialized on Device 11 (device.cpp:550)
+2026-08-26 22:30:31.599 | info     |           Metal | Fabric initialized on Device 12 (device.cpp:550)
+2026-08-26 22:30:31.600 | info     |           Metal | Fabric initialized on Device 13 (device.cpp:550)
+2026-08-26 22:30:31.601 | info     |           Metal | Fabric initialized on Device 14 (device.cpp:550)
+2026-08-26 22:30:31.602 | info     |           Metal | Fabric initialized on Device 15 (device.cpp:550)
+2026-08-26 22:30:31.603 | info     |           Metal | Fabric initialized on Device 16 (device.cpp:550)
+2026-08-26 22:30:31.604 | info     |           Metal | Fabric initialized on Device 17 (device.cpp:550)
+2026-08-26 22:30:31.605 | info     |           Metal | Fabric initialized on Device 18 (device.cpp:550)
+2026-08-26 22:30:31.606 | info     |           Metal | Fabric initialized on Device 19 (device.cpp:550)
+2026-08-26 22:30:31.607 | info     |           Metal | Fabric initialized on Device 20 (device.cpp:550)
+2026-08-26 22:30:31.608 | info     |           Metal | Fabric initialized on Device 21 (device.cpp:550)
+2026-08-26 22:30:31.610 | info     |           Metal | Fabric initialized on Device 22 (device.cpp:550)
+2026-08-26 22:30:31.611 | info     |           Metal | Fabric initialized on Device 23 (device.cpp:550)
+2026-08-26 22:30:31.612 | info     |           Metal | Fabric initialized on Device 24 (device.cpp:550)
+2026-08-26 22:30:31.613 | info     |           Metal | Fabric initialized on Device 25 (device.cpp:550)
+2026-08-26 22:30:31.614 | info     |           Metal | Fabric initialized on Device 26 (device.cpp:550)
+2026-08-26 22:30:31.615 | info     |           Metal | Fabric initialized on Device 27 (device.cpp:550)
+2026-08-26 22:30:31.616 | info     |           Metal | Fabric initialized on Device 28 (device.cpp:550)
+2026-08-26 22:30:31.617 | info     |           Metal | Fabric initialized on Device 29 (device.cpp:550)
+2026-08-26 22:30:31.618 | info     |           Metal | Fabric initialized on Device 30 (device.cpp:550)
+2026-08-26 22:30:31.619 | info     |           Metal | Fabric initialized on Device 31 (device.cpp:550)
+2026-08-26 22:30:31.619 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:444)
+2026-08-26 22:30:31.619 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 24 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=126692348545 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 28 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=126702288199 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 16 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=126789182554 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 20 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=126674060415 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 25 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=127041103095 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 22 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=126795251384 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 29 sync complete: 100 samples, frequency=0.985498 GHz, device_time_at_sync=126774247691 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 21 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=126767685231 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 30 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=126708170622 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 17 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=126681098933 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 26 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=126754276975 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 19 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=126751864977 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 23 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=126751593368 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 27 sync complete: 100 samples, frequency=0.985501 GHz, device_time_at_sync=126821617121 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 31 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=126723167242 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 18 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=126684322435 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=126672875411 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=126619740066 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 9 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=126735673534 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 11 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=126418140414 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=126779022259 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 4 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=126742382293 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 14 sync complete: 100 samples, frequency=0.985498 GHz, device_time_at_sync=126707363157 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.710 | info     |           Metal | [Real-time profiler] Device 6 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=126687620777 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 10 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=126608986449 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 5 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=126688160133 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 15 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=126596442820 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.709 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=126582334828 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.710 | info     |           Metal | [Real-time profiler] Device 7 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=126621698642 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.710 | info     |           Metal | [Real-time profiler] Device 13 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=126490710749 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.710 | info     |           Metal | [Real-time profiler] Device 8 sync complete: 100 samples, frequency=0.985498 GHz, device_time_at_sync=126458799687 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:32.710 | info     |           Metal | [Real-time profiler] Device 12 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=126703399226 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 22:30:33.036 | DEBUG    | conftest:mesh_device:630 - multidevice with 32 devices is created
+[stage] enter build
+[stage] leave build
+[stage] enter allocate kv cache
+[stage] leave allocate kv cache
+[stage] enter bind kv cache
+[stage] leave bind kv cache
+[stage] enter activate decode (starts the persistent DRAM prefetch program)
+[stage] leave activate decode (starts the persistent DRAM prefetch program)
+[stage] enter prepare decode rot mats (RotarySetup2D.decode_forward)
+[stage] leave prepare decode rot mats (RotarySetup2D.decode_forward)
+[stage] enter stage current positions
+[stage] leave stage current positions
+[stage] enter embed decode
+[stage] leave embed decode
+[stage] enter decode forward
+2026-08-26 22:30:45.300 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 64, dfb size: 128, return value: 192 (dataflow_buffer.cpp:1656)
+2026-08-26 22:30:45.300 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-26 22:30:45.300 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-26 22:30:45.302 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 64, dfb size: 128, return value: 192 (dataflow_buffer.cpp:1656)
+2026-08-26 22:30:45.302 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-26 22:30:45.302 | info     |           Metal | Finalize dfb: dfb_offset == base_offset: 0, dfb size: 0, return value: 0 (dataflow_buffer.cpp:1656)
+2026-08-26 22:30:45.655 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:122)
+2026-08-26 22:30:45.655 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-26 22:30:45.656 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.660 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.660 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.661 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.661 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.662 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.662 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.663 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.663 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.664 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.664 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.665 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.665 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.666 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.666 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.667 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.668 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.668 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.669 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.669 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.670 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.670 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.671 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.671 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.672 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.672 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.673 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.673 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.674 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.674 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.675 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:45.675 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.328 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:122)
+2026-08-26 22:30:46.328 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-26 22:30:46.329 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.330 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.331 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.331 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.332 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.333 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.333 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.334 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.334 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.335 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.335 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.336 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.336 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.337 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.337 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.338 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.338 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.339 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.339 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.340 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.340 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.341 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.341 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.342 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.343 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.343 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.344 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.344 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.345 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.345 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.346 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:46.346 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 6144 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-26 22:30:51.787 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.794 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.797 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.799 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.802 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.804 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.806 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.809 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.811 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.813 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.815 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.818 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.820 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.822 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.824 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.827 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.829 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.831 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.833 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.836 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.839 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.841 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.844 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.846 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.848 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.851 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.853 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.855 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.857 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.859 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.861 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+2026-08-26 22:30:51.864 | warning  |              Op | matmul_multi_core_reuse_mcast_1d_optimized_helper: program_config.allowed_worker_cores not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() (e.g. CCL fused ops) should invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This will become a hard error in a future release. (matmul_multicore_reuse_mcast_1d_program_factory.cpp:5619)
+[stage] FAILED in decode forward
+Traceback (most recent call last):
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+TypeError: __call__(): incompatible function arguments. The following argument types are supported:
+    1. __call__(self, input_tensor: ttnn._ttnn.tensor.Tensor, num_devices: int, barrier_semaphores: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore], rs_global_semaphores: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore], ag_global_semaphores: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore], math_op: ttnn._ttnn.operations.reduction.ReduceType, *, memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None, topology: ttnn._ttnn.operations.ccl.Topology = Topology.Linear, num_links: int | None = None, subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None) -> ttnn._ttnn.tensor.Tensor
+    2. __call__(self, input_tensor: ttnn._ttnn.tensor.Tensor, cluster_axis: int | None = None, mesh_device: ttnn._ttnn.multi_device.MeshDevice, barrier_semaphores: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore] | None = None, rs_global_semaphores: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore] | None = None, ag_global_semaphores: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore] | None = None, math_op: ttnn._ttnn.operations.reduction.ReduceType, *, memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None, topology: ttnn._ttnn.operations.ccl.Topology | None = Topology.Linear, num_links: int | None = None, subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None) -> ttnn._ttnn.tensor.Tensor
+    3. __call__(self, input_tensor: ttnn._ttnn.tensor.Tensor, buffer_tensor: ttnn._ttnn.tensor.Tensor, cluster_axis: int, mesh_device: ttnn._ttnn.multi_device.MeshDevice, multi_device_global_semaphore: ttnn._ttnn.global_semaphore.global_semaphore, *, dtype: ttnn._ttnn.tensor.DataType | None = None, memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None, topology: ttnn._ttnn.operations.ccl.Topology = Topology.Linear, num_links: int | None = None, subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None, use_noc1_only: bool = False, use_optimal_ccl_for_llama: bool = False, fp32_dest_acc: bool = False) -> ttnn._ttnn.tensor.Tensor
+
+Invoked with types: ttnn._ttnn.operations.experimental.ccl_experimental.all_reduce_async_t, ttnn._ttnn.tensor.Tensor, ttnn._ttnn.tensor.Tensor, kwargs = { cluster_axis: int, mesh_device: ttnn._ttnn.multi_device.MeshDevice, multi_device_global_semaphore: list, num_links: int, memory_config: ttnn._ttnn.tensor.MemoryConfig, dtype: ttnn._ttnn.tensor.DataType, topology: ttnn._ttnn.operations.ccl.Topology, subdevice_id: ttnn._ttnn.device.SubDeviceId, use_optimal_ccl_for_llama: bool }
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py", line 170, in _stage
+    yield
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py", line 284, in test_one_decode_step_executes
+    output = model.decode_forward(x_embed, tt_positions, rot_mats)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/models/llama33_70b_galaxy/model.py", line 1385, in decode_forward
+    x, h = layer.decode_forward(x, h, rot_mats, metadata)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/models/llama33_70b_galaxy/model.py", line 1184, in decode_forward
+    return self.feed_forward.decode_forward(mlp_input), h
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/modules/mlp/mlp_2d.py", line 536, in decode_forward
+    w2_out_reduced = self._all_reduce_tg(
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/modules/mlp/mlp_2d.py", line 292, in _all_reduce_tg
+    reduced_tensor = ttnn.experimental.all_reduce_async(
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/decorators.py", line 657, in __call__
+    raise TypeError(enhanced_msg) from e
+TypeError: 
+ttnn.experimental.all_reduce_async(): incompatible function arguments.
+
+Called with:
+  all_reduce_async(ttnn.Tensor, ttnn.Tensor, cluster_axis=0, mesh_device=MeshDevice(8x4 grid, 32 devices), multi_device_global_semaphore=[<ttnn._ttnn.global_semaphore.global_semaphore object at 0x7335debd8db0>, <ttnn._ttnn.global_semaphore.global_semaphore object at 0x7335debd8d70>, <ttnn._ttnn.global_semaphore.global_semaphore object at 0x7335debd8e10>], num_links=4, memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":2,"y":0},"end":{"x":3,"y":7}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0), dtype=DataType.BFLOAT16, topology=Topology.Ring, subdevice_id=SubDeviceId(1), use_optimal_ccl_for_llama=True)
+
+Available signatures:
+  all_reduce_async(input_tensor: ttnn.Tensor, num_devices: int, barrier_semaphores: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore], rs_global_semaphores: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore], ag_global_semaphores: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore], math_op: ttnn.reduction.ReduceType, *, memory_config: ttnn.MemoryConfig | None = None, topology: ttnn.ccl.Topology = Topology.Linear, num_links: int | None = None, subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None)
+  all_reduce_async(input_tensor: ttnn.Tensor, cluster_axis: int | None = None, mesh_device: ttnn._ttnn.multi_device.MeshDevice, barrier_semaphores: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore] | None = None, rs_global_semaphores: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore] | None = None, ag_global_semaphores: collections.abc.Sequence[ttnn._ttnn.global_semaphore.global_semaphore] | None = None, math_op: ttnn.reduction.ReduceType, *, memory_config: ttnn.MemoryConfig | None = None, topology: ttnn.ccl.Topology | None = Topology.Linear, num_links: int | None = None, subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None)
+  all_reduce_async(input_tensor: ttnn.Tensor, buffer_tensor: ttnn.Tensor, cluster_axis: int, mesh_device: ttnn._ttnn.multi_device.MeshDevice, multi_device_global_semaphore: ttnn._ttnn.global_semaphore.global_semaphore, *, dtype: ttnn.DataType | None = None, memory_config: ttnn.MemoryConfig | None = None, topology: ttnn.ccl.Topology = Topology.Linear, num_links: int | None = None, subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None, use_noc1_only: bool = False, use_optimal_ccl_for_llama: bool = False, fp32_dest_acc: bool = False)
+[stage] enter close model
+[stage] leave close model
+TIMEOUT after 420s
+  signal -TERM 196960 (comm=python)
+NOTE: reaped on timeout; the mesh needs a glx_reset before the next run.
+exit=124
+holders_after: 0

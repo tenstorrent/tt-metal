@@ -1,0 +1,328 @@
+=== Wed Aug 26 20:44:16 UTC 2026 ===
+node: models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes
+commit: 1d4ded04592bc050bd85f1efb592497b06780a71
+devices: 32
+2026-08-26 20:44:38.125 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 900.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_one_decode_step_executes[wormhole_b0-8x4-device_params0] Fetching 3 files:   0%|          | 0/3 [00:00<?, ?it/s]Fetching 3 files: 100%|██████████| 3/3 [00:00<00:00, 1858.08it/s]
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+2026-08-26 20:46:26.045 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-26 20:46:26.045 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-26 20:46:26.064 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:96)
+2026-08-26 20:46:26.064 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-26 20:46:26.128 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:575)
+2026-08-26 20:46:26.158 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-26 20:46:27.584 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[19, 20, 21, 17, 16, 23, 22, 18, 25, 29, 28, 27, 30, 31, 26, 24, 12, 10, 5, 13, 4, 15, 7, 14, 9, 3, 1, 6, 2, 11, 8, 0] and remote chip ids {} (cluster.cpp:173)
+2026-08-26 20:46:27.584 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-26 20:46:27.584 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:150)
+2026-08-26 20:46:27.584 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-26 20:46:27.610 | info     |             UMD | Starting devices in cluster (cluster.cpp:1198)
+2026-08-26 20:46:27.672 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1206)
+2026-08-26 20:46:27.770 | INFO     | conftest:mesh_device:612 - No trace region size for (8, 4)
+2026-08-26 20:46:27.770 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-26 20:46:27.770 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-26 20:46:27.778 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2410)
+2026-08-26 20:46:27.778 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:2418)
+2026-08-26 20:46:27.863 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:27.879 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:27.894 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:27.909 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:27.924 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:27.940 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:27.959 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:27.976 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:27.992 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.007 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.023 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.041 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.055 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.069 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.084 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.097 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.111 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.125 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.139 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.156 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.170 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.184 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.198 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.213 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.228 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.242 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.259 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.274 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.288 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.307 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.322 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.338 | info     |    BuildKernels | Using pre-compiled firmware from: /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/pre-compiled/441969805167873259/ (build_env_manager.cpp:347)
+2026-08-26 20:46:28.586 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-26 20:46:29.101 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-26 20:46:29.102 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-26 20:46:29.104 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-26 20:46:29.105 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-26 20:46:29.106 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:550)
+2026-08-26 20:46:29.108 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:550)
+2026-08-26 20:46:29.109 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:550)
+2026-08-26 20:46:29.111 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:550)
+2026-08-26 20:46:29.112 | info     |           Metal | Fabric initialized on Device 8 (device.cpp:550)
+2026-08-26 20:46:29.113 | info     |           Metal | Fabric initialized on Device 9 (device.cpp:550)
+2026-08-26 20:46:29.115 | info     |           Metal | Fabric initialized on Device 10 (device.cpp:550)
+2026-08-26 20:46:29.116 | info     |           Metal | Fabric initialized on Device 11 (device.cpp:550)
+2026-08-26 20:46:29.171 | info     |           Metal | Fabric initialized on Device 12 (device.cpp:550)
+2026-08-26 20:46:29.172 | info     |           Metal | Fabric initialized on Device 13 (device.cpp:550)
+2026-08-26 20:46:29.173 | info     |           Metal | Fabric initialized on Device 14 (device.cpp:550)
+2026-08-26 20:46:29.174 | info     |           Metal | Fabric initialized on Device 15 (device.cpp:550)
+2026-08-26 20:46:29.176 | info     |           Metal | Fabric initialized on Device 16 (device.cpp:550)
+2026-08-26 20:46:29.177 | info     |           Metal | Fabric initialized on Device 17 (device.cpp:550)
+2026-08-26 20:46:29.178 | info     |           Metal | Fabric initialized on Device 18 (device.cpp:550)
+2026-08-26 20:46:29.179 | info     |           Metal | Fabric initialized on Device 19 (device.cpp:550)
+2026-08-26 20:46:29.180 | info     |           Metal | Fabric initialized on Device 20 (device.cpp:550)
+2026-08-26 20:46:29.181 | info     |           Metal | Fabric initialized on Device 21 (device.cpp:550)
+2026-08-26 20:46:29.182 | info     |           Metal | Fabric initialized on Device 22 (device.cpp:550)
+2026-08-26 20:46:29.183 | info     |           Metal | Fabric initialized on Device 23 (device.cpp:550)
+2026-08-26 20:46:29.185 | info     |           Metal | Fabric initialized on Device 24 (device.cpp:550)
+2026-08-26 20:46:29.186 | info     |           Metal | Fabric initialized on Device 25 (device.cpp:550)
+2026-08-26 20:46:29.187 | info     |           Metal | Fabric initialized on Device 26 (device.cpp:550)
+2026-08-26 20:46:29.188 | info     |           Metal | Fabric initialized on Device 27 (device.cpp:550)
+2026-08-26 20:46:29.189 | info     |           Metal | Fabric initialized on Device 28 (device.cpp:550)
+2026-08-26 20:46:29.190 | info     |           Metal | Fabric initialized on Device 29 (device.cpp:550)
+2026-08-26 20:46:29.191 | info     |           Metal | Fabric initialized on Device 30 (device.cpp:550)
+2026-08-26 20:46:29.192 | info     |           Metal | Fabric initialized on Device 31 (device.cpp:550)
+2026-08-26 20:46:29.192 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:444)
+2026-08-26 20:46:29.192 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-26 20:46:30.305 | info     |           Metal | [Real-time profiler] Device 16 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=203188582890 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 28 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=203119833029 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 17 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=203166759940 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 24 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=203101001285 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 20 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=203083155794 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 25 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=203379907470 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 29 sync complete: 100 samples, frequency=0.985498 GHz, device_time_at_sync=203219614763 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 21 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=203197310741 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 26 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=203167761134 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 27 sync complete: 100 samples, frequency=0.985501 GHz, device_time_at_sync=203228049974 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 30 sync complete: 100 samples, frequency=0.985501 GHz, device_time_at_sync=203126753916 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 19 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=203148947191 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 18 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=203149001224 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 31 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=203156796932 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 11 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=202871385920 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 22 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=203318128881 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 6 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=203111953578 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 7 sync complete: 100 samples, frequency=0.985506 GHz, device_time_at_sync=203048642901 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 15 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=203048277916 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 23 sync complete: 100 samples, frequency=0.985503 GHz, device_time_at_sync=203170983761 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 14 sync complete: 100 samples, frequency=0.985498 GHz, device_time_at_sync=203056634003 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 4 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=203169422959 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 5 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=203073148944 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 13 sync complete: 100 samples, frequency=0.985498 GHz, device_time_at_sync=202908722278 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=202945216314 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 10 sync complete: 100 samples, frequency=0.985500 GHz, device_time_at_sync=202984953770 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=203056881523 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=0.985504 GHz, device_time_at_sync=203001505479 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=203173033215 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.306 | info     |           Metal | [Real-time profiler] Device 9 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=203148728388 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.307 | info     |           Metal | [Real-time profiler] Device 12 sync complete: 100 samples, frequency=0.985499 GHz, device_time_at_sync=203085020141 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.307 | info     |           Metal | [Real-time profiler] Device 8 sync complete: 100 samples, frequency=0.985498 GHz, device_time_at_sync=202817877924 cycles (realtime_profiler_manager.cpp:1398)
+2026-08-26 20:46:30.623 | DEBUG    | conftest:mesh_device:630 - multidevice with 32 devices is created
+[stage] enter build
+[stage] leave build
+[stage] enter allocate kv cache
+[stage] leave allocate kv cache
+[stage] enter bind kv cache
+[stage] leave bind kv cache
+[stage] enter activate decode (starts the persistent DRAM prefetch program)
+[stage] leave activate decode (starts the persistent DRAM prefetch program)
+[stage] enter prepare decode rot mats (RotarySetup2D.decode_forward)
+[stage] leave prepare decode rot mats (RotarySetup2D.decode_forward)
+[stage] enter stage current positions
+[stage] leave stage current positions
+[stage] enter embed decode
+[stage] leave embed decode
+[stage] enter decode forward
+Building trisc0, compile step:
+/proj_sw/user_dev/ctr-apbernal/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-wh-tensix -I. -I.. -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/common -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hostdevcommon/api -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/api/ -I/proj_sw/user_dev/ctr-apbernal/tt-metal/runtime/sfpi/include -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_io -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole/noc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute -DIS_NOT_POW2_NUM_DRAM_BANKS=1 -DIS_NOT_POW2_NUM_L1_BANKS=1 -DNUM_DRAM_BANKS=12 -DNUM_L1_BANKS=70 -DPCIE_NOC_X=0 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_WORMHOLE -DDISPATCH_MESSAGE_ADDR=4290183304 -DKERNEL_BUILD -DFULL_KERNEL_NAME="layernorm_sharded_post_allgather/1471144061562299564/" -DKERNEL_COMPILE_TIME_ARGS=0,1,0,2,1,4,4,1,0,4,0,0,0,8 -DKERNEL_COMPILE_TIME_ARG_MAP={"welford_fp32_alias",0},{"cb_x_welford",29},{"cb_x",24},{"cb_xmm",18},{"cb_out",16},{"cb_ex_global",15},{"cb_scaler",2},{"cb_in0",0},{"cb_eps",3},{"cb_ex_external",10},{"cb_scaler_global",4},{"cb_in1",1},{"cb_gamma",5},{"cb_beta",6},{"cb_ex_partial",8},{"cb_ex",9},{"cb_col_mask_packed",19},{"cb_ex_external2",13},{"cb_mask_scratch",14},{"cb_ex2pe",20},{"cb_ex_partial2",11},{"cb_ex2",12}, -c -o /home/ctr-apbernal/.cache/tt-metal-cache/441969805167873259/kernels/layernorm_sharded_post_allgather/1471144061562299564/trisc0/trisck.849622137059472840_163595.o /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ctr-apbernal/.cache/tt-metal-cache/441969805167873259/kernels/layernorm_sharded_post_allgather/1471144061562299564/trisc0/trisck.849622137059472840_163595.d
+In file included from ../chlkc_unpack.cpp:4,
+                 from /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common/chlkc_list.h:26,
+                 from /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp: In function 'void kernel_main()':
+/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp:43:14: warning: variable 'num_blocks_reduce' set but not used [-Wunused-but-set-variable]
+   43 |     uint32_t num_blocks_reduce;
+      |              ^~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/proj_sw/user_dev/ctr-apbernal/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-wh-tensix -I. -I.. -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/common -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hostdevcommon/api -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/api/ -I/proj_sw/user_dev/ctr-apbernal/tt-metal/runtime/sfpi/include -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_io -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole/noc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute -DIS_NOT_POW2_NUM_DRAM_BANKS=1 -DIS_NOT_POW2_NUM_L1_BANKS=1 -DNUM_DRAM_BANKS=12 -DNUM_L1_BANKS=70 -DPCIE_NOC_X=0 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_WORMHOLE -DDISPATCH_MESSAGE_ADDR=4290183304 -DKERNEL_BUILD -DFULL_KERNEL_NAME="layernorm_sharded_post_allgather/12370671949865657321/" -DKERNEL_COMPILE_TIME_ARGS=0,1,0,2,1,4,4,1,1,4,0,0,0,8 -DKERNEL_COMPILE_TIME_ARG_MAP={"welford_fp32_alias",0},{"cb_x_welford",29},{"cb_x",24},{"cb_xmm",18},{"cb_out",16},{"cb_ex_global",15},{"cb_scaler",2},{"cb_in0",0},{"cb_eps",3},{"cb_ex_external",10},{"cb_scaler_global",4},{"cb_in1",1},{"cb_gamma",5},{"cb_beta",6},{"cb_ex_partial",8},{"cb_ex",9},{"cb_col_mask_packed",19},{"cb_ex_external2",13},{"cb_mask_scratch",14},{"cb_ex2pe",20},{"cb_ex_partial2",11},{"cb_ex2",12}, -c -o /home/ctr-apbernal/.cache/tt-metal-cache/441969805167873259/kernels/layernorm_sharded_post_allgather/12370671949865657321/trisc0/trisck.849622137059472840_163595.o /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ctr-apbernal/.cache/tt-metal-cache/441969805167873259/kernels/layernorm_sharded_post_allgather/12370671949865657321/trisc0/trisck.849622137059472840_163595.d
+In file included from ../chlkc_unpack.cpp:4,
+                 from /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common/chlkc_list.h:26,
+                 from /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp: In function 'void kernel_main()':
+/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp:43:14: warning: variable 'num_blocks_reduce' set but not used [-Wunused-but-set-variable]
+   43 |     uint32_t num_blocks_reduce;
+      |              ^~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/proj_sw/user_dev/ctr-apbernal/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-wh-tensix -I. -I.. -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/common -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hostdevcommon/api -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/api/ -I/proj_sw/user_dev/ctr-apbernal/tt-metal/runtime/sfpi/include -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_io -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole/noc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute -DIS_NOT_POW2_NUM_DRAM_BANKS=1 -DIS_NOT_POW2_NUM_L1_BANKS=1 -DNUM_DRAM_BANKS=12 -DNUM_L1_BANKS=70 -DPCIE_NOC_X=0 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_WORMHOLE -DDISPATCH_MESSAGE_ADDR=4290183304 -DKERNEL_BUILD -DFULL_KERNEL_NAME="layernorm_sharded_post_allgather/1471144061562299564/" -DKERNEL_COMPILE_TIME_ARGS=0,1,0,2,1,4,4,1,0,4,0,0,0,8 -DKERNEL_COMPILE_TIME_ARG_MAP={"welford_fp32_alias",0},{"cb_x_welford",29},{"cb_x",24},{"cb_xmm",18},{"cb_out",16},{"cb_ex_global",15},{"cb_scaler",2},{"cb_in0",0},{"cb_eps",3},{"cb_ex_external",10},{"cb_scaler_global",4},{"cb_in1",1},{"cb_gamma",5},{"cb_beta",6},{"cb_ex_partial",8},{"cb_ex",9},{"cb_col_mask_packed",19},{"cb_ex_external2",13},{"cb_mask_scratch",14},{"cb_ex2pe",20},{"cb_ex_partial2",11},{"cb_ex2",12}, -c -o /home/ctr-apbernal/.cache/tt-metal-cache/441969805167873259/kernels/layernorm_sharded_post_allgather/1471144061562299564/trisc2/trisck.849622137059472840_163595.o /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ctr-apbernal/.cache/tt-metal-cache/441969805167873259/kernels/layernorm_sharded_post_allgather/1471144061562299564/trisc2/trisck.849622137059472840_163595.d
+In file included from ../chlkc_pack.cpp:4,
+                 from /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common/chlkc_list.h:21,
+                 from /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp: In function 'void kernel_main()':
+/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp:43:14: warning: variable 'num_blocks_reduce' set but not used [-Wunused-but-set-variable]
+   43 |     uint32_t num_blocks_reduce;
+      |              ^~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/proj_sw/user_dev/ctr-apbernal/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-wh-tensix -I. -I.. -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/common -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hostdevcommon/api -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/api/ -I/proj_sw/user_dev/ctr-apbernal/tt-metal/runtime/sfpi/include -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_io -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole/noc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute -DIS_NOT_POW2_NUM_DRAM_BANKS=1 -DIS_NOT_POW2_NUM_L1_BANKS=1 -DNUM_DRAM_BANKS=12 -DNUM_L1_BANKS=70 -DPCIE_NOC_X=0 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_WORMHOLE -DDISPATCH_MESSAGE_ADDR=4290183304 -DKERNEL_BUILD -DFULL_KERNEL_NAME="layernorm_sharded_post_allgather/12370671949865657321/" -DKERNEL_COMPILE_TIME_ARGS=0,1,0,2,1,4,4,1,1,4,0,0,0,8 -DKERNEL_COMPILE_TIME_ARG_MAP={"welford_fp32_alias",0},{"cb_x_welford",29},{"cb_x",24},{"cb_xmm",18},{"cb_out",16},{"cb_ex_global",15},{"cb_scaler",2},{"cb_in0",0},{"cb_eps",3},{"cb_ex_external",10},{"cb_scaler_global",4},{"cb_in1",1},{"cb_gamma",5},{"cb_beta",6},{"cb_ex_partial",8},{"cb_ex",9},{"cb_col_mask_packed",19},{"cb_ex_external2",13},{"cb_mask_scratch",14},{"cb_ex2pe",20},{"cb_ex_partial2",11},{"cb_ex2",12}, -c -o /home/ctr-apbernal/.cache/tt-metal-cache/441969805167873259/kernels/layernorm_sharded_post_allgather/12370671949865657321/trisc2/trisck.849622137059472840_163595.o /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ctr-apbernal/.cache/tt-metal-cache/441969805167873259/kernels/layernorm_sharded_post_allgather/12370671949865657321/trisc2/trisck.849622137059472840_163595.d
+In file included from ../chlkc_pack.cpp:4,
+                 from /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common/chlkc_list.h:21,
+                 from /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp: In function 'void kernel_main()':
+/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp:43:14: warning: variable 'num_blocks_reduce' set but not used [-Wunused-but-set-variable]
+   43 |     uint32_t num_blocks_reduce;
+      |              ^~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/proj_sw/user_dev/ctr-apbernal/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-wh-tensix -I. -I.. -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/common -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hostdevcommon/api -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/api/ -I/proj_sw/user_dev/ctr-apbernal/tt-metal/runtime/sfpi/include -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_io -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole/noc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute -DIS_NOT_POW2_NUM_DRAM_BANKS=1 -DIS_NOT_POW2_NUM_L1_BANKS=1 -DNUM_DRAM_BANKS=12 -DNUM_L1_BANKS=70 -DPCIE_NOC_X=0 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_WORMHOLE -DDISPATCH_MESSAGE_ADDR=4290183304 -DKERNEL_BUILD -DFULL_KERNEL_NAME="layernorm_sharded_post_allgather/1471144061562299564/" -DKERNEL_COMPILE_TIME_ARGS=0,1,0,2,1,4,4,1,0,4,0,0,0,8 -DKERNEL_COMPILE_TIME_ARG_MAP={"welford_fp32_alias",0},{"cb_x_welford",29},{"cb_x",24},{"cb_xmm",18},{"cb_out",16},{"cb_ex_global",15},{"cb_scaler",2},{"cb_in0",0},{"cb_eps",3},{"cb_ex_external",10},{"cb_scaler_global",4},{"cb_in1",1},{"cb_gamma",5},{"cb_beta",6},{"cb_ex_partial",8},{"cb_ex",9},{"cb_col_mask_packed",19},{"cb_ex_external2",13},{"cb_mask_scratch",14},{"cb_ex2pe",20},{"cb_ex_partial2",11},{"cb_ex2",12}, -c -o /home/ctr-apbernal/.cache/tt-metal-cache/441969805167873259/kernels/layernorm_sharded_post_allgather/1471144061562299564/trisc1/trisck.849622137059472840_163595.o /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ctr-apbernal/.cache/tt-metal-cache/441969805167873259/kernels/layernorm_sharded_post_allgather/1471144061562299564/trisc1/trisck.849622137059472840_163595.d
+In file included from ../chlkc_math.cpp:4,
+                 from /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common/chlkc_list.h:16,
+                 from /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp: In function 'void kernel_main()':
+/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp:43:14: warning: variable 'num_blocks_reduce' set but not used [-Wunused-but-set-variable]
+   43 |     uint32_t num_blocks_reduce;
+      |              ^~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/proj_sw/user_dev/ctr-apbernal/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-wh-tensix -I. -I.. -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/common -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hostdevcommon/api -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/api/ -I/proj_sw/user_dev/ctr-apbernal/tt-metal/runtime/sfpi/include -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_io -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/wormhole/noc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu -I/proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute -DIS_NOT_POW2_NUM_DRAM_BANKS=1 -DIS_NOT_POW2_NUM_L1_BANKS=1 -DNUM_DRAM_BANKS=12 -DNUM_L1_BANKS=70 -DPCIE_NOC_X=0 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_WORMHOLE -DDISPATCH_MESSAGE_ADDR=4290183304 -DKERNEL_BUILD -DFULL_KERNEL_NAME="layernorm_sharded_post_allgather/12370671949865657321/" -DKERNEL_COMPILE_TIME_ARGS=0,1,0,2,1,4,4,1,1,4,0,0,0,8 -DKERNEL_COMPILE_TIME_ARG_MAP={"welford_fp32_alias",0},{"cb_x_welford",29},{"cb_x",24},{"cb_xmm",18},{"cb_out",16},{"cb_ex_global",15},{"cb_scaler",2},{"cb_in0",0},{"cb_eps",3},{"cb_ex_external",10},{"cb_scaler_global",4},{"cb_in1",1},{"cb_gamma",5},{"cb_beta",6},{"cb_ex_partial",8},{"cb_ex",9},{"cb_col_mask_packed",19},{"cb_ex_external2",13},{"cb_mask_scratch",14},{"cb_ex2pe",20},{"cb_ex_partial2",11},{"cb_ex2",12}, -c -o /home/ctr-apbernal/.cache/tt-metal-cache/441969805167873259/kernels/layernorm_sharded_post_allgather/12370671949865657321/trisc1/trisck.849622137059472840_163595.o /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/ctr-apbernal/.cache/tt-metal-cache/441969805167873259/kernels/layernorm_sharded_post_allgather/12370671949865657321/trisc1/trisck.849622137059472840_163595.d
+In file included from ../chlkc_math.cpp:4,
+                 from /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common/chlkc_list.h:16,
+                 from /proj_sw/user_dev/ctr-apbernal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp: In function 'void kernel_main()':
+/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp:43:14: warning: variable 'num_blocks_reduce' set but not used [-Wunused-but-set-variable]
+   43 |     uint32_t num_blocks_reduce;
+      |              ^~~~~~~~~~~~~~~~~
+2026-08-26 20:46:56.746 | critical |          Always | TT_THROW: Tensor is not allocated (assert.hpp:104)
+[stage] FAILED in decode forward
+Traceback (most recent call last):
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py", line 170, in _stage
+    yield
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py", line 284, in test_one_decode_step_executes
+    output = model.decode_forward(x_embed, tt_positions, rot_mats)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/models/llama33_70b_galaxy/model.py", line 1326, in decode_forward
+    x, h = layer.decode_forward(x, h, rot_mats, metadata)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/models/llama33_70b_galaxy/model.py", line 1120, in decode_forward
+    attention_input = _relocate(attention_input, self.config.decode_attention_input_memcfg)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/models/common/models/llama33_70b_galaxy/model.py", line 1064, in _relocate
+    else ttnn.to_memory_config(tensor, memory_config)
+  File "/proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+RuntimeError: TT_THROW @ /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/core/tensor/storage.cpp:164: tt::exception
+info:
+Tensor is not allocated
+backtrace:
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0x8ea479) [0x7ccb6477e479]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0x1dc5b20) [0x7ccb65c59b20]
+ --- ttnn::Tensor::buffer() const
+ --- ttnn::prim::ShardedToInterleavedDeviceOperation::validate_inputs[abi:cxx11](ttnn::prim::ShardedToInterleavedParams const&, ttnn::prim::ShardedToInterleavedInputs const&)
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/build_Release/lib/_ttnncpp.so(+0xa69898) [0x7ccb648fd898]
+ --- ttnn::to_memory_config(ttnn::Tensor const&, tt::tt_metal::MemoryConfig const&, std::optional<tt::tt_metal::DataType>, std::optional<ttnn::Tensor> const&)
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x4f9bda) [0x7ccb6679bbda]
+ --- /proj_sw/user_dev/ctr-apbernal/tt-metal/ttnn/ttnn/_ttnn.so(+0x347f45) [0x7ccb665e9f45]
+ --- python(_PyObject_Call_Prepend+0x99) [0x56982cec6649]
+ --- python(+0x3b866e) [0x56982d00c66e]
+ --- python(_PyEval_EvalFrameDefault+0x90c8) [0x56982cf27fc8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyObject_Call_Prepend+0x99) [0x56982cec6649]
+ --- python(+0x3b866e) [0x56982d00c66e]
+ --- python(_PyEval_EvalFrameDefault+0x1221c) [0x56982cf3111c]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(+0x30011c) [0x56982cf5411c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x56982cf3cedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x7f02) [0x56982cf26e02]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x7f02) [0x56982cf26e02]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x34f6f) [0x56982cf53e6f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x34f6f) [0x56982cf53e6f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x56982cf269f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x56982cf2882a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(+0x2734d9) [0x56982cec74d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x56982cf2882a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x56982cec66c6]
+ --- python(+0x3b866e) [0x56982d00c66e]
+ --- python(+0x300318) [0x56982cf54318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x56982cf3cf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x7f02) [0x56982cf26e02]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x56982cf269f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x56982cf2882a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(+0x2734d9) [0x56982cec74d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x56982cf2882a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x56982cec66c6]
+ --- python(+0x3b866e) [0x56982d00c66e]
+ --- python(_PyEval_EvalFrameDefault+0x90c8) [0x56982cf27fc8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(+0x30011c) [0x56982cf5411c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x56982cf3cedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(+0x2734d9) [0x56982cec74d9]
+ --- python(+0x30011c) [0x56982cf5411c]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x56982cf3cf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(+0x30011c) [0x56982cf5411c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x56982cf3cedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(+0x30011c) [0x56982cf5411c]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x56982cf3cf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x56982cf269f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x56982cf2882a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(+0x2734d9) [0x56982cec74d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x56982cf2882a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x56982cec66c6]
+ --- python(+0x3b866e) [0x56982d00c66e]
+ --- python(+0x300318) [0x56982cf54318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x56982cf3cf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x56982cf269f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x56982cf2882a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(+0x2734d9) [0x56982cec74d9]
+ --- python(_PyEval_EvalFrameDefault+0x992a) [0x56982cf2882a]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyObject_Call_Prepend+0x116) [0x56982cec66c6]
+ --- python(+0x3b866e) [0x56982d00c66e]
+ --- python(+0x300318) [0x56982cf54318]
+ --- python(_PyEval_EvalFrameDefault+0x1e057) [0x56982cf3cf57]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(+0x30011c) [0x56982cf5411c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x56982cf3cedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(+0x30011c) [0x56982cf5411c]
+ --- python(_PyEval_EvalFrameDefault+0x1dfdb) [0x56982cf3cedb]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+ --- python(_PyEval_EvalFrameDefault+0x7af2) [0x56982cf269f2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x56982cec5023]
+
+[stage] enter close model
+[stage] leave close model
+FAILEDexit=143
+  reap KILL 166046 (comm=python)
+NOTE: the pytest process had to be reaped; the mesh needs a glx_reset.
+holders_after: 0
