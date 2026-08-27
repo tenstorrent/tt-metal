@@ -18,12 +18,18 @@ are three orders of magnitude smaller.
 The `TODO: Currently done on CPU, to be modified once TTNN supports required indexing ops` comments
 were stale — every op they waited on exists in this build. Both are deleted rather than edited.
 
-- **Rebatch** — `ttnn.embedding`, once for the queries and once for the reference points. Both are
-  row gathers, and `embedding` takes one index per output *row* rather than one per element, so the
-  index stays small. Folding the leading dimensions into the row id (`camera × num_queries + row`)
-  lets each run as a **single call** covering every batch item and camera.
-- **Scatter-back** — one `ttnn.scatter_add`. It accumulates repeated indices, which is exactly the
-  multi-view aggregation semantics, so all six cameras go in one call instead of six.
+| Step | Before — host (torch) | After — device (ttnn) | What the ttnn op does |
+|---|---|---|---|
+| Rebatch the queries | `query_torch[j, valid_indices]` | `ttnn.embedding(query_index, query_rows)` | Table lookup: one index per output **row**, output row `k` is table row `index[k]`. Exactly a row gather. |
+| Rebatch the reference points | `ref_points_torch[i, j, valid_indices]` | `ttnn.embedding(ref_index, ref_rows)` | Same, over the `[num_cams × bs × num_queries, 8]` table. |
+| Scatter the results back | `slots_torch[j, valid] += queries_output_torch[j, i, :n]` | `ttnn.scatter_add(zeros, dim=1, index, src)` | Adds `src` rows into `input` at `index`, **accumulating repeated indices** — which is the multi-view sum, so all six cameras land in one call. |
+| Widen the scatter index | — | `ttnn.repeat` | `scatter_add` indexes per element, so the row id is broadcast across `embed_dims` on device rather than uploaded that wide. |
+
+Both rebatches are row gathers, and `embedding` takes one index per row rather than one per element,
+so the index stays small. Folding the leading dimensions into the row id
+(`camera × num_queries + row`) lets each run as a **single call** covering every batch item and
+camera, instead of one call per camera plus a `concat` to stack them.
+
 - **`rebatch_len`** is `max_len` rounded up to a tile boundary (2484 → 2496), which keeps the
   `(num_cams, rebatch_len)` merges and splits as views on a tiled tensor instead of re-layouts. The
   extra rows cost 0.5% more deformable-attention compute and nothing else.
