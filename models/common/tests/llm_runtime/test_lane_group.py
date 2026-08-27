@@ -1048,7 +1048,7 @@ def test_non_null_lane_log_probs_are_aggregated_in_global_row_order():
         read_from_device=True,
         execution=None,
     ):
-        return torch.zeros(2, dtype=torch.int64), torch.tensor([0.25, 0.75])
+        return (tokens + 100).to(torch.int64), torch.tensor([0.25, 0.75])
 
     lanes[1].decode_forward = decode_with_log_probs
     group = LaneGroupExecutor(lanes)

@@ -1059,22 +1059,51 @@ def test_executor_validates_borrowed_cache_then_omits_it_from_execution(binding)
         *expected_validation,
         "dispatch_decode",
     ]
+    request_state_names = (
+        ("prompt_tokens", "output_tokens", "slot_remap")
+        if "prompt_tokens" in inspect.signature(binding.executor_class.compile_prefill).parameters
+        else ()
+    )
     for target, expected_names in (
         (
             execution.compile_prefill,
-            ("tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "sampling_params"),
+            (
+                "tokens",
+                "page_table",
+                "prompt_lens",
+                "start_pos",
+                "empty_slots",
+                "sampling_params",
+                *request_state_names,
+            ),
         ),
         (
             execution.compile_decode,
-            ("tokens", "start_pos", "page_table", "sampling_params", "reset_batch"),
+            ("tokens", "start_pos", "page_table", "sampling_params", *request_state_names, "reset_batch"),
         ),
         (
             execution.prefill_forward,
-            ("tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "sampling_params"),
+            (
+                "tokens",
+                "page_table",
+                "prompt_lens",
+                "start_pos",
+                "empty_slots",
+                "sampling_params",
+                *request_state_names,
+            ),
         ),
         (
             execution.decode_forward,
-            ("tokens", "start_pos", "page_table", "sampling_params", "reset_batch", "read_from_device"),
+            (
+                "tokens",
+                "start_pos",
+                "page_table",
+                "sampling_params",
+                *request_state_names,
+                "reset_batch",
+                "read_from_device",
+            ),
         ),
     ):
         assert target.call_count == 1

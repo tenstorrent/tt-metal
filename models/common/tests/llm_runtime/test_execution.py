@@ -210,7 +210,8 @@ def test_eager_prefill_prepares_once_and_compiles_all_signatures_from_same_objec
     prefill = _runtime(
         PrefillRuntime,
         prepare=prepare,
-        invoke=lambda prepared: prepared_seen.append(prepared) or PrefillInvocationResult(torch.zeros(1), ()),
+        invoke=lambda prepared, *, count_tokens=True: prepared_seen.append((prepared, count_tokens))
+        or PrefillInvocationResult(torch.zeros(1), ()),
     )
     eager = EagerExecutor(prefill=prefill, decode=_runtime(DecodeRuntime), program_compiler=_compiler(monkeypatch))
     tokens = torch.zeros(1, 1)
@@ -239,7 +240,7 @@ def test_eager_prefill_prepares_once_and_compiles_all_signatures_from_same_objec
             "sampling_params": sampling_params,
         }
     ]
-    assert prepared_seen == [prepared, prepared]
+    assert prepared_seen == [(prepared, False), (prepared, False)]
 
 
 def test_traced_prefill_compile_does_not_interpret_request_eligibility(monkeypatch):
@@ -267,7 +268,7 @@ def test_traced_prefill_compile_does_not_interpret_request_eligibility(monkeypat
     prefill = _runtime(
         PrefillRuntime,
         prepare=prepare,
-        invoke=lambda prepared: identity_events.append(("invoke", prepared))
+        invoke=lambda prepared, *, count_tokens=True: identity_events.append(("invoke", prepared, count_tokens))
         or PrefillInvocationResult(torch.zeros(1), ()),
         capture_plan=lambda prepared: identity_events.append(("capture_plan", prepared)) or operation_plan,
     )
@@ -282,6 +283,7 @@ def test_traced_prefill_compile_does_not_interpret_request_eligibility(monkeypat
 
     assert [event[0] for event in identity_events] == ["prepare", "invoke", "capture_plan"]
     assert all(event[1] is prepared for event in identity_events)
+    assert identity_events[1][2] is False
     assert len(registered) == 1
 
 
@@ -302,7 +304,7 @@ def test_traced_prefill_recompile_reuses_existing_trace_association(monkeypatch)
     prefill = _runtime(
         PrefillRuntime,
         prepare=prepare,
-        invoke=lambda prepared: PrefillInvocationResult(torch.zeros(1), ()),
+        invoke=lambda prepared, *, count_tokens=True: PrefillInvocationResult(torch.zeros(1), ()),
         capture_plan=lambda prepared: (_ for _ in ()).throw(AssertionError("capture plan rebuilt")),
     )
     program_compiler = _compiler(monkeypatch)
@@ -325,7 +327,9 @@ def test_traced_decode_recompile_reuses_existing_trace_association(monkeypatch):
         DecodeRuntime,
         prepare=prepare,
         program_signature=lambda prepared: _Signature("decode", 1),
-        invoke=lambda prepared, *, device_feedback=False: DecodeInvocationResult(torch.zeros(1), (), False),
+        invoke=lambda prepared, *, device_feedback=False, count_tokens=True: DecodeInvocationResult(
+            torch.zeros(1), (), False
+        ),
         capture_plan=lambda prepared: (_ for _ in ()).throw(AssertionError("capture plan rebuilt")),
     )
     program_compiler = _compiler(monkeypatch)

@@ -563,6 +563,9 @@ class _ExplicitGeneratorTarget:
         empty_slots=None,  # ↓ Lane routing
         kv_cache=None,  # ↓ Borrowed resources
         sampling_params=None,  # ↓ Sampling
+        prompt_tokens=None,  # ↓ Request-owned sampling state
+        output_tokens=None,
+        slot_remap=None,
         execution=None,  # ↓ Internal dispatch
     ):
         self._record("compile_prefill", locals())
@@ -575,6 +578,9 @@ class _ExplicitGeneratorTarget:
         *,
         kv_cache=None,  # ↓ Borrowed resources
         sampling_params=None,  # ↓ Sampling
+        prompt_tokens=None,  # ↓ Request-owned sampling state
+        output_tokens=None,
+        slot_remap=None,
         reset_batch=False,  # ↓ State transition
         execution=None,  # ↓ Internal dispatch
     ):
@@ -590,6 +596,9 @@ class _ExplicitGeneratorTarget:
         empty_slots=None,  # ↓ Lane routing
         kv_cache=None,  # ↓ Borrowed resources
         sampling_params=None,  # ↓ Sampling
+        prompt_tokens=None,  # ↓ Request-owned sampling state
+        output_tokens=None,
+        slot_remap=None,
         execution=None,  # ↓ Internal dispatch
     ):
         self._record("prefill_forward", locals())
@@ -603,6 +612,9 @@ class _ExplicitGeneratorTarget:
         *,
         kv_cache=None,  # ↓ Borrowed resources
         sampling_params=None,  # ↓ Sampling
+        prompt_tokens=None,  # ↓ Request-owned sampling state
+        output_tokens=None,
+        slot_remap=None,
         reset_batch=False,  # ↓ State transition
         read_from_device=True,  # ↓ Output policy
         execution=None,  # ↓ Internal dispatch

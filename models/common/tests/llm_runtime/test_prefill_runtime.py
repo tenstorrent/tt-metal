@@ -1333,7 +1333,7 @@ def test_q128_single_topk_tile_is_program_material_but_not_trace_material():
     assert prepare(32, None).program_signatures[0].last_token_tile_start is None
 
 
-def test_hidden_capture_schema_is_sampling_independent_with_separate_alias_workspaces():
+def test_hidden_capture_schema_is_sampling_independent_with_distinct_trace_and_alias_identities():
     runtime = _runtime(allow_force_argmax=True)
     tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80)
 
@@ -1351,7 +1351,12 @@ def test_hidden_capture_schema_is_sampling_independent_with_separate_alias_works
     topk = prepare(SamplingParams(temperature=1.0, top_k=32, top_p=0.08))
     plans = [runtime.capture_plan(prepared) for prepared in (logits, argmax, topk)]
 
-    assert logits.trace_signature == argmax.trace_signature == topk.trace_signature
+    assert {prepared.trace_signature.sampling_path for prepared in (logits, argmax, topk)} == {
+        "logits",
+        "argmax",
+        "topk",
+    }
+    assert len({prepared.trace_signature for prepared in (logits, argmax, topk)}) == 3
     assert len({plan.schema_fingerprint for plan in plans}) == 1
     assert len({plan.workspace_fingerprint for plan in plans}) == 3
     assert all("topk" not in repr(plan.schema_fingerprint) for plan in plans)
@@ -2055,7 +2060,7 @@ def test_chunk_sequence_allocates_kpt_before_steps_and_reuses_final_position(mon
     monkeypatch.setattr(
         runtime.postprocessor,
         "finish_prefill_sequence",
-        lambda prepared, final_step_output, kpt, position_inputs, *, sampled_output, owned: events.append("finish")
+        lambda prepared, final_step_output, kpt, position_inputs, *, sampled_output, owned, count_tokens=True: events.append("finish")
         or final_step_output,
     )
 
@@ -2118,7 +2123,7 @@ def test_sequence_preserves_sampling_output_preallocation_matrix(
     monkeypatch.setattr(
         runtime.postprocessor,
         "finish_prefill_sequence",
-        lambda prepared, final_step_output, kpt, position_inputs, *, sampled_output, owned: final_step_output,
+        lambda prepared, final_step_output, kpt, position_inputs, *, sampled_output, owned, count_tokens=True: final_step_output,
     )
 
     runtime.sequence_runner.run(prepared)

@@ -748,8 +748,6 @@ def test_signatures_expose_ordered_material_and_separate_types():
         ("batch_size", 2),
         ("page_table_width", 8),
         ("sampling_path", "argmax"),
-        ("penalties_enabled", False),
-        ("logprobs_enabled", False),
         ("device_feedback", True),
     )
     assert trace.key_material() == program.key_material()
@@ -778,6 +776,10 @@ def test_signature_tracks_native_penalty_and_sampled_logprob_program_modes():
     assert prepared.sampling_path == "topk"
     assert signature.penalties_enabled
     assert signature.logprobs_enabled
+    assert signature.key_material()[-2:] == (
+        ("penalties_enabled", True),
+        ("logprobs_enabled", True),
+    )
 
 
 def test_configured_topk_policy_is_not_collapsed_to_argmax_by_greedy_temperature():
