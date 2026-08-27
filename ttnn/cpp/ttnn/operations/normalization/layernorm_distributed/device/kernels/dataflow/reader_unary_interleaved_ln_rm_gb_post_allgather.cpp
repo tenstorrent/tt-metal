@@ -84,19 +84,6 @@ void kernel_main() {
     const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();
     const uint32_t stats_tile_bytes = dfb_stats_buf.get_tile_size();
 
-#ifdef FUSE_GAMMA
-    const auto addrg = TensorAccessor(tensor::gamma_src);
-    DataflowBuffer dfb_gamma_buf(dfb::gamma);
-    // datum size (bytes) of gamma, derived from its tile size (TILE_HW = 32*32 = 1024 datums/tile).
-    // Used to scale the row/face byte offsets when packing a stick into tile layout (bf16=2B, fp32=4B).
-    const uint32_t gamma_datum_bytes = dfb_gamma_buf.get_tile_size() / tt::constants::TILE_HW;
-#endif
-#ifdef FUSE_BETA
-    const auto addrb = TensorAccessor(tensor::beta_src);
-    DataflowBuffer dfb_beta_buf(dfb::beta);
-    const uint32_t beta_datum_bytes = dfb_beta_buf.get_tile_size() / tt::constants::TILE_HW;
-#endif
-
     // Generate constant tiles for layernorm compute
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         dfb::reduce,
@@ -142,30 +129,36 @@ void kernel_main() {
                 dfb_inp_buf.push_back(1);
             }
             if (ncht == 0 or dfb_iterations != 1) {
-#if defined FUSE_GAMMA || defined FUSE_BETA
-#ifdef FUSE_GAMMA
-                for (uint32_t j = 0; j < dfb_length; j++) {
-                    dfb_gamma_buf.reserve_back(1);
-                    uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
-                    async_read_row_to_tile<gamma_is_row_major>(
-                        noc, addrg, gamma_tile_count, l1_write_addr, gamma_datum_bytes);
-                    gamma_tile_count++;
-                    noc.async_read_barrier();
-                    dfb_gamma_buf.push_back(1);
-                }
-#endif
-#ifdef FUSE_BETA
-                for (uint32_t j = 0; j < dfb_length; j++) {
-                    dfb_beta_buf.reserve_back(1);
-                    uint32_t l1_write_addr = dfb_beta_buf.get_write_ptr();
-                    async_read_row_to_tile<beta_is_row_major>(
-                        noc, addrb, beta_tile_count, l1_write_addr, beta_datum_bytes);
-                    beta_tile_count++;
-                    noc.async_read_barrier();
-                    dfb_beta_buf.push_back(1);
-                }
-#endif
-#endif
+                with_nullable_token(tensor::gamma_src, dfb::gamma, [&](auto const& t, DFBBindingToken const& d) {
+                    const auto addrg = TensorAccessor(t);
+                    DataflowBuffer dfb_gamma_buf(d);
+                    // datum size (bytes) of gamma, derived from its tile size (TILE_HW = 32*32 = 1024 datums/tile).
+                    // Used to scale the row/face byte offsets when packing a stick into tile layout (bf16=2B, fp32=4B).
+                    const uint32_t gamma_datum_bytes = dfb_gamma_buf.get_tile_size() / tt::constants::TILE_HW;
+                    for (uint32_t j = 0; j < dfb_length; j++) {
+                        dfb_gamma_buf.reserve_back(1);
+                        uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
+                        async_read_row_to_tile<gamma_is_row_major>(
+                            noc, addrg, gamma_tile_count, l1_write_addr, gamma_datum_bytes);
+                        gamma_tile_count++;
+                        noc.async_read_barrier();
+                        dfb_gamma_buf.push_back(1);
+                    }
+                });
+                with_nullable_token(tensor::beta_src, dfb::beta, [&](auto const& t, DFBBindingToken const& d) {
+                    const auto addrb = TensorAccessor(t);
+                    DataflowBuffer dfb_beta_buf(d);
+                    const uint32_t beta_datum_bytes = dfb_beta_buf.get_tile_size() / tt::constants::TILE_HW;
+                    for (uint32_t j = 0; j < dfb_length; j++) {
+                        dfb_beta_buf.reserve_back(1);
+                        uint32_t l1_write_addr = dfb_beta_buf.get_write_ptr();
+                        async_read_row_to_tile<beta_is_row_major>(
+                            noc, addrb, beta_tile_count, l1_write_addr, beta_datum_bytes);
+                        beta_tile_count++;
+                        noc.async_read_barrier();
+                        dfb_beta_buf.push_back(1);
+                    }
+                });
             }
         }
         for (uint32_t i = 0; i < dfb_leftovers; i++) {
@@ -176,29 +169,34 @@ void kernel_main() {
             dfb_inp_buf.push_back(1);
         }
         if (ncht == 0 or dfb_iterations != 1) {
-#if defined FUSE_GAMMA || defined FUSE_BETA
-#ifdef FUSE_GAMMA
-            for (uint32_t i = 0; i < dfb_leftovers; i++) {
-                dfb_gamma_buf.reserve_back(1);
-                uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
-                async_read_row_to_tile<gamma_is_row_major>(
-                    noc, addrg, gamma_tile_count, l1_write_addr, gamma_datum_bytes);
-                gamma_tile_count++;
-                noc.async_read_barrier();
-                dfb_gamma_buf.push_back(1);
-            }
-#endif
-#ifdef FUSE_BETA
-            for (uint32_t i = 0; i < dfb_leftovers; i++) {
-                dfb_beta_buf.reserve_back(1);
-                uint32_t l1_write_addr = dfb_beta_buf.get_write_ptr();
-                async_read_row_to_tile<beta_is_row_major>(noc, addrb, beta_tile_count, l1_write_addr, beta_datum_bytes);
-                beta_tile_count++;
-                noc.async_read_barrier();
-                dfb_beta_buf.push_back(1);
-            }
-#endif
-#endif
+            with_nullable_token(tensor::gamma_src, dfb::gamma, [&](auto const& t, DFBBindingToken const& d) {
+                const auto addrg = TensorAccessor(t);
+                DataflowBuffer dfb_gamma_buf(d);
+                const uint32_t gamma_datum_bytes = dfb_gamma_buf.get_tile_size() / tt::constants::TILE_HW;
+                for (uint32_t i = 0; i < dfb_leftovers; i++) {
+                    dfb_gamma_buf.reserve_back(1);
+                    uint32_t l1_write_addr = dfb_gamma_buf.get_write_ptr();
+                    async_read_row_to_tile<gamma_is_row_major>(
+                        noc, addrg, gamma_tile_count, l1_write_addr, gamma_datum_bytes);
+                    gamma_tile_count++;
+                    noc.async_read_barrier();
+                    dfb_gamma_buf.push_back(1);
+                }
+            });
+            with_nullable_token(tensor::beta_src, dfb::beta, [&](auto const& t, DFBBindingToken const& d) {
+                const auto addrb = TensorAccessor(t);
+                DataflowBuffer dfb_beta_buf(d);
+                const uint32_t beta_datum_bytes = dfb_beta_buf.get_tile_size() / tt::constants::TILE_HW;
+                for (uint32_t i = 0; i < dfb_leftovers; i++) {
+                    dfb_beta_buf.reserve_back(1);
+                    uint32_t l1_write_addr = dfb_beta_buf.get_write_ptr();
+                    async_read_row_to_tile<beta_is_row_major>(
+                        noc, addrb, beta_tile_count, l1_write_addr, beta_datum_bytes);
+                    beta_tile_count++;
+                    noc.async_read_barrier();
+                    dfb_beta_buf.push_back(1);
+                }
+            });
         }
     }  // ncht loop
 }

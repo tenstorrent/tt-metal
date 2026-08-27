@@ -106,19 +106,12 @@ void kernel_main() {
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
 
-#ifdef FUSE_BIAS
-    // in3 mcast args (in3_tensor_addr is now the tensor::bias binding)
-    const uint32_t in3_tensor_start_tile_id = get_arg(args::in3_tensor_start_tile_id);
-
-    constexpr uint32_t in3_tensor_stride_w = get_arg(args::in3_tensor_stride_w);
-
-    constexpr uint32_t cb_id_in3 = dfb::cb_bias;
-    constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
-
 #ifndef BIAS_SHARDED
-    uint32_t l1_write_addr_in3;
-#endif  // BIAS_SHARDED
-#endif  // FUSE_BIAS
+    uint32_t in3_tensor_start_tile_id = 0;
+    with_nullable_token(tensor::bias, [&](auto const&) {
+        in3_tensor_start_tile_id = get_arg(args::in3_tensor_start_tile_id);
+    });
+#endif
 #ifndef OUT_SHARDED
     const uint32_t last_num_blocks_w_dim = get_arg(args::last_num_blocks_w_dim);
 #endif  // OUT_SHARDED
@@ -138,12 +131,6 @@ void kernel_main() {
     } else if constexpr (fuse_op_reduce_scatter) {
         op_signaler = OpSignaler(rt_args_idx);
     }
-
-#ifdef FUSE_BIAS
-#ifndef BIAS_SHARDED
-    const auto s3 = TensorAccessor(tensor::bias);
-#endif  // BIAS_SHARDED
-#endif  // FUSE_BIAS
 
     constexpr uint32_t cb_id_in1 = dfb::cb_in1;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
@@ -170,9 +157,6 @@ void kernel_main() {
     DataflowBuffer cb_out(dfb::cb_out);
     Semaphore sender_sem(sem::in1_sender);
     Semaphore receiver_sem(sem::in1_receiver);
-#ifdef FUSE_BIAS
-    DataflowBuffer cb_in3(dfb::cb_bias);
-#endif
 
 //  READER
 #ifdef IN1_SHARDED
@@ -238,9 +222,9 @@ void kernel_main() {
             for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
                 uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_current_h_dim_block_tile_id;
                 uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
-#ifdef FUSE_BIAS
+#ifndef BIAS_SHARDED
                 uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id;
-#endif  // FUSE_BIAS
+#endif
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                     uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
 
@@ -325,81 +309,95 @@ void kernel_main() {
                         cb_in1.push_back(in1_block_num_tiles);
 #endif  // IN1_SHARDED
                     }
-#ifdef FUSE_BIAS
-                    // Only read bias on first batch, or we have multiple output blocks
-                    if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
-                        // Operand 1
 #ifndef BIAS_SHARDED
-                        cb_in3.reserve_back(in1_block_w);
-                        uint32_t in3_write_offset = 0;
+                    with_nullable_token(
+                        tensor::bias,
+                        dfb::cb_bias,
+                        [&](auto const& t, DFBBindingToken const& d) {
+                            // Only read bias on first batch, or we have multiple output blocks
+                            if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                                const auto s3 = TensorAccessor(t);
+                                DataflowBuffer cb_in3(d);
+                                const uint32_t bias_single_tile_size_bytes = get_tile_size(d);
+                                constexpr uint32_t in3_tensor_stride_w = get_arg(args::in3_tensor_stride_w);
+                                cb_in3.reserve_back(in1_block_w);
+                                uint32_t in3_write_offset = 0;
 
-                        uint64_t in3_start_address =
-                            cb_in3.get_write_ptr();         // copy start address of block, to be used for mcasting
-                        uint32_t in3_block_size_bytes = 0;  // can be optimized later, pass it to kernel
+                                uint64_t in3_start_address =
+                                    cb_in3.get_write_ptr();  // copy start address of block, to be used for mcasting
+                                uint32_t in3_block_size_bytes = 0;  // can be optimized later, pass it to kernel
 
-                        // Copy in1 block into CB, as the default kernel
-                        uint32_t in3_tensor_tile_id = in3_tensor_current_w_dim_block_tile_id;
-                        for (uint32_t w = 0; w < in1_block_w; ++w) {
-                            if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
-                                noc.async_read(
-                                    s3,
-                                    cb_in3,
-                                    bias_single_tile_size_bytes,
-                                    {.page_id = in3_tensor_tile_id},
-                                    {.offset_bytes = in3_write_offset});
-                            }
-                            in3_write_offset += bias_single_tile_size_bytes;
-                            in3_tensor_tile_id += in3_tensor_stride_w;
-                            in3_block_size_bytes += bias_single_tile_size_bytes;
-                        }
-                        // Barrier! make sure the reads are done
-                        noc.async_read_barrier();
+                                // Copy in1 block into CB, as the default kernel
+                                uint32_t in3_tensor_tile_id = in3_tensor_current_w_dim_block_tile_id;
+                                for (uint32_t w = 0; w < in1_block_w; ++w) {
+                                    if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
+                                        noc.async_read(
+                                            s3,
+                                            cb_in3,
+                                            bias_single_tile_size_bytes,
+                                            {.page_id = in3_tensor_tile_id},
+                                            {.offset_bytes = in3_write_offset});
+                                    }
+                                    in3_write_offset += bias_single_tile_size_bytes;
+                                    in3_tensor_tile_id += in3_tensor_stride_w;
+                                    in3_block_size_bytes += bias_single_tile_size_bytes;
+                                }
+                                // Barrier! make sure the reads are done
+                                noc.async_read_barrier();
 
 #ifndef SKIP_MCAST
-                        sender_sem.wait(in1_mcast_num_dests);
-                        sender_sem.set(0);
-                        // DEBUG: matmul mcast hang — reached iff all BIAS acks received (first block).
-                        // If "SEND in1 acked" prints but this does not, the bias mcast handshake is the
-                        // stuck point (receivers never reached the bias up() because in1 VALID didn't reach them).
+                                sender_sem.wait(in1_mcast_num_dests);
+                                sender_sem.set(0);
+                                // DEBUG: matmul mcast hang — reached iff all BIAS acks received (first block).
+                                // If "SEND in1 acked" prints but this does not, the bias mcast handshake is the
+                                // stuck point (receivers never reached the bias up() because in1 VALID didn't reach
+                                // them).
 
-                        MulticastEndpoint mcast_dst;
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(static_cast<uint32_t>(in3_start_address)),
-                            mcast_dst,
-                            in3_block_size_bytes,
-                            in1_mcast_num_cores,
-                            {},
-                            {.noc_x_start = in1_mcast_dest_noc_start_x,
-                             .noc_y_start = in1_mcast_dest_noc_start_y,
-                             .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in3_start_address)},
-                            true);
+                                MulticastEndpoint mcast_dst;
+                                noc.async_write_multicast(
+                                    CoreLocalMem<uint32_t>(static_cast<uint32_t>(in3_start_address)),
+                                    mcast_dst,
+                                    in3_block_size_bytes,
+                                    in1_mcast_num_cores,
+                                    {},
+                                    {.noc_x_start = in1_mcast_dest_noc_start_x,
+                                     .noc_y_start = in1_mcast_dest_noc_start_y,
+                                     .noc_x_end = in1_mcast_dest_noc_end_x,
+                                     .noc_y_end = in1_mcast_dest_noc_end_y,
+                                     .addr = static_cast<uint32_t>(in3_start_address)},
+                                    true);
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
-                        // Flush the DATA multicast before the VALID-semaphore multicast. On Quasar, without this
-                        // barrier the back-to-back in1-then-bias mcasts let the bias VALID semaphore write
-                        // race/drop on the NoC -> the receiver's bias wait(VALID) hangs (flaky: 1x1 256->128
-                        // flaked, bottleneck conv2 hung deterministically). Sender sends+acks bias but the
-                        // receiver never sees bias VALID. Matches the BH ordering requirement.
-                        noc.async_writes_flushed();
+                                // Flush the DATA multicast before the VALID-semaphore multicast. On Quasar, without
+                                // this barrier the back-to-back in1-then-bias mcasts let the bias VALID semaphore write
+                                // race/drop on the NoC -> the receiver's bias wait(VALID) hangs (flaky: 1x1 256->128
+                                // flaked, bottleneck conv2 hung deterministically). Sender sends+acks bias but the
+                                // receiver never sees bias VALID. Matches the BH ordering requirement.
+                                noc.async_writes_flushed();
 #endif  // ARCH_BLACKHOLE || ARCH_QUASAR
 
-                        receiver_sem.set_multicast(
-                            noc,
-                            in1_mcast_dest_noc_start_x,
-                            in1_mcast_dest_noc_start_y,
-                            in1_mcast_dest_noc_end_x,
-                            in1_mcast_dest_noc_end_y,
-                            in1_mcast_num_cores);
+                                receiver_sem.set_multicast(
+                                    noc,
+                                    in1_mcast_dest_noc_start_x,
+                                    in1_mcast_dest_noc_start_y,
+                                    in1_mcast_dest_noc_end_x,
+                                    in1_mcast_dest_noc_end_y,
+                                    in1_mcast_num_cores);
 #endif  // SKIP_MCAST
 
-                        cb_in3.push_back(in1_block_w);
+                                cb_in3.push_back(in1_block_w);
+                            }
+                            in3_tensor_current_w_dim_block_tile_id += in1_block_w;
+                        });
 #else
-                        cb_in3.reserve_back(in1_block_w);
-                        cb_in3.push_back(in1_block_w);
+                    with_nullable_token(dfb::cb_bias, [&](DFBBindingToken const& d) {
+                        // Only read bias on first batch, or we have multiple output blocks
+                        if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                            DataflowBuffer cb_in3(d);
+                            cb_in3.reserve_back(in1_block_w);
+                            cb_in3.push_back(in1_block_w);
+                        }
+                    });
 #endif  // BIAS_SHARDED
-                    }
-#endif  // FUSE_BIAS
 
 #ifndef OUT_SHARDED
                     // WRITER
@@ -474,9 +472,6 @@ void kernel_main() {
 #endif
                     in1_tensor_current_w_dim_block_tile_id += in1_tensor_next_w_dim_block_stride;
                     out_tensor_current_w_dim_block_tile_id += out_tensor_next_w_dim_block_stride;
-#ifdef FUSE_BIAS
-                    in3_tensor_current_w_dim_block_tile_id += in1_block_w;
-#endif
                 }
                 out_tensor_current_h_dim_block_tile_id += out_tensor_next_h_dim_block_stride;
             }

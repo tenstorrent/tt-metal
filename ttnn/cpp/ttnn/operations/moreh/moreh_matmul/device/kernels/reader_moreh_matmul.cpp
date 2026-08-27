@@ -41,9 +41,10 @@ void kernel_main() {
     uint32_t input_mask_w = get_arg(args::input_mask_w);
     uint32_t other_mask_h = get_arg(args::other_mask_h);
     uint32_t other_mask_w = get_arg(args::other_mask_w);
-#ifdef FUSE_BIAS
-    constexpr bool is_scalar_bias = (get_arg(args::is_scalar_bias) == 1);
-#endif
+    constexpr bool is_scalar_bias = map_nullable_token(
+        dfb::in4,
+        [](DFBBindingToken const&) { return get_arg(args::is_scalar_bias) == 1; },
+        [] { return false; });
 
     // runtime args (named scalars; the input/other/bias base addresses are now supplied by the
     // tensor bindings, so their address RTAs are gone)
@@ -78,15 +79,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = dfb::in1;
     constexpr uint32_t cb_id_in2 = dfb::in2;
     constexpr uint32_t cb_id_in3 = dfb::in3;
-    constexpr uint32_t cb_id_in4 = dfb::in4;
     constexpr uint32_t onetile = 1;
 
     const auto s0 = TensorAccessor(tensor::input);
     const auto s1 = TensorAccessor(tensor::other);
-
-#ifdef FUSE_BIAS
-    const auto s_bias = TensorAccessor(tensor::bias);
-#endif
+    auto s_bias = construct_nullable_tensor(tensor::bias);
 
     // mask
     bool need_input_mask_h = (input_mask_h != 32);
@@ -113,19 +110,17 @@ void kernel_main() {
     DataflowBuffer dfb_in1(cb_id_in1);
     const auto in0_tile_bytes = dfb_in0.get_tile_size();
     const auto in1_tile_bytes = dfb_in1.get_tile_size();
-#ifdef FUSE_BIAS
-    DataflowBuffer dfb_in4(cb_id_in4);
-    const auto in4_tile_bytes = dfb_in4.get_tile_size();
-#endif
-
-#ifdef FUSE_BIAS
-    if (is_scalar_bias && num_output_tiles > 0) {
-        dfb_in4.reserve_back(onetile);
-        noc.async_read(s_bias, dfb_in4, in4_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
-        noc.async_read_barrier();
-        dfb_in4.push_back(onetile);
-    }
-#endif
+    auto dfb_in4 = construct_nullable_dfb(dfb::in4);
+    uint32_t in4_tile_bytes = 0;
+    with_nullable_dfb(dfb_in4, [&](DataflowBuffer& dfb_in4) {
+        in4_tile_bytes = dfb_in4.get_tile_size();
+        if (is_scalar_bias && num_output_tiles > 0) {
+            dfb_in4.reserve_back(onetile);
+            noc.async_read(s_bias, dfb_in4, in4_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            dfb_in4.push_back(onetile);
+        }
+    });
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         uint32_t output_idxes[MAX_NUM_DIMENSIONS];
@@ -147,15 +142,15 @@ void kernel_main() {
             input_tidx += input_step_count;
             other_tidx += other_step_count;
         }
-#ifdef FUSE_BIAS
-        if constexpr (!is_scalar_bias) {
-            uint32_t bias_tidx = output_idxes[0];
-            dfb_in4.reserve_back(onetile);
-            noc.async_read(s_bias, dfb_in4, in4_tile_bytes, {.page_id = bias_tidx}, {.offset_bytes = 0});
-            noc.async_read_barrier();
-            dfb_in4.push_back(onetile);
-        }
-#endif
+        with_nullable_token(tensor::bias, dfb::in4, [&](auto const&, DFBBindingToken const&) {
+            if constexpr (!is_scalar_bias) {
+                uint32_t bias_tidx = output_idxes[0];
+                dfb_in4.reserve_back(onetile);
+                noc.async_read(s_bias, dfb_in4, in4_tile_bytes, {.page_id = bias_tidx}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                dfb_in4.push_back(onetile);
+            }
+        });
 
         output_tidx++;
     }

@@ -64,13 +64,15 @@ void kernel_main() {
     }
     const uint32_t src_off_aligned = src_byte_offset - misalignment;
 
-    if constexpr (is_non_aligned) {
+    with_nullable_token(
+        scratch::pad,
+        [&](auto const& pad) {
         // TRID-pipelined src->scratch->dest, mirroring the quasar i2s stick reader's unaligned path.
         enum SlotState : uint8_t { IDLE = 0, SRC_PENDING = 1, SCRATCH_READY = 2, SCRATCH_PENDING = 3 };
         constexpr uint32_t trid_base = 1;
 
         Scratchpad<uint32_t> scratch_buf(
-            scratch::pad);  // NB: local must not be named `scratch` (shadows the scratch:: ns)
+            pad);  // NB: local must not be named `scratch` (shadows the scratch:: ns)
         const uint32_t scratch_page_size = scratch_buf.size_in_bytes() / num_trids;
         const uint32_t scratch_l1_base = scratch_buf.get_base_address();
         const uint32_t my_noc_x = my_x[noc.get_noc_id()];
@@ -149,7 +151,8 @@ void kernel_main() {
         // Reset the sticky TRID tag for any downstream untagged reads.
         noc.set_async_read_state<NocOptions::TXN_ID>(
             self_ep, /*size_bytes=*/0, {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = 0}, NocOptVals{.trid = 0});
-    } else {
+        },
+        [&] {
         // Aligned path (the resnet stem's path): direct src->output DFB reads.
         for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
             cb_in0.reserve_back(num_read_per_barrier);
@@ -177,5 +180,5 @@ void kernel_main() {
             noc.async_read_barrier();
             cb_in0.push_back(num_read_per_barrier);
         }
-    }
+        });
 }

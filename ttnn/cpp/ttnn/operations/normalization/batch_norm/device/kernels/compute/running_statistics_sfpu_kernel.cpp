@@ -66,11 +66,6 @@ constexpr auto dfb_writer_updated_var = dfb::updated_var;
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
-    constexpr uint32_t old_running_mean_has_value = get_arg(args::old_running_mean_has_value) == 1;
-    constexpr uint32_t old_running_var_has_value = get_arg(args::old_running_var_has_value) == 1;
-    static_assert(
-        old_running_mean_has_value || old_running_var_has_value,
-        "running_statistics requires at least one of running_mean / running_var");
 
     constexpr uint32_t tc_in_fmt = get_arg(args::tc_in_fmt);
     constexpr uint32_t tc_out_fmt = get_arg(args::tc_out_fmt);
@@ -78,10 +73,10 @@ void kernel_main() {
     DataflowBuffer dfb_batch_mean_obj(dfb::batch_mean);
     DataflowBuffer dfb_batch_var_obj(dfb::batch_var);
     DataflowBuffer dfb_out0_obj(dfb::out);
-    DataflowBuffer dfb_old_running_mean_obj(dfb::old_running_mean);
-    DataflowBuffer dfb_old_running_var_obj(dfb::old_running_var);
-    DataflowBuffer dfb_updated_running_mean_obj(dfb::updated_mean);
-    DataflowBuffer dfb_updated_running_var_obj(dfb::updated_var);
+    auto dfb_old_running_mean_obj = construct_nullable_dfb(dfb::old_running_mean);
+    auto dfb_old_running_var_obj = construct_nullable_dfb(dfb::old_running_var);
+    auto dfb_updated_running_mean_obj = construct_nullable_dfb(dfb::updated_mean);
+    auto dfb_updated_running_var_obj = construct_nullable_dfb(dfb::updated_var);
     DataflowBuffer dfb_momentum_obj(dfb::momentum);
     DataflowBuffer dfb_one_obj(dfb::one);  // holds 1, for the (1 - momentum) term
     DataflowBuffer dfb_tmp1_obj(dfb::tmp1);
@@ -104,7 +99,7 @@ void kernel_main() {
         dfb_batch_var_obj.wait_front(onetile);
         dfb_out0_obj.reserve_back(1);
 
-        if constexpr (old_running_mean_has_value) {
+        with_nullable_dfb(dfb_old_running_mean_obj, [&](auto& dfb_old_running_mean_obj) {
             // 1 - momentum
             dfb_tmp1_obj.reserve_back(onetile);
             tile_regs_acquire();
@@ -185,10 +180,13 @@ void kernel_main() {
             // No pack reconfig needed: tmp3 and updated_mean share interm_data_format
             pack_tile_with_dt(tile_index * 2, dfb::updated_mean);
             // For the output tensor, return the same values as either of the stats.
-            if constexpr (!old_running_var_has_value) {
-                pack_reconfig_data_format(dfb::updated_mean, dfb::out);
-                pack_tile_with_dt(tile_index * 2, dfb::out);
-            }
+            with_nullable_token(
+                dfb::old_running_var,
+                [&](auto const&) {},
+                [&] {
+                    pack_reconfig_data_format(dfb::updated_mean, dfb::out);
+                    pack_tile_with_dt(tile_index * 2, dfb::out);
+                });
             tile_regs_release();
             dfb_updated_running_mean_obj.push_back(onetile);
 
@@ -197,9 +195,9 @@ void kernel_main() {
 
             dfb_tmp3_obj.pop_front(onetile);
             dfb_tmp2_obj.pop_front(onetile);
-        }
+        });
 
-        if constexpr (old_running_var_has_value) {
+        with_nullable_dfb(dfb_old_running_var_obj, [&](auto& dfb_old_running_var_obj) {
             // 1 - momentum
             dfb_tmp1_obj.reserve_back(onetile);
             tile_regs_acquire();
@@ -286,7 +284,7 @@ void kernel_main() {
 
             dfb_tmp3_obj.pop_front(onetile);
             dfb_tmp2_obj.pop_front(onetile);
-        }
+        });
 
         dfb_batch_mean_obj.pop_front(onetile);
         dfb_batch_var_obj.pop_front(onetile);

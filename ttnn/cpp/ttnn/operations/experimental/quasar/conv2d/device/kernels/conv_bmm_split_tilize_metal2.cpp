@@ -373,9 +373,6 @@ void kernel_main() {
 
     [[maybe_unused]] uint32_t bias_block_offset = 0;
     [[maybe_unused]] constexpr uint32_t bias_ntiles_w = get_arg(args::bias_ntiles_w);
-#ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = dfb::bias;
-#endif
     constexpr uint32_t mm_out_cb_id = fuse_bias ? matmul_partials_cb : untilize_mode_out_cb_id;
 
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
@@ -419,9 +416,7 @@ void kernel_main() {
     DataflowBuffer cb_matmul_partials(matmul_partials_cb);
     DataflowBuffer cb_mm_out(mm_out_cb_id);
     DataflowBuffer cb_out(out_cb_id);
-#ifdef FUSE_BIAS
-    DataflowBuffer cb_bias(bias_cb_id);
-#endif
+    auto cb_bias = construct_nullable_dfb(dfb::bias);
     DataflowBuffer cb_untilize_mode_out(untilize_mode_out_cb_id);
 
     // WH fast_tilize RACE-GUARD (DPRINT-independent; do NOT remove without the LLK fix). The WH fast_tilize
@@ -745,8 +740,8 @@ void kernel_main() {
                 continue;
             }
 #endif
-#ifdef FUSE_BIAS
-            if constexpr (fuse_bias) {
+            with_nullable_dfb(cb_bias, [&](DataflowBuffer& cb_bias) {
+                const uint32_t bias_cb_id = cb_bias.get_id();
                 if constexpr (pack_relu) {
                     PACK((llk_pack_relu_config(ReluConfig::zero())));
                 }
@@ -815,8 +810,7 @@ void kernel_main() {
                     UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, matmul_partials_cb));
                     PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, matmul_partials_cb));
                 }
-            }
-#endif  // FUSE_BIAS
+            });
             if constexpr (untilize_out) {
                 if constexpr (packer_l1_acc) {
                     pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
@@ -849,20 +843,14 @@ void kernel_main() {
                 }
             }
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
-#ifdef FUSE_BIAS
-                if constexpr (fuse_bias) {
-                    reconfig_data_format(matmul_partials_cb, in1_cb_id, bias_cb_id, mm_in0_cb_id);
-                } else
-#endif
-                {
-                    reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
-                }
+                with_nullable_token(
+                    dfb::bias,
+                    [&](DFBBindingToken const& bias_cb_id) {
+                        reconfig_data_format(matmul_partials_cb, in1_cb_id, bias_cb_id, mm_in0_cb_id);
+                    },
+                    [&] { reconfig_data_format_srca(matmul_partials_cb, in1_cb_id); });
             }
         }  // for in0_num_blocks_h
-#ifdef FUSE_BIAS
-        if constexpr (fuse_bias) {
-            bias_block_offset += in1_block_w;
-        }
-#endif
+        with_nullable_token(dfb::bias, [&](auto const&) { bias_block_offset += in1_block_w; });
     }  // for in1_num_blocks_w
 }  // void kernel_main()

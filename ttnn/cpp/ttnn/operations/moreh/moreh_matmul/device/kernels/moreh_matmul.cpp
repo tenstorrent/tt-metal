@@ -23,7 +23,6 @@ constexpr uint32_t cb_in0 = dfb::in0;
 constexpr uint32_t cb_in1 = dfb::in1;
 constexpr uint32_t cb_in2 = dfb::in2;
 constexpr uint32_t cb_in3 = dfb::in3;
-constexpr uint32_t bias_cb_id = dfb::in4;
 constexpr uint32_t cb_out0 = dfb::out0;
 constexpr uint32_t cb_intermed0 = dfb::im0;
 constexpr uint32_t cb_intermed1 = dfb::im1;
@@ -151,9 +150,8 @@ FORCE_INLINE void mask_tile_to_cb(
     }
 }
 
-#ifdef FUSE_BIAS
-template <bool is_scalar_bias>
-FORCE_INLINE void bias_add() {
+template <bool is_scalar_bias, typename BiasTok>
+FORCE_INLINE void bias_add(BiasTok bias_cb_id) {
     DataflowBuffer dfb_intermed3_obj(cb_intermed3);
     DataflowBuffer bias_cb_id_obj(bias_cb_id);
     pack_onetile_to_cb(cb_intermed3);
@@ -180,7 +178,6 @@ FORCE_INLINE void bias_add() {
         bias_cb_id_obj.pop_front(onetile);
     }
 }
-#endif
 
 template <bool is_scalar_bias>
 FORCE_INLINE void matmul_with_transpose_and_mask(
@@ -312,9 +309,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 ////////////////////
 // bias add
 ////////////////////
-#ifdef FUSE_BIAS
-                bias_add<is_scalar_bias>();
-#endif
+                with_nullable_token(dfb::in4, [&](auto const& in4) { bias_add<is_scalar_bias>(in4); });
                 pack_onetile_to_cb(cb_out0);
             } else {
                 pack_onetile_to_cb(cb_intermed0);
@@ -358,13 +353,11 @@ void kernel_main() {
     constexpr uint32_t input_mask_w = get_arg(args::input_mask_w);
     constexpr uint32_t other_mask_h = get_arg(args::other_mask_h);
     constexpr uint32_t other_mask_w = get_arg(args::other_mask_w);
-#ifdef FUSE_BIAS
-    constexpr bool is_scalar_bias = (get_arg(args::is_scalar_bias) == 1);
-    constexpr bool need_bias_add = true;
-#else
-    constexpr bool is_scalar_bias = false;
-    constexpr bool need_bias_add = false;
-#endif
+    constexpr bool is_scalar_bias = map_nullable_token(
+        dfb::in4,
+        [](DFBBindingToken const&) { return get_arg(args::is_scalar_bias) == 1; },
+        [] { return false; });
+    constexpr bool need_bias_add = !is_null_binding(dfb::in4);
     constexpr bool need_input_mask_h = (input_mask_h != 32);
     constexpr bool need_input_mask_w = (input_mask_w != 32);
     constexpr bool need_other_mask_h = (other_mask_h != 32);

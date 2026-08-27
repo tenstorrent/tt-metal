@@ -39,13 +39,9 @@ struct x_minus_mean_node {
     };
 };
 
-// The normalized result goes straight to the output unless gamma or beta still has to be applied to
-// it. Only the buffers this build binds have handles, so the choice is made at the preprocessor.
-#if defined(FUSE_GAMMA) || defined(FUSE_BETA)
-constexpr auto normed_output_dfb = dfb::x_normed;
-#else
-constexpr auto normed_output_dfb = dfb::out;
-#endif
+// Pack dest of the normalize stage is a real DFB in every compile: exactly one of
+// x_normed (γ∨β) and out (neither) is the staging dest.
+constexpr auto normed_output_dfb = engaged_token_between(dfb::x_normed, dfb::out);
 struct normed_output_node {
     static constexpr LLK_Node node{
         .llk_init = mul_bcast_cols_init,
@@ -66,45 +62,74 @@ constexpr auto dfb_length_file_scope = get_arg(args::dfb_length);
 constexpr uint32_t pop_gamma_beta = (Wt_file_scope == dfb_length_file_scope) ? 0xDDDD : 0xFFFF;
 
 // gamma's product feeds the beta stage when both are applied; otherwise it is already the output.
-#if defined(FUSE_GAMMA) && defined(FUSE_BETA)
-constexpr auto dfb_times_gamma_out = dfb::times_gamma_out;
-#else
-constexpr auto dfb_times_gamma_out = dfb::out;
-#endif
-#ifdef FUSE_GAMMA
-struct gamma_optional_node {
-    static constexpr LLK_Node node{
-        .llk_init = mul_bcast_rows_init,
-        .llk = FN_compute(mul_tiles_bcast_rows),
-        .DFB_A = dfb::x_normed,
-        .DFB_B = dfb::gamma,
-        .DFB_OUT = dfb_times_gamma_out,
-        .fixed_DFB_B_index = pop_gamma_beta,
-        .fixed_dest_reg = 0xFFFF,
-        .debug_mode = 1,
-    };
-};
-#endif
+constexpr auto dfb_times_gamma_out = engaged_token_between(dfb::times_gamma_out, dfb::out);
+constexpr auto dfb_in_beta = engaged_token_between(dfb_times_gamma_out, normed_output_dfb);
 
-#ifdef FUSE_GAMMA
-constexpr auto dfb_in_beta = dfb_times_gamma_out;
-#else
-constexpr auto dfb_in_beta = normed_output_dfb;
-#endif
-#ifdef FUSE_BETA
-struct beta_optional_node {
-    static constexpr LLK_Node node{
-        .llk_init = add_bcast_rows_init,
-        .llk = FN_compute(add_tiles_bcast_rows),
-        .DFB_A = dfb_in_beta,
-        .DFB_B = dfb::beta,
-        .DFB_OUT = dfb::out,
-        .fixed_DFB_B_index = pop_gamma_beta,
-        .fixed_dest_reg = 0xFFFF,
-        .debug_mode = 1,
+// Four host configs (none / γ / β / both) share this source. Mixed absences are valid and the
+// node list is a compile-time argument pack, so dispatch is an overload set on the tokens.
+void apply_gamma_beta(DFBBindingToken, DFBBindingToken) {
+    struct gamma_optional_node {
+        static constexpr LLK_Node node{
+            .llk_init = mul_bcast_rows_init,
+            .llk = FN_compute(mul_tiles_bcast_rows),
+            .DFB_A = dfb::x_normed,
+            .DFB_B = dfb::gamma,
+            .DFB_OUT = dfb_times_gamma_out,
+            .fixed_DFB_B_index = pop_gamma_beta,
+            .fixed_dest_reg = 0xFFFF,
+            .debug_mode = 1,
+        };
     };
-};
-#endif
+    struct beta_optional_node {
+        static constexpr LLK_Node node{
+            .llk_init = add_bcast_rows_init,
+            .llk = FN_compute(add_tiles_bcast_rows),
+            .DFB_A = dfb_in_beta,
+            .DFB_B = dfb::beta,
+            .DFB_OUT = dfb::out,
+            .fixed_DFB_B_index = pop_gamma_beta,
+            .fixed_dest_reg = 0xFFFF,
+            .debug_mode = 1,
+        };
+    };
+    chain_llk<Wt_file_scope, dfb_length_file_scope, true>(
+        x_minus_mean_node{}, normed_output_node{}, gamma_optional_node{}, beta_optional_node{});
+}
+void apply_gamma_beta(DFBBindingToken, NullDFBBindingToken) {
+    struct gamma_optional_node {
+        static constexpr LLK_Node node{
+            .llk_init = mul_bcast_rows_init,
+            .llk = FN_compute(mul_tiles_bcast_rows),
+            .DFB_A = dfb::x_normed,
+            .DFB_B = dfb::gamma,
+            .DFB_OUT = dfb_times_gamma_out,
+            .fixed_DFB_B_index = pop_gamma_beta,
+            .fixed_dest_reg = 0xFFFF,
+            .debug_mode = 1,
+        };
+    };
+    chain_llk<Wt_file_scope, dfb_length_file_scope, true>(
+        x_minus_mean_node{}, normed_output_node{}, gamma_optional_node{});
+}
+void apply_gamma_beta(NullDFBBindingToken, DFBBindingToken) {
+    struct beta_optional_node {
+        static constexpr LLK_Node node{
+            .llk_init = add_bcast_rows_init,
+            .llk = FN_compute(add_tiles_bcast_rows),
+            .DFB_A = dfb_in_beta,
+            .DFB_B = dfb::beta,
+            .DFB_OUT = dfb::out,
+            .fixed_DFB_B_index = pop_gamma_beta,
+            .fixed_dest_reg = 0xFFFF,
+            .debug_mode = 1,
+        };
+    };
+    chain_llk<Wt_file_scope, dfb_length_file_scope, true>(
+        x_minus_mean_node{}, normed_output_node{}, beta_optional_node{});
+}
+void apply_gamma_beta(NullDFBBindingToken, NullDFBBindingToken) {
+    chain_llk<Wt_file_scope, dfb_length_file_scope, true>(x_minus_mean_node{}, normed_output_node{});
+}
 
 void kernel_main() {
     const auto NCHt = get_arg(args::NCHt);
@@ -157,19 +182,7 @@ void kernel_main() {
         tile_regs_release();
         dfb_recip_sqrt_var.push_back(1);
 
-#if defined(FUSE_GAMMA) && defined(FUSE_BETA)
-        /*
-         * x_normed * gamma, then + beta
-         */
-        chain_llk<Wt, dfb_length, true>(
-            x_minus_mean_node{}, normed_output_node{}, gamma_optional_node{}, beta_optional_node{});
-#elif defined(FUSE_GAMMA)
-        chain_llk<Wt, dfb_length, true>(x_minus_mean_node{}, normed_output_node{}, gamma_optional_node{});
-#elif defined(FUSE_BETA)
-        chain_llk<Wt, dfb_length, true>(x_minus_mean_node{}, normed_output_node{}, beta_optional_node{});
-#else
-        chain_llk<Wt, dfb_length, true>(x_minus_mean_node{}, normed_output_node{});
-#endif
+        apply_gamma_beta(dfb::gamma, dfb::beta);
 
         // free up the buffers
         dfb_stats_reduced.pop_front(stats_tile_stride);

@@ -65,9 +65,7 @@ void kernel_main() {
     Semaphore weights_mcast_sender_sem(sem::weights_mcast_sender);
     Semaphore weights_mcast_receiver_sem(sem::weights_mcast_receiver);
     DataflowBuffer cb_weight_obj(dfb::weights);
-#ifdef FUSE_BIAS
-    DataflowBuffer cb_bias_obj(dfb::bias);
-#endif
+    auto cb_bias_obj = construct_nullable_dfb(dfb::bias);
 #ifdef SPLIT_READER
     DataflowBuffer cb_act_second_obj(dfb::act_second_reader);
     DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);
@@ -187,9 +185,8 @@ void kernel_main() {
                 }
             }
 #endif
-            if constexpr (fuse_bias) {
+            with_nullable_dfb(cb_bias_obj, [&](DataflowBuffer& cb_bias_obj) {
                 if (load_bias) {
-#ifdef FUSE_BIAS
                     cb_bias_obj.reserve_back(bias_ntiles);
 
                     // Set weights semaphore value to INVALID
@@ -203,9 +200,8 @@ void kernel_main() {
 
                     cb_bias_obj.push_back(bias_ntiles);
                     load_bias = false;
-#endif
                 }
-            }
+            });
 
         }  // out_num_blocks_h
     }  // out_num_blocks_w
