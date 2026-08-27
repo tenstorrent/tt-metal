@@ -43,6 +43,15 @@ class MLAReference(nn.Module):
         # forward() is overridden below to use memory-efficient F.scaled_dot_product_attention.
         self.attention = DeepseekV3Attention(config, layer_idx=layer_idx)
 
+        # Mistral Small 4 carries a full YaRN block but applies NO mscale to the softmax scale --
+        # `Mistral4Attention` sets `self.scaling = qk_head_dim ** -0.5` unconditionally and its
+        # rotary reports attention_scaling = 1.0. DeepseekV3Attention.__init__ folds mscale^2 in
+        # whenever `rope_scaling["mscale_all_dim"]` is truthy, which would make this reference
+        # disagree with the model it is standing in for (and with tt/mla/mla.py, which honours the
+        # same flag). Absent (-> False) on every other variant, so their scale is unchanged.
+        if bool(getattr(config, "mla_disable_yarn_mscale", False)):
+            self.attention.softmax_scale = (config.qk_nope_head_dim + config.qk_rope_head_dim) ** -0.5
+
         # Kimi-K3 deltas; both absent (-> False) on every other variant.
         self.use_nope = bool(getattr(config, "mla_use_nope", False))
         self.use_output_gate = bool(getattr(config, "mla_use_output_gate", False))

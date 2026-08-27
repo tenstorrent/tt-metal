@@ -397,6 +397,93 @@ def reference_kvpe_for_layer(hf_layer, layer_idx, layer_input, layer_kwargs, ref
     return derive_mla_kvpe(hf_layer, layer_input, layer_kwargs.get("position_embeddings"), config)
 
 
+def extract_routed_experts(full_sd, n_routed=None, prefix="", hf_layer=None):
+    """Per-expert {gate_proj, up_proj, down_proj} for one layer, from either expert weight layout.
+
+    Two layouts exist in the wild and the TT side wants the same thing from both:
+
+    * **per-expert** (DeepSeek-V3 / Kimi / GLM) -- ``mlp.experts.{j}.{gate,up,down}_proj.weight``,
+      each a 2-D ``[out, in]`` tensor.
+    * **stacked + fused** (Mistral Small 4, GPT-OSS family) -- one 3-D tensor per projection, with
+      gate and up concatenated along the output dim:
+      ``mlp.experts.gate_up_proj`` ``[E, 2*moe_intermediate, hidden]`` and
+      ``mlp.experts.down_proj``    ``[E, hidden, moe_intermediate]``.
+
+    The split is contiguous halves, gate first -- ``Mistral4NaiveMoe.forward`` does
+    ``linear(x, gate_up_proj[e]).chunk(2, dim=-1)`` and uses the first result as the gate. Read off
+    the modeling code rather than inferred, because getting it backwards swaps SwiGLU's branches and
+    produces plausible output with bad PCC.
+
+    The layer-by-layer pretrained loader passes an unprefixed single-layer state_dict; the whole-model
+    path passes the full dict with a ``layers.{i}.`` prefix. Same two layouts either way.
+    """
+    stacked_gate_up = full_sd.get(f"{prefix}mlp.experts.gate_up_proj")
+    if stacked_gate_up is None:
+        # Per-expert layout only. Resolved HERE, not at the call site: for a stacked-layout model
+        # `hf_layer.mlp.experts` is a single module with no __len__ (Mistral4NaiveMoe), so asking for
+        # its length eagerly is a TypeError on exactly the variants that take the branch below.
+        if n_routed is None:
+            n_routed = len(hf_layer.mlp.experts)
+        return [
+            {
+                "gate_proj": full_sd[f"{prefix}mlp.experts.{j}.gate_proj.weight"],
+                "up_proj": full_sd[f"{prefix}mlp.experts.{j}.up_proj.weight"],
+                "down_proj": full_sd[f"{prefix}mlp.experts.{j}.down_proj.weight"],
+            }
+            for j in range(n_routed)
+        ]
+
+    stacked_down = full_sd[f"{prefix}mlp.experts.down_proj"]
+    num_experts, two_i, _hidden = stacked_gate_up.shape
+    if n_routed is not None:
+        assert num_experts == n_routed, f"stacked experts {num_experts} != n_routed_experts {n_routed}"
+    assert two_i % 2 == 0, f"fused gate_up out-dim {two_i} is not even"
+    inter = two_i // 2
+    assert (
+        stacked_down.shape[0] == num_experts
+    ), f"expert-count mismatch: gate_up {num_experts} vs down {stacked_down.shape[0]}"
+    assert (
+        stacked_down.shape[2] == inter
+    ), f"down_proj in-dim {stacked_down.shape[2]} != moe_intermediate {inter} implied by gate_up"
+    return [
+        {
+            "gate_proj": stacked_gate_up[j, :inter, :],
+            "up_proj": stacked_gate_up[j, inter:, :],
+            "down_proj": stacked_down[j],
+        }
+        for j in range(num_experts)
+    ]
+
+
+def extract_moe_layer_weights(full_sd, n_routed=None, prefix="", hf_layer=None):
+    """The three MoE weight dicts for one layer: gate, routed experts, shared expert.
+
+    Tolerates the two checkpoint shapes this repo sees. A router with no auxiliary-loss-free
+    correction bias (Mistral Small 4: a plain softmax top-k router, `Mistral4TopkRouter` holds only
+    `weight`) gets zeros -- the TT gate always carries a bias tensor and zero is its identity in
+    every path that reads it, top-k on (logits + bias) and the sigmoid/noaux_tc affinity alike, so
+    this is exact rather than a placeholder. DeepSeek/Kimi/GLM are unaffected: their bias is present
+    and used. extract_routed_experts owns the second shape, stacked+fused expert tensors instead of
+    per-expert keys, including the gate/up split order.
+    """
+    gate_weight = full_sd[f"{prefix}mlp.gate.weight"]
+    return {
+        "gate_weights": {
+            "weight": gate_weight,
+            "e_score_correction_bias": full_sd.get(
+                f"{prefix}mlp.gate.e_score_correction_bias",
+                torch.zeros(gate_weight.shape[0], dtype=torch.float32),
+            ),
+        },
+        "routed_expert_weights": extract_routed_experts(full_sd, n_routed=n_routed, prefix=prefix, hf_layer=hf_layer),
+        "shared_expert_weights": {
+            "gate_proj": full_sd[f"{prefix}mlp.shared_experts.gate_proj.weight"],
+            "up_proj": full_sd[f"{prefix}mlp.shared_experts.up_proj.weight"],
+            "down_proj": full_sd[f"{prefix}mlp.shared_experts.down_proj.weight"],
+        },
+    }
+
+
 def extract_layer_state_dict(variant, full_sd, layer_idx, hf_layer):
     """Extract one layer's weights from HF state_dict into TtPrefillBlock format."""
     prefix = f"layers.{layer_idx}."
@@ -417,23 +504,7 @@ def extract_layer_state_dict(variant, full_sd, layer_idx, hf_layer):
     }
 
     if is_moe:
-        layer_sd["gate_weights"] = {
-            "weight": full_sd[f"{prefix}mlp.gate.weight"],
-            "e_score_correction_bias": full_sd[f"{prefix}mlp.gate.e_score_correction_bias"],
-        }
-        layer_sd["routed_expert_weights"] = [
-            {
-                "gate_proj": full_sd[f"{prefix}mlp.experts.{j}.gate_proj.weight"],
-                "up_proj": full_sd[f"{prefix}mlp.experts.{j}.up_proj.weight"],
-                "down_proj": full_sd[f"{prefix}mlp.experts.{j}.down_proj.weight"],
-            }
-            for j in range(len(hf_layer.mlp.experts))
-        ]
-        layer_sd["shared_expert_weights"] = {
-            "gate_proj": full_sd[f"{prefix}mlp.shared_experts.gate_proj.weight"],
-            "up_proj": full_sd[f"{prefix}mlp.shared_experts.up_proj.weight"],
-            "down_proj": full_sd[f"{prefix}mlp.shared_experts.down_proj.weight"],
-        }
+        layer_sd.update(extract_moe_layer_weights(full_sd, prefix=prefix, hf_layer=hf_layer))
     else:
         layer_sd["ffn_weights"] = {
             "gate_proj": full_sd[f"{prefix}mlp.gate_proj.weight"],
@@ -844,23 +915,7 @@ def load_and_compute_layer_by_layer(
                     "down_proj": layer_dequant["mlp.down_proj.weight"],
                 }
             else:
-                layer_dict["gate_weights"] = {
-                    "weight": layer_dequant["mlp.gate.weight"],
-                    "e_score_correction_bias": layer_dequant["mlp.gate.e_score_correction_bias"],
-                }
-                layer_dict["routed_expert_weights"] = [
-                    {
-                        "gate_proj": layer_dequant[f"mlp.experts.{j}.gate_proj.weight"],
-                        "up_proj": layer_dequant[f"mlp.experts.{j}.up_proj.weight"],
-                        "down_proj": layer_dequant[f"mlp.experts.{j}.down_proj.weight"],
-                    }
-                    for j in range(n_routed)
-                ]
-                layer_dict["shared_expert_weights"] = {
-                    "gate_proj": layer_dequant["mlp.shared_experts.gate_proj.weight"],
-                    "up_proj": layer_dequant["mlp.shared_experts.up_proj.weight"],
-                    "down_proj": layer_dequant["mlp.shared_experts.down_proj.weight"],
-                }
+                layer_dict.update(extract_moe_layer_weights(layer_dequant, n_routed=n_routed))
 
             # Build TTNN cache (device=None) - NOT accumulated in memory!
             TtPrefillBlock.build_ttnn_cache(
