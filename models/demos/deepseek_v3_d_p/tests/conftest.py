@@ -54,7 +54,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapt
 
 TEST_VARIANTS["kimi_k3"] = KimiK3Adapter()
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
-from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset, extract_routed_experts
 
 # Shared production-policy params for prefill block + transformer tests. LoudBox executes canonical
 # 2x4 Fabric2D and one 4x2 axis-order diagnostic; Galaxy production executes only 8x4 TorusXY.
@@ -659,7 +659,14 @@ def _unwrap_multimodal_config(cfg):
     """
     if hasattr(cfg, "text_config") and hasattr(cfg.text_config, "hidden_size"):
         logger.info(f"Unwrapping multimodal wrapper config (inner model_type={cfg.text_config.model_type})")
+        # `quantization_config` describes the CHECKPOINT, so HF puts it on the outer wrapper only and
+        # the unwrap drops it. convert_state_dict then falls to passthrough and raises on the first
+        # float8 tensor ("config has no `quantization_config`"). Carry the genuine one across rather
+        # than reconstructing it, so modules_to_not_convert / dequantize survive.
+        outer_quant = getattr(cfg, "quantization_config", None)
         cfg = cfg.text_config
+        if getattr(cfg, "quantization_config", None) is None and outer_quant is not None:
+            cfg.quantization_config = outer_quant
     return cfg
 
 
@@ -783,11 +790,19 @@ def model_path(variant) -> Path:
 
 
 @pytest.fixture
-def hf_config(model_path):
+def hf_config(variant, model_path):
     """
     Load HF config for testing.
     Returns None if model path doesn't exist (weights not available).
+
+    `config_builder_overrides_checkpoint` means the adapter's config is authoritative even though
+    the checkpoint's own loads: transformers 5.x nests rope_theta inside rope_parameters, so an
+    AutoConfig-derived config lacks attributes ttMLA reads as plain ones. `config_only` already goes
+    through the builder, and this path has to agree with it -- otherwise the two fixtures hand out
+    different configs for one checkpoint and only the tests using the second one fail.
     """
+    if getattr(variant, "config_builder_overrides_checkpoint", False) and variant.config_builder is not None:
+        return variant.config_builder()
     return _resolve_hf_config(str(model_path))
 
 
@@ -1019,18 +1034,20 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
                 "down_proj": layer_dequant["mlp.down_proj.weight"],
             }
         else:
+            # Both lookups have to tolerate the two checkpoint shapes this repo already sees, the same
+            # way load_and_compute_layer_by_layer does: a router with no auxiliary correction bias
+            # (Mistral -- zeros are the identity for it), and stacked+fused expert tensors instead of
+            # per-expert keys. extract_routed_experts owns the second, including the gate/up split
+            # order, which is not inferable and is wrong-but-plausible if guessed.
+            gate_weight = layer_dequant["mlp.gate.weight"]
             layer_dict["gate_weights"] = {
-                "weight": layer_dequant["mlp.gate.weight"],
-                "e_score_correction_bias": layer_dequant["mlp.gate.e_score_correction_bias"],
+                "weight": gate_weight,
+                "e_score_correction_bias": layer_dequant.get(
+                    "mlp.gate.e_score_correction_bias",
+                    torch.zeros(gate_weight.shape[0], dtype=torch.float32),
+                ),
             }
-            layer_dict["routed_expert_weights"] = [
-                {
-                    "gate_proj": layer_dequant[f"mlp.experts.{j}.gate_proj.weight"],
-                    "up_proj": layer_dequant[f"mlp.experts.{j}.up_proj.weight"],
-                    "down_proj": layer_dequant[f"mlp.experts.{j}.down_proj.weight"],
-                }
-                for j in range(n_routed)
-            ]
+            layer_dict["routed_expert_weights"] = extract_routed_experts(layer_dequant, n_routed)
             layer_dict["shared_expert_weights"] = {
                 "gate_proj": layer_dequant["mlp.shared_experts.gate_proj.weight"],
                 "up_proj": layer_dequant["mlp.shared_experts.up_proj.weight"],
