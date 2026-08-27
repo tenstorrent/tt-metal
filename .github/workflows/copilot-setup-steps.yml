@@ -20,8 +20,12 @@ jobs:
     # keys (steps/permissions/runs-on/services/snapshot/timeout-minutes).
     # Community reports say it is applied but then breaks Copilot's helper-script
     # paths (exit 127). Testing whether that is still true as of 2026-08.
+    #
+    # `latest` rather than a pinned digest: the tag-latest job in
+    # build-docker-artifact.yaml only moves it on pushes to main, so it tracks
+    # the current main-branch CI build image and needs no maintenance here.
     container:
-      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:bfe1fda5c0d2fc78c1e3ec657e3247e94de72a6f
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:latest
     # Copilot caps this at 59.
     timeout-minutes: 30
 
