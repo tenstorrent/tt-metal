@@ -1219,7 +1219,47 @@ def _per_request_stages() -> set:
         return set()
 
 
-def _stage_units(stage, prompt_tokens) -> int:
+def _stage_items_observed(stage, profile) -> int:
+    """How many items ONE call of `stage` retired, from the matmuls that stage actually ran. 0 if it
+    ran none with parseable dims.
+
+    THE COUNT THE RUN CAN SEE FOR ITSELF. A stage that states nothing was priced at ONE item, which
+    is right for a recurring step and 1500x wrong for a tower over 1500 frames, and the only escape
+    was a workload marker filed under a typed stage name -- so exactly one stage per model could be
+    sized, and only if it happened to be called that. A matmul's M is the number of rows the stage
+    pushed through: batch included, per call, which is the same quantity <stage>_trace_items states.
+    The dominant matmul by FLOPs is the stage's real shape; smaller projections beside it share it.
+
+    Same joining principle as stage_roots, which pairs a 32-block stack with a 32-block checkpoint
+    section: read what the model did and join on a number, never on a name.
+    """
+    try:
+        from agent.roofline import parse_matmul_shape
+    except Exception:  # noqa: BLE001
+        try:
+            from models.experimental.perf_automation.agent.roofline import parse_matmul_shape
+        except Exception:  # noqa: BLE001
+            return 0
+    _rows: dict = {}
+    for _b in ((profile or {}).get("stage_buckets") or {}).get(str(stage)) or []:
+        for _o in (_b or {}).get("top_ops") or []:
+            _parsed = parse_matmul_shape(str((_o or {}).get("shape") or ""))
+            if not _parsed:
+                continue
+            _m, _k, _n = _parsed
+            if _m > 0:
+                _rows[_m] = _rows.get(_m, 0) + max(1, int((_o or {}).get("count") or 1))
+    if not _rows:
+        return 0
+    # THE ROW COUNT MOST OF THE STAGE'S MATMULS RUN AT, not the biggest one. Ranking by FLOPs picks
+    # whichever single matmul is widest, and on a decode step that is the vocab head -- which runs at
+    # a TILE-PADDED 32 rows for a batch of 8. The stage would then have read as retiring 32 items and
+    # been labelled a request-rate stage instead of one token per user. Every other matmul in the
+    # step runs at the true row count, so the mode carries it and the padded outlier does not.
+    return int(max(_rows.items(), key=lambda kv: (kv[1], -kv[0]))[0])
+
+
+def _stage_units(stage, prompt_tokens, profile=None) -> int:
     """How many items this stage retires in one unit of work.
 
     FROM WHAT THE RUN RECORDED, not from the stage's name and not inferred from the byte model. The
@@ -1247,9 +1287,13 @@ def _stage_units(stage, prompt_tokens) -> int:
         _each = int((read_stage_isl_per_request_map() or {}).get(str(stage)) or 0)
     except Exception:  # noqa: BLE001
         _each = 0
-    if _each <= 0:
-        return 1
-    return int(_each) * max(1, _request_batch())
+    if _each > 0:
+        return int(_each) * max(1, _request_batch())
+    # OBSERVED, BEFORE DEFAULTED. Neither map named this stage, which used to mean ONE item -- a
+    # number that is right for a recurring step and silently wrong for everything else. What the
+    # stage actually ran is on record; ask that before falling back.
+    _seen = _stage_items_observed(stage, profile)
+    return int(_seen) if _seen > 0 else 1
 
 
 # What the prompt-consuming row is called when the model declared no stages and therefore gave it no
@@ -1601,7 +1645,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
     _pt = _prompt_tokens() if _unit_is_token(unit) else 0
     _declared = [str(k) for k in (stage_ms or {}) if k]
     if _declared:
-        stages = [(n, _stage_units(n, _pt)) for n in _declared]
+        stages = [(n, _stage_units(n, _pt, profile)) for n in _declared]
     else:
         # NOTHING DECLARED. A model that never reported its stages still gets the recurring unit --
         # every model has one -- and a prompt-consuming stage when it consumes a prompt. This is the
@@ -2123,7 +2167,15 @@ def _roofline_tables(
 
     # A stage retiring one item per unit reports the model's own unit; one retiring many reports
     # requests. Both follow from the item count the stage list already carries, not from a name.
-    _STAGE_UNIT = {st: (unit if int((rf or {}).get("tokens") or 0) == 1 else "req/s") for st, rf in _roofs.items()}
+    # ONE ITEM PER USER is what "recurring" means, and that is `batch`, not the literal 1. The two
+    # agree at batch 1, which is why == 1 held while every stage fell back to a single item. Once a
+    # stage's real count is observed, a batch-8 decode retires 8 rows per call and would have read as
+    # a request-rate stage; it is still one token per user. Encode, retiring 1500 frames for a batch
+    # it does not have, correctly stops claiming to emit tokens.
+    _su_batch = max(1, _request_batch())
+    _STAGE_UNIT = {
+        st: (unit if int((rf or {}).get("tokens") or 0) == _su_batch else "req/s") for st, rf in _roofs.items()
+    }
     # A DECLARED STAGE GETS A UNIT TOO. Only prefill and decode were named here, so a third stage --
     # voxtral's audio encoder, measured at 12.79 ms -- had no unit, no title, and no row. Its unit is
     # one pass of that tower, which is what "per pass" says without pretending it emits tokens.

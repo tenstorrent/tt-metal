@@ -232,7 +232,9 @@ def _roofs_at_batch(monkeypatch, batch, items=128):
     # The item count comes from what the RUN recorded, so it is stated here rather than inferred:
     # inferring it from the byte model classified decode as processing the whole prompt, because
     # decode READS the KV history to emit one token.
-    monkeypatch.setattr(S, "_stage_units", lambda st, pt: (items * batch) if st == "prefill" else 1)
+    # `profile` is a third, defaulted parameter: the real function consults the matmuls a stage ran
+    # when neither map names it. The stub takes it so the double matches the signature it replaces.
+    monkeypatch.setattr(S, "_stage_units", lambda st, pt, profile=None: (items * batch) if st == "prefill" else 1)
     return S._stage_roofs(_BYTES, _BW, 1, "tok/s/u", None, {"prefill": 110.1, "decode": 6.11})
 
 

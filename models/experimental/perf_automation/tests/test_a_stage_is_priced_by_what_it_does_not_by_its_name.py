@@ -146,10 +146,22 @@ def test_the_parser_records_the_count_for_whatever_stage_stated_it():
     code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
     assert "stage_isl[_nm] = _nv" in code, "the count is still keyed by a hardcoded stage name"
     assert 'stage_isl["prefill"] = _iv' not in code, "the hardcoded writer is back"
-    # The literal moved into a named constant -- it is the conventional name for the prompt-consuming
-    # stage, used only as the fallback for one that states no <stage>_trace_items() of its own.
-    assert "stage_isl_per_request.setdefault(_LEGACY_PROMPT_KEY" in code, "the legacy marker no longer feeds it"
-    assert '_LEGACY_PROMPT_KEY = "prefill"' in code, "the convention is no longer stated in one place"
+    # BEHAVIOUR CHANGE: this used to REQUIRE the legacy marker to be filed under _LEGACY_PROMPT_KEY,
+    # as the fallback for a stage stating no count of its own. That made a workload fact reachable
+    # through one typed name -- one stage per model could be sized, and only if it was called that,
+    # while every other stage fell back to a single item. summary._stage_items_observed now reads the
+    # count off the matmuls each stage actually ran, so no stage needs to be named to be sized.
+    assert (
+        "stage_isl_per_request.setdefault(_LEGACY_PROMPT_KEY" not in code
+    ), "a stage is being sized by a typed name again"
+    _sum = (_PA / "cc_optimize" / "summary.py").read_text()
+    assert "def _stage_items_observed(" in _sum, "nothing derives the count the removed writer supplied"
+    # The constant survives for ONE reason: reading a doc written before `prompt_tokens` existed. That
+    # is an on-disk schema key, not a claim about this model's stages, and it cannot mis-price -- a
+    # doc without it simply yields 0.
+    assert '_LEGACY_PROMPT_KEY = "prefill"' in code, "the on-disk compat key is no longer named once"
+    _reads = [ln for ln in code.splitlines() if "_LEGACY_PROMPT_KEY" in ln and "=" not in ln.split("_LEGACY")[0]]
+    assert all("_doc.get" in ln or "def " in ln or "_LEGACY_PROMPT_KEY =" in ln for ln in _reads), _reads
 
 
 def test_a_stated_count_is_a_total_and_is_not_multiplied_by_the_batch(monkeypatch):
@@ -540,3 +552,54 @@ def test_an_unstated_item_count_is_reported_and_never_blocks(tmp_path):
     assert found, "an unstated item count is silent again"
     assert "whatever_this_model_calls_it" in found[0].detail, "the clause did not use the model's own name"
     assert not any(f.blocking for f in found), "a missing optional seam must not refuse the direct path"
+
+
+# ------------------------------------------------- the item count comes off what the stage RAN
+
+
+def _prof(**stages):
+    return {"stage_buckets": {k: [{"top_ops": v}] for k, v in stages.items()}}
+
+
+def test_a_stage_states_its_item_count_through_the_matmuls_it_ran():
+    """THE COUNT WITHOUT A NAME. A stage that states no <stage>_trace_items() was priced at ONE item
+    unless a workload marker happened to be filed under its name -- so exactly one stage per model
+    could be sized, and only if it was called the name the tool typed. A matmul's M is the rows the
+    stage pushed through, which is the same quantity the seam states."""
+    from cc_optimize.summary import _stage_items_observed as obs
+
+    p = _prof(
+        zzz_tower=[{"shape": "1500x1280 @ 1280x5120", "count": 32}],
+        zzz_prompt=[{"shape": "4096x3072 @ 3072x8192", "count": 30}],
+    )
+    assert obs("zzz_tower", p) == 1500
+    assert obs("zzz_prompt", p) == 4096
+    # nothing typed: stages named anything at all are sized the same way
+    assert obs("zzz_absent", p) == 0
+
+
+def test_the_padded_vocab_head_does_not_set_the_item_count():
+    """THE REGRESSION THE FLOP RANKING WOULD HAVE SHIPPED. Ranking by FLOPs picks the widest single
+    matmul, and on a decode step that is the vocab head -- running at a TILE-PADDED 32 rows for a
+    batch of 8. The stage would have read as retiring 32 items and been labelled a request-rate
+    stage instead of one token per user. The modal row count carries the true figure."""
+    from cc_optimize.summary import _stage_items_observed as obs
+
+    p = _prof(
+        zzz_step=[
+            {"shape": "8x3072 @ 3072x8192", "count": 30},
+            {"shape": "32x3072 @ 3072x131072", "count": 1},  # the padded head, widest by far
+        ]
+    )
+    assert obs("zzz_step", p) == 8
+
+
+def test_an_unparseable_stage_gets_no_count_rather_than_a_wrong_one():
+    """A wrong divisor is worse than a missing one -- the rule stage_roots already follows when two
+    sections have equal depth. 0 means the caller keeps its own fallback."""
+    from cc_optimize.summary import _stage_items_observed as obs
+
+    assert obs("zzz", _prof(zzz=[{"shape": "?", "count": 3}])) == 0
+    assert obs("zzz", None) == 0
+    assert obs("zzz", {}) == 0
+    assert obs(None, _prof(zzz=[{"shape": "8x8 @ 8x8", "count": 1}])) == 0

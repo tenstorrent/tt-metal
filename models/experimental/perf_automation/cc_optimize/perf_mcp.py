@@ -2993,15 +2993,20 @@ def _run_full_pipeline_ms():
                         # a stage key.
                         if not prompt_tokens_seen:
                             prompt_tokens_seen = _iv
-                        # AND STILL FILED UNDER THE CONVENTIONAL NAME, deliberately. This is the
-                        # fallback item count for a stage that states no <stage>_trace_items() of its
-                        # own, and the legacy marker carries no stage of its own to attribute it to.
-                        # Dropping it does remove a name dependency and it also silently reprices any
-                        # such stage at ONE item instead of the sequence it ran -- a worse failure
-                        # than the one it fixes. The real answer is the pipeline stating its own count,
-                        # which is exactly what <stage>_trace_items() is for; this is what happens
-                        # until it does.
-                        stage_isl_per_request.setdefault(_LEGACY_PROMPT_KEY, _iv)
+                        # AND FILED AGAINST NO STAGE. This marker is printed at tokenisation, before
+                        # any stage exists, so it cannot say which stage consumes it -- and it used to
+                        # be filed under the literal "prefill" anyway. That made a workload fact
+                        # reachable through one typed name: exactly one stage per model could be
+                        # sized, and only if it happened to be called that, while every other stage
+                        # fell back to ONE item. Voxtral's encoder was priced at 1 instead of 1500 and
+                        # reported memory-bound when it is compute-bound.
+                        #
+                        # Dropping the write was previously refused because it repriced the named
+                        # stage at one item, which was the worse failure. That is no longer the
+                        # trade: summary._stage_items_observed reads the count back off the matmuls
+                        # each stage actually ran, so every stage -- named anything -- is sized from
+                        # what it did. The prompt length stays what it is, a property of the request,
+                        # carried as the scalar below.
                 except Exception:  # noqa: BLE001
                     pass
             if "TRACE_PER_TOKEN_MS=" in line:
