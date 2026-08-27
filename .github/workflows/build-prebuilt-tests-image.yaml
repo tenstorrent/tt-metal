@@ -73,10 +73,12 @@ on:
         type: string
         description: "Name of the build artifact to bake into the image"
       artifact-run-id:
-        required: false
+        required: true
         type: string
-        default: ""
-        description: "Workflow run to take the artifact from (default: this run)"
+        description: >-
+          Workflow run to take the artifact from. Required here: a dispatched run
+          builds nothing itself, so defaulting to the current run would download
+          from a run with no artifacts.
       base-image:
         required: true
         type: string
@@ -128,6 +130,7 @@ jobs:
           DOCKERFILE: ${{ inputs.dockerfile }}
           BUILD_ARGS: ${{ inputs.build-args }}
           CHECKOUT_SOURCE: ${{ inputs.checkout-source }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact-run-id }}
         run: |
           set -euo pipefail
           # required: true still lets '' through, and an empty name would make
@@ -146,9 +149,13 @@ jobs:
           # push the same tag and the second would overwrite the first. Equal
           # hashes mean identical images, so sharing a tag is then correct.
           # CONFIG rather than the raw artifact name: the run id must not leak in
-          # or a re-run of the same commit would mint a new tag.
-          RECIPE=$(printf '%s\n%s\n%s\n%s\n%s' \
+          # or a re-run of the same commit would mint a new tag. ARTIFACT_RUN_ID
+          # is the raw input, so it is empty on the same-run path and changes
+          # nothing there, but it separates two cross-run calls that share a
+          # build config and would otherwise collide on different payloads.
+          RECIPE=$(printf '%s\n%s\n%s\n%s\n%s\n%s' \
             "$CONFIG" "$BASE_IMAGE" "$DOCKERFILE" "$BUILD_ARGS" "$CHECKOUT_SOURCE" \
+            "$ARTIFACT_RUN_ID" \
             | sha256sum | cut -c1-8)
           # The readable parts are truncated so the tag is bounded by construction.
           # Real configs reach 142 chars untruncated, over Docker's 128 limit, and
@@ -194,7 +201,7 @@ jobs:
           path: artifact
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -228,14 +235,14 @@ jobs:
 
       - name: Extract metadata (tags, labels)
         id: docker-metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/${{ github.repository }}/${{ inputs.image-name }}
           tags: |
             type=raw,value=${{ steps.ref.outputs.tag }}
 
       - name: Build and push the test image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ github.workspace }}
           file: ${{ inputs.dockerfile }}
