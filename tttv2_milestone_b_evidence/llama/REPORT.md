@@ -1511,16 +1511,50 @@ Production has the same property. **Batch 32 itself is not blocked** - all 32 sl
 prefilling before any of them decodes works, which is what the demo's batch-32 test
 does.
 
-The fix is to release the global CB on `activate("prefill")` and recreate it on the
-next `activate("decode")`. It was **not** attempted tonight, deliberately: it
-changes the mode-switching of the one module every qualified decode path depends
-on, and enabling it would put every number in this report back in doubt with no
-time budgeted to re-take them. It is the first thing the next session should do,
-behind a config flag, with this test as its oracle. Two things to know before
-trying: the recreated buffer must land at the same L1 address or the decode
-programs already in the program cache will hold stale addresses, and every
-reference has to be dropped - attempt 1 found that `cleanup()` alone does not free
-it because the contexts still hold handles.
+### The obvious fix was tried, and hardware refuted it
+
+The obvious fix is to release the global CB on `activate("prefill")` and recreate
+it on the next `activate("decode")`. It is implemented, behind
+`Prefetcher2DConfig.release_global_cb_on_prefill` (**default False**, so nothing
+measured above depends on it), with two host tests and an
+`LLAMA33_70B_GALAXY_RELEASE_GLOBAL_CB` opt-in so it could be measured without
+disturbing the qualified path.
+
+**It does not work.** `logs3/a3_64_batch32_release_traced.log`, consecutive lines:
+
+```text
+[prefetcher] released the global circular buffer on entering prefill
+TT_THROW: Statically allocated circular buffers in program 100 clash with L1
+          buffers on core range [0-0 - 0-3]. L1 buffer allocated at 544832 and
+          static circular buffer region ends at 630080
+```
+
+The release ran - the print is unconditional once the flag is on, and it exists
+precisely so this could not be read ambiguously - and the L1 base address is
+*identical* to the run without it (544832, `logs3/a3_46`). So **dropping every
+Python reference to a `global_circular_buffer` does not return its L1.** Attempt 1
+wrote that `cleanup()` "cannot free the global circular buffer... until every
+context handle dies"; the stronger reading is the correct one - there is no
+`deallocate` on the type, and the allocation is not released when the last Python
+reference goes.
+
+That eliminates the obvious fix, which is worth a run on its own. The flag and its
+tests are left in the tree, default off, with this result recorded against them so
+nobody spends the same run again.
+
+**A better hypothesis, not attempted.** The clash is that a *full-grid* prefill
+program cannot place its circular buffers on the sender columns. The prefill mode
+plan is currently one sub-device covering the whole grid
+(`galaxy_prefill_mode_plan_cores`). Making it the **worker** cores instead would
+confine every prefill program to the 50 cores the global CB does not occupy, and
+the problem disappears without touching the buffer's lifetime at all - which is
+the shape every other defect this milestone turned out to have. The cost is 20 of
+70 cores for prefill, and the reason it was not done tonight is that it changes the
+grid of every prefill program: the prefill 128 and 2048 numbers, the 80-layer
+prefill and the accuracy gate would all need re-taking, and spending the end of a
+session destabilising a passing tree to fix a test that is not in the finish
+condition is the wrong trade. It is the first thing to try next, with
+`test_llama33_70b_galaxy_batch32_slots_are_isolated` as the oracle.
 
 ## A3.7 Harness — three changes, each paid for by a lost run
 

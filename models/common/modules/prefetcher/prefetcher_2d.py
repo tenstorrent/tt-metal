@@ -501,6 +501,13 @@ class Prefetcher2D:
         if decode_context is not None:
             object.__setattr__(decode_context, "global_cb", None)
         self._global_cb = None
+        # Printed, not logged at debug, and unconditional once the flag is on: the
+        # only way to tell "the release did not run" from "the release did not
+        # help" in a device log is to see this line. Measured on `(8, 4)`: it *does*
+        # run and it does **not** help - the following prefill still aborts with
+        # the L1 clash at the same base address, so the global CB's L1 is not
+        # returned when the last Python reference goes. See REPORT.md §A3.6.
+        print("[prefetcher] released the global circular buffer on entering prefill", flush=True)
 
     def cleanup(self) -> None:
         if self._cleaned:

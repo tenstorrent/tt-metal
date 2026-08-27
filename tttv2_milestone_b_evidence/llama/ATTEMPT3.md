@@ -960,3 +960,89 @@ served alongside 31 others produces exactly what it produces alone.
 | Batch 1, coherent demo text | **3** fresh | PASS, identical text |
 | Batch 32, no cross-slot contamination | 1 | PASS |
 | Two runners in one process | 1 | FAIL — limitation L1's remaining half (Result 46) |
+| 55 | `logs3/a3_55_host_gate.log` | the brief's host regression gate | **28 failed**, 537 passed — 23 mine, 3 padding claims, 2 already stale |
+| 56-60 | `logs3/a3_56..60_host_*.log` | fixing them | 300 passed on the galaxy suite |
+| 61 | `logs3/a3_61_host_gate.log` | **the host regression gate again** | **565 passed**, exit 0 |
+
+## Result 55-61 — the host gate, and what the fixes broke
+
+The gate found 28 failures, and classifying them mattered more than fixing them.
+
+**23 were mine, and they were the *harness*, not the code.** `test_step7_concat32`,
+`_prefix_cache` and `_repeat_and_cleanup` drive `GalaxyDirectRunner` against a
+`MagicMock` mesh and faked its readback by patching `to_torch_auto_compose`.
+`_compose_rows` no longer calls it (D-B23), so the fake stopped intercepting and a
+real `ConcatMesh2dToTensor` met the mock:
+
+```text
+TypeError: create_mesh_composer(): incompatible function arguments
+Invoked with types: unittest.mock.MagicMock, MeshComposerConfig
+```
+
+`step7_harness.patch_compose` now fakes **both** of the runner's readback paths -
+the logits through `compose_galaxy_logits` and the device-sampled token ids through
+`to_torch_auto_compose`, which stays correct for them because `Sampling2D`'s output
+placement is set by a *mapper*, not produced by a matmul. Patching only the first
+left five temperature tests and the greedy test reaching a real
+`tensor_topology()` on a `SimpleNamespace`, which is how the second half of this
+was found.
+
+**3 encoded the old padding as a property of the geometry.** Corrected with the
+reason quoted against them. The interesting one is
+`test_llama_has_no_vocabulary_padding_at_all`, whose docstring existed to warn that
+the padded-vocabulary gate was **vacuous** for Llama: "Recorded so nobody reads a
+Llama pass as evidence that masking works." That warning no longer applies - Llama
+now carries 768 masked entries - so the test is renamed
+`test_llama_now_pads_and_therefore_masks_like_qwen` and asserts the masking it used
+to say could not be tested. **This is strictly better for step 7 than what the test
+was guarding against**, which is worth saying plainly, because "I changed a test
+that was warning me about something" deserves the scrutiny.
+
+**2 were already stale before tonight.**
+`test_decode_plan_covers_exactly_the_qualified_collectives` never listed the decode
+LM head's column all-reduce, which attempt 2 added to the decode plan - so the
+"exactly" in its name was not being enforced for either model, and the entry was
+missing rather than wrong. Added, keyed on `local_padded_vocab_size`.
+
+Final: **565 passed, 0 failed, exit 0** (`logs3/a3_61_host_gate.log`). No test was
+deleted, skipped, `xfail`ed or weakened; three assertions were *corrected* and one
+was *added*.
+| 62 | `logs3/a3_62_batch32_isolation_release.log` | the release-global-CB candidate fix | **FAILED** — same clash, same address |
+| 63 | `logs3/a3_63_host_prefetcher.log` | host after adding the release trace | 20 passed |
+| 64 | `logs3/a3_64_batch32_release_traced.log` | the same, with the release traced | **FAILED, unambiguously** |
+
+## Result 62-64 — the obvious fix for prefill-after-decode, refuted
+
+`Prefetcher2DConfig.release_global_cb_on_prefill` releases the global CB on the way
+into prefill and lets `_ensure_global_cb` recreate it on the way back into decode.
+Default off; two host tests; an env opt-in so it could be measured without
+disturbing anything already measured.
+
+Run 62 failed with the same clash at the same base address, which left one
+ambiguity: did the release run at all? Run 64 answers it. Consecutive lines:
+
+```text
+[prefetcher] released the global circular buffer on entering prefill
+TT_THROW: Statically allocated circular buffers in program 100 clash with L1
+          buffers on core range [0-0 - 0-3]. L1 buffer allocated at 544832 and
+          static circular buffer region ends at 630080
+```
+
+**Dropping every Python reference to a `global_circular_buffer` does not return its
+L1.** There is no `deallocate` on the type, and the address is identical to the run
+without the flag. Attempt 1's "cannot free the global circular buffer" is literally
+true, not a statement about reference counting.
+
+The flag and its tests stay in the tree, default off, with this result recorded
+against them so the run is not spent twice.
+
+**The better hypothesis, written down rather than attempted:** the fault is that a
+*full-grid* prefill program cannot place its CBs on the sender columns, and the
+prefill mode plan is one sub-device covering the whole grid. Confining it to the
+**worker** cores would move every prefill program off the sender columns and the
+problem disappears without touching the buffer's lifetime - which is the shape
+every other defect this milestone had. It costs 20 of 70 cores for prefill and it
+changes the grid of every prefill program, so the prefill 128/2048 numbers, the
+80-layer prefill and the accuracy gate would all need re-taking. That is the right
+first move for a session with a full budget, and the wrong one for the end of this
+one.
