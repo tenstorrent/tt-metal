@@ -21,6 +21,7 @@ on:
           - qwen2.5-7b
           - qwen2.5-72b
           - qwen2.5-vl-32b
+          - qwen3.5-9b
           - qwq-32b
           - phi-3-mini
           - janus-pro-7b
