@@ -744,7 +744,18 @@ KNOBS = {
     # knob string carrying it would move BOTH arms and the delta would
     # no longer read as the license's own effect (hand arm anchors
     # must stay byte-identical; the S1-unlocked hand form is a named
-    # successor finding, not this knob's business).
+    # successor finding, not this knob's business).  KNOB-LEG CENSUS
+    # (own farm, pin-35-canonical base 3300/3300 byte-identical at
+    # OFF/TD/ON-36; license-only knob vs ON-36): 64 changed variants,
+    # ALL = licensed-fold fires on the shape corpus-wide (38 unary
+    # production convert-before-store bodies, binary sub fresh +
+    # rem/fmod/pow arms, ternary addcmul/addcdiv/snake_beta, typecast,
+    # cast_fp32_to_fp16a production, moe_gate, sdpa-exp); delta CRAQ on
+    # the NEW pinned sim: 36/36 runnable ids corr PASS on BOTH legs
+    # (zero LICENSED-EXPECTED exceptions), 2 ids symmetric sim-SKIP.
+    # BOOKED (headline-laneHZ-stochrndfold-20260827): binary-float sem
+    # 27428 -> 21291, hand 25766 byte-and-cycle-identical, 3-rep
+    # cycle-exact => vs_hand -17.37 WIN (was +6.45 LOSS).
     "stochrnd-store-fold": "-mtt-tensix-optimize-stochrnd-store-fold",
     # EK (int-not): single-SFPNOT selection for the
     # all-ones-minus-x value function (exhaustive 2^32 equivalence
