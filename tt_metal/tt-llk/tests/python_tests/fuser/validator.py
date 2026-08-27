@@ -82,6 +82,14 @@ def require_src_a_tiles(*shapes):
     )
 
 
+def require_dest_tiles(*shapes):
+    return reject(
+        lambda s, a, b: s._dest_tile_shape is None
+        or s._dest_tile_shape.tile_dims not in shapes,
+        f"Only {format_tile_dims(shapes)} dest tiles are supported for this operation",
+    )
+
+
 def forced_unpackers(*names, when=None, note=None):
     def condition(s, a, b):
         if when is not None and not when(s, a, b):
@@ -393,6 +401,7 @@ class FpuMathSchemaBase(BaseModel):
     _fpu_map: ClassVar[dict] = {}
     _unpacker_map: ClassVar[dict] = {}
     _output_dims: ClassVar[dict] = {}
+    _dest_tile_shape: Optional[TileShape] = None
 
     type: Literal["Fpu"]
     operation: str
@@ -693,6 +702,8 @@ class OperationSchemaBase(BaseModel):
             p._block_size = self.block_size
         for m in self.math:
             m._block_size = self.block_size
+            if isinstance(m, FpuMathSchemaBase):
+                m._dest_tile_shape = tile_shape
 
         pack_nodes = []
         for i, p in enumerate(self.pack):

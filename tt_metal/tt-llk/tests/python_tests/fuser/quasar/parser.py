@@ -42,6 +42,7 @@ from fuser.validator import (
     eltwise_unpacker_rules,
     forced_unpackers,
     reject,
+    require_dest_tiles,
     require_src_a_tiles,
 )
 from helpers.llk_params import (
@@ -203,7 +204,7 @@ FPU_MAP = {
             NO_BROADCAST,
             TRANSPOSE_WITHIN_FACE_REQUIRED,
             forced_unpackers("TransposeDestUnpacker"),
-            require_src_a_tiles((32, 32)),
+            require_dest_tiles((32, 32)),
         ],
     ),
     "UnaryBroadcast": (

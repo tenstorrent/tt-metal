@@ -65,8 +65,6 @@ def _format_loc(loc):
             )
             if is_discriminator:
                 parts[-1] += f" ({part})"
-            elif i + 1 < len(loc) and isinstance(loc[i + 1], int):
-                parts.append(part)
             else:
                 parts.append(part)
         i += 1
