@@ -64,30 +64,6 @@ def test_reshape():
     visualize(tensor)
 
 
-@pytest.mark.requires_fast_runtime_mode_off
-def test_config_owned_tracing_is_disabled_when_config_turns_off():
-    """Config-owned tracing stops when its opt-in flag is restored."""
-    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_torch_tracer", False):
-        with ttnn.manage_config("enable_torch_tracer", True):
-            ttnn.from_torch(torch.ones((1, 1)))
-            assert ttnn.tracer.is_tracing_enabled()
-
-        assert not ttnn.tracer.is_tracing_enabled()
-        ttnn.from_torch(torch.ones((1, 1)))
-        assert not ttnn.tracer.is_tracing_enabled()
-
-
-@pytest.mark.requires_fast_runtime_mode_off
-def test_config_changes_do_not_disable_explicit_trace_session():
-    """Config restoration leaves an explicit trace session active."""
-    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_torch_tracer", False):
-        with trace():
-            with ttnn.manage_config("enable_torch_tracer", True):
-                ttnn.from_torch(torch.ones((1, 1)))
-
-            assert ttnn.tracer.is_tracing_enabled()
-
-
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("show_modules", [True, False])

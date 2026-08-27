@@ -130,20 +130,6 @@ void Config::validate(std::string_view name) const {
         }
     }
 
-    if (name == "enable_fast_runtime_mode" or name == "enable_torch_tracer") {
-        if (this->attributes.enable_torch_tracer) {
-            if (this->attributes.enable_fast_runtime_mode) {
-                log_warning(
-                    tt::LogAlways,
-                    "The python torch tracer is not supported in fast runtime mode. Please disable fast runtime mode "
-                    "('enable_fast_runtime_mode = false') to use it.");
-            } else if (not this->attributes.enable_logging) {
-                log_warning(
-                    tt::LogAlways, "Running without logging. Please enable logging to use the python torch tracer");
-            }
-        }
-    }
-
     if (name == "enable_fast_runtime_mode" or name == "enable_graph_report" or
         name == "enable_detailed_buffer_report" or name == "enable_detailed_tensor_report") {
         if (not this->attributes.enable_logging) {
