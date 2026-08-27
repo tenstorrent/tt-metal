@@ -206,6 +206,20 @@ TEST(MoEComputeRingProtocol, RingKernelDoesNotMixPersistentInlineAndAtomicSemaph
     EXPECT_NE(source.find("noc_semaphore_inc</*posted=*/false>"), std::string::npos);
 }
 
+TEST(MoEComputeRingProtocol, CumulativeCombineBarriersAcceptSemaphoreOvershoot) {
+    const std::string source =
+        read_repo_source("ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/dm1.cpp");
+    ASSERT_FALSE(source.empty());
+
+    // The combine semaphore is cumulative across expert chunks. Multiple NoC
+    // increments may land before a waiter observes the value, so exact waits
+    // can strand EPD2 forever after an overshoot. All three barriers (empty
+    // expert, first chunk/double-buffer reuse, and final reset) must accept a
+    // value at least as large as the cumulative threshold.
+    EXPECT_EQ(count_occurrences(source, "combine_sem.wait_min(combine_semaphore_val)"), 3u);
+    EXPECT_EQ(count_occurrences(source, "combine_sem.wait(combine_semaphore_val)"), 0u);
+}
+
 TEST(MoEComputeRingProtocol, RingPayloadIsAcknowledgedBeforeEveryReadySignal) {
     const std::string source =
         read_repo_source("ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/dm1.cpp");

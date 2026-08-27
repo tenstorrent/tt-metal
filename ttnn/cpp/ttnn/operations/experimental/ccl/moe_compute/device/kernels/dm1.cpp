@@ -257,7 +257,7 @@ void kernel_main() {
         // compute_only has no combine writer to coordinate with).
         if constexpr (!compute_only) {
             if (num_expert_chunks == 0) {
-                combine_sem.wait(combine_semaphore_val);
+                combine_sem.wait_min(combine_semaphore_val);
             }
         }
 
@@ -439,7 +439,7 @@ void kernel_main() {
                 if constexpr (compute_only) {
                     noc1_obj.async_writes_flushed();  // non-posted in compute_only; use NON-posted flush API
                 } else if (chunk == 0) {
-                    combine_sem.wait(combine_semaphore_val);
+                    combine_sem.wait_min(combine_semaphore_val);
                 }
 
                 uint32_t dest_height_shard = dest_height_shard_start;
@@ -520,7 +520,7 @@ void kernel_main() {
         noc1_obj.async_write_barrier();
     } else {
         // wait for combine to do its final semaphore increment before resetting. Otherwise, leads to hang.
-        combine_sem.wait(combine_semaphore_val);
+        combine_sem.wait_min(combine_semaphore_val);
         combine_sem.set(0);
         noc1_obj.async_writes_flushed<NocOptions::POSTED>();
     }

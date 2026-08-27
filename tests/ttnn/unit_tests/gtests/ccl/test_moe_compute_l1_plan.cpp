@@ -85,5 +85,12 @@ TEST(MoEComputeCapability, ReportsEveryValidatedWeightDtype) {
     EXPECT_EQ(dtypes[2], ttnn::DataType::BFLOAT16);
 }
 
+TEST(MoEComputeCapability, AdvertisesCumulativeCombineMinimumWait) {
+    const auto capabilities = ttnn::experimental::moe_compute_capabilities();
+
+    ASSERT_EQ(capabilities.size(), 1);
+    EXPECT_EQ(capabilities[0], "cumulative_combine_wait_min");
+}
+
 }  // namespace
 }  // namespace ttnn::experimental::prim::detail
