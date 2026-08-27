@@ -38,6 +38,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_gelu_fw_ulp.cpp
     test_tanh_bw_ulp.cpp
     test_tanh_fw_ulp.cpp
+    test_work_split_tilize.cpp
 )
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES

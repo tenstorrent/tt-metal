@@ -36,6 +36,8 @@ project(
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+GenerateVersionHeader()
+AddVersionHeaderTarget()
 
 # Augment CMake's built-in per-config flags rather than replacing them wholesale.
 # Using set(CMAKE_CXX_FLAGS_<CONFIG> ...) overwrites the variable entirely, silently

@@ -341,13 +341,9 @@ class Llama3Generator:
         normalized: NormalizedPrefillKwargs,
         trace_requested: bool,
     ):
-        if trace_requested and not self.target.can_trace_prefill(
-            tokens=normalized["tokens"],
-            prompt_lens=normalized["prompt_lens"],
-            start_pos=normalized["start_pos"],
-            empty_slots=normalized["empty_slots"],
-        ):
-            trace_requested = False
+        # Static trace intent is authoritative. Eligibility and configured
+        # coverage are preflighted by the selected execution target; this
+        # facade must never turn a required trace miss into eager KV writes.
         return self._select_execution("prefill", trace_requested)
 
     def _select_execution(self, operation: str, enable_trace: bool):

@@ -29,10 +29,11 @@ What the number excludes, verified on an 8x4 galaxy (warm caches, 58 programs x 
 Recalibrating: set ``_EXPECTED_NS = None`` and the test measures and logs without gating, printing
 the value to set it back to. Do that on any box whose baseline you need to re-cut.
 
-Two limits carried over from the tracy version:
+One limit carried over from the tracy version:
 
-  * Measures the SiLU path, not the checkpoint's SiTU-GLU (#51335), so this baseline moves when
-    that kernel lands.
+  * ``_EXPECTED_NS`` was cut before the shared expert moved off SiLU. It now measures the
+    checkpoint's SiTU-GLU on every FFN site, where the shared expert's single fused multiply
+    becomes a softcap/sigmoid/multiply chain, so the baseline is stale until re-cut.
 """
 
 import os
@@ -56,9 +57,16 @@ _SEQ_LEN_PER_CHIP = 640
 # Capacity factor 5 carries over from K2.6, as in the pcc parametrize.
 _DISPATCH_BUFFER_CAPACITY_FACTOR = 5
 
-# Measured 2026-08-21 on an 8x4 BH galaxy (DDR 16000, 130W), warm forward, with the routed
-# experts folded into one program.
-_EXPECTED_NS = 12_210_765
+# Re-centered 2026-08-25 (issue #54280): the forward got ~4.6% FASTER and fell out the bottom of the
+# band, so the baseline was stale rather than the margin too tight. Likely source is #53968
+# (active-ERISC __global_pointer$ link fix, 2026-08-21 16:19 UTC) -- same suspect and direction as
+# #54220 on the Kimi-K2.6 traced chunked gate; the previous 12,210,765 was measured 2026-08-21,
+# plausibly just before it landed.
+#
+# Measured on an 8x4 BH galaxy (nominal DDR, high power), warm forward, routed experts folded into one
+# program: run 32811686276/job 97720001496 (main). Run 32728173507 independently measured 11,555,528 ns
+# at the same 31-program shape, 0.8% under this value and well inside the band.
+_EXPECTED_NS = 11_646_483
 # Repeated warm measurements on that box spanned 0.63% stdev / 1.89% peak to peak, so 3% holds
 # the observed run-to-run noise; sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.
 # The baseline above is a single run, not the centre of a spread -- recentre it if a regression
@@ -141,6 +149,7 @@ def test_kimi_k3_moe_perf_galaxy(variant, config_only, mesh_device, device_param
         shared_hidden_dim=KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
         latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
+        shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
         measure=measure,
     )
 

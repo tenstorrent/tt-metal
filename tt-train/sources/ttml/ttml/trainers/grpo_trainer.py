@@ -5,14 +5,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass, asdict
+import csv
 import inspect
 import json
 import logging
+import math
 import random
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 import os
 import numpy as np
@@ -21,6 +24,13 @@ import ttml
 import ttnn
 from safetensors.numpy import save_file
 from ttml.common.utils import create_optimizer, no_grad
+
+from .callback import TrainerCallback
+
+try:
+    import wandb as _wandb  # type: ignore
+except ImportError:  # pragma: no cover - wandb is optional
+    _wandb = None
 
 
 class GRPOCompleter(ABC):
@@ -98,6 +108,10 @@ class GRPOConfig:
     # accumulates gradients over micro-batches of size per_device_train_batch_size * num_devices
     # before each optimizer step. Larger values mean a larger effective batch per step.
     gradient_accumulation_steps: int
+    # Metrics are accumulated every step and emitted every ``logging_steps``
+    # steps as an interval-mean (except ``min_completion_len``,
+    # ``max_completion_len``, ``lr`` where minimum, maximum, last value is
+    # emitted respectively).
     logging_steps: int
     output_dir: str
     checkpointing: bool
@@ -107,6 +121,18 @@ class GRPOConfig:
     max_completion_length: int
     num_generations: int
     warmup_steps: int
+    log_completions: bool = False
+    num_completions_to_print: int = 0
+    report_to: str = "none"
+    # Optional wandb run name, mirrored from TRL's ``TrainingArguments.run_name``.
+    # ``None`` lets wandb auto-generate a name. Project / entity / mode
+    # come from the ``WANDB_PROJECT`` / ``WANDB_ENTITY`` / ``WANDB_MODE`` env
+    # vars, matching TRL + transformers conventions.
+    run_name: Optional[str] = None
+    # Escape hatch: when True the trainer does NOT auto-append a GRPOMonitor
+    # callback (users can still add their own). Kept off by default so the
+    # default experience prints step metrics + writes ``grpo_metrics.csv``.
+    disable_default_monitor: bool = False
     # Deprecated/unused: the number of prompts per generation batch is now
     # derived at runtime from per_device_train_batch_size, num_devices, and
     # num_generations. Kept only so older configs that still set it construct
@@ -143,6 +169,35 @@ class GRPOConfig:
             raise ValueError(
                 f"grpo_config: 'checkpoint_interval' must be > 0 when checkpointing is enabled "
                 f"(got {self.checkpoint_interval})."
+            )
+
+        # ``report_to`` is intentionally a plain string in this framework
+        # (unlike TRL, which accepts a list). Reject lists/tuples early so a
+        # copy-pasted TRL config surfaces the difference immediately.
+        if not isinstance(self.report_to, str):
+            raise TypeError(
+                f"grpo_config: 'report_to' must be a str, got {type(self.report_to).__name__}. "
+                "Supported values: 'none', 'wandb'."
+            )
+        _allowed_report_to = {"none", "wandb"}
+        if self.report_to not in _allowed_report_to:
+            raise ValueError(
+                f"grpo_config: 'report_to' must be one of {sorted(_allowed_report_to)} " f"(got {self.report_to!r})."
+            )
+
+        if not isinstance(self.num_completions_to_print, int) or isinstance(self.num_completions_to_print, bool):
+            raise TypeError(
+                "grpo_config: 'num_completions_to_print' must be an int, "
+                f"got {type(self.num_completions_to_print).__name__}."
+            )
+        if self.num_completions_to_print < 0:
+            raise ValueError(
+                f"grpo_config: 'num_completions_to_print' must be >= 0 (got {self.num_completions_to_print})."
+            )
+        if self.log_completions and self.num_completions_to_print == 0:
+            logging.warning(
+                "grpo_config: 'log_completions' is True but 'num_completions_to_print' is 0; "
+                "no completions will be logged. Set 'num_completions_to_print' > 0 to enable."
             )
 
         # Warn (once per construction) when a deprecated field is explicitly set.
@@ -190,6 +245,345 @@ def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
     return GRPOConfig(**fields)
 
 
+# Fixed base column order in the CSV. Callback-timing columns are appended after
+# these; any extra scalar keys populated on ``trainer.metrics`` follow. The
+# header line is materialised together with the first row on the first logging
+# step (see :meth:`GRPOMonitor._write_csv_header`).
+_CSV_BASE_COLUMNS = (
+    "step",
+    "reward_mean",
+    "reward_std",
+    "mean_completion_len",
+    "min_completion_len",
+    "max_completion_len",
+    "lr",
+    "step_time_s",
+    "generation_time_s",
+)
+
+
+# Metric keys that carry per-step sample payloads (not scalars) and should
+# never be forwarded to the CSV or to wandb as scalars. Kept as a module-level
+# constant so both the CSV writer and the wandb sink agree.
+_NON_CSV_KEYS = frozenset({"completions", "prompts", "rewards"})
+
+
+class _MetricStats:
+    """Constant-memory running stats for a single metric key."""
+
+    __slots__ = ("sum", "count", "min", "max", "last")
+
+    def __init__(self) -> None:
+        self.sum = 0.0
+        self.count = 0
+        self.min = math.inf
+        self.max = -math.inf
+        self.last = float("nan")
+
+    def push(self, value: float) -> None:
+        self.sum += value
+        self.count += 1
+        if value < self.min:
+            self.min = value
+        if value > self.max:
+            self.max = value
+        self.last = value
+
+
+# Per-key aggregation policy for interval emission. Anything not listed defaults
+# to ``"mean"`` (matching TRL, which averages every metric it logs).
+_AGG_POLICY: dict[str, str] = {
+    "min_completion_len": "min",
+    "max_completion_len": "max",
+    "lr": "last",
+}
+
+
+def _aggregate(key: str, r: _MetricStats) -> float:
+    policy = _AGG_POLICY.get(key, "mean")
+    if policy == "min":
+        return r.min
+    if policy == "max":
+        return r.max
+    if policy == "last":
+        return r.last
+    return r.sum / max(r.count, 1)
+
+
+class GRPOMonitor(TrainerCallback):
+    """CSV + console + optional wandb logger for GRPO training.
+
+    The trainer auto-appends a :class:`GRPOMonitor` to its callback list unless
+    the config sets ``disable_default_monitor=True``. It writes a
+    ``grpo_metrics.csv`` under the config's ``output_dir``, prints a per-step
+    log line, and — when ``report_to == "wandb"`` — calls ``wandb.init(...)``
+    itself (matching the TRL / ``transformers`` convention) and forwards scalar
+    metrics + a small completions table.
+
+    Args:
+        config: The :class:`GRPOConfig` in use. ``output_dir`` (where the CSV
+            lands), ``report_to`` (``"none"`` or ``"wandb"``), ``run_name``
+            (wandb run name), ``log_completions`` and
+            ``num_completions_to_print`` are read from it. The trainer wires
+            this up automatically.
+    """
+
+    def __init__(self, config: GRPOConfig) -> None:
+        self._config = config
+        self._output_dir = config.output_dir
+        self._report_to = config.report_to
+        self._run_name = config.run_name
+        self._log_completions = config.log_completions
+        self._num_completions_to_print = config.num_completions_to_print
+
+        self._csv_path = os.path.join(self._output_dir, "grpo_metrics.csv") if self._output_dir else None
+        # Frozen list of CSV columns; populated on the first ``_write_csv_row``
+        # call so that the header reflects the actual contents of ``trainer.metrics``
+        # at the first logging step (including keys populated by user callbacks
+        # in their ``on_step_end``). Empty means "header not written yet".
+        self._columns: list[str] = []
+        # Snapshot of the callback classes present at ``on_train_begin`` — used
+        # to seed the ``<Callback>_time_s`` columns in the header. Captured then
+        # rather than at write time so mutations to ``trainer.callbacks`` after
+        # training starts do not silently churn the CSV schema.
+        self._callback_time_columns: list[str] = []
+        # One-time-warning flags to avoid spamming logs on every step.
+        self._warned_missing_wandb = False
+        self._warned_unknown_columns: set[str] = set()
+
+        self._wandb_active = False
+        # Whether this callback owns the wandb run (i.e. it called
+        # ``wandb.init`` itself). If a caller already started a run before the
+        # trainer was constructed, we log into it but don't finish it in
+        # ``on_train_end`` — that stays the caller's responsibility.
+        self._wandb_owned = False
+
+        # Per-key running stats accumulated every step; flushed to CSV / wandb
+        # (as interval-mean, or the policy in ``_AGG_POLICY``) every
+        # ``logging_steps`` steps.
+        self._running: dict[str, _MetricStats] = defaultdict(_MetricStats)
+
+    # -- lifecycle -----------------------------------------------------------
+
+    def on_train_begin(self, trainer: Any) -> None:
+        # Skip GRPOMonitor: its cost is deliberately outside step_time_s and it
+        # never populates _callback_times, so a column would always be empty.
+        self._callback_time_columns = [
+            f"{type(cb).__name__}_time_s" for cb in trainer.callbacks if not isinstance(cb, GRPOMonitor)
+        ]
+
+        if self._csv_path is not None:
+            os.makedirs(self._output_dir, exist_ok=True)
+
+        if self._report_to == "wandb":
+            self._start_wandb(trainer)
+
+    def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
+        metrics: dict[str, Any] = getattr(trainer, "metrics", None) or dict(kwargs)
+        self._accumulate(metrics)
+
+        if not self._is_logging_step(step):
+            return
+
+        row: dict[str, Any] = {k: _aggregate(k, r) for k, r in self._running.items()}
+        for key in _NON_CSV_KEYS:
+            if key in metrics:
+                row[key] = metrics[key]
+
+        self._log_console(step, row)
+        self._write_csv_row(step, row)
+        self._maybe_log_completions(step, row)
+        self._maybe_log_wandb(step, row)
+        self._running.clear()
+
+    def _accumulate(self, metrics: dict[str, Any]) -> None:
+        for key, value in metrics.items():
+            if key in _NON_CSV_KEYS:
+                continue
+            if isinstance(value, (bool, int, float)) and not (isinstance(value, float) and math.isnan(value)):
+                self._running[key].push(float(value))
+
+    def _is_logging_step(self, step: int) -> bool:
+        ls = self._config.logging_steps
+        return ls > 0 and step % ls == 0
+
+    def on_train_end(self, trainer: Any) -> None:
+        logging.info("Training complete.")
+        if self._wandb_active and self._wandb_owned:
+            _wandb.finish()
+
+    # -- helpers -------------------------------------------------------------
+
+    def _start_wandb(self, trainer: Any) -> None:
+        if _wandb is None:
+            logging.warning(
+                "GRPOMonitor: report_to='wandb' but the 'wandb' package is not installed; "
+                "falling back to console + CSV logging only."
+            )
+            self._warned_missing_wandb = True
+            return
+
+        if getattr(_wandb, "run", None) is not None:
+            # A run was already opened by the caller — log into it but don't
+            # own its lifecycle. This preserves the escape hatch for users who
+            # want full control over ``wandb.init`` (custom tags, groups, etc.).
+            self._wandb_active = True
+            self._wandb_owned = False
+            logging.info("GRPOMonitor: reusing existing wandb run (%s).", _wandb.run.name)
+            return
+
+        # Project / entity / mode follow the TRL + transformers convention of
+        # coming from ``WANDB_*`` env vars; only ``run_name`` is a config field.
+        _wandb.init(
+            project=os.environ.get("WANDB_PROJECT"),
+            name=self._run_name,
+            entity=os.environ.get("WANDB_ENTITY"),
+            mode=os.environ.get("WANDB_MODE"),
+            config=_build_wandb_config(trainer),
+        )
+        self._wandb_active = True
+        self._wandb_owned = True
+        logging.info(
+            "GRPOMonitor: wandb.init() called (project=%s, run=%s).",
+            os.environ.get("WANDB_PROJECT") or "<default>",
+            self._run_name or "<auto>",
+        )
+
+    def _log_console(self, step: int, metrics: dict[str, Any]) -> None:
+        logs = {"step": step, **{k: v for k, v in metrics.items() if k not in _NON_CSV_KEYS}}
+        logging.info(logs)
+
+    def _write_csv_row(self, step: int, metrics: dict[str, Any]) -> None:
+        if self._csv_path is None:
+            return
+
+        if not self._columns:
+            self._write_csv_header(metrics)
+
+        row_values = [step if col == "step" else _format_cell(metrics.get(col, float("nan"))) for col in self._columns]
+        with open(self._csv_path, mode="a", newline="") as f:
+            csv.writer(f).writerow(row_values)
+
+        self._warn_unknown_keys(metrics)
+
+    def _write_csv_header(self, metrics: dict[str, Any]) -> None:
+        """Derive the CSV column list from the first row's metrics and write the header.
+
+        Called once, on the first logging step. Columns are the base scalars,
+        then the ``<Callback>_time_s`` columns captured in ``on_train_begin``,
+        then any other numeric keys already populated on ``trainer.metrics``.
+        """
+        extras = [
+            k
+            for k in metrics
+            if k not in _NON_CSV_KEYS and k not in _CSV_BASE_COLUMNS and k not in self._callback_time_columns
+        ]
+        self._columns = list(_CSV_BASE_COLUMNS) + self._callback_time_columns + extras
+        with open(self._csv_path, mode="w", newline="") as f:
+            csv.writer(f).writerow(self._columns)
+
+    def _warn_unknown_keys(self, metrics: dict[str, Any]) -> None:
+        """Log a one-time warning for any metric key that appeared after the header froze.
+
+        On the first row this is a no-op — ``_write_csv_header`` derives the
+        columns from ``metrics`` so every key present is already in
+        ``self._columns``.
+        """
+        for key in metrics:
+            if key in _NON_CSV_KEYS or key in self._columns or key in self._warned_unknown_columns:
+                continue
+            self._warned_unknown_columns.add(key)
+            logging.warning(
+                "GRPOMonitor: metric %r first appeared after the CSV header was frozen; "
+                "it will not be written to %s.",
+                key,
+                self._csv_path,
+            )
+
+    def _maybe_log_completions(self, step: int, metrics: dict[str, Any]) -> None:
+        if not self._log_completions or self._num_completions_to_print <= 0:
+            return
+        completions: Iterable[str] = metrics.get("completions", []) or []
+        prompts: Iterable[str] = metrics.get("prompts", []) or []
+        rewards: Iterable[float] = metrics.get("rewards", []) or []
+        for i, (prompt, completion, reward) in enumerate(zip(prompts, completions, rewards)):
+            if i >= self._num_completions_to_print:
+                break
+            logging.info(
+                "[completion %d @ step %d] reward=%.4f\n  prompt=%r\n  completion=%r",
+                i,
+                step,
+                _as_float(reward),
+                _preview(prompt),
+                _preview(completion),
+            )
+
+    def _maybe_log_wandb(self, step: int, metrics: dict[str, Any]) -> None:
+        if not self._wandb_active:
+            return
+        # Only forward numeric scalars to wandb — string / list metrics (like
+        # ``completions``) are handled separately as a ``wandb.Table`` below.
+        scalar_payload: dict[str, Any] = {}
+        for key, value in metrics.items():
+            if key in _NON_CSV_KEYS:
+                continue
+            if isinstance(value, (bool, int, float)) and not (isinstance(value, float) and math.isnan(value)):
+                scalar_payload[f"grpo/{key}"] = value
+        if scalar_payload:
+            _wandb.log(scalar_payload, step=step)
+
+        if self._log_completions and self._num_completions_to_print > 0:
+            prompts = list(metrics.get("prompts", []) or [])[: self._num_completions_to_print]
+            completions = list(metrics.get("completions", []) or [])[: self._num_completions_to_print]
+            rewards = list(metrics.get("rewards", []) or [])[: self._num_completions_to_print]
+            if prompts and completions:
+                table = _wandb.Table(columns=["step", "prompt", "completion", "reward"])
+                for prompt, completion, reward in zip(prompts, completions, rewards):
+                    table.add_data(step, _preview(prompt), _preview(completion), _as_float(reward))
+                _wandb.log({"grpo/completions": table}, step=step)
+
+
+def _build_wandb_config(trainer: Any) -> dict:
+    """Assemble the ``config`` payload logged to wandb at run start.
+
+    Includes the full :class:`GRPOConfig` (via ``asdict``), the model source,
+    and the raw optimizer dict — enough to reproduce a run from the wandb
+    settings tab.
+    """
+    payload: dict = {}
+    cfg = getattr(trainer, "config", None)
+    if cfg is not None:
+        try:
+            payload.update(asdict(cfg))
+        except TypeError:
+            pass
+    model_source = getattr(trainer, "model_source", None)
+    if model_source is not None:
+        payload["model_source"] = model_source
+    optimizer_dict = getattr(trainer, "optimizer_dict", None)
+    if optimizer_dict:
+        payload["optimizer"] = dict(optimizer_dict)
+    return payload
+
+
+def _as_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _format_cell(value: Any) -> Any:
+    if isinstance(value, (int, float, str)) or value is None:
+        return value
+    return str(value)
+
+
+def _preview(text: Any, max_len: int = 300) -> str:
+    s = str(text).replace("\n", " ")
+    return s if len(s) <= max_len else s[: max_len - 1] + "\u2026"
+
+
 def _deallocate_tensors(tensors: Any) -> None:
     if tensors is None:
         return
@@ -221,6 +615,28 @@ def dispatch_reward(
 
     call_kwargs = {name: data_pool[name] for name in params if name in data_pool}
     return reward_func(**call_kwargs)
+
+
+def _derive_reward_names(funcs: List[Callable]) -> List[str]:
+    """Derive a unique, human-readable name per reward function.
+
+    Uses ``fn.__name__`` when available; falls back to ``reward_{i}`` for
+    lambdas and other unnamed callables. Duplicate names are disambiguated
+    with a ``_2`` / ``_3`` suffix so per-component metric keys stay unique.
+    """
+    names: List[str] = []
+    seen: dict[str, int] = {}
+    for i, fn in enumerate(funcs):
+        raw = getattr(fn, "__name__", None) or f"reward_{i}"
+        if raw == "<lambda>":
+            raw = f"reward_{i}"
+        if raw in seen:
+            seen[raw] += 1
+            names.append(f"{raw}_{seen[raw]}")
+        else:
+            seen[raw] = 1
+            names.append(raw)
+    return names
 
 
 def compute_advantages_host(rewards_np: np.ndarray, group_size: int) -> np.ndarray:
@@ -381,19 +797,117 @@ class GRPOTrainer:
         completer: GRPOCompleter,
         dataset: Any,
         config: GRPOConfig,
-        reward_func: Callable[..., List[float]],
-        optimizer_dict: dict,
+        reward_func: Optional[Callable[..., List[float]]] = None,
+        optimizer_dict: Optional[dict] = None,
         callbacks: Optional[List[Any]] = None,
         model_source: Optional[str] = None,
+        reward_funcs: Optional[List[Callable[..., List[float]]]] = None,
     ) -> None:
+        if optimizer_dict is None:
+            raise ValueError("GRPOTrainer: 'optimizer_dict' is required.")
+
+        self._init_rewards(reward_func, reward_funcs)
+
         self.completer = completer
         self.dataset = dataset
         self.config = config
-        self.reward_func = reward_func
         self.optimizer_dict = optimizer_dict
-        self.callbacks: List[Any] = callbacks or []
+        self.callbacks: List[Any] = list(callbacks or [])
         self.model_source = model_source
         self.model: Any = None
+        # Mutable per-step metrics dict — callbacks earlier in ``self.callbacks``
+        # can add/overwrite entries here (e.g. an eval callback writing
+        # ``trainer.metrics["eval_similarity"] = ...``) and later callbacks
+        # (notably the built-in ``GRPOMonitor``) read the merged view.
+        # Pre-seeded with NaN reward-component entries so ``GRPOMonitor``
+        # freezes the CSV header with those columns; rebuilt on every step.
+        self.metrics: dict = {}
+        if len(self.reward_funcs) > 1:
+            self.metrics = {f"{name}_mean": float("nan") for name in self._reward_func_names}
+        self._callback_times: dict = {}
+
+        # Auto-append the framework's default GRPOMonitor unless the config
+        # opts out. Placed last so any user-supplied callbacks (e.g. eval)
+        # get a chance to populate ``self.metrics`` before the monitor writes
+        # a row.
+        if not self.config.disable_default_monitor:
+            # Detect the framework GRPOMonitor (or a subclass) by isinstance, and
+            # a legacy local class also named ``GRPOMonitor`` by class name — pre-
+            # refactor forks used to define their own monitor with that name.
+            # Either way we skip auto-appending to avoid duplicate CSV writes.
+            if not any(isinstance(cb, GRPOMonitor) or type(cb).__name__ == "GRPOMonitor" for cb in self.callbacks):
+                self.callbacks.append(GRPOMonitor(self.config))
+
+    def _init_rewards(
+        self,
+        reward_func: Optional[Callable[..., List[float]]],
+        reward_funcs: Optional[List[Callable[..., List[float]]]],
+    ) -> None:
+        """Validate reward inputs (exactly one of ``reward_func`` /
+        ``reward_funcs`` must be provided) and normalize onto a list.
+
+        When ``reward_funcs`` is given, per-completion rewards from each
+        function are summed element-wise at train time; per-component means
+        are logged separately under ``{fn.__name__}_mean`` keys.
+        """
+        if (reward_func is None) == (reward_funcs is None):
+            raise ValueError(
+                "GRPOTrainer: pass exactly one of 'reward_func' (single callable) "
+                "or 'reward_funcs' (non-empty list of callables)."
+            )
+        if reward_funcs is not None and not reward_funcs:
+            raise ValueError("GRPOTrainer: 'reward_funcs' must be a non-empty list.")
+
+        self.reward_funcs = list(reward_funcs) if reward_funcs is not None else [reward_func]
+        self.reward_func = reward_func
+        self._reward_func_names = _derive_reward_names(self.reward_funcs)
+        self._reward_component_means: dict[str, float] = {}
+
+    def _time_callback(self, cb: Any, method_name: str, *args: Any, **kwargs: Any) -> str:
+        """Fire ``cb.<method_name>(*args, **kwargs)`` and accumulate its wall-clock
+        time into ``self._callback_times[<ClassName>_time_s]`` for the current step.
+
+        ``GRPOMonitor`` is intentionally excluded from the accumulator: it runs
+        last, after ``step_time_s`` has been sealed, and its own cost sits
+        outside the step wall time by design.
+
+        Returns the metrics key so callers can refresh ``self.metrics`` in-place
+        between callbacks in the same hook loop.
+        """
+        cb_t0 = time.perf_counter()
+        getattr(cb, method_name)(*args, **kwargs)
+        key = f"{type(cb).__name__}_time_s"
+        if not isinstance(cb, GRPOMonitor):
+            self._callback_times[key] = self._callback_times.get(key, 0.0) + (time.perf_counter() - cb_t0)
+        return key
+
+    def _compute_rewards_and_means(
+        self,
+        completions_strs: List[str],
+        prompts_strs: List[str],
+        dataset_columns_dict: dict,
+    ) -> Tuple[np.ndarray, dict[str, float]]:
+        """Dispatch each reward function, sum element-wise, compute per-component means.
+
+        Returns:
+            rewards_np: Summed rewards, shape ``[B]``.
+            component_means: Per-component ``{name}_mean`` values. Empty when
+                only one reward function is configured.
+        """
+        per_func_rewards = []
+        for fn in self.reward_funcs:
+            values = dispatch_reward(fn, completions_strs, prompts_strs, dataset_columns_dict)
+            per_func_rewards.append(np.array(values, dtype=np.float32))
+
+        component_means: dict[str, float] = {}
+        if len(self.reward_funcs) > 1:
+            component_means = {
+                f"{name}_mean": float(arr.mean()) if arr.size else 0.0
+                for name, arr in zip(self._reward_func_names, per_func_rewards)
+            }
+
+        rewards_np = np.sum(per_func_rewards, axis=0).astype(np.float32)
+        return rewards_np, component_means
 
     def _compute_grpo_loss(
         self,
@@ -607,8 +1121,10 @@ class GRPOTrainer:
 
             completions_strs = [tokenizer.decode(c, skip_special_tokens=True) for c in completions_batch]
             prompts_strs = [tokenizer.decode(p) for p in prompts_batch]
-            rewards = dispatch_reward(self.reward_func, completions_strs, prompts_strs, dataset_columns_dict)
-            rewards_np = np.array(rewards, dtype=np.float32)
+            rewards_np, self._reward_component_means = self._compute_rewards_and_means(
+                completions_strs, prompts_strs, dataset_columns_dict
+            )
+            rewards = rewards_np.tolist()
 
             advantages_np = compute_advantages_host(rewards_np, grpo_cfg.num_generations)
             completion_lens = [len(c) for c in completions_batch]
@@ -686,12 +1202,16 @@ class GRPOTrainer:
                     # here), matched to this reduction.
                     ttml.sync_gradients(tt_model.parameters(), axis_names=("dp",))
 
+                # Reset per-step callback timings before firing the first hook
+                # of this optimizer step. ``on_before_optimizer_step``,
+                # ``on_step_end``, and ``on_save`` all accumulate into
+                # ``self._callback_times`` so a callback's cost lands in the row
+                # for the step in which it ran, not the row after.
+                self._callback_times = {}
                 for cb in self.callbacks:
-                    cb.on_before_optimizer_step(self)
+                    self._time_callback(cb, "on_before_optimizer_step", self)
                 optimizer.step()
                 optimizer.zero_grad()
-
-                step_time_s = time.perf_counter() - step_t0
 
                 # Generation runs once per effective batch; attribute its cost to
                 # the first mini-epoch's step only.
@@ -708,19 +1228,37 @@ class GRPOTrainer:
                     min_completion_len = 0
                     max_completion_len = 0
 
-                step_metrics = {
+                monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
+
+                # Build the mutable per-step metrics dict on ``self`` every step
+                # so callbacks can inject additional columns (e.g. an eval
+                # callback writing ``trainer.metrics["eval_similarity"]``) and
+                # so the built-in ``GRPOMonitor`` can accumulate per-key running
+                # stats across every step. ``step_time_s`` is filled in below,
+                # once the entire step (including non-monitor ``on_step_end``
+                # callbacks and any checkpoint save) has completed.
+                self.metrics = {
                     "reward_mean": mean_reward,
                     "reward_std": float(rewards_np.std()),
                     "mean_completion_len": mean_completion_len,
                     "min_completion_len": min_completion_len,
                     "max_completion_len": max_completion_len,
                     "lr": base_lr * warmup_factor,
-                    "step_time_s": step_time_s,
-                    "step_time_and_previous_callbacks_s": time.perf_counter() - step_t0,
                     "generation_time_s": generation_time_s_for_step,
+                    **self._callback_times,
+                    **self._reward_component_means,
                 }
+                if grpo_cfg.log_completions and grpo_cfg.num_completions_to_print > 0:
+                    k = grpo_cfg.num_completions_to_print
+                    self.metrics["prompts"] = prompts_strs[:k]
+                    self.metrics["completions"] = completions_strs[:k]
+                    self.metrics["rewards"] = list(rewards[:k])
+
                 for cb in self.callbacks:
-                    cb.on_step_end(self, num_steps, **step_metrics)
+                    if cb is monitor_cb:
+                        continue
+                    key = self._time_callback(cb, "on_step_end", self, num_steps, **self.metrics)
+                    self.metrics[key] = self._callback_times[key]
 
                 if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
                     ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")
@@ -735,7 +1273,21 @@ class GRPOTrainer:
                         model_source=self.model_source,
                     )
                     for cb in self.callbacks:
-                        cb.on_save(self, num_steps, ckpt_dir)
+                        if cb is monitor_cb:
+                            continue
+                        key = self._time_callback(cb, "on_save", self, num_steps, ckpt_dir)
+                        self.metrics[key] = self._callback_times[key]
+
+                # Seal ``step_time_s`` after all non-monitor work is done, so it
+                # covers the full per-step wall time (generation, host post-gen,
+                # reference log-probs, training loop, non-monitor callbacks, and
+                # any checkpoint save on this step). ``GRPOMonitor``'s own cost
+                # is deliberately outside this window.
+                step_time_s = time.perf_counter() - step_t0
+                self.metrics["step_time_s"] = step_time_s
+
+                if monitor_cb is not None:
+                    self._time_callback(monitor_cb, "on_step_end", self, num_steps, **self.metrics)
 
                 step_t0 = time.perf_counter()
 

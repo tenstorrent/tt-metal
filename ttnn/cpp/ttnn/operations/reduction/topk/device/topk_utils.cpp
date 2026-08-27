@@ -338,4 +338,10 @@ bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool 
     return memory_cost_local < device->l1_size_per_core();
 }
 
+bool is_uint32_index_required(const ttnn::Tensor& input_tensor, int8_t dim) {
+    const bool dim_fits_uint16 = input_tensor.padded_shape()[dim] <= std::numeric_limits<uint16_t>::max();
+    const bool is_fp32 = input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32;
+    return !dim_fits_uint16 || is_fp32;
+}
+
 }  // namespace ttnn::prim
