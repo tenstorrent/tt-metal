@@ -37,6 +37,8 @@ from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as br
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import (  # noqa: E402
     DIM,
     HEAD_DIM,
+    N_KV_HEADS,
+    HEAD_DIM,
     N_LAYERS,
     ROPE_THETA,
     causal_bias,
@@ -183,3 +185,127 @@ def test_decode_is_bit_deterministic(gen, w):
     for t, (x, y) in enumerate(zip(a, b)):
         assert torch.equal(x, y), f"decode step {t} not reproducible: max delta {(x - y).abs().max():.3e}"
     print(f"\n  {len(a)} decode steps reproduced bit-identically across two runs")
+
+
+# ── The KV cache prefill writes ───────────────────────────────────────────────────────────────
+# Prefill has TWO jobs: produce the last hidden state (which Block 2 consumes, gated above) and
+# populate the KV cache that every later decode step attends to. Only the first was gated. The
+# second was covered transitively -- a wrong entry drifts the decode hidden states -- but weakly:
+# attention averages over 200+ positions, so one bad entry is heavily diluted, and the decode test
+# only runs 8 steps.
+#
+# BUG-5 is exactly this surface: warm-up/capture writing the cache "corrupts the prompt unless
+# aimed at a scratch row; measured decode PCC 0.9998 -> 0.86 with NO error raised". Decode PCC
+# caught that because it was catastrophic. These tests localise instead of detect: they name the
+# layer, the position and the side (K or V).
+#
+# Both sides cache POST-RoPE: the reference applies `apply_rope` before writing the cache, and the
+# device caches what `_qkv` returns, which is also post-RoPE. So this compares like with like.
+CACHE_CASE = 0
+CACHE_PCC = 0.999
+CACHE_STEPS = 4
+
+# THE K CACHE IS STORED IN A DIFFERENT HEAD-DIM ORDER ON THE TWO SIDES, and comparing raw K without
+# accounting for it reads PCC ~0.02 in all 26 layers while the model is perfectly healthy. Measured
+# 2026-08-27: as-is -0.0035, permuted 0.999975 (layer 0); 0.0357 vs 0.999928 (layer 12).
+#
+# The reference lays a rotated head out HALF-SPLIT -- first half, then second -- and the device lays
+# it out INTERLEAVED, pairs adjacent. That is a permutation of the head dimension, and RoPE applies
+# it to Q as well, so Q.K is unchanged and attention is identical either way. Hence V, which is
+# never rotated, matches with no permutation at all, and only K needs one. Decode PCC 0.9998 and
+# WER 0 of 894 are the independent confirmation that both layouts are self-consistent.
+#
+# This matters beyond the test: anything that reads, transplants or pages the K cache -- or compares
+# it against another implementation -- has to know which order it is in.
+_HALF_TO_INTERLEAVED = torch.empty(HEAD_DIM, dtype=torch.long)
+_HALF_TO_INTERLEAVED[: HEAD_DIM // 2] = torch.arange(0, HEAD_DIM, 2)
+_HALF_TO_INTERLEAVED[HEAD_DIM // 2 :] = torch.arange(1, HEAD_DIM, 2)
+
+
+def _as_device_k_layout(k_ref):
+    """Reference K (half-split head dim) -> the device's interleaved order."""
+    return k_ref[..., _HALF_TO_INTERLEAVED]
+
+
+def _reference_cache(w, embeds):
+    """-> {layer_index: (k, v)} after a reference prefill, each [1, N_KV_HEADS, P, HEAD_DIM]."""
+    inc = bref.IncrementalBackbone(w, n_layers=N_LAYERS)
+    inc.prefill(embeds)
+    return {i: inc.cache[f"layers.{i}."] for i in range(N_LAYERS)}, inc
+
+
+def _device_cache(gen, P):
+    """-> {layer_index: (k, v)} sliced to the prompt's P positions."""
+    out = {}
+    for i, (kc, vc) in enumerate(gen.caches):
+        out[i] = (ttnn.to_torch(kc).float()[:, :, :P, :], ttnn.to_torch(vc).float()[:, :, :P, :])
+    return out
+
+
+def test_prefill_kv_cache_matches_reference(gen, w):
+    """Every cached K and V entry, all 26 layers, against the fp32 reference's own cache."""
+    embeds, case = fixture_embeds(CACHE_CASE, w)
+    P = embeds.shape[1]
+    ref_cache, _ = _reference_cache(w, embeds)
+    gen.reset()
+    gen.prefill(embeds)
+    dev_cache = _device_cache(gen, P)
+
+    rows = []
+    for i in range(N_LAYERS):
+        for side, j in (("K", 0), ("V", 1)):
+            exp, got = ref_cache[i][j].float(), dev_cache[i][j]
+            if side == "K":
+                exp = _as_device_k_layout(exp)      # see _HALF_TO_INTERLEAVED above
+            assert exp.shape == got.shape, (
+                f"layer {i} {side}: reference {tuple(exp.shape)} vs device {tuple(got.shape)}")
+            m = compare_hidden(got, exp)
+            # worst position, so a failure names one instead of a whole layer
+            per_pos = (got - exp).abs().amax(dim=(0, 1, 3))
+            rows.append((i, side, m["pcc"], m["worst_pct"], int(per_pos.argmax())))
+
+    worst_pcc = min(r[2] for r in rows)
+    worst_ws = max(r[3] for r in rows)
+    print(f"\n  case {CACHE_CASE} ({case['voice']}), P={P}, {N_LAYERS} layers x (K,V), "
+          f"cache [{1}, {N_KV_HEADS}, {P}, {HEAD_DIM}]")
+    for i, side, pc, ws, pos in sorted(rows, key=lambda r: r[2])[:5]:
+        print(f"    weakest: layer {i:>2} {side}  PCC {pc:.6f}  worst-sample {ws:.2f}%  @pos {pos}")
+    print(f"  worst PCC {worst_pcc:.6f}, worst-sample {worst_ws:.2f}% across all "
+          f"{len(rows)} (layer, side) pairs")
+    bad = [(i, s, pc) for i, s, pc, _, _ in rows if pc <= CACHE_PCC]
+    assert not bad, "cache entries below the gate: " + ", ".join(
+        f"layer {i} {s} PCC {pc:.6f}" for i, s, pc in bad)
+
+
+def test_decode_does_not_disturb_the_prompt_cache(gen, w):
+    """After prefill, decode steps must leave positions [0, P) exactly as prefill wrote them.
+
+    This is BUG-5's shape. A step that writes at the wrong index -- or a warm-up/capture aimed at a
+    live row instead of a scratch one -- corrupts the prompt the whole utterance is conditioned on,
+    and raises nothing. Compared device-against-itself, so it isolates the write index from any
+    numerical question.
+    """
+    embeds, _ = fixture_embeds(CACHE_CASE, w)
+    P = embeds.shape[1]
+    frames = real_frames()
+    gen.reset()
+    gen.prefill(embeds, last_only=True)
+    before = _device_cache(gen, P)
+    for t in range(CACHE_STEPS):
+        gen.step(bref.embed_frame(w, frames[t]))
+    after = _device_cache(gen, P)
+
+    moved = []
+    for i in range(N_LAYERS):
+        for side, j in (("K", 0), ("V", 1)):
+            if not torch.equal(before[i][j], after[i][j]):
+                d = (before[i][j] - after[i][j]).abs()
+                moved.append((i, side, float(d.max()), int(d.amax(dim=(0, 1, 3)).argmax())))
+    if moved:
+        for i, side, mx, pos in moved[:5]:
+            print(f"\n    layer {i} {side} changed by {mx:.3e} at prompt position {pos}")
+    assert not moved, (
+        f"{len(moved)} of {N_LAYERS * 2} (layer, side) cache regions changed over {CACHE_STEPS} "
+        f"decode steps -- decode is writing inside the prompt's positions [0, {P})")
+    print(f"\n  {N_LAYERS} layers x (K,V) unchanged across {CACHE_STEPS} decode steps "
+          f"(prompt positions [0, {P}))")
