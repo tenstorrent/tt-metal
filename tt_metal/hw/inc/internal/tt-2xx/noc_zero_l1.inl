@@ -18,10 +18,15 @@
 template <typename Dst>
 inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& args) const {
     static_assert(
-        std::is_same_v<Dst, CircularBuffer> || std::is_same_v<Dst, DataflowBuffer>,
-        "noc.async_write_zeros local-L1 overload accepts CircularBuffer or DataflowBuffer only. "
-        "Use the TensorAccessor overload for DRAM.");
-    uint32_t local_addr = get_dst_ptr<AddressType::LOCAL_L1>(dst, args);
+        noc_zero_l1_endpoint_v<Dst>,
+        "noc.async_write_zeros: unsupported local-L1 destination. Supported: CircularBuffer, "
+        "DataflowBuffer, CoreLocalMem, Scratchpad, LocalTensorAccessor. Use the TensorAccessor overload for DRAM.");
+
+    if constexpr (is_scratchpad_v<Dst>) {
+        ASSERT(static_cast<uint64_t>(args.offset_bytes) + size_bytes <= dst.size_in_bytes());
+    }
+    const uint32_t local_addr = static_cast<uint32_t>(get_dst_ptr<AddressType::LOCAL_L1>(dst, args));
+    DEBUG_SANITIZE_L1_ADDR(local_addr, size_bytes);
 
     // Engage the Quasar iDMA zero device (Overlay Spec §4.12). The zero mode is
     // a HW overlay on top of the iDMA copy path: same MISC.idma_en + MISC.write_trans

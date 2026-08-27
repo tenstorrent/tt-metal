@@ -32,6 +32,14 @@ struct noc_traits_t<UnicastEndpoint>;
 template <>
 struct noc_traits_t<MulticastEndpoint>;
 
+// May T be a local-L1 endpoint of noc.async_write_zeros?
+template <typename T>
+inline constexpr bool noc_zero_l1_endpoint_v = false;
+
+// Is T a Scratchpad?
+template <typename T>
+inline constexpr bool is_scratchpad_v = false;
+
 /**
  * @brief Compile-time bit-flags that control optional NoC transaction behaviours.
  *
@@ -716,6 +724,21 @@ public:
     /**
      * @brief Zeroes a local-L1 destination buffer (overload 1).
      *
+     * Zeroes [start, start + @p size_bytes) where start = base + @p args.offset_bytes, and base is:
+     *   - CircularBuffer / DataflowBuffer : get_write_ptr()
+     *   - Scratchpad                      : get_base_address()
+     *   - LocalTensorAccessor             : get_bank_base_address()
+     *   - CoreLocalMem                    : get_address()
+     * @p args.offset_bytes is in bytes, including for the typed handles (whose operator[] is not).
+     *
+     * @note The destination bytes are UNDEFINED until write_zeros_l1_barrier() returns: do not read
+     *       or write the window before the barrier.
+     *
+     * @note Destination alignment (base + @p args.offset_bytes): on Wormhole/Blackhole the zero is a
+     *       NOC loopback read, so the address must be NOC_L1_READ_ALIGNMENT_BYTES (16) aligned. On
+     *       Quasar it is an overlay iDMA transaction rather than a NOC transfer, so the NOC alignment
+     *       constants do not apply and no alignment is required.
+     *
      * @note Quasar: this temporarily reprograms the overlay write command buffer (cmd buffer 0)
      *       into iDMA zero mode; it is restored to normal write mode only by
      *       write_zeros_l1_barrier(). Do NOT issue any other NOC write (noc.async_write /
@@ -725,10 +748,11 @@ public:
      *
      * @see write_zeros_l1_barrier.
      *
-     * @param dst Destination object (CircularBuffer or DataflowBuffer)
+     * @param dst Destination object (CircularBuffer, DataflowBuffer, CoreLocalMem, Scratchpad or
+     *            LocalTensorAccessor)
      * @param size_bytes Number of bytes to zero
      * @param args Additional arguments for destination address calculation (offset within @p dst)
-     * @tparam Dst Must be CircularBuffer or DataflowBuffer
+     * @tparam Dst Must satisfy noc_zero_l1_endpoint_v
      */
     template <typename Dst>
     void async_write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& args = {}) const;
@@ -741,11 +765,15 @@ public:
      * must cover at least min(@p size_bytes, NOC_MAX_BURST_SIZE) bytes; otherwise the impl reads
      * garbage past the zero region and streams it to DRAM.
      *
-     * Contract: the zeroed bytes must sit at @p scratch's read pointer. Two valid patterns:
+     * Contract: the zeroed bytes must sit at @p scratch's read pointer. For a CircularBuffer or
+     * DataflowBuffer the read and write pointers differ, so there are two valid patterns:
      *   - Same-kernel scratch: a fresh/empty CB or DFB has read_ptr == write_ptr, so zeroing it
      *     via overload (1) (which writes the write pointer) lands where overload (2) reads.
      *   - Producer/consumer handoff: the producer zeroes via overload (1) then push_back()s the
      *     entry; the consumer wait_front()s it before passing it here.
+     * For the raw L1 handles (CoreLocalMem, Scratchpad, LocalTensorAccessor) the source and
+     * destination addresses are the same, so neither dance applies: zero it via overload (1),
+     * barrier, then pass the same handle here.
      *
      * Caller MUST zero the scratch via overload (1) + write_zeros_l1_barrier() before the first call.
      *
@@ -757,9 +785,10 @@ public:
      * @param accessor Destination DRAM tensor accessor
      * @param size_bytes Number of bytes to zero per page
      * @param args Destination page args (page_id, offset_bytes)
-     * @param scratch Pre-zeroed L1 scratch buffer (CircularBuffer or DataflowBuffer); read at its read pointer
+     * @param scratch Pre-zeroed L1 scratch buffer (CircularBuffer, DataflowBuffer, CoreLocalMem,
+     *                Scratchpad or LocalTensorAccessor); read at its read pointer
      * @tparam DSpecT TensorAccessor type spec; must satisfy DSpecT::is_dram
-     * @tparam Scratch Must be CircularBuffer or DataflowBuffer
+     * @tparam Scratch Must satisfy noc_zero_l1_endpoint_v
      *
      * @code
      *   // Same-kernel scratch: fresh CB, so read_ptr == write_ptr.
