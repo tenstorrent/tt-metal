@@ -346,8 +346,12 @@ void down_links_bh_single_ended_unsafe() { down_links_bh_unsafe_impl(/*single_en
 void dump_erisc_debug_slots() {
     // Base of the ERISC debug slot (dev_mem_map.h MEM_AERISC_RESUME_PHASE_BASE) and its length in words.
     // Hardcoded rather than included because dev_mem_map.h is a device header; keep in sync if the slot moves.
-    constexpr uint64_t DBG_SLOT_BASE = 0x6F220;
-    constexpr std::size_t DBG_SLOT_WORDS = 16;
+    // MEM_AERISC_RESUME_PHASE_SIZE is 104, so the slot starts 104B below
+    // MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE == 0x6F1F8. The old 0x6F220/16 here predates the slot growing
+    // past 16 words and pointed at word[10], shifting every dumped word by 10. Keep in sync with the
+    // in-process dump in test_tt_fabric.cpp, which uses the same base and width.
+    constexpr uint64_t DBG_SLOT_BASE = 0x6F1F8;
+    constexpr std::size_t DBG_SLOT_WORDS = 26;
     // ERISC0 main-loop heartbeat (0xDCBA0000 | counter) -- liveness for the sender side.
     constexpr uint64_t ERISC0_HEARTBEAT = 0x7CC70;
 
@@ -357,7 +361,7 @@ void dump_erisc_debug_slots() {
 
     std::cout << "# ERISC debug slot dump: base 0x" << std::hex << DBG_SLOT_BASE << std::dec << ", " << DBG_SLOT_WORDS
               << " words per core\n";
-    std::cout << "# fields: dev chan w0..w15 hb0 hb1\n";
+    std::cout << "# fields: dev chan w0..w25 hb0 hb1\n";
     for (auto chip_id : mmio_chips) {
         const auto& soc_desc = cluster.get_soc_descriptor(chip_id);
         const uint32_t num_eth_channels = soc_desc.get_num_eth_channels();

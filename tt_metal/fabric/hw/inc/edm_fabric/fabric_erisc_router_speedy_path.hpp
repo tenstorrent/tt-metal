@@ -156,6 +156,18 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
                 (free_slots <= WorkerInterfaceT::num_buffers) ? (WorkerInterfaceT::num_buffers - free_slots) : 0u;
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_OCC_TRUE_ADDR) = occ_true;  // word[7]
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_OCC_REG_ADDR) = occ_reg;    // word[15]
+
+            // [#45872 DRAIN TIME-SERIES] Time-resolved trace of the post-retrain drain. Sampled HERE, outside
+            // if(can_send), so the trace keeps running after forwarding stops and the settle is visible -- the
+            // 0xE4 probe further down is deliberately left alone and still marks when the drain reaches
+            // can_send. Pushed only when reg or occ MOVES, so the static link-down window costs a single entry
+            // and the 32-entry ring is spent on the drain. Packing/tags: FABRIC_DBG_DRAIN_TS_TAG, eth_fw_api.h.
+            // All state lives inside the (noinline) helper -- keeping it out of this frame is mandatory, not
+            // stylistic: inlining it here took the router main loop to 3680B of stack against a hard 1912B
+            // cap and failed the build. Self-check needs no extra state: word[6]/[7]/[15] above are written
+            // every iteration, so a live word[6] with an EMPTY ring means the (guaranteed) first push was
+            // lost rather than never attempted. See the FABRIC_DBG_DRAIN notes in eth_fw_api.h.
+            fabric_dbg_drain_sample(free_slots, occ_true, rc);
         }
     }
 #endif
