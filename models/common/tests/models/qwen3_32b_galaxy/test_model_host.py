@@ -587,3 +587,117 @@ def test_distributed_norm_resolves_its_statistics_onto_the_decode_input_origin(m
     )
     buffer_origin = stats_plan.persistent_output_specs[0].memory_config.shard_spec.grid.bounding_box().start
     assert (buffer_origin.x, buffer_origin.y) == (input_origin.x, input_origin.y)
+
+
+# ---------------------------------------------------------------------------
+# Decode placement composition (Milestone B job 2)
+# ---------------------------------------------------------------------------
+
+
+def _transformer_config(n_layers: int = 1):
+    """Build the whole Qwen transformer 2D config against the mock mesh.
+
+    The decode placements resolve to real ``MemoryConfig`` objects on a
+    ``MagicMock(spec=ttnn.MeshDevice)``, so the *wiring* between modules is
+    checkable on host even though the partition itself is not. That is the
+    difference between finding a placement defect in a second here and losing a
+    device run to it.
+    """
+
+    mesh = _mesh()
+    params = Qwen3_32BGalaxyModelParameters(n_layers=n_layers)
+    lazy = build_qwen3_32b_galaxy_lazy_weights(
+        mesh_device=mesh,
+        geometry=params.geometry(),
+        precision=QWEN3_32B_GALAXY_ACCURACY,
+        weights=_shaped_weights(params, layers=n_layers),
+    )
+
+    def context(mode):
+        return SimpleNamespace(
+            mesh_device=mesh,
+            mode=mode,
+            worker_sub_device_id=f"{mode}-worker",
+            resources=lambda *_args, **_kwargs: None,
+            next_semaphore_handles=lambda *_args, **_kwargs: None,
+            next_barrier_semaphore_handle=lambda *_args, **_kwargs: None,
+        )
+
+    return galaxy_model.build_qwen3_32b_galaxy_transformer_2d_config(
+        mesh_device=mesh,
+        geometry=params.geometry(),
+        precision=QWEN3_32B_GALAXY_ACCURACY,
+        lazy_weights=lazy,
+        resources=MagicMock(),
+        prefetcher=SimpleNamespace(context=context, mesh_device=mesh),
+        norm_eps=params.rms_norm_eps,
+        rope_theta=params.rope_theta,
+    )
+
+
+def test_embedding_decode_output_is_the_residual_placement_not_interleaved_l1():
+    """`ttnn.embedding` must be confined to the residual placement's cores.
+
+    The op takes its program grid from a *sharded* output's shard grid, and only
+    from there: with an interleaved output - L1 or DRAM - it spreads over the
+    whole compute grid, including the two prefetch sender columns, and cannot
+    place its static circular buffers around the prefetcher's L1 there:
+
+        TT_THROW ... Statically allocated circular buffers in program N
+        clash with L1 buffers on core range [0-0 - 0-0]
+
+    Milestone B job 1 found this on silicon for Llama and fixed it there; this
+    package carried the same `ttnn.L1_MEMORY_CONFIG` unchanged. Naming the
+    residual placement also makes the relocation in `embed_decode` a no-op.
+    """
+
+    config = _transformer_config()
+
+    assert config.embedding_config.decode_output_memcfg == config.decode_placements.residual_memcfg
+    assert config.embedding_config.decode_output_memcfg.is_sharded(), "an interleaved output spreads over the full grid"
+    # Prefill is a different story: it is not under the decode sub-device
+    # manager, and DRAM is correct there.
+    assert config.embedding_config.prefill_output_memcfg == ttnn.DRAM_MEMORY_CONFIG
+
+
+def test_wo_weight_placement_is_paired_with_attention_dim_not_dim():
+    """`wo` reduces ``attention_dim`` to ``dim``: 8192 -> 5120, per row 1024 -> 1280.
+
+    Milestone A's recorded Qwen attention result was measured against a 40-head
+    fixture where ``n_heads * head_dim == dim``, so a `local_dim`-vs-
+    `local_attention_dim` confusion in this pairing was undetectable there. It
+    is detectable here because the two differ.
+    """
+
+    params = Qwen3_32BGalaxyModelParameters(n_layers=1)
+    geometry = params.geometry()
+
+    assert geometry.local_attention_dim == 1024
+    assert geometry.local_dim == 1280
+    assert geometry.local_attention_dim != geometry.local_dim
+
+    source = inspect.getsource(galaxy_model)
+    assert (
+        "wo_memcfg = dram_sharded_weight_memory_config(mesh_device, geometry.local_attention_dim, geometry.local_dim)"
+        in source
+    ), "wo must be placed as (local_attention_dim, local_dim)"
+
+
+def test_relocate_never_uses_the_full_grid_copy_or_typecast_on_sharded_input():
+    """The decode graph's placement helper must stay inside the partition.
+
+    ``to_memory_config(t, memcfg, dtype)`` reaches ``ttnn::prim::copy``, which
+    splits work over the full compute grid and aborts under the decode
+    sub-device manager with
+
+        TT_FATAL ... Kernel group cores do not match sub device cores
+
+    The safe spelling is the explicit ``sharded_to_interleaved`` /
+    ``interleaved_to_sharded`` pair, both of which are worker-confined.
+    """
+
+    source = inspect.getsource(galaxy_model._relocate)
+
+    assert "sharded_to_interleaved" in source
+    assert "interleaved_to_sharded" in source
+    assert "ttnn.to_memory_config(tensor, memory_config, dtype)" not in source, "the three-argument form is full-grid"
