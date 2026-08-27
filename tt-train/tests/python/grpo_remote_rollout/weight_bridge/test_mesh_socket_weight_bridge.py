@@ -41,13 +41,14 @@ from utils.weight_bridge import (  # noqa: E402
     SENDER_RANK,
 )
 
-# 1->1 socket on top of [1, 2] parent meshes.
-# Both ranks open a [1, 2] mesh so the fabric topology mapper can resolve the
-# inter-mesh routes over this box's physical 2x2 wiring (see
+# 1->1 socket on top of [1, 4] parent meshes.
+# Both ranks open a [1, 4] mesh so the fabric topology mapper can resolve the
+# inter-mesh routes over the BH loudbox's physical 2x4 wiring (see
 # configurations/1_1/mgd.textproto). Each side then carves a [1, 1] submesh at
 # offset (0, 0) and hands that to the bridge -- the MeshSocket itself is
-# strictly single-device on both ends.
-PARENT_SHAPE = (1, 2)
+# strictly single-device on both ends (chip 0 <-> chip 4 over the vertical
+# inter-mesh cable).
+PARENT_SHAPE = (1, 4)
 SUBMESH_SHAPE = (1, 1)
 SUBMESH_OFFSET = (0, 0)
 
@@ -159,7 +160,7 @@ def _receiver_side(mesh) -> None:
 
 
 def _open_parent_and_submesh():
-    """Open the [1, 2] parent mesh and carve a [1, 1] submesh at offset (0, 0).
+    """Open the [1, 4] parent mesh and carve a [1, 1] submesh at offset (0, 0).
 
     Returns ``(parent, submesh)``; the caller must release the submesh reference
     before closing the parent (the parent can't close while a submesh still
