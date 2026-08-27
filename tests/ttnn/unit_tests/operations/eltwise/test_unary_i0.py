@@ -24,6 +24,16 @@ I0_MAX_INPUT = 88.5
 # input domain, including the exhaustive bfloat16 sweep below: 6.0 ULP for float32 and
 # 1.0 ULP for bfloat16. The budgets carry ~2x headroom over those measurements.
 #
+# Re-measured after the tenstorrent/tt-metal#52126 review trim (region-1 12->9 terms,
+# region-2 BF16-specific 5-term Q, unified overflow/NaN branch): 6.0 FP32 ULP again
+# (unchanged) and 0.91 BF16 ULP (a small improvement). Trimming both regions did not
+# measurably change accuracy -- consistent with the review's finding that region-1
+# accuracy is bounded by FP32 rounding of t = fl(x*x), not by the polynomial's degree.
+# Budgets left unchanged; they already carried headroom over the re-measured numbers.
+#
+# Confirmed on both architectures with the same seed: Blackhole p150b and Wormhole
+# n300 produced bit-identical results (same worst-case x, same output, same reference).
+#
 # Units are the true spacing of the output dtype (what comp_ulp/assert_with_ulp use),
 # not a relative-mantissa proxy -- the two differ by up to 2x within a binade and
 # diverge at power-of-2 boundaries, so a budget calibrated against one is not valid
