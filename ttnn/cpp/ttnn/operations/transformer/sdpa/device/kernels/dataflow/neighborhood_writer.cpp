@@ -82,13 +82,13 @@ void kernel_main() {
         const uint32_t head_index = (work_item / chunk_count) % head_count;
         const uint32_t batch_index = work_item / (chunk_count * head_count);
 
-        const layout::BrickCoordinate chunk_origin =
+        const ttnn::transformer::neighborhood::BrickPoint chunk_origin =
             layout::chunk_origin_brick(chunk_index, volume_chunks, query_chunk_bricks);
 
         cb_output.wait_front(head_dim_tiles * bricks_per_query_chunk);
         uint32_t read_pointer = cb_output.get_read_ptr();
         for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
-            const layout::BrickCoordinate brick =
+            const ttnn::transformer::neighborhood::BrickPoint brick =
                 layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
             // A chunk may hang off the end of the volume; those bricks have no home to write to.
             if (!layout::brick_is_inside(brick, volume_bricks)) {

@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "neighborhood_point3.hpp"
+
 // The argument layout shared by the program factory and the three kernels: circular buffer
 // ids, the compile-time argument slots, and the geometry the reader needs to address bricks.
 //
@@ -218,26 +220,28 @@ enum : uint32_t {
 
 // The per-axis extents the mask generator needs. Passed as one struct rather than nine loose
 // arguments so a caller cannot transpose height and width without noticing.
-struct SignedAxisOffsets {
-    int32_t time;
-    int32_t height;
-    int32_t width;
-};
-
 struct AxisExtents {
     uint32_t time;
     uint32_t height;
     uint32_t width;
+
+    // So the unit conversions in neighborhood_point3.hpp -- first_site_of, containing_brick --
+    // accept this as well as the host's Extent3. Deliberately NOT used inside the per-element
+    // loops of fill_mask_tile: named fields make this a branch chain rather than an array load,
+    // and those loops are the ones the mask cost lives in.
+    constexpr uint32_t operator[](Axis axis) const {
+        return axis == Axis::Time ? time : (axis == Axis::Height ? height : width);
+    }
 };
 
 struct NeighborhoodExtents {
-    AxisExtents brick_sites;         // sites per brick
-    AxisExtents context_window;      // the unclamped window from the config
-    AxisExtents stride;              // query group extent
-    AxisExtents volume;              // the true GLOBAL volume, NOT the brick-padded one
-    AxisExtents query_chunk;         // one query chunk, in sites -- the unit that shares a window
-    SignedAxisOffsets shard_origin;  // where this device's tensor starts in the global volume
-    AxisExtents resident;            // how much of it this device holds (owned + halo)
+    AxisExtents brick_sites;     // sites per brick
+    AxisExtents context_window;  // the unclamped window from the config
+    AxisExtents stride;          // query group extent
+    AxisExtents volume;          // the true GLOBAL volume, NOT the brick-padded one
+    AxisExtents query_chunk;     // one query chunk, in sites -- the unit that shares a window
+    SiteOffset shard_origin;     // where this device's tensor starts in the global volume; signed
+    AxisExtents resident;        // how much of it this device holds (owned + halo)
 };
 
 }  // namespace ttnn::transformer::neighborhood::kernel_args

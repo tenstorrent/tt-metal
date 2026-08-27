@@ -8,6 +8,10 @@
 #include <cstdint>
 #include <vector>
 
+// Site, SiteOffset, BrickPoint, Axis and the unit conversions between them. Shared with the
+// kernels so that host and device cannot disagree about what a position means.
+#include "kernels/neighborhood_point3.hpp"
+
 // 3D neighborhood attention geometry.
 //
 // Every neighborhood concept in the design lives in this file and nowhere else. It has no
@@ -21,16 +25,13 @@
 // out-of-range to mask. A truncating window looks plausible and is wrong near every edge.
 //
 // Naming: every count carries its unit -- _sites, _bricks, _tiles, _index, _count. You
-// cannot add a brick count to a site count when the names do not match.
+// cannot add a brick count to a site count when the names do not match. POSITIONS enforce the
+// same rule through the type system instead: see Unit in kernels/neighborhood_point3.hpp.
 
 namespace ttnn::transformer::neighborhood {
 
 // One brick is one hardware tile row: 32 sites, in some 3D arrangement.
 constexpr uint32_t SITES_PER_BRICK = 32;
-
-constexpr uint32_t AXIS_COUNT = 3;
-
-enum class Axis : uint32_t { Time = 0, Height = 1, Width = 2 };
 
 // Natural: row-major over (time, height, width), the order tokens arrive in.
 // Bricked: 32 consecutive tokens form one compact 3D box -- see site_to_bricked_index.
@@ -60,37 +61,6 @@ struct Extent3 {
     }
 };
 
-// A signed position, in sites. Distinct from Site because a shard's origin can be NEGATIVE: a
-// symmetric halo puts the device at the low edge of the volume at -halo, and those columns are
-// real storage that simply lies outside the volume. Its queries never use them and its windows
-// never reach them, but the local -> global conversion still has to be able to say where it is.
-struct Offset3 {
-    std::array<int32_t, AXIS_COUNT> by_axis{0, 0, 0};
-
-    static constexpr Offset3 at(int32_t time, int32_t height, int32_t width) { return Offset3{{time, height, width}}; }
-    constexpr int32_t time() const { return by_axis[0]; }
-    constexpr int32_t height() const { return by_axis[1]; }
-    constexpr int32_t width() const { return by_axis[2]; }
-    constexpr int32_t operator[](Axis axis) const { return by_axis[static_cast<uint32_t>(axis)]; }
-
-    friend constexpr bool operator==(const Offset3& left, const Offset3& right) {
-        return left.by_axis == right.by_axis;
-    }
-};
-
-// A position, in sites.
-struct Site {
-    std::array<uint32_t, AXIS_COUNT> by_axis{0, 0, 0};
-
-    static constexpr Site at(uint32_t time, uint32_t height, uint32_t width) { return Site{{time, height, width}}; }
-    constexpr uint32_t time() const { return by_axis[0]; }
-    constexpr uint32_t height() const { return by_axis[1]; }
-    constexpr uint32_t width() const { return by_axis[2]; }
-    constexpr uint32_t operator[](Axis axis) const { return by_axis[static_cast<uint32_t>(axis)]; }
-
-    friend constexpr bool operator==(const Site& left, const Site& right) { return left.by_axis == right.by_axis; }
-};
-
 struct NeighborhoodConfig {
     Extent3 volume;          // the GLOBAL token grid, in sites
     Extent3 context_window;  // what one query group attends to, in sites
@@ -118,9 +88,9 @@ struct NeighborhoodConfig {
     // wrong receptive field along every internal boundary.
     //
     // `shard_origin` must be brick-aligned, so the local tensor bricks the same way the global
-    // one would.
+    // one would. It is SIGNED -- see SiteOffset.
     Extent3 shard_extent{{0, 0, 0}};  // zero means "same as volume"
-    Offset3 shard_origin{{0, 0, 0}};
+    SiteOffset shard_origin{{0, 0, 0}};
 
     // The sub-box of the resident region this device actually produces OUTPUT for, and where it
     // starts inside that region. Zero extent means "the whole resident region", which is what an
@@ -177,7 +147,7 @@ struct NeighborhoodPlan {
     // They coincide unless the config asked for a query sub-region.
     Extent3 query_bricks;
     uint32_t query_brick_count = 0;
-    Extent3 query_origin_bricks;
+    BrickPoint query_origin_bricks;  // a position, not a size: config.query_origin in bricks
 
     // The QUERY region measured in query chunks. One chunk is one unit of work: its bricks share
     // a gather, a mask and a flash pass. Chunks are counted over the query region, not the

@@ -65,12 +65,8 @@ Extent3 query_in_bricks(const NeighborhoodConfig& config) {
     return result;
 }
 
-Extent3 query_origin_in_bricks(const NeighborhoodConfig& config) {
-    Extent3 result;
-    for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
-        result.by_axis[axis_index] = config.query_origin.by_axis[axis_index] / config.brick.by_axis[axis_index];
-    }
-    return result;
+BrickPoint query_origin_in_bricks(const NeighborhoodConfig& config) {
+    return containing_brick(config.query_origin, config.brick);
 }
 
 // A chunk's origin, in QUERY-region-local sites. Add config.query_origin for resident-local.
@@ -167,12 +163,10 @@ ContextWindow context_window_for(Site query_group_origin, const NeighborhoodConf
 
 uint32_t site_to_brick_index(Site site, const NeighborhoodConfig& config) {
     const Extent3 volume_bricks = volume_in_bricks(config);
-    const uint32_t brick_index_time = site.time() / config.brick.time();
-    const uint32_t brick_index_height = site.height() / config.brick.height();
-    const uint32_t brick_index_width = site.width() / config.brick.width();
+    const BrickPoint brick = containing_brick(site, config.brick);
 
-    return brick_index_time * (volume_bricks.height() * volume_bricks.width()) +
-           brick_index_height * volume_bricks.width() + brick_index_width;
+    return brick.time() * (volume_bricks.height() * volume_bricks.width()) + brick.height() * volume_bricks.width() +
+           brick.width();
 }
 
 Site brick_index_to_origin(uint32_t brick_index, const NeighborhoodConfig& config) {
@@ -181,13 +175,13 @@ Site brick_index_to_origin(uint32_t brick_index, const NeighborhoodConfig& confi
 
     const uint32_t brick_index_time = brick_index / bricks_per_time_slice;
     const uint32_t remainder_after_time = brick_index % bricks_per_time_slice;
-    const uint32_t brick_index_height = remainder_after_time / volume_bricks.width();
-    const uint32_t brick_index_width = remainder_after_time % volume_bricks.width();
 
-    return Site::at(
-        brick_index_time * config.brick.time(),
-        brick_index_height * config.brick.height(),
-        brick_index_width * config.brick.width());
+    return first_site_of(
+        BrickPoint::at(
+            brick_index_time,
+            remainder_after_time / volume_bricks.width(),
+            remainder_after_time % volume_bricks.width()),
+        config.brick);
 }
 
 uint32_t site_to_bricked_index(Site site, const NeighborhoodConfig& config) {
@@ -349,7 +343,7 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
         const uint32_t window_extent_sites =
             window_extent_on_axis(config.context_window.by_axis[axis_index], volume_extent_sites);
         // Bricks below the volume belong to a halo that hangs off the low edge; clamp so the
-        // group index stays sane. Their windows are never used -- see Offset3.
+        // group index stays sane. Their windows are never used -- see SiteOffset.
         const int32_t signed_global = static_cast<int32_t>(brick_origin.by_axis[axis_index]) +
                                       static_cast<int32_t>(config.query_origin.by_axis[axis_index]) +
                                       config.shard_origin.by_axis[axis_index];

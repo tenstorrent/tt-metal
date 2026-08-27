@@ -51,14 +51,14 @@ neighborhood::NeighborhoodConfig to_config(
     }
     if (shard_origin.has_value()) {
         const SignedAxisTuple& origin = *shard_origin;
-        config.shard_origin = neighborhood::Offset3{{origin[0], origin[1], origin[2]}};
+        config.shard_origin = neighborhood::SiteOffset::at(origin[0], origin[1], origin[2]);
     }
     if (query_extent.has_value()) {
         config.query_extent = to_extent(*query_extent);
     }
     if (query_origin.has_value()) {
         const AxisTuple& origin = *query_origin;
-        config.query_origin = neighborhood::Site{{origin[0], origin[1], origin[2]}};
+        config.query_origin = neighborhood::Site::at(origin[0], origin[1], origin[2]);
     }
     return config;
 }

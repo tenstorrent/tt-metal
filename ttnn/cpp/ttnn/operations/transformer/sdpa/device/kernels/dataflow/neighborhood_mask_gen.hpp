@@ -41,61 +41,9 @@ FORCE_INLINE uint32_t to_global_site(uint32_t local_site, int32_t shard_origin) 
 constexpr uint16_t KEEP_SCORE = 0x0000;
 constexpr uint16_t MASK_SCORE = 0xFF80;  // -infinity
 
-// A site's position inside its brick, from its index in the tile row. Bricks are laid out
-// time-major then height then width -- the same order as site_to_bricked_index on the host.
-struct SiteInBrick {
-    uint32_t time;
-    uint32_t height;
-    uint32_t width;
-};
-
-FORCE_INLINE SiteInBrick site_in_brick_from_index(uint32_t site_index_in_brick, kernel_args::AxisExtents brick_sites) {
-    const uint32_t sites_per_time_slice = brick_sites.height * brick_sites.width;
-    const uint32_t time = site_index_in_brick / sites_per_time_slice;
-    const uint32_t remainder = site_index_in_brick % sites_per_time_slice;
-    return SiteInBrick{time, remainder / brick_sites.width, remainder % brick_sites.width};
-}
-
-// True when the key at `key_site` is inside the context window of the query at `query_site`.
-// Both arrive LOCAL to this device's tensor and are lifted to global here, because a window is
-// clamped at the true volume boundary and never at a shard seam.
-inline bool key_is_visible(
-    const SiteInBrick& query_site, const SiteInBrick& key_site, const kernel_args::NeighborhoodExtents& extents) {
-    // An axis shorter than the window is attended to in full; clamp exactly as the host does.
-    const uint32_t window_time =
-        extents.context_window.time < extents.volume.time ? extents.context_window.time : extents.volume.time;
-    const uint32_t window_height =
-        extents.context_window.height < extents.volume.height ? extents.context_window.height : extents.volume.height;
-    const uint32_t window_width =
-        extents.context_window.width < extents.volume.width ? extents.context_window.width : extents.volume.width;
-
-    // Must mirror the planner exactly, hence the shared rule rather than a local test.
-    const uint32_t snap_time = snap_extent_on_axis(extents.stride.time, extents.brick_sites.time);
-    const uint32_t snap_height = snap_extent_on_axis(extents.stride.height, extents.brick_sites.height);
-    const uint32_t snap_width = snap_extent_on_axis(extents.stride.width, extents.brick_sites.width);
-
-    return key_is_in_window_on_axis(
-               to_global_site(query_site.time, extents.shard_origin.time),
-               to_global_site(key_site.time, extents.shard_origin.time),
-               extents.stride.time,
-               window_time,
-               extents.volume.time,
-               snap_time) &&
-           key_is_in_window_on_axis(
-               to_global_site(query_site.height, extents.shard_origin.height),
-               to_global_site(key_site.height, extents.shard_origin.height),
-               extents.stride.height,
-               window_height,
-               extents.volume.height,
-               snap_height) &&
-           key_is_in_window_on_axis(
-               to_global_site(query_site.width, extents.shard_origin.width),
-               to_global_site(key_site.width, extents.shard_origin.width),
-               extents.stride.width,
-               window_width,
-               extents.volume.width,
-               snap_width);
-}
+// Positions here are `Site`s from neighborhood_point3.hpp: RESIDENT-local sites, in the same
+// units the gather origin table carries. Bricks are laid out time-major then height then width --
+// the same order as site_to_bricked_index on the host.
 
 // How much of a key brick a query brick can see. When the whole brick is one query group
 // (stride == brick) every row of the mask tile is the same, so a brick that lies wholly inside
@@ -111,18 +59,17 @@ enum class BrickCoverage : uint8_t { AllVisible, NoneVisible, Mixed };
 constexpr uint32_t SITES_PER_BRICK_AXIS_MAX = 32;
 
 inline BrickCoverage classify_brick(
-    const SiteInBrick& query_brick_origin,
-    const SiteInBrick& key_brick_origin,
-    const kernel_args::NeighborhoodExtents& extents) {
+    const Site& query_brick_origin, const Site& key_brick_origin, const kernel_args::NeighborhoodExtents& extents) {
     const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
     const uint32_t stride[3] = {extents.stride.time, extents.stride.height, extents.stride.width};
     const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
     const uint32_t window_config[3] = {
         extents.context_window.time, extents.context_window.height, extents.context_window.width};
-    const uint32_t query_origin[3] = {query_brick_origin.time, query_brick_origin.height, query_brick_origin.width};
-    const uint32_t key_origin[3] = {key_brick_origin.time, key_brick_origin.height, key_brick_origin.width};
+    const uint32_t query_origin[3] = {
+        query_brick_origin.time(), query_brick_origin.height(), query_brick_origin.width()};
+    const uint32_t key_origin[3] = {key_brick_origin.time(), key_brick_origin.height(), key_brick_origin.width()};
     const int32_t shard_origin[3] = {
-        extents.shard_origin.time, extents.shard_origin.height, extents.shard_origin.width};
+        extents.shard_origin.time(), extents.shard_origin.height(), extents.shard_origin.width()};
     const uint32_t resident[3] = {extents.resident.time, extents.resident.height, extents.resident.width};
 
     bool all_visible = true;
@@ -177,10 +124,7 @@ inline BrickCoverage classify_brick(
 // quadrant -- correct along the diagonal, wrong everywhere else.
 // Taken BY VALUE and force-inlined so the caller's compile-time extents fold in.
 FORCE_INLINE void fill_mask_tile(
-    uint32_t write_address,
-    SiteInBrick query_brick_origin,
-    SiteInBrick key_brick_origin,
-    kernel_args::NeighborhoodExtents extents) {
+    uint32_t write_address, Site query_brick_origin, Site key_brick_origin, kernel_args::NeighborhoodExtents extents) {
     constexpr uint32_t FACE_HEIGHT = 16;
     constexpr uint32_t FACE_WIDTH = 16;
     // A 16-bit half of one face row, as bfloat16 pairs packed into words. Indexed by two MASK
@@ -192,14 +136,14 @@ FORCE_INLINE void fill_mask_tile(
     const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
     const uint32_t stride[3] = {extents.stride.time, extents.stride.height, extents.stride.width};
     const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
-    const int32_t shard[3] = {extents.shard_origin.time, extents.shard_origin.height, extents.shard_origin.width};
+    const int32_t shard[3] = {extents.shard_origin.time(), extents.shard_origin.height(), extents.shard_origin.width()};
     const uint32_t resident[3] = {extents.resident.time, extents.resident.height, extents.resident.width};
     const uint32_t window[3] = {
         extents.context_window.time < volume[0] ? extents.context_window.time : volume[0],
         extents.context_window.height < volume[1] ? extents.context_window.height : volume[1],
         extents.context_window.width < volume[2] ? extents.context_window.width : volume[2]};
-    const uint32_t query_base[3] = {query_brick_origin.time, query_brick_origin.height, query_brick_origin.width};
-    const uint32_t key_base[3] = {key_brick_origin.time, key_brick_origin.height, key_brick_origin.width};
+    const uint32_t query_base[3] = {query_brick_origin.time(), query_brick_origin.height(), query_brick_origin.width()};
+    const uint32_t key_base[3] = {key_brick_origin.time(), key_brick_origin.height(), key_brick_origin.width()};
     const uint32_t snap[3] = {
         snap_extent_on_axis(stride[0], brick[0]),
         snap_extent_on_axis(stride[1], brick[1]),

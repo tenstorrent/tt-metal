@@ -10,12 +10,65 @@
 #include <algorithm>
 #include <cstdint>
 #include <set>
+#include <type_traits>
 #include <vector>
 
 #include "gtest/gtest.h"
 #include "ttnn/operations/transformer/sdpa/device/neighborhood_plan.hpp"
 
 namespace ttnn::transformer::neighborhood {
+
+// ---- the point types, pinned at compile time ----
+//
+// A position is Point3<Scalar, Unit>, where Unit is a PHANTOM tag: it distinguishes a site from a
+// brick from a chunk in the type system while adding nothing to the object. Both halves of that
+// claim are load-bearing and neither is visible at a call site, so both are asserted here.
+//
+// Before this existed, a position was spelled five different ways -- Site, Offset3,
+// SignedAxisOffsets, SiteInBrick, BrickCoordinate -- which were distinct types by NAME only.
+// Assigning a brick coordinate into a site compiled cleanly and was wrong by a factor of the
+// brick shape, and the symptom was a mask that read the wrong keys and still returned plausible
+// video. These assertions are what make that a build failure instead.
+
+// The tag costs nothing: same size, same layout, still trivially copyable into a kernel argument.
+static_assert(sizeof(Site) == AXIS_COUNT * sizeof(uint32_t));
+static_assert(sizeof(BrickPoint) == sizeof(Site));
+static_assert(sizeof(ChunkPoint) == sizeof(Site));
+static_assert(sizeof(SiteOffset) == AXIS_COUNT * sizeof(int32_t));
+static_assert(std::is_trivially_copyable_v<Site>);
+static_assert(std::is_trivially_copyable_v<SiteOffset>);
+
+// The tag bites: units do not convert into one another, in either direction.
+static_assert(!std::is_assignable_v<Site&, BrickPoint>);
+static_assert(!std::is_assignable_v<BrickPoint&, Site>);
+static_assert(!std::is_assignable_v<BrickPoint&, ChunkPoint>);
+static_assert(!std::is_assignable_v<ChunkPoint&, BrickPoint>);
+// Nor does signedness, which is why the shard origin cannot be a Site: see SiteOffset.
+static_assert(!std::is_assignable_v<Site&, SiteOffset>);
+static_assert(!std::is_assignable_v<SiteOffset&, Site>);
+// Same unit still assigns and compares, or nothing above would be usable.
+static_assert(std::is_assignable_v<Site&, Site>);
+static_assert(Site::at(1, 2, 3) == Site::at(1, 2, 3));
+static_assert(!(Site::at(1, 2, 3) == Site::at(1, 2, 4)));
+
+// The conversions are the ONLY route between units, and they fold at compile time. Worked with
+// the shipped brick (2, 4, 4): brick (3, 1, 2) begins at site (6, 4, 8), and every site in that
+// brick -- (7, 5, 9) among them -- maps back to it.
+static_assert(first_site_of(BrickPoint::at(3, 1, 2), Extent3::of(2, 4, 4)) == Site::at(6, 4, 8));
+static_assert(containing_brick(Site::at(6, 4, 8), Extent3::of(2, 4, 4)) == BrickPoint::at(3, 1, 2));
+static_assert(containing_brick(Site::at(7, 5, 9), Extent3::of(2, 4, 4)) == BrickPoint::at(3, 1, 2));
+static_assert(first_brick_of(ChunkPoint::at(2, 1, 0), Extent3::of(4, 2, 2)) == BrickPoint::at(8, 2, 0));
+
+// Same-unit arithmetic, which is how a query brick is offset into the resident grid.
+static_assert(BrickPoint::at(1, 2, 3) + BrickPoint::at(10, 20, 30) == BrickPoint::at(11, 22, 33));
+static_assert(BrickPoint::at(11, 22, 33) - BrickPoint::at(1, 2, 3) == BrickPoint::at(10, 20, 30));
+
+// Axis indexing agrees with the named accessors, since both spellings are live.
+static_assert(Site::at(4, 5, 6)[Axis::Time] == 4);
+static_assert(Site::at(4, 5, 6)[Axis::Height] == 5);
+static_assert(Site::at(4, 5, 6)[Axis::Width] == 6);
+static_assert(Site::at(4, 5, 6).time() == Site::at(4, 5, 6)[Axis::Time]);
+
 namespace {
 
 // The NATTEN rule, by brute force: of every in-bounds placement of a window of `extent` that
@@ -229,25 +282,37 @@ TEST(NeighborhoodBrickedOrder, PacksOneBrickContiguously) {
 // build_plan
 // ---------------------------------------------------------------------------
 
-TEST(NeighborhoodPlanBuild, GatherCoversEveryQueryWindowInTheBrick) {
-    // The load-bearing invariant: whatever one brick gathers must contain the context window
-    // of every query inside it. If this fails, the kernel silently reads the wrong keys.
+TEST(NeighborhoodPlanBuild, GatherCoversEveryQueryWindowInTheChunk) {
+    // The load-bearing invariant: whatever one chunk gathers must contain the context window of
+    // every query inside it. If this fails, the kernel silently reads the wrong keys.
+    //
+    // The gather table is indexed by CHUNK, and a chunk is a box of query_chunk_bricks bricks
+    // sharing one gather -- so the scan below is over the chunk's whole site extent, not one
+    // brick's. The chunk origin is decoded here rather than borrowed from the planner, on the same
+    // principle as the window oracle above: an independent transcription cannot share a bug with
+    // the thing it checks.
     for (const NeighborhoodConfig& config : awkward_configs()) {
         const NeighborhoodPlan plan = build_plan(config);
+        const Extent3 chunk_sites = config.query_chunk_sites();
 
-        for (uint32_t brick_index = 0; brick_index < plan.brick_count; ++brick_index) {
-            const Site brick_origin = brick_index_to_origin(brick_index, config);
-            const Site gather_origin = plan.gather_origin_by_brick[brick_index];
+        for (uint32_t chunk_index = 0; chunk_index < plan.chunk_count; ++chunk_index) {
+            const uint32_t chunks_per_time_slice = plan.volume_chunks.height() * plan.volume_chunks.width();
+            const uint32_t remainder = chunk_index % chunks_per_time_slice;
+            const Site chunk_origin = Site::at(
+                (chunk_index / chunks_per_time_slice) * chunk_sites.time(),
+                (remainder / plan.volume_chunks.width()) * chunk_sites.height(),
+                (remainder % plan.volume_chunks.width()) * chunk_sites.width());
+            const Site gather_origin = plan.gather_origin_by_chunk[chunk_index];
 
-            for (uint32_t site_in_brick_time = 0; site_in_brick_time < config.brick.time(); ++site_in_brick_time) {
-                for (uint32_t site_in_brick_height = 0; site_in_brick_height < config.brick.height();
-                     ++site_in_brick_height) {
-                    for (uint32_t site_in_brick_width = 0; site_in_brick_width < config.brick.width();
-                         ++site_in_brick_width) {
+            for (uint32_t site_in_chunk_time = 0; site_in_chunk_time < chunk_sites.time(); ++site_in_chunk_time) {
+                for (uint32_t site_in_chunk_height = 0; site_in_chunk_height < chunk_sites.height();
+                     ++site_in_chunk_height) {
+                    for (uint32_t site_in_chunk_width = 0; site_in_chunk_width < chunk_sites.width();
+                         ++site_in_chunk_width) {
                         const Site query_site = Site::at(
-                            brick_origin.time() + site_in_brick_time,
-                            brick_origin.height() + site_in_brick_height,
-                            brick_origin.width() + site_in_brick_width);
+                            chunk_origin.time() + site_in_chunk_time,
+                            chunk_origin.height() + site_in_chunk_height,
+                            chunk_origin.width() + site_in_chunk_width);
 
                         // Bricks may overhang a volume that is not a brick multiple.
                         const bool inside_volume = query_site.time() < config.volume.time() &&
@@ -264,11 +329,11 @@ TEST(NeighborhoodPlanBuild, GatherCoversEveryQueryWindowInTheBrick) {
                             const uint32_t brick_span_sites =
                                 plan.gather_bricks.by_axis[axis_index] * config.brick.by_axis[axis_index];
                             EXPECT_GE(window.origin.by_axis[axis_index], gather_origin.by_axis[axis_index])
-                                << "gather starts after the window on axis " << axis_index << ", brick " << brick_index;
+                                << "gather starts after the window on axis " << axis_index << ", chunk " << chunk_index;
                             EXPECT_LE(
                                 window.origin.by_axis[axis_index] + window.extent.by_axis[axis_index],
                                 gather_origin.by_axis[axis_index] + brick_span_sites)
-                                << "gather ends before the window on axis " << axis_index << ", brick " << brick_index;
+                                << "gather ends before the window on axis " << axis_index << ", chunk " << chunk_index;
                         }
                     }
                 }
@@ -282,9 +347,9 @@ TEST(NeighborhoodPlanBuild, GatherStaysInBoundsAndIsConstantSize) {
         const NeighborhoodPlan plan = build_plan(config);
 
         EXPECT_EQ(plan.gather_sites, plan.gather_extent.sites());
-        EXPECT_EQ(plan.gather_origin_by_brick.size(), plan.brick_count);
+        EXPECT_EQ(plan.gather_origin_by_chunk.size(), plan.chunk_count);
 
-        for (const Site& gather_origin : plan.gather_origin_by_brick) {
+        for (const Site& gather_origin : plan.gather_origin_by_chunk) {
             for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
                 const uint32_t brick_extent_sites = config.brick.by_axis[axis_index];
                 const uint32_t brick_span_sites = plan.gather_bricks.by_axis[axis_index] * brick_extent_sites;

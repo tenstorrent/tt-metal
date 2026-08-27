@@ -31,36 +31,16 @@ namespace kernel_args = ttnn::transformer::neighborhood::kernel_args;
 namespace mask_gen = ttnn::transformer::neighborhood::mask_gen;
 namespace layout = ttnn::transformer::neighborhood::chunk_layout;
 
+using ttnn::transformer::neighborhood::BrickPoint;
+using ttnn::transformer::neighborhood::containing_brick;
+using ttnn::transformer::neighborhood::first_site_of;
+using ttnn::transformer::neighborhood::Site;
+using ttnn::transformer::neighborhood::SiteOffset;
+
 namespace {
 
 // tiles_per_kv_chunk is bounded by DST capacity (8), so the per-chunk scratch is fixed size.
 constexpr uint32_t MAX_TILES_PER_KV_CHUNK = 8;
-
-using layout::BrickCoordinate;
-
-// The key brick a gather slot names, and where it starts in sites. Lifted out of the gather loop
-// so the coverage cache can be filled with exactly the same decode the gather uses.
-FORCE_INLINE BrickCoordinate gather_slot_brick(
-    const BrickCoordinate& gather_origin_brick, uint32_t slot, const kernel_args::AxisExtents& gather_bricks) {
-    const uint32_t per_time_slice = gather_bricks.height * gather_bricks.width;
-    const uint32_t within = slot % per_time_slice;
-    return BrickCoordinate{
-        gather_origin_brick.time + slot / per_time_slice,
-        gather_origin_brick.height + within / gather_bricks.width,
-        gather_origin_brick.width + within % gather_bricks.width};
-}
-
-FORCE_INLINE mask_gen::SiteInBrick gather_slot_origin(
-    const BrickCoordinate& gather_origin_brick,
-    uint32_t slot,
-    const kernel_args::AxisExtents& gather_bricks,
-    const kernel_args::NeighborhoodExtents& extents) {
-    const BrickCoordinate brick = gather_slot_brick(gather_origin_brick, slot, gather_bricks);
-    return mask_gen::SiteInBrick{
-        brick.time * extents.brick_sites.time,
-        brick.height * extents.brick_sites.height,
-        brick.width * extents.brick_sites.width};
-}
 
 // A query brick clamped on no axis and wholly resident. For those the mask pattern is the same
 // as every other interior brick's, so the uploaded tensor applies.
@@ -89,18 +69,16 @@ FORCE_INLINE int32_t relative_span_high(uint32_t window_extent, uint32_t brick_e
 // Tile index into the RELATIVE table for this (query brick, key brick) pair, or NO_REGIME when
 // the pair falls outside it. Mirrors the linearisation in _build_relative_masks.
 FORCE_INLINE uint32_t relative_table_index(
-    const mask_gen::SiteInBrick& query_origin_site,
-    const mask_gen::SiteInBrick& key_origin_site,
-    const kernel_args::NeighborhoodExtents& extents) {
+    const Site& query_origin_site, const Site& key_origin_site, const kernel_args::NeighborhoodExtents& extents) {
     const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
     const uint32_t window[3] = {
         extents.context_window.time, extents.context_window.height, extents.context_window.width};
+    const BrickPoint key_brick = containing_brick(key_origin_site, extents.brick_sites);
+    const BrickPoint query_brick = containing_brick(query_origin_site, extents.brick_sites);
     const int32_t relative[3] = {
-        static_cast<int32_t>(key_origin_site.time / brick[0]) - static_cast<int32_t>(query_origin_site.time / brick[0]),
-        static_cast<int32_t>(key_origin_site.height / brick[1]) -
-            static_cast<int32_t>(query_origin_site.height / brick[1]),
-        static_cast<int32_t>(key_origin_site.width / brick[2]) -
-            static_cast<int32_t>(query_origin_site.width / brick[2])};
+        static_cast<int32_t>(key_brick.time()) - static_cast<int32_t>(query_brick.time()),
+        static_cast<int32_t>(key_brick.height()) - static_cast<int32_t>(query_brick.height()),
+        static_cast<int32_t>(key_brick.width()) - static_cast<int32_t>(query_brick.width())};
 
     uint32_t index = 0;
     for (uint32_t axis = 0; axis < 3; ++axis) {
@@ -127,17 +105,17 @@ FORCE_INLINE uint32_t relative_table_index(
 // bricks are not owned by this device and their output is sliced off, which is why a wrong mask
 // there was harmless -- until reuse let one of them decide the tiles a real brick reads.
 FORCE_INLINE bool gather_is_canonical(
-    const BrickCoordinate& gather_origin_brick,
-    const mask_gen::SiteInBrick& query_origin_site,
+    const BrickPoint& gather_origin_brick,
+    const Site& query_origin_site,
     const kernel_args::AxisExtents& gather_bricks,
     const kernel_args::NeighborhoodExtents& extents) {
     const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
     const uint32_t window[3] = {
         extents.context_window.time, extents.context_window.height, extents.context_window.width};
     const uint32_t gather[3] = {gather_bricks.time, gather_bricks.height, gather_bricks.width};
-    const uint32_t origin[3] = {gather_origin_brick.time, gather_origin_brick.height, gather_origin_brick.width};
-    const uint32_t query[3] = {
-        query_origin_site.time / brick[0], query_origin_site.height / brick[1], query_origin_site.width / brick[2]};
+    const uint32_t origin[3] = {gather_origin_brick.time(), gather_origin_brick.height(), gather_origin_brick.width()};
+    const BrickPoint query_brick = containing_brick(query_origin_site, extents.brick_sites);
+    const uint32_t query[3] = {query_brick.time(), query_brick.height(), query_brick.width()};
 
     for (uint32_t axis = 0; axis < 3; ++axis) {
         const int32_t low = relative_span_low(window[axis], brick[axis]);
@@ -157,13 +135,13 @@ FORCE_INLINE bool gather_is_canonical(
 // stop and no longer centres on the query, so the kernel still generates those. At most one
 // brick per edge per axis.
 FORCE_INLINE bool brick_window_is_unclamped(
-    const mask_gen::SiteInBrick& query_origin_site, const kernel_args::NeighborhoodExtents& extents) {
+    const Site& query_origin_site, const kernel_args::NeighborhoodExtents& extents) {
     const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
     const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
     const uint32_t configured[3] = {
         extents.context_window.time, extents.context_window.height, extents.context_window.width};
-    const int32_t shard[3] = {extents.shard_origin.time, extents.shard_origin.height, extents.shard_origin.width};
-    const uint32_t local[3] = {query_origin_site.time, query_origin_site.height, query_origin_site.width};
+    const int32_t shard[3] = {extents.shard_origin.time(), extents.shard_origin.height(), extents.shard_origin.width()};
+    const uint32_t local[3] = {query_origin_site.time(), query_origin_site.height(), query_origin_site.width()};
     const uint32_t resident[3] = {extents.resident.time, extents.resident.height, extents.resident.width};
 
     for (uint32_t axis = 0; axis < 3; ++axis) {
@@ -202,17 +180,16 @@ FORCE_INLINE bool brick_window_is_unclamped(
 // The scan is over the CHUNK, not one brick: the chunk is the unit that shares a window, so it
 // is the unit whose clamping behaviour decides the pattern. Scanning a brick would give the
 // right answer only when the chunk is one brick.
-FORCE_INLINE uint32_t
-chunk_regime(const mask_gen::SiteInBrick& chunk_origin_site, const kernel_args::NeighborhoodExtents& extents) {
+FORCE_INLINE uint32_t chunk_regime(const Site& chunk_origin_site, const kernel_args::NeighborhoodExtents& extents) {
     const uint32_t group[3] = {extents.query_chunk.time, extents.query_chunk.height, extents.query_chunk.width};
     const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
     const uint32_t stride[3] = {extents.stride.time, extents.stride.height, extents.stride.width};
     const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
-    const int32_t shard[3] = {extents.shard_origin.time, extents.shard_origin.height, extents.shard_origin.width};
+    const int32_t shard[3] = {extents.shard_origin.time(), extents.shard_origin.height(), extents.shard_origin.width()};
     const uint32_t resident[3] = {extents.resident.time, extents.resident.height, extents.resident.width};
     const uint32_t configured[3] = {
         extents.context_window.time, extents.context_window.height, extents.context_window.width};
-    const uint32_t local[3] = {chunk_origin_site.time, chunk_origin_site.height, chunk_origin_site.width};
+    const uint32_t local[3] = {chunk_origin_site.time(), chunk_origin_site.height(), chunk_origin_site.width()};
 
     uint32_t regime = 0;
     for (uint32_t axis = 0; axis < 3; ++axis) {
@@ -283,10 +260,11 @@ void kernel_main() {
         get_compile_time_arg_val(kernel_args::reader_arg::query_bricks_height),
         get_compile_time_arg_val(kernel_args::reader_arg::query_bricks_width)};
     constexpr uint32_t query_brick_count = get_compile_time_arg_val(kernel_args::reader_arg::query_brick_count);
-    constexpr kernel_args::AxisExtents query_origin_bricks{
+    // A position, not a size: where the query grid starts inside the resident brick grid.
+    constexpr BrickPoint query_origin_bricks = BrickPoint::at(
         get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_time),
         get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_height),
-        get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_width)};
+        get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_width));
     constexpr kernel_args::AxisExtents gather_bricks{
         get_compile_time_arg_val(kernel_args::reader_arg::gather_bricks_time),
         get_compile_time_arg_val(kernel_args::reader_arg::gather_bricks_height),
@@ -395,15 +373,13 @@ void kernel_main() {
         const uint32_t head_index = (work_item / chunk_count) % head_count;
         const uint32_t batch_index = work_item / (chunk_count * head_count);
 
-        const layout::BrickCoordinate chunk_origin =
-            layout::chunk_origin_brick(chunk_index, volume_chunks, query_chunk_bricks);
+        const BrickPoint chunk_origin = layout::chunk_origin_brick(chunk_index, volume_chunks, query_chunk_bricks);
 
         // ---- Q: one tile row per brick in the chunk ----
         cb_query.reserve_back(head_dim_tiles * bricks_per_query_chunk);
         uint32_t query_write_pointer = cb_query.get_write_ptr();
         for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
-            const layout::BrickCoordinate brick =
-                layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
+            const BrickPoint brick = layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
             // A chunk on the far edge can hang off the volume. Those rows have no queries to
             // read; the writer drops them again, and flash rows are independent so whatever
             // stale L1 they carry cannot reach a real query.
@@ -445,23 +421,20 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(origin_write_pointer);
         namespace column = kernel_args::gather_origin_column;
         // Origins are rounded down to a brick boundary by the planner, so this division is exact.
-        const BrickCoordinate gather_origin_brick{
-            origin_row[column::gather_time] / extents.brick_sites.time,
-            origin_row[column::gather_height] / extents.brick_sites.height,
-            origin_row[column::gather_width] / extents.brick_sites.width};
+        const BrickPoint gather_origin_brick = containing_brick(
+            Site::at(
+                origin_row[column::gather_time], origin_row[column::gather_height], origin_row[column::gather_width]),
+            extents.brick_sites);
 
         // Where this device sits in the global volume. Addressing above is LOCAL; window
         // placement below is GLOBAL, and this is what converts between them.
-        extents.shard_origin = kernel_args::SignedAxisOffsets{
+        extents.shard_origin = SiteOffset::at(
             static_cast<int32_t>(origin_row[column::shard_origin_time]),
             static_cast<int32_t>(origin_row[column::shard_origin_height]),
-            static_cast<int32_t>(origin_row[column::shard_origin_width])};
+            static_cast<int32_t>(origin_row[column::shard_origin_width]));
 
         // RESIDENT-local, like query_origin_site below and like the gather table's key origins.
-        const mask_gen::SiteInBrick chunk_origin_site{
-            (chunk_origin.time + query_origin_bricks.time) * extents.brick_sites.time,
-            (chunk_origin.height + query_origin_bricks.height) * extents.brick_sites.height,
-            (chunk_origin.width + query_origin_bricks.width) * extents.brick_sites.width};
+        const Site chunk_origin_site = first_site_of(chunk_origin + query_origin_bricks, extents.brick_sites);
 
         // The relative table needs no regime: it is keyed on (key_brick - query_brick), which is
         // defined for every chunk. Only the per-brick clamping test below gates it.
@@ -525,22 +498,19 @@ void kernel_main() {
             // same instruction cache and measured WORSE than either alone -- 7498 ms against
             // 2761 ms for generating everywhere. Keeping each loop tight avoids that.
             mask_gen::BrickCoverage coverage[MAX_TILES_PER_KV_CHUNK];
-            mask_gen::SiteInBrick key_origins[MAX_TILES_PER_KV_CHUNK];
+            Site key_origins[MAX_TILES_PER_KV_CHUNK];
 
             for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
                 const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
                 const bool slot_is_padding = gather_slot >= gather_brick_count;
                 const uint32_t within_time_slice = gather_slot % (gather_bricks.height * gather_bricks.width);
-                const BrickCoordinate key_brick{
-                    gather_origin_brick.time +
+                const BrickPoint key_brick = BrickPoint::at(
+                    gather_origin_brick.time() +
                         (slot_is_padding ? 0u : gather_slot / (gather_bricks.height * gather_bricks.width)),
-                    gather_origin_brick.height + (slot_is_padding ? 0u : within_time_slice / gather_bricks.width),
-                    gather_origin_brick.width + (slot_is_padding ? 0u : within_time_slice % gather_bricks.width)};
+                    gather_origin_brick.height() + (slot_is_padding ? 0u : within_time_slice / gather_bricks.width),
+                    gather_origin_brick.width() + (slot_is_padding ? 0u : within_time_slice % gather_bricks.width));
 
-                key_origins[slot] = mask_gen::SiteInBrick{
-                    key_brick.time * extents.brick_sites.time,
-                    key_brick.height * extents.brick_sites.height,
-                    key_brick.width * extents.brick_sites.width};
+                key_origins[slot] = first_site_of(key_brick, extents.brick_sites);
                 // The resident table already holds the right tile for every slot, uniform ones
                 // included, so classifying is 175 divisions per chunk spent on an answer nothing
                 // reads. `coverage` is dead on that path.
@@ -588,15 +558,13 @@ void kernel_main() {
             // the CHUNK's window regime, which is the wrong window for every brick but the first.
             if (per_brick_mask != 0) {
                 for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
-                    const layout::BrickCoordinate query_brick =
+                    const BrickPoint query_brick =
                         layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
                     // Into RESIDENT-local sites: the key origins this is compared against come
                     // from the gather table, which addresses the resident tensor. Without the
                     // shift a query sub-region would place every window a halo too low.
-                    const mask_gen::SiteInBrick query_origin_site{
-                        (query_brick.time + query_origin_bricks.time) * extents.brick_sites.time,
-                        (query_brick.height + query_origin_bricks.height) * extents.brick_sites.height,
-                        (query_brick.width + query_origin_bricks.width) * extents.brick_sites.width};
+                    const Site query_origin_site =
+                        first_site_of(query_brick + query_origin_bricks, extents.brick_sites);
                     const uint32_t brick_base = mask_write_pointer + brick_in_chunk * tiles_per_kv_chunk * tile_bytes;
                     // Resolved per brick, not per slot: the table describes a window that centres
                     // on its query, which stops being true once the window clamps at a volume edge.
