@@ -34,6 +34,8 @@ degrades spectral metrics through its 108-conv chain, and H3's is longer still.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -70,6 +72,11 @@ class MiniMaxH3AudioDecoder(Module):
         tap_matmul: bool = True,
         prefer_mac: bool = True,
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
+        # H3-only latency opt-ins, off by default pending wider coverage (channel-TP, other shard
+        # factors). Env-defaulted here specifically -- not as a module global in audio_ops.py, which
+        # is shared with LTX's Vocoder -- so this flag cannot silently change LTX's partitioning.
+        tight_t_align: bool = os.environ.get("MINIMAX_H3_AUDIO_TIGHT_T_ALIGN", "0") == "1",
+        local_tpad_tail: bool = os.environ.get("MINIMAX_H3_AUDIO_LOCAL_TPAD_TAIL", "0") == "1",
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
@@ -90,6 +97,10 @@ class MiniMaxH3AudioDecoder(Module):
         self.tap_matmul = tap_matmul
         self.prefer_mac = prefer_mac
         self.max_c_in_block = max_c_in_block
+        # Layout/partitioning only -- unlike the levers above, these don't change which weight
+        # tensors exist, so they aren't part of the pipeline's `weights_variant` cache key.
+        self.tight_t_align = tight_t_align
+        self.local_tpad_tail = local_tpad_tail
 
         # H3's audio channel schedule differs from LTX's at both ends, so every conv misses
         # _FP32_BLOCKINGS. Seed stubs before any conv is built; see that module for why stubs.
@@ -130,6 +141,8 @@ class MiniMaxH3AudioDecoder(Module):
             prefer_mac=prefer_mac,
             split_mode=split_mode,
             tap_matmul=tap_matmul,
+            tight_t_align=tight_t_align,
+            local_tpad_tail=local_tpad_tail,
         )
 
     def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:
