@@ -38,6 +38,21 @@ def _mesh_partition_and_free(tensor, dim):
     return partitioned
 
 
+def _concat_and_free(tensors, dim):
+    """Concatenate ``tensors`` along ``dim`` and free the inputs.
+
+    ``ttnn.concat`` short-circuits a single-tensor list through ``ttnn.to_memory_config``, which
+    returns the input unchanged when the memory config already matches. With one user in the batch
+    the "concatenated" result therefore *is* ``tensors[0]``, and freeing every input would free the
+    result. That case owns no extra memory anyway, so leave it to Python refcounting.
+    """
+    concatenated = ttnn.concat(tensors, dim=dim)
+    if len(tensors) > 1:
+        for tensor in tensors:
+            ttnn.deallocate(tensor)
+    return concatenated
+
+
 class VisionTransformer(LightweightModule):
     """
     Vision Transformer model for Qwen 3 VL.
@@ -349,11 +364,10 @@ class DropInVisionTransformer(torch.nn.Module):
                 else:
                     deepstack_visual_embeds_list[i].append(deepstack_visual_embeds_sharded[i])
 
-        # concatenate all the outputs
-        tt_out = ttnn.concat(final_outputs, dim=0)
+        # concatenate all the outputs, releasing the per-user shards they were built from
+        tt_out = _concat_and_free(final_outputs, 0)
         for i in range(len(deepstack_visual_embeds_list)):
-            deepstack_visual_embeds_list[i] = ttnn.concat(deepstack_visual_embeds_list[i], dim=0)
-        (ttnn.deallocate(final_outputs[i]) for i in range(len(final_outputs)))
+            deepstack_visual_embeds_list[i] = _concat_and_free(deepstack_visual_embeds_list[i], 0)
         return tt_out, deepstack_visual_embeds_list
 
     def forward_single_user(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:

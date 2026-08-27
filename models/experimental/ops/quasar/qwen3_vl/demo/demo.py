@@ -333,7 +333,7 @@ def test_demo(
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         output_directory = "models/experimental/ops/quasar/qwen3_vl/demo/output"
         os.makedirs(output_directory, exist_ok=True)
-        os.chmod(output_directory, 0o755)
+        os.chmod(output_directory, 0o750)
         output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
 
     # Start profiler

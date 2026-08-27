@@ -37,8 +37,14 @@ def test_ci_dispatch(model_weights):
         ]
         + ["-x"]  # Fail if one of the tests fails
     )
-    if exit_code == pytest.ExitCode.TESTS_FAILED:
+    # Anything other than OK is a failure: besides TESTS_FAILED, pytest.main returns nonzero for
+    # collection/import errors, a usage error (e.g. a path that no longer exists), interruption,
+    # an internal error, and NO_TESTS_COLLECTED. Treating those as a pass publishes a green result
+    # for a suite that never ran -- the likeliest failure mode for this fork, whose test paths were
+    # rewritten wholesale.
+    if exit_code != pytest.ExitCode.OK:
         pytest.fail(
-            f"One or more CI dispatch tests failed for {model_weights}. Please check the log above for more info",
+            f"One or more CI dispatch tests failed for {model_weights} (pytest exit code: {exit_code}). "
+            "Please check the log above for more info",
             pytrace=False,
         )
