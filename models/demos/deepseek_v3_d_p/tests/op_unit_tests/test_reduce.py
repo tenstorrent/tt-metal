@@ -50,6 +50,15 @@ REDUCE_MESH_PARAMS = [
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
         id="fabric2d-mesh-4x2",
     ),
+    # Blackhole accepts 32-device meshes only, so neither shape above runs on the galaxy and every row
+    # there skips -- rc=0, which reads as coverage. This row is the only one that executes there, and
+    # so the only one covering mistral_small_4 (or any model) on Blackhole.
+    pytest.param(
+        (8, 4),
+        fabric2d_device_params(),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="fabric2d-mesh-8x4",
+    ),
 ]
 
 
@@ -85,6 +94,15 @@ def run_reduce(
 ):
     """Run the TTNN reduce module in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, topk) shape axis."""
+    # The ND-sharded combine output is chunked by topk across the mesh, so a topk that does not divide
+    # the device count cannot be laid out:
+    #   TT_FATAL: ND sharding requires the number of chunks 24 to match the mesh dimension size 32
+    # Observed on the 8x4 galaxy row: topk 8 and 4 lay out, topk 6 (dsv4_pro / dsv4_flash) does not.
+    # Skipped rather than xfailed because it is a property of the shape, not a defect to fix here.
+    num_devices = mesh_device.get_num_devices()
+    if num_devices % topk:
+        pytest.skip(f"topk={topk} does not divide {num_devices} devices; ND sharding cannot chunk it")
+
     torch.manual_seed(42)
 
     signpost(f"reduce-{mesh_device.shape}-seq{seq_len}-{'weighted' if use_weights else 'unweighted'}")
