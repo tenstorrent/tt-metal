@@ -241,8 +241,8 @@ bool WriteToDeviceDRAMChannel(
         address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
-    MetalContext::instance().get_cluster().write_dram_vec(
-        host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().write_dram_vec(host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
     return true;
 }
 
@@ -260,9 +260,9 @@ bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addre
             device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceDRAMChannel");
     }
     bool pass = true;
-    MetalContext::instance().get_cluster().dram_barrier(device->id());
-    MetalContext::instance().get_cluster().read_dram_vec(
-        host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().dram_barrier(device->id());
+    metal_ctx.get_cluster().read_dram_vec(host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
     return pass;
 }
 
@@ -288,7 +288,8 @@ bool WriteToDeviceL1(
         }
     }
     auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    MetalContext::instance().get_cluster().write_core(device->id(), worker_core, host_buffer, address);
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().write_core(device->id(), worker_core, host_buffer, address);
     return true;
 }
 
@@ -308,7 +309,8 @@ bool WriteToDeviceL1(
 
 bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval) {
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    MetalContext::instance().get_cluster().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
 }
 
@@ -325,9 +327,10 @@ bool ReadFromDeviceL1(
                 device->id(), address, address + static_cast<uint32_t>(host_buffer.size()));
         }
     }
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    MetalContext::instance().get_cluster().read_core(
+    metal_ctx.get_cluster().read_core(
         host_buffer.data(), host_buffer.size(), tt_cxy_pair(device->id(), virtual_core), address);
     return true;
 }
@@ -345,16 +348,18 @@ bool ReadFromDeviceL1(
             emule::LiveL1HostPokeRanges::add(device->id(), address, address + size);
         }
     }
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    host_buffer = MetalContext::instance().get_cluster().read_core(device->id(), virtual_core, address, size);
+    host_buffer = metal_ctx.get_cluster().read_core(device->id(), virtual_core, address, size);
     return true;
 }
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval) {
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().l1_barrier(device->id());
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    MetalContext::instance().get_cluster().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+    metal_ctx.get_cluster().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
 }
 
