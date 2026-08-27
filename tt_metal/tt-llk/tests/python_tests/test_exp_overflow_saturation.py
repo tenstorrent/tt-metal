@@ -5,7 +5,9 @@
 The Exp sweep domain (_exp_spec in sfpu_domains.py) is deliberately range-bounded to avoid
 overflow, and _APPROX_ACCURACY_MAX caps the argument at 16.0 on top of that -- so nothing
 in the ordinary sweep drives xlog2 = x/ln2 + 127 above 255. The only input in the whole
-suite that reaches the saturating path is the +inf special.
+suite that reaches the saturating path is the +inf special. (The kernel biases by 126.5 and
+rounds to nearest rather than biasing by 127 and truncating -- same floor, same threshold;
+see docs/sfpu_exp21f_optimization.md section 9.)
 
 That leaves a gap: the bfloat16-accurate kernel (_sfpu_exp_21f_bf16_tti_) relies on its
 FP32->UINT8 convert saturating at 255 for its upper clamp. If that convert ever wrapped

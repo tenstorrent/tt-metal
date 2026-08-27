@@ -157,29 +157,48 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
  * Requires _init_exponential_tti_bf16_() to have been called to configure
  * ADDR_MOD_6 (dest auto-increment by 2 on SFPSTORE) and to load:
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
- *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
+ *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 0.337189436f
  */
 template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // Iteration-invariant constants. Loaded once before the loop.
     //
-    //   LREG5 = 127.0f                      (bias term in z = x/ln2 + 127)
-    //   LREG6 = 7.839635491371155e-08f      (poly coeff c1)
-    //   LREG7 = 1.0017248f                  (poly coeff c0)
+    //   LREG5 = 126.5f                      (bias term in z = x/ln2 + 126.5)
+    //   LREG6 = 0.994825721f                (poly coeff c1)
+    //   LREG7 = 1.415068626f                (poly coeff c0)
     //   LREG12 = 1/ln2                      (programmable, set in init)
-    //   LREG13 = 4.791750143340323e-15f     (poly coeff c2; programmable, set in init)
+    //   LREG13 = 0.337189436f               (poly coeff c2; programmable, set in init)
     //
     // In-loop scratch:
-    //   LREG0 = val → integer-part work
-    //   LREG1 = 255 (loaded inside loop) → exexp result → frac (int) → frac (float) → poly result
+    //   LREG0 = val → int_part (integer) → masked int_part
+    //   LREG1 = (float)int_part → frac → poly result
     //   LREG2 = poly accumulator
     //   LREG3 = xlog2 (preserved through int-part work) → mask
-    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0x42fe);
+    //
+    // The bias is 126.5, not 127. Splitting xlog2 into its integer and fractional
+    // parts needs a floor, and the only float→int convert the SFPU has is
+    // SFP_STOCH_RND, whose round-toward-zero mode (SFPSTOCHRND_RND_ZERO) the ttsim
+    // simulator declines to model — it rejects every rnd_mode except round-to-nearest
+    // and calls _Exit(1), which takes the whole sim_bh_p150 CI lane down. Biasing by
+    // half a unit reaches the same floor through the mode ttsim does model:
+    // round-to-nearest-ties-away of (x - 0.5) is floor(x) for every non-negative x,
+    // and the saturation point is unchanged (round(x - 0.5) >= 255 iff floor(x) >= 255).
+    //
+    // The cost is that the fractional part now lands in [-0.5, 0.5) instead of [0, 1),
+    // so the polynomial is re-expressed in the shifted variable. That is pure algebra,
+    // not a re-fit — with t = frac - 0.5,
+    //     c0 + c1*(t + 0.5) + c2*(t + 0.5)^2 = (c0 + c1/2 + c2/4) + (c1 + c2)*t + c2*t^2
+    // so c0' = c0 + c1/2 + c2/4, c1' = c1 + c2, c2' = c2 (unchanged, still set in init).
+    // Same function, same approximation error. c0' no longer lands on the FP16 grid,
+    // so it takes an UPPER/LOWER pair rather than one FLOATA load; that is one extra
+    // instruction here in the per-call preamble, and none in the replayed body.
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0x42fd);  // 126.5f
 
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, 0x3f28);
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, 0x5ada);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, 0x3f7e);  // c1' = 0.994825721f
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, 0xace6);
 
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATA, 0x3c02);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb5);  // c0' = 1.415068626f
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, 0x20f8);
 
     // Number of instructions in one iteration of the loop body. Used by
     // TTI_REPLAY/record and TTI_REPLAY/replay below; MUST match exactly the count of
@@ -223,7 +242,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
         TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
     }
 
-    // xlog2 = val * (1/ln2) + 127.0f, into LREG3 (preserved past int-part work).
+    // xlog2 = val * (1/ln2) + 126.5f, into LREG3 (preserved past int-part work).
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG5, p_sfpu::LREG3, 0);
 
     // Split xlog2 into its integer and fractional parts.
@@ -231,14 +250,14 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // The scalar kernel (_float_to_int32_for_exp_21f_) reaches these by building the
     // 31-bit integer xlog2*2^23 with SFPEXEXP/SFPEXMAN/SFPSHFT and then immediately taking
     // it apart again with SFPEXMAN/SFPCAST -- 5 instructions to produce two values that a
-    // truncating float->int conversion yields in 3. Same decomposition, same polynomial,
-    // same result; only the encoding of the fractional part differs, and the coefficients
-    // below absorb that (see the c1/c2 loads above: identical mantissas, rescaled by 2^23
-    // and 2^46, so the polynomial is the same function of the same quantity).
+    // float->int conversion yields in 3. Same decomposition, same polynomial, same result;
+    // only the encoding and the origin of the fractional part differ, and the coefficients
+    // loaded above absorb both (see the LREG5 comment for the derivation).
     //
-    // Round-toward-zero on a non-negative argument is floor, and the UINT8 target saturates
-    // at 255 -- which is both the old explicit clamp bound and the exponent field for +inf.
-    // That is why there is no SFPLOADI/SFPSWAP pair here any more.
+    // Round-to-nearest of the half-unit-biased argument is floor of the unbiased one (see
+    // the LREG5 comment above), and the UINT8 target saturates at 255 -- which is both the
+    // old explicit clamp bound and the exponent field for +inf. That is why there is no
+    // SFPLOADI/SFPSWAP pair here any more.
     //
     // The bottom is not symmetric: xlog2 can be negative, and this convert does NOT saturate
     // a negative input to zero on Blackhole (measured -- it produces garbage). That stays
@@ -246,7 +265,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // integer is used, which is the same guard the previous sequence relied on.
     constexpr unsigned SFPCAST_MOD1_SM32_TO_FP32_RNE = 0;
     TTI_SFP_STOCH_RND(
-        sfpi::SFPSTOCHRND_RND_ZERO,
+        sfpi::SFPSTOCHRND_RND_EVEN,
         0,
         0,
         p_sfpu::LREG3,
@@ -255,15 +274,17 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 
     TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG1, SFPCAST_MOD1_SM32_TO_FP32_RNE);  // LREG1 = (float)int_part
 
-    // frac = xlog2 - int_part, in [0, 1). LCONST_neg1 turns the SFPMAD into a subtract.
+    // frac = xlog2 - int_part, in [-0.5, 0.5). LCONST_neg1 turns the SFPMAD into a subtract.
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG3, p_sfpu::LREG1, 0);
 
-    // Polynomial refinement of 2^x_f on [0, 1] in Horner form:
-    //   frac = c0 + frac * (c1 + frac * c2)
-    //        = 1.0017248 + frac * (0.657636285 + frac * 0.337189436)
-    // Same polynomial as the scalar kernel, with c1 and c2 scaled by 2^23 and 2^46 because
-    // frac here is a float in [0, 1) rather than the raw 23-bit mantissa. The mantissa bits
-    // of the constants are unchanged (0x..5ada, 0x..a418); only their exponents moved.
+    // Polynomial refinement of 2^(frac + 0.5) on [-0.5, 0.5] in Horner form:
+    //   frac = c0' + frac * (c1' + frac * c2')
+    //        = 1.415068626 + frac * (0.994825721 + frac * 0.337189436)
+    // Same polynomial as the scalar kernel, twice re-expressed and never re-fitted: once
+    // because frac here is a float rather than the raw 23-bit mantissa (which scales c1 and
+    // c2 by 2^23 and 2^46), and once because the half-unit bias moves frac from [0, 1) to
+    // [-0.5, 0.5) (which folds into c0' and c1' as shown above LREG5). c2 survives both
+    // steps untouched, mantissa and exponent alike.
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG6, p_sfpu::LREG2, 0);
 
     // Negative-input handling: instead of clamping xlog2 with a max(0, ·)
@@ -273,6 +294,9 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // can be interleaved with SFPMAD to hide their latency.
     // It sits here, after the frac subtract, because it overwrites LREG3 -- which still
     // held xlog2 until that subtract consumed it.
+    // With the 126.5 bias the test is xlog2 + 126.5 > 0, i.e. half a unit stricter than
+    // before. Nothing changes: across that half-unit strip the int_part is 0 either way,
+    // so SETEXP builds an exponent-0 value that flushes to zero with or without the mask.
     constexpr unsigned SFPGT_MOD1_SET_VD = 8;
     TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPGT_MOD1_SET_VD);
 
@@ -1087,8 +1111,10 @@ void exp_init() {
 
             // LREG13 = c2 = 0.337189436f (0x3eaca418).
             // Same coefficient as the scalar kernel's 4.791750143340323e-15f, rescaled by
-            // 2^46 because the TTI body's fractional part is a float in [0, 1) rather than
-            // the raw 23-bit mantissa. Identical mantissa bits, exponent shifted.
+            // 2^46 because the TTI body's fractional part is a float rather than the raw
+            // 23-bit mantissa. Identical mantissa bits, exponent shifted. The quadratic
+            // coefficient is invariant under the half-unit shift of the fractional part, so
+            // unlike c0 and c1 this constant is the same in both formulations.
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3eac);
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
             TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);

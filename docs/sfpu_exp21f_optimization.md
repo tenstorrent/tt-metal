@@ -1,22 +1,27 @@
-# Optimizing `exp_21f` on Blackhole — 16.6 % fewer cycles, bit-identical results
+# Optimizing `exp_21f` on Blackhole — 16.6 % fewer cycles, no accuracy change
 
 Two instruction-count reductions to the shipped bfloat16-accurate exponential
-(`_sfpu_exp_21f_bf16_tti_`). Same algorithm, same polynomial, same answers.
+(`_sfpu_exp_21f_bf16_tti_`), plus one change that keeps the result reachable from the
+ttsim simulator (§9). Same algorithm, same polynomial.
 
 | | |
 |---|---|
 | Kernel changed | `ckernel_sfpu_exp.h`, Blackhole only |
 | Silicon | Blackhole p100a, device 0 |
 | Branch point | `f6b36f3b1be` (main) |
-| Diff | +43 / −27, one file, plus one new regression test |
-| Body size | **16 → 12** SFPU instructions |
+| Diff | one file, plus one new regression test |
+| Body size | **16 → 12** SFPU instructions (per-call preamble 4 → 5, see §9) |
 | Performance | **577.99 → 481.99** cycles/tile, **−16.61 %** |
-| Accuracy | **unchanged** — same polynomial, same result bits |
+| Accuracy | **unchanged** — same polynomial, re-expressed (§9) |
 | Functional | **257 passed, 129 skipped, 0 failed** (`test_sfpu_unary.py -k Exp`) |
 
-Both changes are pure implementation. Nothing about the approximation moves, so there is no
-accuracy trade to weigh — on every input that was tested, the standard `Exp` sweep plus the
+All three changes are pure implementation. Nothing about the approximation moves, so there is
+no accuracy trade to weigh — on every input that was tested, the standard `Exp` sweep plus the
 overflow probes listed in §4.2, the outputs were byte-identical to main.
+
+> §2 and §3 describe the kernel as first written, with a round-toward-zero convert. §9 replaces
+> that convert with an equivalent one the simulator can execute; read it as an amendment to
+> both. The body instruction count and the dependency chain are the same either way.
 
 ---
 
@@ -47,7 +52,7 @@ Five instructions to produce two values — an integer part and a fractional par
 truncating float→int conversion yields in three:
 
 ```
-SFP_STOCH_RND (RND_ZERO, FP32→UINT16)   int_part = floor(xlog2)
+SFP_STOCH_RND (RND_ZERO, FP32→UINT16)   int_part = floor(xlog2)   <- see §9
 SFPCAST                                 fi       = (float)int_part
 SFPMAD (× LCONST_neg1)                  frac     = xlog2 − fi
 ```
@@ -64,7 +69,8 @@ SFPMAD (× LCONST_neg1)                  frac     = xlog2 − fi
 
 The mantissa halves are **identical** — only the exponent bits move. That is the check that this
 is a pure rescaling and not a refit: same function of the same quantity, evaluated to 3.9e-08
-(fp32 rounding) over `u ∈ [0, 1)`.
+(fp32 rounding) over `u ∈ [0, 1)`. §9 applies a second, equally mechanical re-expression on top
+of this one; `c2` survives both untouched.
 
 `SFPSETEXP` follows from mode 2 (`ARG_EXPONENT`, exponent read from a float encoding's exponent
 field) to mode 0 (exponent read from the operand's low bits), which is where the truncating
@@ -356,3 +362,99 @@ pytest -q --speed-of-light --compile-consumer -n 1 -m perf "$ID"
 
 A tile is 32 SFPU vector iterations, so one added instruction is exactly +32.0 cycles/tile;
 deltas landing off a multiple of 32 mean scheduling moved too.
+
+---
+
+## 9. Change 3 — a floor the simulator can execute
+
+### 9.1 Why
+
+Changes 1 and 2 both rest on one instruction: `SFP_STOCH_RND` in `SFPSTOCHRND_RND_ZERO` mode,
+which truncates FP32 to a saturating UINT8. On silicon it is exactly right. In `ttsim` — the
+Tensix simulator the `sim_bh_p150` CI lane runs on — it does not execute at all:
+
+```c
+/* ttsim/src/tensix.cpp, TENSIX_EXECUTE_SFP_STOCH_RND() */
+TTSIM_VERIFY(!rnd_mode, UnsupportedFunctionality, "rnd_mode=%d", rnd_mode);
+```
+
+`SFPSTOCHRND_RND_ZERO` is 2, so the predicate fails, and `ttsim_error()` is `[[noreturn]]` and
+ends in `_Exit(1)`. The simulator process dies the first time a tile reaches the kernel, taking
+pytest with it. That is what failed seven `sim_bh_p150` jobs on the first CI run of this branch:
+`ttnn eltwise group 2/3/4`, `ttnn fused group 1/2`, `core ttnn unit test group`, `ttsim examples`
+— exit code 1, no test-level annotation, at whichever point in each split the first non-approx
+bf16 `exp` ran. `sim_wh_n150` was unaffected (Wormhole path untouched), and every `bh_p150b_civ2`
+job on real silicon passed.
+
+The restriction is over-broad rather than intentional: `ttsim`'s own rationale for excluding this
+family (`docs/unsupported_functionality.md`, category 8) is about *stochastic* rounding, which is
+`rnd_mode == 1`. `RND_ZERO` is deterministic and has a published functional model
+(`tt-isa-documentation`, `SFPSTOCHRND_FloatInt.md`). Widening the check is a five-line change, but
+it lands in a repository that does not accept pull requests, so it cannot unblock this branch.
+
+### 9.2 The substitution
+
+Round-to-nearest-ties-away — `rnd_mode == 0`, the one mode `ttsim` does model — reaches the same
+floor if the argument is biased down by half a unit. For any `x ≥ 0`, writing `x = n + f` with
+`f ∈ [0, 1)`:
+
+```
+round(x − 0.5) = round(n + f − 0.5) = n = floor(x)
+```
+
+because `f − 0.5 ∈ [−0.5, 0.5)` never carries. The bias is already a constant the kernel loads,
+so this is a one-immediate change, `127.0 → 126.5`, and `126.5` is exact in BF16 (`0x42fd`).
+Saturation is untouched: `round(x − 0.5) ≥ 255` exactly when `floor(x) ≥ 255`.
+
+The fractional part now arrives as `t = f − 0.5 ∈ [−0.5, 0.5)`, so the polynomial is rewritten in
+`t`. This is algebra, not a refit:
+
+```
+c0 + c1·(t + 0.5) + c2·(t + 0.5)²  =  (c0 + c1/2 + c2/4) + (c1 + c2)·t + c2·t²
+```
+
+| | `frac ∈ [0, 1)` | `t ∈ [−0.5, 0.5)` | |
+|---|---|---|---|
+| c0 | `1.001953125f` = `0x3f804000` | `1.415068626f` = `0x3fb520f8` | `c0 + c1/2 + c2/4` |
+| c1 | `0.657636285f` = `0x3f285ada` | `0.994825721f` = `0x3f7eace6` | `c1 + c2` |
+| c2 | `0.337189436f` = `0x3eaca418` | `0.337189436f` = `0x3eaca418` | unchanged |
+
+`c0'` no longer lands on the FP16 immediate grid, so it takes an `SFPLOADI` `UPPER`/`LOWER` pair
+instead of a single `FLOATA` load. **That instruction is in the per-call preamble, before
+`TTI_REPLAY` records the body — the replayed body is still 12 instructions and the dependency
+chain is unchanged.** Preamble goes 4 → 5 `SFPLOADI`.
+
+Rounding `c0'` to the FP16 grid instead would have kept the preamble at 4, and was rejected: see
+9.3.
+
+### 9.3 Verification
+
+The whole body was modelled bit-exactly against `tt-isa-documentation` — `fma_model_bh` for every
+`SFPMAD`, and the published functional models for `SFPSTOCHRND` (both flavours), `SFPCAST`,
+`SFPSETEXP` — and both formulations were swept over `x ∈ [−90, 90]` in steps of `1e-4`
+(1 800 001 points), comparing the stored BF16:
+
+| c0' encoding | preamble | BF16 outputs differing | max rel. err vs `exp` |
+|---|---|---|---|
+| FP32 `0x3fb520f8` (**chosen**) | 5 | **1** of 1 800 001 | `5.744462e-03` — *identical* to RND_ZERO |
+| FP16 `0x3da9` (= `1.4150390625`) | 4 | 6 649 (0.37 %) | `5.711828e-03` |
+| c0' FP32, c1' as FP16 `0x3bf5` | 4 | 11 209 (0.62 %) | `5.846893e-03` |
+
+The chosen encoding reproduces the round-toward-zero kernel to one BF16 ULP on a single sample in
+1.8 million, at a max relative error identical to nine digits. The two four-instruction variants
+are also correct — their error is no worse than the polynomial's own `1.7e-03` fit error, and one
+is marginally better — but they move a third of a percent of outputs by one BF16 ULP, which is
+not worth one preamble instruction on a branch whose claim is that nothing about the answers
+moves.
+
+Both documented hardware quirks are reproduced by the model and are shared by the two
+formulations: `RND_ZERO` rounding *away* from zero when every discarded mantissa bit is set
+(`tt-isa-documentation` notes this explicitly), and the corresponding tie in `round(x − 0.5)`.
+They coincide on the same inputs and are harmless here, since `frac ≈ 0` at exactly those points.
+
+### 9.4 What still needs measuring
+
+The replayed body is unchanged, so §5's `481.99` cycles/tile should stand. The extra preamble
+`SFPLOADI` costs one instruction per `calculate_exponential` call against a body of
+`12 × ITERATIONS`, so the expected regression is under one percent. **This has not been
+re-measured on silicon.** The sweep in §8 reproduces it.
