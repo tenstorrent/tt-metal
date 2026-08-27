@@ -20,6 +20,12 @@ comparison against torch: a dropped link fails both.
     export TT_METAL_HOME=$PWD
     source python_env/bin/activate
     python test_unified_unary.py
+    python test_unified_unary.py --metal2
+
+--metal2 runs the same kernel through a Metal 2.0 ProgramSpec instead of a
+ProgramDescriptor. Both paths must agree; this is the first suite ported, and the
+two launchers below are deliberately kept side by side so the difference is
+readable. See unified_metal2_spec.md.
 """
 
 import argparse
@@ -29,7 +35,15 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import (
+    dfb_input,
+    dfb_output,
+    make_cb,
+    run_unified_spec,
+    single_core,
+    unified_program,
+    unified_program_spec,
+)
 
 KERNEL = "unified_kernels/unary.cpp"
 
@@ -45,7 +59,7 @@ OPS = {
 }
 
 
-def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, fidelity=None, buffering=2):
+def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, fidelity=None, buffering=2, metal2=False):
     num_tiles = num_blocks * tiles_per_block
     shape = [1, num_tiles, 32, 32]
 
@@ -59,34 +73,55 @@ def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, fidelity=None, buff
     tout = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
 
     core_ranges, cores = single_core()
-
-    ct_args = []
     named_ct_args = [("num_blocks", num_blocks), ("tiles_per_block", tiles_per_block)]
-    for t in (ta, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-
-    rt_args = [ta.buffer_address(), tout.buffer_address()]
-
-    cbs = [
-        make_cb(CB_IN, core_ranges, num_pages=buffering * tiles_per_block),
-        make_cb(CB_OUT, core_ranges, num_pages=buffering * tiles_per_block),
-    ]
-
     define, reference = OPS[op]
-    program = unified_program(
-        kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=cbs,
-        compile_time_args=ct_args,
-        named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
-        defines=[(define, "1")] if define else None,
-        **(fidelity or {}),
+    defines = [(define, "1")] if define else None
+    pages = buffering * tiles_per_block
+
+    logger.info(
+        f"running unified unary: op={op} num_blocks={num_blocks} "
+        f"tiles_per_block={tiles_per_block} path={'metal2' if metal2 else 'legacy'}"
     )
 
-    logger.info(f"running unified unary: op={op} num_blocks={num_blocks} tiles_per_block={tiles_per_block}")
-    out = ttnn.generic_op([ta, tout], program)
+    if metal2:
+        # The kernel does noc_load<0> and noc_store<1>, so DM thread 0 fills `in` and DM
+        # thread 1 drains `out`. That is the pairing the roles below have to state, and
+        # unary.cpp's static_assert checks the other half of it -- see unified_harness.py.
+        spec = unified_program_spec(
+            kernel_source=KERNEL,
+            nodes=core_ranges,
+            dfbs=[
+                dfb_input("in", thread=0, num_pages=pages),
+                dfb_output("out", thread=1, num_pages=pages),
+            ],
+            tensors={"in": ta, "out": tout},
+            named_compile_time_args=named_ct_args,
+            defines=(defines or []) + [("TT_UNIFIED_METAL2", "1")],
+            name=f"unary_{op}",
+            **(fidelity or {}),
+        )
+        run_unified_spec(device, spec, {"in": ta, "out": tout})
+        out = tout
+    else:
+        ct_args = []
+        for t in (ta, tout):
+            ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+
+        program = unified_program(
+            kernel_source=KERNEL,
+            core_ranges=core_ranges,
+            cores=cores,
+            cbs=[
+                make_cb(CB_IN, core_ranges, num_pages=pages),
+                make_cb(CB_OUT, core_ranges, num_pages=pages),
+            ],
+            compile_time_args=ct_args,
+            named_compile_time_args=named_ct_args,
+            runtime_args=[ta.buffer_address(), tout.buffer_address()],
+            defines=defines,
+            **(fidelity or {}),
+        )
+        out = ttnn.generic_op([ta, tout], program)
 
     got = ttnn.to_torch(out).to(torch.float32)
     want = reference(a.to(torch.float32))
@@ -111,6 +146,7 @@ def main(argv=None):
     p.add_argument("--tiles-per-block", type=int, default=2)
     p.add_argument("--pcc", type=float, default=0.99)
     p.add_argument("--rel-err", type=float, default=0.02, help="max elementwise relative error")
+    p.add_argument("--metal2", action="store_true", help="build a Metal 2.0 ProgramSpec instead of a ProgramDescriptor")
     args = p.parse_args(argv)
 
     ops = list(OPS) if args.op == "all" else [args.op]
@@ -119,7 +155,7 @@ def main(argv=None):
     device = ttnn.open_device(device_id=0)
     try:
         for op in ops:
-            results[op] = run(device, op, args.num_blocks, args.tiles_per_block)
+            results[op] = run(device, op, args.num_blocks, args.tiles_per_block, metal2=args.metal2)
     finally:
         ttnn.close_device(device)
 
