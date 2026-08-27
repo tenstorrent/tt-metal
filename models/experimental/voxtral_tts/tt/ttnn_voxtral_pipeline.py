@@ -48,6 +48,11 @@ class TtVoxtralPipeline:
         self.flow = TtVoxtralFlow(device, ckpt_path=ckpt_path)
         self.codec = TtVoxtralCodecDecoder(device, ckpt_path=ckpt_path)
         self._tr = None            # (trace_id, input buffers, output tensors), built per generate()
+        # Per-stage wall times from the LAST request, so a perf test can report where a request
+        # went instead of deriving it. The codec is timed too: without it the codec column has to
+        # be computed as total - prefill - decode, which silently folds in the per-frame host
+        # overhead and reads as if the codec were 20x its real cost.
+        self.last_timings = {}
 
     # ------------------------------------------------------------------
     # TRACED FRAME LOOP -- NOTES.md [pipe-05], STATUS.md 6.65
@@ -137,6 +142,32 @@ class TtVoxtralPipeline:
         ac = flow._fsq_quantize(ttnn.to_torch(xr).float().reshape(1, flow.N_ACOUSTIC_CODEBOOK))
         return torch.cat([sem, ac + flow.N_AUDIO_SPECIAL], dim=1)
 
+    def warmup(self):
+        """Pay the program compiles once, on a synthetic prompt, so the first real request does not.
+
+        Deliberately does NOT go through `generate()`: on random embeds Block 2 can emit
+        [END_AUDIO] on frame 0, which `generate()` raises on. Warmup only needs each block's
+        programs built, so it drives them directly.
+        """
+        from models.experimental.voxtral_tts.reference.voxtral_common_ref import DIM
+
+        torch.manual_seed(0)
+        embeds = torch.randn(1, 32, DIM) * 0.02
+        h = self.backbone.prefill_last(embeds)
+        codes = self.flow(h[:, 0])
+        self.decode(codes)
+        self.backbone.reset()
+        return self
+
+    def close(self):
+        """Release the trace and drop the per-request state.
+
+        Does NOT close the device: the caller owns it (it is passed into `__init__`), and may hold
+        several pipelines on it or reuse it afterwards.
+        """
+        self._trace_release()
+        self.last_timings = {}
+
     @torch.no_grad()
     def generate(self, embeds, max_frames=150, cfg_alpha=CFG_ALPHA, seed=0, verbose=True):
         """prompt embeds [1,P,3072] -> frames [T,37] int64 (offset applied, [END_AUDIO] excluded)."""
@@ -190,11 +221,24 @@ class TtVoxtralPipeline:
             print(f"[pipeline] hit max_frames={max_frames} without [END_AUDIO]")
         if not frames:
             raise RuntimeError("model emitted [END_AUDIO] on the first frame -- nothing to decode")
-        return torch.cat(frames, dim=0), t_prefill, time.perf_counter() - t0
+        t_decode = time.perf_counter() - t0
+        out = torch.cat(frames, dim=0)
+        # Same tuple as always -- callers unpack three values. The dict is additive.
+        self.last_timings = {
+            "prefill_s": t_prefill,
+            "decode_s": t_decode,
+            "frames": int(out.shape[0]),
+            "decode_ms_per_frame": t_decode / max(out.shape[0], 1) * 1e3,
+            "traced": traced,
+        }
+        return out, t_prefill, t_decode
 
     @torch.no_grad()
     def decode(self, frames):
         """frames [T,37] -> waveform torch [1,1,T*1920] @ 24 kHz, via Block 3."""
         from models.experimental.voxtral_tts.reference.voxtral_codec_ref import strip_offset_and_trim
 
-        return self.codec(strip_offset_and_trim(frames))
+        t0 = time.perf_counter()
+        wav = self.codec(strip_offset_and_trim(frames))
+        self.last_timings["codec_s"] = time.perf_counter() - t0
+        return wav

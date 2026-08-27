@@ -116,8 +116,15 @@ pytest models/experimental/voxtral_tts/tests/test_model_teacher_forced_pcc.py
 # Shipped TTNN configuration is what it is documented to be
 pytest models/experimental/voxtral_tts/tests/test_tt_defaults.py
 
+# Host-side contracts: sampling/seed/CFG, the WER scorer itself, request independence
+pytest models/experimental/voxtral_tts/tests/test_sampling.py
+pytest models/experimental/voxtral_tts/tests/test_wer.py
+pytest models/experimental/voxtral_tts/tests/test_request_path_repeatability.py
+
 # Per-stage timings and RTF, gated against per-stage ceilings
 pytest models/experimental/voxtral_tts/tests/test_perf.py
+
+# The on-device tests are marked `slow`. `-m "not slow"` is the fast subset (~2.5 min).
 ```
 
 **Gate on real prompts, never random activations.** Random embeddings are off-manifold and read
