@@ -1674,12 +1674,8 @@ void kernel_main() {
 #if defined(COMPILE_FOR_IDLE_ERISC)
         RISC_POST_HEARTBEAT(heartbeat);
         if (early_exit()) {
-            noc_async_full_barrier(my_noc_index);
+            noc_async_full_barrier();
             noc_clear_packet_tags(my_noc_index);
-            if constexpr (my_noc_index != upstream_noc_index) {
-                noc_async_atomic_barrier(upstream_noc_index);
-                noc_clear_packet_tags(upstream_noc_index);
-            }
             set_l1_data_cache<false>();
             return;
         }
@@ -1711,12 +1707,8 @@ void kernel_main() {
     if (is_h_variant && !is_d_variant) {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();
     }
-    noc_async_full_barrier(my_noc_index);
+    noc_async_full_barrier();
     noc_clear_packet_tags(my_noc_index);
-    if constexpr (my_noc_index != upstream_noc_index) {
-        noc_async_atomic_barrier(upstream_noc_index);
-        noc_clear_packet_tags(upstream_noc_index);
-    }
     // DPRINT("dispatch_{}{}: out\n", is_h_variant, is_d_variant);
     set_l1_data_cache<false>();
 }
