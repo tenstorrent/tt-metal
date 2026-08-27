@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import os, random
-from time import time
 import numpy as np
 import ttnn
 import ttml
@@ -105,6 +104,67 @@ def round_up_to_tile(value: int, tile: int = 32) -> int:
     return ((int(value) + int(tile) - 1) // int(tile)) * int(tile)
 
 
+def resolve_padded_load_shape(src_shape, target_shape, expected_shape=None, *, name: str = "") -> tuple:
+    """Validate a weight being loaded and return the (tile-padded) shape to pad UP to.
+
+    Shared by every HF -> ttml weight loader so the "how do checkpoint dims map
+    onto a param's tile-padded shape" policy lives in one place.
+
+    Args:
+        src_shape:      shape of the source tensor (after any layout transform).
+        target_shape:   the destination param's physical, tile-padded dims to pad
+                        up to. The caller is responsible for reconstructing the
+                        GLOBAL shape for sharded params (e.g. ``dim *= tp_size``)
+                        so this is always a global-vs-global comparison.
+        expected_shape: the config-implied LOGICAL (un-tile-padded) shape, when
+                        known. Comparing against this -- not the tile-padded
+                        ``target_shape`` -- is the only way to catch a checkpoint
+                        whose dim (e.g. vocab_size) diverges from the config by
+                        LESS than a tile (both round to the same tile).
+
+    Returns ``target_shape`` (as an int tuple) when the load is legitimate; the
+    caller then zero-pads the source up to it.
+
+    Raises ``RuntimeError`` on: divergence from ``expected_shape``, a transposed
+    layout, a target smaller than the source (would crop), or -- when no
+    ``expected_shape`` is given -- a source that is not an exact tile-alignment of
+    the target. Never crops. When it must tile-pad without an ``expected_shape``
+    to verify against, it prints a warning (that padding is unverified).
+    """
+    src = tuple(int(x) for x in src_shape)
+    tgt = tuple(int(x) for x in target_shape)
+    if len(src) != len(tgt):
+        raise RuntimeError(f"{name}: source rank {len(src)} does not match target rank {len(tgt)}.")
+
+    if expected_shape is not None:
+        exp = tuple(int(x) for x in expected_shape)
+        if src != exp:
+            raise RuntimeError(
+                f"{name}: checkpoint shape {src} does not match the config-implied shape {exp}; "
+                f"the checkpoint diverges from the model config."
+            )
+        if any(t < s for t, s in zip(tgt, src)):
+            raise RuntimeError(
+                f"{name}: parameter shape {tgt} is smaller than the config-implied shape {src}; cannot fit."
+            )
+        return tgt
+
+    # No config-derived shape to validate against: permit ONLY tile-alignment
+    # padding (target == source rounded up to the tile on every dim).
+    if src == tgt:
+        return tgt
+    if all(t == round_up_to_tile(s) for t, s in zip(tgt, src)):
+        print(
+            f"  Warning: tile-padding {name} from {src} to {tgt} without a config-derived shape to "
+            f"verify against; confirm this is only tile alignment."
+        )
+        return tgt
+    raise RuntimeError(
+        f"Unexpected shape for {name}: got {src}, expected {tgt} or its pre-tile-padding source. "
+        f"Check that the model config matches the checkpoint."
+    )
+
+
 def initialize_device(yaml_config: dict):
     """Initialize device mesh from configuration.
 
@@ -167,36 +227,6 @@ def build_causal_mask(T: int, device: bool = False):
     if not device:
         return m
     return ttml.autograd.Tensor.from_numpy(m, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
-
-
-def get_available_device_memory_in_bytes() -> int:
-    """Get the total amount of device DRAM available on the system."""
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    dram_view = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
-    total_dram = dram_view.total_bytes_per_bank * dram_view.num_banks * ttnn.get_num_devices()
-    return total_dram
-
-
-class PerformanceMeter:
-    def __init__(self, cfg, window_size=10):
-        self.cfg = cfg
-        self.steps = []
-        self.window_size = window_size
-
-    def step(self):
-        self.steps.append(time())
-        if len(self.steps) > self.window_size:
-            self.steps.pop(0)
-
-    def get_metrics(self):
-        time_window = self.steps[-1] - self.steps[0]
-        if time_window == 0:
-            return 0, 0
-
-        samples = len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
-        samples_per_second = samples / time_window
-        tokens_per_second = samples * self.cfg.seq_len / time_window
-        return samples_per_second, tokens_per_second
 
 
 def summary(model) -> None:

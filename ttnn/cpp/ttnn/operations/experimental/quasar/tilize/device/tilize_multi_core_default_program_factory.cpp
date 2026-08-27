@@ -11,6 +11,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -113,7 +115,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_rows", "num_tiles_per_block", "block_width_size", "num_full_blocks_in_row", "start_page_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // -- Writer kernel (spans all_cores) --
@@ -129,13 +132,16 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = MC_OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // -- Compute kernels (preserved multiplicity: per-group CTAs) --
-    ComputeHardwareConfig compute_hw{.fp32_dest_acc_en = fp32_llk_acc};
+    ttnn::ComputeKernelConfig compute_config{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_config);
     if (fp32_llk_acc) {
-        compute_hw.unpack_to_dest_mode = {{MC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
+        std::visit([&](auto& c) { c.unpack_modes.emplace(MC_INPUT_DFB, UnpackMode::UnpackToDest); }, compute_hw);
     }
     const char* compute_src = "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/compute/tilize.cpp";
     auto make_compute = [&](const KernelSpecName& id, uint32_t nblocks_per_core_arg) {
@@ -155,8 +161,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
                  }},
             .compile_time_args =
                 {{"per_core_block_cnt", nblocks_per_core_arg}, {"per_core_block_tile_cnt", ntiles_per_block}},
-            .hw_config = compute_hw,
-        };
+            .hw_config = compute_hw};
     };
 
     bool has_cliff = !core_range_cliff.empty();
@@ -190,34 +195,49 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     uint32_t tile_start_id = 0;
     uint32_t page_start_id = 0;
     const auto& cores = corerange_to_cores(available_grid);
+    KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+    KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
-        reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
                 {"num_rows", nblocks_per_core * TILE_HEIGHT},
                 {"num_tiles_per_block", ntiles_per_block},
                 {"block_width_size", page_size},
                 {"num_full_blocks_in_row", 1u},
-                {"start_page_id", page_start_id}}});
-        writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"num_pages", ntiles_per_block * nblocks_per_core}, {"start_id", tile_start_id}}});
+                {"start_page_id", page_start_id},
+            });
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"num_pages", ntiles_per_block * nblocks_per_core},
+                {"start_id", tile_start_id},
+            });
         tile_start_id += ntiles_per_block * nblocks_per_core;
         page_start_id += TILE_HEIGHT * nblocks_per_core * num_pages_in_row;
     }
     if (has_cliff) {
         const CoreCoord& core = cores[ncores_full];
-        reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
                 {"num_rows", nblocks_per_core_cliff * TILE_HEIGHT},
                 {"num_tiles_per_block", ntiles_per_block},
                 {"block_width_size", page_size},
                 {"num_full_blocks_in_row", 1u},
-                {"start_page_id", page_start_id}}});
-        writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {{"num_pages", ntiles_per_block * nblocks_per_core_cliff}, {"start_id", tile_start_id}}});
+                {"start_page_id", page_start_id},
+            });
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"num_pages", ntiles_per_block * nblocks_per_core_cliff},
+                {"start_id", tile_start_id},
+            });
     }
 
     run_args.kernel_run_args = {reader_run, writer_run};

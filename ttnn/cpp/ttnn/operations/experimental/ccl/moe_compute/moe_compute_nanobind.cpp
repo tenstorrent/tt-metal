@@ -34,10 +34,11 @@ void bind_moe_compute(nb::module_& mod) {
 
         This operation performs the expert matmuls (gate/up projection via W0/W1, down
         projection via W2) and activation (SILU, SwiGLU, or GELU) in a fused compute kernel.
-        Tile distribution across the matmul ring (12 cores on Wormhole; 8 cores on
-        Blackhole — auto-detected from the architecture) is derived at compile time from
-        ``hidden_size`` and ``intermediate_size`` using Euclidean-rhythm (Bresenham) shard
-        formulas — no model-specific configuration tables are needed.
+        Tile distribution across the matmul ring (12 cores on Wormhole; 7 or 8 cores on
+        Blackhole depending on whether one DRAM bank is fused off — auto-detected from the
+        live DRAM-bank count) is derived at compile time from ``hidden_size`` and
+        ``intermediate_size`` using Euclidean-rhythm (Bresenham) shard formulas — no
+        model-specific configuration tables are needed.
 
         Note: This is the **compute** portion of the MoE pipeline. The A2A dispatch
         (producing the sparse buffer consumed by this op) and the A2A combine (reducing
@@ -119,10 +120,11 @@ void bind_moe_compute(nb::module_& mod) {
           matmul output is the final output, slot 4) instead of 6, and all combine-path
           arguments below must be left unset (notably ``cluster_axis`` must be ``None``).
 
-        The matmul ring size is **auto-detected** from the architecture — 8 on Blackhole,
-        12 on Wormhole (one per DRAM bank) — and is not exposed on this API. The
-        ``prepare_*`` / ``get_weight_mem_configs`` helpers that pack the weights must be
-        called with the matching ring size (see ``effective_matmul_ring_size``).
+        The matmul ring size is **auto-detected** from the live DRAM-bank count — 12 on
+        Wormhole (no DRAM-bank harvesting), 7/8 on Blackhole (up to one bank may be fused
+        off) — and is not exposed on this API. The ``prepare_*`` / ``get_weight_mem_configs``
+        helpers that pack the weights must be called with the matching ring size (see
+        ``effective_matmul_ring_size``).
 
         **Core placement**
 
@@ -133,7 +135,7 @@ void bind_moe_compute(nb::module_& mod) {
         matmul_ring_size=effective_matmul_ring_size(mesh_device)), hidden_size)``
         to query combine cores for memory-config setup before running the op.
         Passing ``matmul_ring_size`` is required so the width shard dim accounts for
-        the ring-divisibility constraint (e.g. BH ring_n=8 with hidden_tiles=90
+        the ring-divisibility constraint (e.g. unharvested BH ring_n=8 with hidden_tiles=90
         picks d=2 not d=3 because 8%3≠0).
 
         Shard expert indices/scores to the drain tilize core returned by
@@ -157,40 +159,50 @@ void bind_moe_compute(nb::module_& mod) {
         ``has_bias`` must match the actual layout of the provided tensors; mismatch
         produces silent wrong results or UB.
 
-        **Combine path (Full mode only)**
+        **Combine paths**
 
-        These arguments configure the cross-device A2A combine that reduces expert
-        outputs. They apply only when ``compute_only=False``; with ``compute_only=True``
-        ``cluster_axis``, ``topology``, ``num_links``, ``mux_core_range_set``,
-        ``optional_output_tensor``, and ``optional_cross_device_semaphore`` must be
-        passed as ``None`` / left at their defaults. An empty ``CoreRangeSet`` still
-        counts as a provided ``mux_core_range_set`` and is rejected in compute-only mode.
+        When ``compute_only=False``, the op also runs the fused selective_reduce_combine
+        stage and returns **6** tensors. There are two combine modes:
 
-        - ``cluster_axis`` (**required when** ``compute_only=False``): The mesh axis along
-          which the combine reduces. Must be ``None`` when ``compute_only=True``.
+        - Single-device fused mode: pass ``cluster_axis=None`` on a 1x1 mesh. The combine runs
+          locally with no fabric, mux cores, links, topology, or cross-device semaphore.
+        - Multi-device fused mode: pass ``cluster_axis=0`` or ``cluster_axis=1`` on a multi-device
+          mesh. The combine reduces along that mesh axis using the fabric.
+
+        With ``compute_only=True``, ``cluster_axis``, ``topology``, ``num_links``,
+        ``mux_core_range_set``, ``optional_output_tensor``, and
+        ``optional_cross_device_semaphore`` must be passed as ``None`` / left at their
+        defaults. An empty ``CoreRangeSet`` still counts as a provided ``mux_core_range_set``
+        and is rejected in compute-only mode.
+
+        - ``cluster_axis``: ``None`` for ``compute_only=True`` and for single-device fused mode;
+          otherwise the mesh axis along which multi-device fused mode reduces.
         - ``topology`` (optional, default ``None`` ≡ fabric default): Combine fabric
-          topology; only ``ttnn.Topology.Linear`` and ``ttnn.Topology.Ring`` are
-          supported. If the fabric default is Torus/Mesh, pass ``Linear`` or ``Ring``
-          explicitly (BH Loudbox callers must pass ``Linear``).
+          topology for multi-device fused mode; must be ``None`` for single-device fused
+          mode and ``compute_only=True``. Only ``ttnn.Topology.Linear`` and
+          ``ttnn.Topology.Ring`` are supported. If the fabric default is Torus/Mesh, pass
+          ``Linear`` or ``Ring`` explicitly (BH Loudbox callers must pass ``Linear``).
         - ``num_links`` (optional, default ``None``): Number of fabric links for the
-          combine; auto-detected from the mesh and ``cluster_axis`` when ``None``.
+          multi-device fused combine; auto-detected from the mesh and ``cluster_axis`` when
+          ``None``. Must be ``None`` for single-device fused mode and ``compute_only=True``.
         - ``mux_core_range_set`` (optional, default ``None`` ≡ empty): Cores assigned to
-          the fabric mux on the combine path. Mux cores may be placed anywhere on the worker
-          grid — including inside the matmul/all-worker multicast bounding boxes — because the
-          op places every worker group (matmul, tilize, combine) to avoid the mux cells: the
-          matmul ring prefers the DRAM-bank-adjacent workers but relocates to a compact,
-          column-0-anchored placement if mux would overlap it (or if the DRAM-adjacent ring
-          spans the grid, e.g. WH ROW dispatch), and tilize/combine are placed after mux and
-          route around it. The op raises a clear error only if the grid is too small/blocked
-          to fit all groups disjointly.
+          the fabric mux on the multi-device fused combine path; must be ``None`` for
+          single-device fused mode and ``compute_only=True``. Mux cores may be placed anywhere
+          on the worker grid — including inside the matmul/all-worker multicast bounding boxes
+          — because the op places every worker group (matmul, tilize, combine) to avoid the
+          mux cells: the matmul ring prefers the DRAM-bank-adjacent workers but relocates to a
+          compact, column-0-anchored placement if mux would overlap it (or if the DRAM-adjacent
+          ring spans the grid, e.g. WH ROW dispatch), and tilize/combine are placed after mux
+          and route around it. The op raises a clear error only if the grid is too
+          small/blocked to fit all groups disjointly.
         - ``output_memory_config`` (optional, default ``None`` ≡ ``DRAM_MEMORY_CONFIG``):
           Memory config for the combine output tensor.
         - ``optional_output_tensor`` (optional): Preallocated tensor to receive the
           combine output instead of allocating a new one. Must be ``None`` when
           ``compute_only=True`` (no combine output is produced).
         - ``optional_cross_device_semaphore`` (optional): Global semaphore used to
-          synchronize the cross-device combine. Must be ``None`` when
-          ``compute_only=True``.
+          synchronize the multi-device fused combine. Must be ``None`` for single-device
+          fused mode and ``compute_only=True``.
 
         **Reference input packer **
 
@@ -221,10 +233,10 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("output_height_shard_dim"),
         nb::arg("intermediate_size"),
         nb::arg("has_bias") = false,
-        // cluster_axis is required when compute_only=False; pass None for compute_only=True paths.
+        // cluster_axis is None for compute_only=True and for 1x1 fused mode; set it for multi-device fused mode.
         // (Two breaking changes vs prior versions: (1) intermediate_size is now required positional
         // from PR #43932; (2) cluster_axis became optional, new compute_only knob. The matmul ring
-        // size is auto-detected from the arch (8 BH / 12 WH); bh_ring_size remains only on prim.)
+        // size is auto-detected from the live DRAM-bank count (7/8 BH / 12 WH); bh_ring_size remains only on prim.)
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("topology") = nb::none(),
         nb::arg("num_links") = nb::none(),
@@ -326,9 +338,9 @@ void bind_moe_compute_utils(nb::module_& mod) {
         (complementary when ``Nt%n_cores + Ht%n_cores == n_cores``) for W2. Ring
         ordering: DRAM bank logical coords sorted by ``(y, x)`` descending.
 
-        The matmul ring size is auto-detected from the architecture — 8 on Blackhole,
-        12 on Wormhole (the DRAM-bank count) — matching ``ttnn.experimental.moe_compute``,
-        so the packed weights always line up with the op.
+        The matmul ring size is the live DRAM-bank count (12 on Wormhole, 7/8 on
+        Blackhole), matching ``ttnn.experimental.moe_compute``, so the packed weights always
+        line up with the op.
 
         Returns an object with ``w0_w1_shard_map``, ``w2_shard_map``, and
         ``dram_core_range_set`` attributes.
@@ -382,8 +394,9 @@ void bind_moe_compute_utils(nb::module_& mod) {
         dim) so real columns stay paired with their real W2 rows. This keeps the
         downstream prep + DRAM layout uniform (full-Nt per-expert stride) while
         letting the kernel walk only the per-core prefixes as a balanced TpNt ring.
-        The shard-map generator auto-detects the ring size from the arch (8 on Blackhole,
-        12 on Wormhole), matching ``prepare_*`` / ``get_weight_mem_configs`` and the op.
+        The shard-map generator auto-detects the ring size from the live DRAM-bank count
+        (12 on Wormhole, 7/8 on Blackhole), matching ``prepare_*`` / ``get_weight_mem_configs``
+        and the op.
 
         Returns ``(output_w0, output_w1, output_w2)``, each the result of
         concatenating routed + shared along dim 1.

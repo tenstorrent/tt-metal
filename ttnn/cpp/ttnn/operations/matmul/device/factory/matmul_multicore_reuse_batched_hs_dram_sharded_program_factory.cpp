@@ -522,6 +522,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     std::set<CoreCoord> worker_cores_set(all_worker_cores_ordered.begin(), all_worker_cores_ordered.end());
 
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(all_worker_cores_ordered.size());
 
     // Idle cores in the bounding box
     for (const auto& core : all_cores_in_rect_grid_vec) {
@@ -529,13 +530,13 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
 
         if (!is_worker) {
             std::vector<uint32_t> in0_idle_args = {0u};
-            in0_reader_kernel_desc.runtime_args.emplace_back(core, in0_idle_args);
+            in0_reader_kernel_desc.runtime_args.emplace_back(core, std::move(in0_idle_args));
 
             std::vector<uint32_t> in1_idle_args = {0u};
-            in1_writer_kernel_desc.runtime_args.emplace_back(core, in1_idle_args);
+            in1_writer_kernel_desc.runtime_args.emplace_back(core, std::move(in1_idle_args));
 
             std::vector<uint32_t> compute_idle_args = {0u};
-            compute_kernel_desc.runtime_args.emplace_back(core, compute_idle_args);
+            compute_kernel_desc.runtime_args.emplace_back(core, std::move(compute_idle_args));
         }
     }
 
@@ -582,7 +583,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
         std::vector<uint32_t> compute_runtime_args = {
             1u,
         };
-        compute_kernel_desc.runtime_args.emplace_back(core, compute_runtime_args);
+        compute_kernel_desc.runtime_args.emplace_back(core, std::move(compute_runtime_args));
     }
 
     // Push all kernel descriptors
@@ -606,7 +607,7 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
 
     const auto& a = input_tensors.at(0).mesh_tensor();
     const auto& b = input_tensors.at(1).mesh_tensor();
-    auto bias = tt::tt_metal::as_optional_mesh_tensor(optional_input_tensors.at(0));
+    auto bias = ttnn::as_optional_mesh_tensor(optional_input_tensors.at(0));
     const auto& output = output_tensors.at(0).mesh_tensor();
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();

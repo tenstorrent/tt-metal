@@ -48,9 +48,9 @@ NlpCreateHeadsFalcon7BDeviceOperation::spec_return_value_t NlpCreateHeadsFalcon7
     tt::tt_metal::TensorLayout layout(
         input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.output_mem_config);
     return {
-        .q = TensorSpec(Shape({input_shape[0], 71, input_shape[2], 64}), layout),
-        .k = TensorSpec(Shape({input_shape[0], 1, input_shape[2], 64}), layout),
-        .v = TensorSpec(Shape({input_shape[0], 1, input_shape[2], 64}), layout)};
+        .q = tt::tt_metal::TensorSpec(Shape({input_shape[0], 71, input_shape[2], 64}), layout),
+        .k = tt::tt_metal::TensorSpec(Shape({input_shape[0], 1, input_shape[2], 64}), layout),
+        .v = tt::tt_metal::TensorSpec(Shape({input_shape[0], 1, input_shape[2], 64}), layout)};
 }
 
 NlpCreateHeadsFalcon7BDeviceOperation::tensor_return_value_t

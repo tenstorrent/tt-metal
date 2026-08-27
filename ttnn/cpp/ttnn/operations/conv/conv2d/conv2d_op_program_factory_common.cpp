@@ -212,19 +212,31 @@ std::vector<CBInfo> get_cb_info(
 
     // Matmul partials CB. 1D depthwise compute uses dest-reuse accumulation.
     //  - Single height block: it reuses out_cb directly for the read-back, so no partials CB
-    //    (0-page entry; allocate_cbs skips the device allocation).
+    //    (the 0-page entry is not emitted).
     //  - Multiple height blocks, non-coalesced: out_cb is the persistent sharded output and cannot
     //    double as the dest-reuse scratch across blocks, so allocate a dedicated scratch CB in the
     //    output data format.
     const bool depthwise_dest_reuse_scratch = is_1d_depthwise_conv &&
                                               sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
                                               !coalesce_1d_depthwise_kw_reads && num_blocks_act_h > 1;
+    const bool partials_use_output_cb = !untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv;
+    // This must match the compute kernel's out_block_num_tiles. Both factories pass one full per-core output-width
+    // block to compute, so dedicated partials storage is exactly one output block reused through ordinary CB FIFO
+    // wraparound. When formats allow output aliasing, only the final block of the existing output allocation is used.
+    const uint32_t output_block_num_tiles = block_config.act_block_h_ntiles * per_core_out_matrix_width_ntiles;
+    TT_FATAL(
+        is_1d_depthwise_conv || output_block_num_tiles <= per_core_out_ntiles,
+        "Conv2d output block size {} exceeds the per-core output size {}",
+        output_block_num_tiles,
+        per_core_out_ntiles);
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::MATMUL_PARTIALS,
         .num_pages =
-            depthwise_dest_reuse_scratch ? act_block_num_tiles : (is_1d_depthwise_conv ? 0 : per_core_out_ntiles),
+            depthwise_dest_reuse_scratch ? act_block_num_tiles : (is_1d_depthwise_conv ? 0 : output_block_num_tiles),
         .page_size = depthwise_dest_reuse_scratch ? output_tile_size : partial_tile_size,
-        .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
+        .is_globally_allocated = partials_use_output_cb,
+        .address_offset =
+            partials_use_output_cb ? (per_core_out_ntiles - output_block_num_tiles) * output_tile_size : 0,
         .data_format = depthwise_dest_reuse_scratch ? output_df : partial_df});
 
     const bool overlap_im2col_cb =
@@ -346,58 +358,6 @@ std::vector<CBInfo> get_cb_info(
 
     TT_FATAL(cb_info.size() == num_cbs, "Expected info for {} cbs  by got {}!", num_cbs, cb_info.size());
     return cb_info;
-}
-
-void allocate_cbs(
-    std::vector<CBInfo>& cb_info,
-    tt::tt_metal::Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& all_cores,
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
-    const Tensor& l1_indices_tensor) {
-    uint32_t cb_index = 0;
-    for (auto& cb : cb_info) {
-        if (cb.num_pages == 0) {
-            // Skip circular buffers with zero pages
-            continue;
-        }
-
-        // cbs for sharded tensors.
-        Buffer* buffer = nullptr;
-        if (cb.is_globally_allocated) {
-            if (cb.name == Conv2dCb::ACT_SHARDED) {
-                buffer = input_tensor.buffer();
-            } else if (cb.name == Conv2dCb::OUT || cb.name == Conv2dCb::MATMUL_PARTIALS) {
-                buffer = output_tensor.buffer();
-            } else if (cb.name == Conv2dCb::READER_INDICES) {
-                buffer = l1_indices_tensor.buffer();
-            } else {
-                TT_THROW(
-                    "Unexpected circular buffer name {}. Expected one of: SHARDED_ACT_CB, OUT0_CB, READER_INDICES_CB",
-                    enchantum::to_string(cb.name));
-            }
-        }
-
-        std::tie(cb.index, cb.handle) =
-            tt::tt_metal::create_cb(cb_index++, program, all_cores, cb.page_size, cb.num_pages, cb.data_format, buffer);
-        log_trace(
-            tt::LogOp,
-            "Allocated circular buffer {} with index {}, num pages {}, page size {}, globally allocated: {}",
-            enchantum::to_string(cb.name),
-            cb.index,
-            cb.num_pages,
-            cb.page_size,
-            cb.is_globally_allocated);
-    }
-
-    for (auto& cb : cb_info) {
-        if (cb.overlapped_by_cb.has_value()) {
-            // If this CB is overlapped by another CB, set the handle to the overlapped CB's handle
-            const CBInfo& overlapped_cb = get_cb_info_by_name(cb_info, cb.overlapped_by_cb.value());
-            cb.handle = overlapped_cb.handle;
-            cb.index = overlapped_cb.index;
-        }
-    }
 }
 
 const CBInfo& get_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name) {
@@ -779,7 +739,6 @@ void emit_cb_descriptors(
     uint32_t cb_index = 0;
     for (auto& cb : cb_info) {
         if (cb.num_pages == 0) {
-            // Skip circular buffers with zero pages (matches allocate_cbs behavior).
             continue;
         }
 
@@ -800,7 +759,7 @@ void emit_cb_descriptors(
 
         cb.index = cb_index++;
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = cb.num_pages * cb.page_size,
+            .total_size = cb.cb_size_per_core(),
             .core_ranges = all_cores_set,
             .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(cb.index),
@@ -808,6 +767,7 @@ void emit_cb_descriptors(
                 .page_size = cb.page_size,
             }}},
             .buffer = buffer,
+            .address_offset = cb.address_offset,
         });
     }
 

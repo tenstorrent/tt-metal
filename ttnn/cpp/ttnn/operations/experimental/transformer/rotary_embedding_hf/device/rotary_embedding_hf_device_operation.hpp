@@ -15,7 +15,7 @@ struct RotaryEmbeddingHfDeviceOperation {
     using operation_attributes_t = RotaryEmbeddingHfParams;
     using tensor_args_t = RotaryEmbeddingHfInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
-    using tensor_return_value_t = tt::tt_metal::Tensor;
+    using tensor_return_value_t = ttnn::Tensor;
     using program_factory_t = std::variant<RotaryEmbeddingHfMultiCore, RotaryEmbeddingHfMultiCoreSharded>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

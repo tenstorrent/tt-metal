@@ -22,8 +22,8 @@ void kernel_main() {
     CircularBuffer cb_accumulator(accumulator_cb_id);
 
     // Initialize binary operations - use the same constants consistently
-    binary_op_init_common(fabric_receiver_cb_id, fabric_receiver_cb_id, accumulator_cb_id);
-    add_tiles_init(fabric_receiver_cb_id, fabric_receiver_cb_id, true);
+    compute_kernel_hw_startup(fabric_receiver_cb_id, fabric_receiver_cb_id, accumulator_cb_id);
+    add_init(fabric_receiver_cb_id, fabric_receiver_cb_id, true);
 
     // Wait for input data once before beginning processing
     cb_fabric_receiver.wait_front(total_pages);

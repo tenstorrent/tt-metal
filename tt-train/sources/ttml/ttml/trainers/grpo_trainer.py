@@ -709,18 +709,18 @@ class GRPOTrainer:
                     max_completion_len = 0
 
                 if grpo_cfg.logging_steps > 0 and num_steps % grpo_cfg.logging_steps == 0:
+                    step_metrics = {
+                        "reward_mean": mean_reward,
+                        "reward_std": float(rewards_np.std()),
+                        "mean_completion_len": mean_completion_len,
+                        "min_completion_len": min_completion_len,
+                        "max_completion_len": max_completion_len,
+                        "lr": base_lr * warmup_factor,
+                        "step_time_s": step_time_s,
+                        "step_time_and_previous_callbacks_s": time.perf_counter() - step_t0,
+                        "generation_time_s": generation_time_s_for_step,
+                    }
                     for cb in self.callbacks:
-                        step_metrics = {
-                            "reward_mean": mean_reward,
-                            "reward_std": float(rewards_np.std()),
-                            "mean_completion_len": mean_completion_len,
-                            "min_completion_len": min_completion_len,
-                            "max_completion_len": max_completion_len,
-                            "lr": base_lr * warmup_factor,
-                            "step_time_s": step_time_s,
-                            "step_time_and_previous_callbacks_s": time.perf_counter() - step_t0,
-                            "generation_time_s": generation_time_s_for_step,
-                        }
                         cb.on_step_end(self, num_steps, **step_metrics)
 
                 if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:

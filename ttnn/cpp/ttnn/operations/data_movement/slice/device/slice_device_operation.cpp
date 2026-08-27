@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
 
@@ -247,7 +248,7 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
             tt::tt_metal::MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), derived);
     }
 
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_tensor_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config));
 }
@@ -276,13 +277,16 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
 
     if (input.layout() == Layout::ROW_MAJOR) {
-        // HEIGHT→HEIGHT no-step: fast CB path, no NOC read needed.
-        // WIDTH/BLOCK-sharded RM: SliceRmProgramFactory with per-shard page size via noc_async_*_sharded.
+        // Misaligned W-begin needs SliceRmProgramFactory's tt_memmove fixup (issue #50714).
+        const uint32_t begins_bytes_last =
+            args.slice_start.rank() > 0 ? args.slice_start[-1] * input.element_size() : 0u;
+        const bool w_begin_aligned = (begins_bytes_last % ::hal::get_l1_alignment()) == 0;
         const bool height_sharded_in_out_no_step =
             input.is_sharded() &&
             input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
             args.output_mem_config.is_sharded() &&
-            args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !has_step;
+            args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !has_step &&
+            w_begin_aligned;
         if (height_sharded_in_out_no_step) {
             return SliceRmShardedProgramFactory{};
         }

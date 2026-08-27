@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import pytest
 import torch
 import ttnn
 import math
@@ -24,6 +23,10 @@ from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 i
 )
 from tracy import signpost
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import get_core_ranges
+
+# Re-exported so the existing callers keep importing it from here; it lives in a leaf
+# module so tests that only need the skip gate can avoid this file's import chain.
+from tests.ttnn.unit_tests.operations.prefetcher_support import require_tensor_prefetcher
 
 
 def round_up(n, m):
@@ -117,13 +120,13 @@ def make_recv_contig_weight(
 
 
 @contextlib.contextmanager
-def tensor_prefetcher_session(device, dual_senders_per_bank: bool = False):
+def tensor_prefetcher_session(device):
     """Open a Tensor prefetcher Start/Stop window. Stop (and a device sync)
     runs even on test failure so the next test sees a clean device, replacing the
     explicit ``start -> ... -> stop -> synchronize`` callers used to spell out at
     every test site.
     """
-    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders_per_bank)
+    ttnn.experimental.start_tensor_prefetcher(device)
     try:
         yield
     finally:
@@ -419,7 +422,8 @@ def run_prefetcher_mm(
         )
         program_configs.append(program_config)
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=True,

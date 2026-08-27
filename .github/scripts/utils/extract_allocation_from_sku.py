@@ -97,11 +97,13 @@ def main():
     if "match_labels" in allocation:
         lines.append("matchLabels:")
         for key, value in allocation["match_labels"].items():
-            # Quote keys that contain special characters like dots
+            # Quote keys that contain special characters like dots, and always
+            # quote the value: matchLabels values must stay strings, so bare
+            # tokens like true/1 must not be coerced to a YAML bool/int downstream.
             if "." in key or "/" in key:
-                lines.append(f'  "{key}": {value}')
+                lines.append(f'  "{key}": "{value}"')
             else:
-                lines.append(f"  {key}: {value}")
+                lines.append(f'  {key}: "{value}"')
 
     if "topologyKeys" in allocation:
         lines.append("topologyKeys:")

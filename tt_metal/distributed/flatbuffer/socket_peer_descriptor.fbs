@@ -22,6 +22,7 @@ table SocketMemoryConfig {
     fifo_size: uint32;
     sender_sub_device: uint32 = null;
     receiver_sub_device: uint32 = null;
+    per_core_allocation: bool = false;
 }
 
 table SocketConfig {

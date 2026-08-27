@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_log.h"
+#include "cmath_common.h"
 
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_log.h"
@@ -52,7 +53,7 @@ inline void calculate_lgamma_stirling() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_lgamma_stirling_fp32(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr float LOG_SQRT_2PI = 0.9189385332046727f;
@@ -161,9 +162,10 @@ inline void calculate_lgamma_adjusted(
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE>
 void lgamma_stirling_init() {
-    recip_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    recip_init<APPROXIMATION_MODE, false, false>();
 }
 
 }  // namespace ckernel::sfpu

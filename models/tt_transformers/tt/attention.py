@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.common.utility_functions import nearest_32
+from models.common.utility_functions import copy_to_buffer, nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
@@ -131,6 +131,12 @@ class Attention(LightweightModule):
         self.sdpa_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
         )
+        # Some architectures (e.g. Gemma-2, head_dim=256) need the flash-decode op's
+        # internal default compute config instead of the framework's forced
+        # fp32_dest_acc_en/packer_l1_acc, which corrupts the cross-chunk online-softmax
+        # reduction for large head_dim. Config-gated flag; False for every other model.
+        if getattr(configuration, "sdpa_decode_use_default_compute_config", False):
+            self.sdpa_decode_compute_kernel_cfg = None
         self.li_o_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
         )
@@ -440,35 +446,12 @@ class Attention(LightweightModule):
             for k_or_v in [cache_k, cache_v]
         ]
 
-    @staticmethod
-    def _inplace_copy(src: ttnn.Tensor, dst: ttnn.Tensor, target_dtype) -> None:
-        """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then
-        ``ttnn.copy`` into ``dst``. ``dst``'s device buffer is preserved (no
-        reallocation) so any captured trace and the DRAM prefetcher's recorded
-        buffer addresses remain valid.
-        """
-        converted = src
-
-        if converted.layout != dst.layout:
-            converted = ttnn.to_layout(converted, layout=dst.layout)
-
-        if converted.dtype != target_dtype:
-            converted = ttnn.typecast(converted, dtype=target_dtype)
-
-        if tuple(converted.shape) != tuple(dst.shape):
-            converted = ttnn.reshape(converted, list(dst.shape))
-
-        if converted.memory_config() != dst.memory_config():
-            converted = ttnn.to_memory_config(converted, dst.memory_config())
-
-        ttnn.copy(input_a=converted, input_b=dst)
-
     def _update_wqkv(self, tensor: ttnn.Tensor) -> None:
         """In-place replace ``self.wqkv`` via ``ttnn.copy``. Caller must match
         the constructor's ``self.wqkv``: shape ``(1, 1, H, qkv_size_per_device)``,
         TILE, ``ShardTensor2dMesh(dims=(2, 3))`` (or ``(3, 2)`` on TG).
         """
-        self._inplace_copy(tensor, self.wqkv, self.wqkv_dtype)
+        copy_to_buffer(tensor, self.wqkv, self.wqkv_dtype)
 
     def _update_wo(self, tensor: ttnn.Tensor) -> None:
         """In-place replace ``self.wo`` (and ``self.wo_sharded_ring`` when the
@@ -476,10 +459,10 @@ class Attention(LightweightModule):
         decode path reads ``wo_sharded_ring`` instead of ``wo`` when
         ``self.prefetcher is not None``.
         """
-        self._inplace_copy(tensor, self.wo, self.wo_dtype)
+        copy_to_buffer(tensor, self.wo, self.wo_dtype)
         wo_sharded_ring = getattr(self, "wo_sharded_ring", None)
         if wo_sharded_ring is not None:
-            self._inplace_copy(tensor, wo_sharded_ring, self.wo_dtype)
+            copy_to_buffer(tensor, wo_sharded_ring, self.wo_dtype)
 
     def _update_wqkv_bias(
         self,
@@ -562,18 +545,19 @@ class Attention(LightweightModule):
         self._update_wo(wo_internal)
 
         bias_present = (q_proj_bias is not None) or (k_proj_bias is not None) or (v_proj_bias is not None)
-        if bias_present and self.wqkv_bias_prefill is None:
-            raise ValueError(
-                "Q/K/V projection biases were supplied but Attention was " "constructed without a QKV bias."
-            )
-        if (not bias_present) and self.wqkv_bias_prefill is not None:
-            raise ValueError(
-                "Attention was constructed with a QKV bias but Q/K/V " "projection biases were not supplied."
-            )
         if bias_present:
+            if self.wqkv_bias_prefill is None:
+                raise ValueError(
+                    "Q/K/V projection biases were supplied but Attention was " "constructed without a QKV bias."
+                )
             if q_proj_bias is None or k_proj_bias is None or v_proj_bias is None:
                 raise ValueError("Q/K/V projection biases must all be supplied together.")
             self._update_wqkv_bias(q_proj_bias, k_proj_bias, v_proj_bias)
+        else:
+            if self.wqkv_bias_prefill is not None:
+                raise ValueError(
+                    "Attention was constructed with a QKV bias but Q/K/V " "projection biases were not supplied."
+                )
 
         if q_norm is not None:
             self._update_qk_norm("q_norm", q_norm)
@@ -734,16 +718,28 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        xqkv_fused_sharded = ttnn.linear(
-            x,
-            self.wqkv,
-            memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
-            program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
-            compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
-            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-        )
+        if self.TG and self.prefetcher is None:
+            x_interleaved = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            xqkv_fused_sharded = ttnn.linear(
+                x_interleaved,
+                self.wqkv,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=None,
+                compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
+                dtype=self.ccl_dtype,
+            )
+            ttnn.deallocate(x_interleaved)
+        else:
+            xqkv_fused_sharded = ttnn.linear(
+                x,
+                self.wqkv,
+                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
+                program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
+                compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
+                dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+            )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
             # select the bias tensor based on the number of tiles in the rows
@@ -763,7 +759,7 @@ class Attention(LightweightModule):
             memory_config=qkv_all_reduce_mem_cfg
             if qkv_all_reduce_mem_cfg is not None
             else xqkv_fused_sharded.memory_config(),
-            sharded=True,
+            sharded=not (self.TG and self.prefetcher is None),
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
             subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,

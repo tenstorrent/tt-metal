@@ -13,8 +13,14 @@ full descriptor rebuild every dispatch).
 
 This is a BUILD-TIME text check (no runtime cost). It only inspects ProgramDescriptor-based factories
 (files that mention ``CoreRuntimeArgs`` / ``emplace_runtime_args`` / ``ProgramDescriptor``); legacy
-``SetRuntimeArgs`` ops are out of scope. Intentional exceptions (e.g. ops parked pending
-``get_dynamic_runtime_args``) suppress a line with a trailing ``// smuggled-rta-ok: <reason>``.
+``SetRuntimeArgs`` ops are out of scope. A file that mixes both paths (e.g. a factory ported to Metal
+2.0 that still keeps a classic ``Program`` + ``SetRuntimeArgs`` + ``override_runtime_arguments`` path)
+is common, so the check is per-container: an ``*args`` builder vector whose only runtime-arg consumer is
+classic ``SetRuntimeArgs`` is left alone — its addresses are re-applied every cache hit by
+``override_runtime_arguments`` (the sanctioned classic pattern), not smuggled onto a descriptor. Only
+addresses flowing into a descriptor sink (``emplace_runtime_args`` / ``emplace_common_runtime_args`` /
+``KernelDescriptor::runtime_args.emplace_back``) are flagged. Intentional exceptions (e.g. ops parked
+pending ``get_dynamic_runtime_args``) suppress a line with a trailing ``// smuggled-rta-ok: <reason>``.
 """
 
 import bisect
@@ -29,8 +35,19 @@ SINK_START = re.compile(
     r"|CoreRuntimeArgs"  # bare: let _sink_regions find the following { or ( (do not consume it)
     r"|common_runtime_args\s*="
     # a builder container whose name ends in *args (reader_args/writer_runtime_args/…) being appended to
-    r"|[A-Za-z_]\w*args\s*\.\s*(?:push_back|append|emplace_back)"
+    r"|(?P<container>[A-Za-z_]\w*args)\s*\.\s*(?:push_back|append|emplace_back)"
     r")"
+)
+# Container passed as the last argument to a classic (non-descriptor) SetRuntimeArgs call. Such a
+# container is the legacy path — its addresses are re-applied by override_runtime_arguments, not
+# smuggled onto a descriptor — so pushes into it are out of scope (unless it also feeds a descriptor sink).
+CLASSIC_CONSUMER = re.compile(r"\bSetRuntimeArgs\s*\([^;]*?,\s*([A-Za-z_]\w*)\s*\)", re.DOTALL)
+# Container passed by name to a descriptor sink (emplace_runtime_args(core, NAME) /
+# emplace_common_runtime_args(NAME) / runtime_args.emplace_back(core, NAME)).
+DESCRIPTOR_CONSUMER = re.compile(
+    r"(?:emplace_runtime_args|runtime_args\s*\.\s*emplace_back)\s*\([^;{]*?,\s*([A-Za-z_]\w*)\s*\)"
+    r"|emplace_common_runtime_args\s*\(\s*([A-Za-z_]\w*)\s*\)",
+    re.DOTALL,
 )
 ADDRESS = re.compile(r"->\s*address\s*\(\s*\)|\.\s*address\s*\(\s*\)")
 # Local: `<...> foo = <...>address();`  -> foo becomes an "address variable".
@@ -92,8 +109,12 @@ def _strip_comments(text):
 
 
 def _sink_regions(text):
-    """Yield (start_off, end_off) char spans of each runtime-arg construction."""
+    """Yield (start_off, end_off, container) char spans of each runtime-arg construction.
+
+    ``container`` is the builder-vector name for the ``*args.push_back(...)`` form (used to gate out
+    classic ``SetRuntimeArgs`` builders), else ``None`` for a direct descriptor sink."""
     for m in SINK_START.finditer(text):
+        container = m.groupdict().get("container")
         i = m.end()
         # advance to the first opening bracket of the construction
         while i < len(text) and text[i] not in "{(":
@@ -110,7 +131,7 @@ def _sink_regions(text):
             elif c in "})":
                 depth -= 1
                 if depth == 0:
-                    yield (m.start(), j + 1)
+                    yield (m.start(), j + 1, container)
                     break
             j += 1
 
@@ -136,8 +157,15 @@ def check_file(path):
         return OK in lines[lineno - 1] if 1 <= lineno <= len(lines) else False
 
     addr_vars = {m.group(1) for m in ADDR_VAR.finditer(code)}
+    # Containers consumed by classic SetRuntimeArgs vs by a descriptor sink. A builder consumed only by
+    # SetRuntimeArgs is the legacy path (out of scope); if it also feeds a descriptor sink, keep checking it.
+    classic_containers = {m.group(1) for m in CLASSIC_CONSUMER.finditer(code)}
+    descriptor_containers = {g for m in DESCRIPTOR_CONSUMER.finditer(code) for g in m.groups() if g}
+    classic_only = classic_containers - descriptor_containers
     findings = []
-    for s, e in _sink_regions(code):
+    for s, e, container in _sink_regions(code):
+        if container is not None and container in classic_only:
+            continue  # legacy SetRuntimeArgs builder — out of scope (re-applied via override, not smuggled)
         region = code[s:e]
         # (a) direct raw address inside the runtime-arg construction
         for am in ADDRESS.finditer(region):

@@ -80,9 +80,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
                 {
                     .runtime_arg_names = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
                 },
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         };
     };
 
@@ -108,12 +106,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
 
     auto make_kernel_run_params = [&]() {
         return experimental::ProgramRunArgs::KernelRunArgs{
-            .runtime_arg_values =
-                {{node,
-                  {{"signal_address", signal_address},
-                   {"dram_dst_address", dram_address},
-                   {"dram_dst_bank_id", dram_channel},
-                   {"l1_result_addr", l1_result_addr}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"signal_address", signal_address},
+                 {"dram_dst_address", dram_address},
+                 {"dram_dst_bank_id", dram_channel},
+                 {"l1_result_addr", l1_result_addr}}),
         };
     };
 
@@ -325,7 +323,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
             {
                 .runtime_arg_names = {"signal_address", "l1_result_addr"},
             },
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -344,7 +342,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = COMPUTE_KERNEL,
-        .runtime_arg_values = {{node, {{"l1_result_addr", l1_result_addr}, {"signal_address", signal_address}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            node, {{"l1_result_addr", l1_result_addr}, {"signal_address", signal_address}}),
     }};
     experimental::SetProgramRunArgs(program, params);
 

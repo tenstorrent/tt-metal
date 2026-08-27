@@ -26,16 +26,18 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(3);
     constexpr uint32_t test_id = get_compile_time_arg_val(4);
     constexpr bool sync = get_compile_time_arg_val(5) == 1;
+    constexpr uint32_t grid_size_x = get_compile_time_arg_val(6);
+    constexpr uint32_t grid_size_y = get_compile_time_arg_val(7);
 
-    // Tensor accessor compile time args appended to kernel's compile time args
-    // so the index is offset to start at 6
-    auto args = TensorAccessorArgs<6>();
+    auto args = TensorAccessorArgs<8>();
     auto s = TensorAccessor(args, src_addr);
 
     constexpr uint32_t transaction_size_bytes = page_size_bytes;
     DeviceTimestampedData("Number of transactions", num_of_transactions * num_pages);
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("Grid Size X", grid_size_x);
+    DeviceTimestampedData("Grid Size Y", grid_size_y);
 
     // Wait for all cores to reach this point before starting data movement
     barrier_sync(barrier_sem_id, barrier_coord_x, barrier_coord_y, num_cores, local_barrier_addr);

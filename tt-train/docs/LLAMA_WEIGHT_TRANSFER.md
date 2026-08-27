@@ -130,7 +130,7 @@ Every value in the returned dict has the same per-tensor representation:
 |-----------------|------------------------------------------------|------------------------------------------------------------------------|
 | Python type     | `ttnn.Tensor`                                  | on-device handle, no host download                                     |
 | `dtype`         | `ttnn.bfloat16`                                | matches ttml's storage; consumer recasts if its destination differs    |
-| `layout`        | `ttnn.TILE_LAYOUT`                             | matches ttml's storage; `_inplace_copy` re-layouts only on mismatch    |
+| `layout`        | `ttnn.TILE_LAYOUT`                             | matches ttml's storage; `copy_to_buffer` re-layouts only on mismatch   |
 | `memory_config` | `ttnn.DRAM_MEMORY_CONFIG` (interleaved)        | consumer re-shards if its destination is L1 or width-sharded           |
 | mesh placement  | fully replicated across every mesh axis        | DDP supported (e.g. `[1, 2]`); TP / CP / sharded weights not — see [§3.4](#34-subtleties) |
 | rank / shape    | 4D, `(1, 1, *, *)`                             | HF Linear / embedding / gamma shape wrapped in two leading unit dims   |
@@ -138,7 +138,7 @@ Every value in the returned dict has the same per-tensor representation:
 The 4D shape convention is the consumer's contract — every leaf
 `.update()` method in tt-transformers (`Attention`, `MLP`, `RMSNorm`,
 `LMHead`, `Embedding`) accepts 4D explicitly and adapts dtype / layout /
-memcfg inside `_inplace_copy`.
+memcfg inside `copy_to_buffer`.
 
 ### 3.2 Key set
 

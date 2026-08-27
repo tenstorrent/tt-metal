@@ -24,6 +24,7 @@ The decisive facts (per-instruction latencies, which arch's hardware auto-handle
 - **Consult the live source every run; never trust a list reproduced in this document.** Any instruction names / counts below are *dated illustrations for calibration*, subordinate to fresh derivation.
 - Ground latency facts in the **`sfpi` version this build is pinned to** (resolve the pin from tt-metal's build/toolchain config) — that is what compiled the shipped kernels. Optionally also read the tip and **flag divergence**; the pinned version is the verdict authority.
 - Source files to read & parse fresh: `gcc/config/riscv/tt/rtl-rvtt-schedule.cc` (the NOP pass), `gcc/config/riscv/tt/rvtt.md` (the `xtt_delay` and `xtt_dynamic_bug` attributes), `gcc/config/riscv/tt/sfpu-ops-{wh,bh,qsr}.h` (per-arch op tables). HW latency columns: tt-isa-docs MCP `VectorUnit.md` (WH and BH separately).
+- **Instruction existence/validity** is resolved by that arch's `tt_metal/tt-llk/tt_llk_<arch>/common/inc/ckernel_ops.h` (a `TT_OP_*`/`TTI_*` with an opcode encoding = valid), **never** by ISA-doc page coverage — so never flag an instruction "invalid/absent on BH" from a missing page. The header settles *existence only*; latency / sampled registers / errata still come from the ISA + `sfpi-gcc`. (This is the general "never infer a negative from a missing doc" rule — grounded per `race-audit-all`'s ladder + Ground-or-abstain, which this skill's MANDATORY banner already requires; not re-derived here.)
 - **Fetch recipe — the source is a *submodule*, NOT in the local install** (`runtime/sfpi/` ships only the *compiled* toolchain; do not stop there and fall back to a compile experiment). Resolve it each run:
   1. Read the pin in `tt_metal/sfpi-version` (e.g. `sfpi_version='7.62.0'`, `sfpi_repo='https://github.com/tenstorrent/sfpi'`).
   2. `tenstorrent/sfpi` at that tag has a **`gcc` submodule** → `tenstorrent/sfpi-gcc`; get its pinned commit: `gh api repos/tenstorrent/sfpi/contents/gcc?ref=<tag> -q .sha` (e.g. sfpi `7.62.0` → sfpi-gcc `40d9f44`).
@@ -42,15 +43,21 @@ The pass `rtl-rvtt-schedule.cc` conditionally inserts `sfpnop` after Tensix insn
 
 ## Method
 1. **Establish the freshness contract** (resolve pinned sfpi; load the live rule files; re-derive the static-delay set, the per-arch dynamic-bug errata set, and the latency table). State what you derived and from which version.
-2. **Enumerate hand-written instruction sequences** (the at-risk surface):
+2. **Enumerate hand-written instruction sequences** (the at-risk surface).
+   **Scan the KERNEL layer too, not just canonical tt-llk** — hand-written raw
+   `TTI_*`/SFPU sequences live in `ttnn/`/`models/` kernels (e.g. deepseek MoE
+   `top8_merge_sfpu.h`, `bias_bcast_sfpu.h`) and in ttnn ops that **vendor their
+   own `tt_llk` fork** under `.../kernel_includes/tt_llk/`; a canonical-tt-llk-only
+   search misses those (the largest raw-sequence surface):
    ```bash
-   cd tt_metal/tt-llk
-   grep -rInE "\bTTI_SFP[A-Z0-9_]+|\bTTI_[A-Z0-9_]+\(|sfpnop|TTI_NOP" tt_llk_* --include=*.h | grep -v /tests/
+   # from the repo root
+   grep -rInE "\bTTI_SFP[A-Z0-9_]+|\bTTI_[A-Z0-9_]+\(|sfpnop|TTI_NOP" \
+        tt_metal/tt-llk/tt_llk_* ttnn/cpp models --include=*.h --include=*.cpp 2>/dev/null | grep -v /tests/
    ```
    Classify each block by provenance (sfpi-generated vs raw). Skip sfpi-generated blocks.
 3. **For each raw sequence**, walk producer→consumer in program order. For every result a later instruction reads, check the producer's latency (and `xtt_delay` class) against the spacing present: enough NOPs / independent instructions to cover the latency?
 4. **Apply the arch matrix.** WH: every static + dynamic hazard needs manual spacing. BH/QSR: static delays + the `xtt_dynamic_bug` errata instructions still need manual NOPs; other dynamic hazards are HW-scoreboarded. Do NOT exempt Blackhole wholesale.
-5. **Watch the explicit footguns** the compiler flags: variable-LReg read/write (`rvtt.md` notes "for the user to get this right"), `SFPLOADMACRO` ("Complex" latency), and `SFPCONFIG`. Also the non-SFPU result-latencies the compiler never touches (these are pure LLK-C++, manual on every arch): `MVMUL`/FPU → `SFPLOAD`-from-`Dst` settle, config-write (`SETC16`/`WRCFG`) → consumer settle.
+5. **Watch the explicit footguns** the compiler flags: variable-LReg read/write (`rvtt.md` notes "for the user to get this right"), `SFPLOADMACRO` ("Complex" latency), and `SFPCONFIG`. Also the non-SFPU result-latencies the compiler never touches (these are pure LLK-C++, manual on every arch): `MVMUL`/FPU → `SFPLOAD`-from-`Dst` settle (a settle gap is required between an FPU write to `Dst` and an `SFPLOAD` reading that `Dst` region on WH and BH; the exact count — illustratively ~3 unrelated instructions — is a *re-derive-this-run* number per the freshness contract, not a baked authority), config-write (`SETC16`/`WRCFG`) → consumer settle. Related erratum **TEN-2932** (WH/BH, fixed in Quasar): while `LaneConfig.ENABLE_DEST_INDEX` is set, any instruction other than `SFPLOAD`/`SFPLOADI`/`SFPSWAP`/`SFPTRANSP` that writes `LReg[4..7]` is UnsupportedFunctionality. **NOTE: this is an ISA-legality restriction, NOT a latency/settle gap — a NOP does NOT fix it; the fix is avoiding the instruction+mode-bit combo (don't emit the disallowed `LReg[4..7]` write while `ENABLE_DEST_INDEX` is set).** Do not tag a TEN-2932 site LATENCY-HAZARD or recommend inserting NOPs (the Verdict's "errata insn → NOP" remedy applies only to the `xtt_dynamic_bug` latency errata, not to this legality erratum).
 
 ## Verdict
 - **sfpi-compiled, or raw sequence with sufficient spacing for the arch** → SAFE.

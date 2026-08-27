@@ -50,10 +50,6 @@ def test_tilize_8x32(device, N):
     )
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
 
-    # Input tile: 8x32 - represents the logical tile size
-    # The data is in row-major format before tilizing
-    input_tile = ttnn.Tile((8, 32))
-
     # Create input tensor - use ROW_MAJOR_LAYOUT since tilize_block expects row-major input
     # The tilize_block kernel will convert from row-major to tiled format
     ttnn_input = ttnn.from_torch(
@@ -62,7 +58,6 @@ def test_tilize_8x32(device, N):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=input_mem_config,
-        tile=input_tile,
     )
 
     logger.info(f"Created input tensor with shard shape {input_shard_shape}")

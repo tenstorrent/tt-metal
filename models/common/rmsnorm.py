@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import copy_to_buffer
 from models.tt_transformers.tt.common import Mode
 
 TILE = 32
@@ -61,6 +62,7 @@ class RMSNorm(LightweightModule):
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
         self.tt_ccl = tt_ccl
+        self.add_unit_offset = add_unit_offset
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
@@ -119,39 +121,16 @@ class RMSNorm(LightweightModule):
             packer_l1_acc=True,
         )
 
-    @staticmethod
-    def _inplace_copy(src: ttnn.Tensor, dst: ttnn.Tensor, target_dtype) -> None:
-        """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then
-        ``ttnn.copy`` it into ``dst``. ``dst``'s device buffer is
-        preserved. Mirrors ``Attention._inplace_copy``.
-        """
-        converted = src
-
-        if converted.layout != dst.layout:
-            converted = ttnn.to_layout(converted, layout=dst.layout)
-
-        if converted.dtype != target_dtype:
-            converted = ttnn.typecast(converted, dtype=target_dtype)
-
-        if tuple(converted.shape) != tuple(dst.shape):
-            converted = ttnn.reshape(converted, list(dst.shape))
-
-        if converted.memory_config() != dst.memory_config():
-            converted = ttnn.to_memory_config(converted, dst.memory_config())
-
-        ttnn.copy(input_a=converted, input_b=dst)
-
     def update(self, *, weight: ttnn.Tensor) -> None:
         """In-place replace the RMSNorm gamma via ``ttnn.copy``.
 
         HF-format input: ``weight`` is HF ``...norm.weight``, shape
         ``(1, 1, 1, dim)``, bf16, TILE, DRAM-interleaved, replicated.
 
-        ``_inplace_copy`` reshapes to the storage shape
+        ``copy_to_buffer`` reshapes to the storage shape
         ``(1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)`` and TILE -> ROW_MAJOR to
-        match ``self.weight``. No ``add_unit_offset`` here: the constructor's
-        offset is baked into the cached weights once, and ``.update`` ships in
-        already-prepared gamma values.
+        match ``self.weight``. ``add_unit_offset`` is not supported (see
+        assert): the caller must ship a gamma that already includes the +1.
 
         When ``self.weight_distributed`` (the column-sharded mirror) exists it's
         kept in sync on device: project ``self.weight`` into the sharded layout
@@ -160,7 +139,8 @@ class RMSNorm(LightweightModule):
         and ``ttnn.copy`` into it. Both buffers keep their address, so captured
         traces and the prefetcher's recorded addresses stay valid.
         """
-        self._inplace_copy(weight, self.weight, self.weight.dtype)
+        assert not self.add_unit_offset, "RMSNorm.update does not support add_unit_offset=True"
+        copy_to_buffer(weight, self.weight, self.weight.dtype)
 
         if getattr(self, "weight_distributed", None) is not None:
             partitioned = ttnn.mesh_partition(
@@ -169,7 +149,7 @@ class RMSNorm(LightweightModule):
                 dim=2,
                 cluster_axis=1,
             )
-            self._inplace_copy(partitioned, self.weight_distributed, self.weight_distributed.dtype)
+            copy_to_buffer(partitioned, self.weight_distributed, self.weight_distributed.dtype)
 
     def forward(
         self,
@@ -190,12 +170,13 @@ class RMSNorm(LightweightModule):
         sharded_program_config = norm_config.get("sharded_program_config") if norm_config else None
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
         output_mem_config = norm_config.get("output_mem_config") if norm_config else None
+        # Optional L1 placement for the distributed 3-op outputs (pre/gather/post); None -> DRAM default.
+        distributed_out_mc = norm_config.get("distributed_output_mem_config") if norm_config else None
 
         # If input is sharded do sharded RMSNorm and optionally return sharded output
         program_config = sharded_program_config if in_sharded else None
         memory_config = sharded_output_config if out_sharded else None
         distributed = self.is_distributed and self.is_distributed(mode)
-        norm = self._distributed_rmsnorm if distributed else ttnn.rms_norm
         weight = self.weight_distributed if distributed else self.weight
 
         if in_sharded:
@@ -203,14 +184,23 @@ class RMSNorm(LightweightModule):
         else:
             assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"
 
-        x = norm(
-            x,
-            epsilon=self.eps,
-            weight=weight,
-            program_config=program_config,
-            memory_config=memory_config,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
+        if distributed:
+            x = self._distributed_rmsnorm(
+                x,
+                epsilon=self.eps,
+                weight=weight,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                output_memory_config=distributed_out_mc,
+            )
+        else:
+            x = ttnn.rms_norm(
+                x,
+                epsilon=self.eps,
+                weight=weight,
+                program_config=program_config,
+                memory_config=memory_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
 
         if in_sharded and not out_sharded:
             return ttnn.sharded_to_interleaved(x)
@@ -220,14 +210,26 @@ class RMSNorm(LightweightModule):
             return x
 
     def _distributed_rmsnorm(
-        self, inp, epsilon=None, weight=None, program_config=None, memory_config=None, compute_kernel_config=None
+        self,
+        inp,
+        epsilon=None,
+        weight=None,
+        program_config=None,
+        memory_config=None,
+        compute_kernel_config=None,
+        output_memory_config=None,
     ):
         assert program_config is None, "Distributed RMSNorm does not support sharded inputs"
         assert memory_config is None, "Distributed RMSNorm does not support sharded outputs"
         assert self.tt_ccl is not None, "Distributed RMSNorm requires tt_ccl"
 
+        # Interleaved output placement for the 3 ops; default DRAM (matches the prior hardcoded behavior).
+        mc = output_memory_config if output_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+
         # Run distributed rmsnorm part 1
-        tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+        tt_stats = ttnn.rms_norm_pre_all_gather(
+            inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, memory_config=mc
+        )
         # AllGather stats
         tt_stats = ttnn.experimental.all_gather_async(
             tt_stats,
@@ -236,7 +238,7 @@ class RMSNorm(LightweightModule):
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
             topology=self.ccl_topology,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             chunks_per_sync=10,
             num_workers_per_link=2,
@@ -249,6 +251,7 @@ class RMSNorm(LightweightModule):
             epsilon=epsilon,
             weight=weight,
             compute_kernel_config=compute_kernel_config,
+            memory_config=mc,
         )
         tt_stats.deallocate(True)
 

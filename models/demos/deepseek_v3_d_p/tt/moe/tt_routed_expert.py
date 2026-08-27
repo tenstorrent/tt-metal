@@ -24,6 +24,21 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
+# Model configs are torch-only and so name their activation as a string; this is the one place
+# that maps those names onto the kernel enum. Keys match the HF ``hidden_act`` spelling.
+ROUTED_EXPERT_ACTIVATION_BY_NAME = {
+    "silu": ttnn.RoutedExpertActivation.Silu,
+    "swiglu_oai": ttnn.RoutedExpertActivation.SwiGluOai,
+    "situ": ttnn.RoutedExpertActivation.SituGlu,
+}
+
+# Activations whose fused kernel path carries the bias branch (gate/up bias before the
+# activation, down bias after the down matmul). SiLU has no bias branch.
+_BIAS_CAPABLE_ACTIVATIONS = (
+    ttnn.RoutedExpertActivation.SwiGluOai,
+    ttnn.RoutedExpertActivation.SituGlu,
+)
+
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
@@ -155,6 +170,57 @@ class TtRoutedExpert(LightweightModule):
         return (gate_tensors, up_tensors, down_tensors) if device else None
 
     @staticmethod
+    def _convert_expert_biases(
+        torch_biases: list[dict],
+        experts_per_chip: int,
+        mesh_device: ttnn.MeshDevice,
+        bias_dtype=ttnn.bfloat16,
+    ):
+        """Convert per-expert gate/up/down biases to mesh-distributed ttnn tensors.
+
+        Each torch bias dict has keys gate_proj_bias/up_proj_bias/down_proj_bias (1D,
+        length = projection N). Returns (gate, up, down) lists of one (1, N) TILE tensor
+        per local expert, distributed across the mesh exactly like the routed weights
+        (reusing the weight gather + mesh mapper by remapping the bias keys).
+        """
+        mesh_rows, mesh_cols = mesh_device.shape
+        mapper = ExpertMapping.get_weights_mesh_mapper(mesh_device)
+        # Remap bias keys so the weight-distribution gather can be reused verbatim.
+        as_weights = [
+            {
+                "gate_proj": d["gate_proj_bias"],
+                "up_proj": d["up_proj_bias"],
+                "down_proj": d["down_proj_bias"],
+            }
+            for d in torch_biases
+        ]
+
+        def _to_tt(per_pos_biases):
+            # each entry is 1D (N,) -> (1, N); stack per mesh position -> (rows, cols, 1, N)
+            stacked = torch.stack([b.reshape(1, -1) for b in per_pos_biases], dim=0)
+            n = stacked.shape[-1]
+            stacked = stacked.reshape(mesh_rows, mesh_cols, 1, n)
+            tt = ttnn.as_tensor(
+                stacked,
+                mesh_mapper=mapper,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                dtype=bias_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            return ttnn.squeeze(ttnn.squeeze(tt, dim=0), dim=0)  # per device: (1, N)
+
+        gate_biases, up_biases, down_biases = [], [], []
+        for local_expert_idx in range(experts_per_chip):
+            gb, ub, db = ExpertMapping.gather_weights_for_mesh_distribution(
+                as_weights, local_expert_idx, mesh_rows, mesh_cols, experts_per_chip
+            )
+            gate_biases.append(_to_tt(gb))
+            up_biases.append(_to_tt(ub))
+            down_biases.append(_to_tt(db))
+        return gate_biases, up_biases, down_biases
+
+    @staticmethod
     def build_ttnn_cache(
         torch_weights: list[dict],
         experts_per_chip: int,
@@ -196,6 +262,7 @@ class TtRoutedExpert(LightweightModule):
         hidden_dim: int = 2 * 1024,
         max_tokens: int = 1600,
         torch_weights: list[dict] = None,
+        torch_biases: list[dict] = None,
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
@@ -212,7 +279,10 @@ class TtRoutedExpert(LightweightModule):
             experts_per_chip: Number of local experts per chip
             emb_dim: Embedding dimension (default: 7168)
             hidden_dim: Hidden/intermediate dimension (default: 2048)
-            max_tokens: Maximum tokens per expert (default: 1600, used for program config)
+            max_tokens: Maximum tokens per expert (default: 1600, used for program config).
+                          The FFN kernel sizes chunk_M_tiles/per_core_M to each expert's
+                          ACTUAL token count at runtime (read device-side), so no expected-
+                          token hint is needed.
             torch_weights: Optional list of dicts with keys 'gate_proj', 'up_proj', 'down_proj'
                           containing torch tensors. Length must be num_devices * experts_per_chip
                           (total routed experts), with weights ordered by global expert index.
@@ -227,9 +297,10 @@ class TtRoutedExpert(LightweightModule):
                           global ids. Required.
             activation: Required ttnn.RoutedExpertActivation selecting the fused kernel's
                           activation. Pass RoutedExpertActivation.Silu for the DeepSeek path
-                          (byte-identical) or RoutedExpertActivation.SwiGluOai for the
-                          MiniMax-M3 / gpt-oss clamped swigluoai activation. Keyword-only and
-                          without a default so the caller must choose explicitly.
+                          (byte-identical), RoutedExpertActivation.SwiGluOai for the
+                          MiniMax-M3 / gpt-oss clamped swigluoai activation, or
+                          RoutedExpertActivation.SituGlu for Kimi K3's SiTU-GLU. Keyword-only
+                          and without a default so the caller must choose explicitly.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -247,14 +318,33 @@ class TtRoutedExpert(LightweightModule):
         # Activation variant for the fused unified_routed_expert_moe kernel.
         # Required RoutedExpertActivation, chosen explicitly by the caller (no
         # silent default): pass ttnn.RoutedExpertActivation.Silu for the DeepSeek
-        # path (byte-identical) or .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
-        # swigluoai activation. Enforcing presence avoids silently running the
-        # wrong activation when a caller forgets to set it.
+        # path (byte-identical), .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
+        # swigluoai activation, or .SituGlu for Kimi K3's SiTU-GLU. Enforcing presence
+        # avoids silently running the wrong activation when a caller forgets to set it.
         if activation is None:
             raise ValueError(
-                "TtRoutedExpert requires an explicit `activation` (ttnn.RoutedExpertActivation.Silu or .SwiGluOai)"
+                "TtRoutedExpert requires an explicit `activation` "
+                "(ttnn.RoutedExpertActivation.Silu, .SwiGluOai or .SituGlu)"
             )
         self.activation = activation
+
+        # Every non-SiLU activation lives in the fused Blackhole kernel only; the Wormhole
+        # fallback in forward() calls routed_expert_ffn, which has no activation parameter and
+        # always computes SiLU. Reject here rather than silently returning SiLU output.
+        if activation != ttnn.RoutedExpertActivation.Silu and not is_blackhole():
+            raise NotImplementedError(
+                f"TtRoutedExpert {activation} is only supported on the Blackhole fused path; "
+                "the fallback path computes SiLU"
+            )
+
+        # Optional per-expert projection biases (gpt-oss). Supported by any fused binary
+        # activation (the kernel adds gate/up bias before the activation and down bias
+        # after the down matmul). Converted + distributed like the weights below.
+        if torch_biases is not None and activation not in _BIAS_CAPABLE_ACTIVATIONS:
+            raise ValueError(
+                "TtRoutedExpert expert biases require a fused binary activation "
+                "(RoutedExpertActivation.SwiGluOai or .SituGlu); the SiLU path has no bias branch."
+            )
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -322,6 +412,19 @@ class TtRoutedExpert(LightweightModule):
 
         assert result is not None, "Expected weight tensors to be returned when device is provided"
         self.gate_projs, self.up_projs, self.down_projs = result
+
+        # Convert + distribute optional per-expert biases (gpt-oss), one (1, N)
+        # tensor per local expert, mesh-distributed like the weights.
+        self.gate_biases = None
+        self.up_biases = None
+        self.down_biases = None
+        if torch_biases is not None:
+            assert (
+                len(torch_biases) == total_experts
+            ), f"Expected {total_experts} expert biases, got {len(torch_biases)}"
+            self.gate_biases, self.up_biases, self.down_biases = self._convert_expert_biases(
+                torch_biases, experts_per_chip, self.mesh_device
+            )
 
     @staticmethod
     def shard_expert_token_counts(
@@ -412,12 +515,16 @@ class TtRoutedExpert(LightweightModule):
         """
         logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
-        # Convert input to activations dtype if needed
-        if dispatched_buffer.dtype != self.activations_dtype:
-            logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
-            dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
-
         if is_blackhole():
+            # Fused path. The composite op selects its strategy from the input
+            # layout: a ROW_MAJOR bf16 buffer is consumed directly (x tilized and
+            # bf8-packed internally, fresh output); a TILE buffer takes the
+            # non-fused read path and is written in place. TILE mode requires x to
+            # be bf8, so cast a mismatched TILE input; the ROW_MAJOR fast path is
+            # left untouched.
+            if dispatched_buffer.layout == ttnn.TILE_LAYOUT and dispatched_buffer.dtype != self.activations_dtype:
+                logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
+                dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
             signpost(header="UnifiedRoutedExpertMoe")
             expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
                 dispatched_buffer,
@@ -430,11 +537,27 @@ class TtRoutedExpert(LightweightModule):
                 max_dispatched_tokens_per_expert=self.max_tokens,
                 compute_kernel_config=self.compute_kernel_config,
                 activation=self.activation,
+                gate_biases=self.gate_biases,
+                up_biases=self.up_biases,
+                down_biases=self.down_biases,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
 
-        # Wormhole fallback: per-expert Python loop with extract → FFN → insert.
+        if self.gate_biases is not None:
+            raise NotImplementedError("Expert bias is only supported on the Blackhole fused path")
+
+        # Wormhole fallback: the per-expert extract → FFN → insert loop needs a
+        # TILE activations_dtype buffer. A ROW_MAJOR input is tilized and cast in
+        # one to_layout; an already-TILE input only needs the dtype cast (to_layout
+        # would not cast a TILE→TILE tensor). expert_outputs aliases this buffer;
+        # the insert writes each expert's result back in place.
+        if dispatched_buffer.layout == ttnn.TILE_LAYOUT:
+            if dispatched_buffer.dtype != self.activations_dtype:
+                logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
+                dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
+        else:
+            dispatched_buffer = ttnn.to_layout(dispatched_buffer, ttnn.TILE_LAYOUT, dtype=self.activations_dtype)
         expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")

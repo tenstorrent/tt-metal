@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
+#include <vector>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/roll/device/roll_device_operation_types.hpp"
@@ -16,7 +18,7 @@ namespace ttnn::prim {
 struct RollDeviceOperation {
     using operation_attributes_t = RollParams;
     using tensor_args_t = RollInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<RollShardedProgramFactory>;
 

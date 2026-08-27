@@ -6,6 +6,9 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
@@ -160,6 +163,11 @@ void validate_remote_desc(
         local_desc.config.socket_mem_config.receiver_sub_device ==
             remote_desc.config.socket_mem_config.receiver_sub_device,
         "Mismatch in receiver sub-device during handshake.");
+
+    TT_FATAL(
+        local_desc.config.socket_mem_config.per_core_allocation ==
+            remote_desc.config.socket_mem_config.per_core_allocation,
+        "Mismatch in socket per-core allocation flag during handshake.");
     if (validate_buffer_addresses) {
         TT_FATAL(
             local_desc.config_buffer_address == remote_desc.config_buffer_address,
@@ -261,7 +269,31 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
 
     uint32_t num_data_cores = 0;
     CoreRangeSet shard_grid;
-    if (socket_mem_config.socket_storage_type == BufferType::DRAM) {
+    bool per_core = socket_mem_config.per_core_allocation;
+    if (per_core) {
+        TT_FATAL(
+            socket_mem_config.socket_storage_type == BufferType::L1,
+            "Per-core socket allocation is only supported for L1 storage (got {}).",
+            socket_mem_config.socket_storage_type);
+        std::unordered_set<MeshCoreCoord> receiver_cores;
+        for (const auto& connection : config.socket_connection_config) {
+            receiver_cores.insert(connection.receiver_core);
+        }
+        TT_FATAL(
+            receiver_cores.size() == 1,
+            "Per-core socket allocation (v1) supports exactly one distinct receiver core (device + core) per "
+            "socket, but the connection config resolves to {} distinct (device, core) receivers. A per-core "
+            "socket may not span multiple receiver cores or devices.",
+            receiver_cores.size());
+
+        TT_FATAL(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_allocator_mode_hybrid(),
+            "Per-core socket allocation requires the device to be opened with AllocatorMode::HYBRID "
+            "(set TT_METAL_ALLOCATOR_MODE_HYBRID=1 before opening the device).");
+
+        shard_grid = CoreRangeSet(receiver_cores.begin()->core_coord);
+        num_data_cores = 1;
+    } else if (socket_mem_config.socket_storage_type == BufferType::DRAM) {
         // Allocate DRAM Sharded Buffer
         shard_grid =
             CoreRange(CoreCoord(0, 0), CoreCoord(receiver->dram_grid_size().x - 1, receiver->dram_grid_size().y - 1));
@@ -274,12 +306,16 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
     }
     // Allocate a shard of size fifo_size on each data core. User decides how these data-cores must be used
     const auto total_data_buffer_size = num_data_cores * socket_mem_config.fifo_size;
+    auto sharding_args = BufferShardingArgs(
+        ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_data_cores, 1}),
+        TensorMemoryLayout::HEIGHT_SHARDED);
+    if (per_core) {
+        experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+    }
     DeviceLocalBufferConfig socket_data_buffer_specs = {
         .page_size = socket_mem_config.fifo_size,
         .buffer_type = socket_mem_config.socket_storage_type,
-        .sharding_args = BufferShardingArgs(
-            ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_data_cores, 1}),
-            TensorMemoryLayout::HEIGHT_SHARDED),
+        .sharding_args = sharding_args,
         .bottom_up = std::nullopt,
         .sub_device_id = socket_mem_config.socket_storage_type == BufferType::DRAM
                              ? std::nullopt
@@ -311,7 +347,6 @@ void write_socket_configs(
     const SocketSenderSize sender_size;
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Resolve the peer endpoint's FabricNodeId for a given connection. Same-process sockets pass
     // the real peer device (offset-aware). Cross-rank sockets have no peer device and instead read
@@ -335,13 +370,17 @@ void write_socket_configs(
         const auto sender_total_size_bytes =
             sender_size.md_size_bytes +
             (max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes));
-        auto sender_mesh_id = local_descriptor.config.sender_mesh_id.value();
-        auto sender_local_coord_range = control_plane.get_coord_range(sender_mesh_id, tt_fabric::MeshScope::LOCAL);
-
         std::vector<uint32_t> config_data(config_buffer->size() / sizeof(uint32_t), 0);
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
-            if (!sender_local_coord_range.contains(device_coord)) {
+            // Only program sockets whose sender device is on this host's local mesh. Use
+            // MeshDevice::is_local (the same local-ownership check #44890 introduced and uses
+            // in global_semaphore.cpp): it tests the coordinate against this mesh_device's
+            // own frame, so it works for both full-mesh coordinates (multi-host) and the
+            // submesh-local coordinates used by rank-scoped stage sockets. The previous
+            // get_coord_range(mesh_id, LOCAL).contains(device_coord) check only matched
+            // full-mesh coords and silently skipped submesh-local ones (writing zeros).
+            if (!mesh_device->is_local(device_coord)) {
                 continue;
             }
             if (cores_map.size() > 1) {
@@ -378,11 +417,9 @@ void write_socket_configs(
                     tt_fabric::FabricNodeId recv_fabric_node_id =
                         get_peer_fabric_node(recv_device_coord, connection_index, peer_device);
                     uint32_t receiver_id = receiver_ids_per_sender.at(connection);
+                    auto sender_node = mesh_device->get_fabric_node_id(sender_core.device_coord);
                     auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
-                        mesh_device->get_fabric_node_id(sender_core.device_coord),
-                        recv_fabric_node_id,
-                        fabric_config,
-                        SocketEndpoint::SENDER);
+                        sender_node, recv_fabric_node_id, fabric_config, SocketEndpoint::SENDER);
                     // Write to the correct slot based on receiver ID
                     uint32_t receiver_enc_offset =
                         enc_offset + (receiver_id * (sender_size.enc_size_bytes / sizeof(uint32_t)));
@@ -397,11 +434,12 @@ void write_socket_configs(
     } else {
         std::vector<receiver_socket_md> config_data(
             config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
-        auto receiver_mesh_id = local_descriptor.config.receiver_mesh_id.value();
-        auto receiver_local_coord_range = control_plane.get_coord_range(receiver_mesh_id, tt_fabric::MeshScope::LOCAL);
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
-            if (!receiver_local_coord_range.contains(device_coord)) {
+            // See the sender branch: use MeshDevice::is_local so submesh-local rank-scoped
+            // socket coords are programmed (get_coord_range(..., LOCAL) only matches full-mesh
+            // coords and skipped them, leaving the receiver config zeroed).
+            if (!mesh_device->is_local(device_coord)) {
                 continue;
             }
 
@@ -442,6 +480,20 @@ void write_socket_configs(
     }
 }
 
+DeviceAddr get_receiver_data_buffer_address(const MeshSocket& receiver_socket) {
+    const auto& config = receiver_socket.get_config();
+    const auto& data_buffer = *receiver_socket.get_data_buffer();
+    if (!config.socket_mem_config.per_core_allocation) {
+        return data_buffer.address();
+    }
+    TT_FATAL(
+        !config.socket_connection_config.empty(),
+        "Per-core socket has no connections; cannot resolve receiver data buffer address.");
+    const auto& receiver_core = config.socket_connection_config.front().receiver_core;
+    return experimental::per_core_allocation::get_per_core_address(
+        data_buffer, receiver_core.device_coord, receiver_core.core_coord);
+}
+
 SocketPeerDescriptor generate_local_endpoint_descriptor(
     const MeshSocket& socket_endpoint, std::optional<DistributedContextId> context_id) {
     const auto& config = socket_endpoint.get_config();
@@ -458,7 +510,7 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
     SocketPeerDescriptor local_endpoint_desc = {
         .config = config,
         .config_buffer_address = socket_endpoint.get_config_buffer()->address(),
-        .data_buffer_address = is_sender ? 0 : socket_endpoint.get_data_buffer()->address(),
+        .data_buffer_address = is_sender ? 0 : get_receiver_data_buffer_address(socket_endpoint),
         .exchange_tag = tag};
 
     // Advertise this endpoint's own resolved fabric nodes, indexed by socket connection. The peer
@@ -672,6 +724,7 @@ std::vector<multihost::Rank> get_ranks_for_mesh_id(
     const auto& global_logical_bindings =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_global_logical_bindings();
     std::vector<multihost::Rank> ranks;
+    ranks.reserve(global_logical_bindings.size());
 
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
         if (std::get<0>(mesh_id_and_host_rank) == mesh_id && rank_translation_table.contains(rank)) {

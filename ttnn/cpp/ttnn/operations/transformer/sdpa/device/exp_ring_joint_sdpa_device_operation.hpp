@@ -6,9 +6,11 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 
@@ -19,7 +21,7 @@ struct ExpRingJointSDPADeviceOperation {
     using tensor_args_t = ExpRingJointSDPAInputs;
     using spec_return_value_t = ExpRingJointSDPAResultSpec;
     using tensor_return_value_t = ExpRingJointSDPAResult;
-    using program_factory_t = std::variant<ExpRingJointSDPAProgramFactory>;
+    using program_factory_t = std::variant<ExpRingJointSDPAMeshWorkloadFactory>;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

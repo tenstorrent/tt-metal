@@ -101,12 +101,8 @@ def _is_galaxy_vector(vec):
     )
 
 
-def vector_axis(vec):
-    # Galaxy always uses COL dispatch regardless of shard spec heuristics.
-    # Galaxy vectors with x=7 in shard grids would incorrectly classify as
-    # ROW, but Galaxy physically dispatches on COL axis.
-    if _is_galaxy_vector(vec):
-        return "col"
+def _scan_axis_needs(vec):
+    """Raw {needs_col, needs_row} for a vector's shard grids / program config."""
     state = {"needs_col": False, "needs_row": False}
     for k, v in vec.items():
         if "memory_config" in k:
@@ -115,6 +111,34 @@ def vector_axis(vec):
             _scan_mc(v, state)
         if k == "program_config":
             _scan_pc(v, state)
+    return state
+
+
+def vector_dispatch_axis_hint(vec):
+    """The axis a sweep module would derive for this vector: 'row', 'col' or None.
+
+    Mirrors mesh_tensor_utils.dispatch_axis_for_grid() -- ROW is checked FIRST (the
+    compute-grid width is the hard constraint) and None means "either axis works", so
+    the module passes axis=None and inherits TTNN_DISPATCH_AXIS. Note this deliberately
+    differs from vector_axis() below in two ways: no Galaxy override, and ROW wins over
+    COL. vector_axis() decides which PARTITION FILE a vector lands in; this predicts the
+    DEVICE KEY a module will actually open, which is what the runner orders vectors by.
+    """
+    state = _scan_axis_needs(vec)
+    if state["needs_row"]:
+        return "row"
+    if state["needs_col"]:
+        return "col"
+    return None
+
+
+def vector_axis(vec):
+    # Galaxy always uses COL dispatch regardless of shard spec heuristics.
+    # Galaxy vectors with x=7 in shard grids would incorrectly classify as
+    # ROW, but Galaxy physically dispatches on COL axis.
+    if _is_galaxy_vector(vec):
+        return "col"
+    state = _scan_axis_needs(vec)
     if state["needs_col"]:
         return "col"
     if state["needs_row"]:

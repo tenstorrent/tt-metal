@@ -20,7 +20,7 @@ namespace ttnn::experimental::prim {
 struct SplitFusedQKVAndSplitHeadsDeviceOperation {
     using operation_attributes_t = SplitQueryKeyValueAndSplitHeadsParams;
     using tensor_args_t = SplitQueryKeyValueAndSplitHeadsInputs;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t =

@@ -10,7 +10,7 @@
 #include <cstring>
 #include <span>
 #include <sub_device_types.hpp>
-#include <tracy/Tracy.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -35,6 +35,7 @@
 #include "circular_buffer.hpp"
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
+#include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/device/device_impl.hpp"
@@ -66,7 +67,7 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include "vector_aligned.hpp"
+#include "impl/dispatch/vector_aligned.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
 #include "kernels/kernel.hpp"
@@ -74,6 +75,7 @@
 
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdev/rta_constants.h"
+#include "hostdev/cross_node_dfb_constants.h"
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
@@ -104,7 +106,6 @@ inline bool is_watcher_assert_enabled() {
 }
 
 struct CommandConstants {
-    CoreType dispatch_core_type;
     NOC noc_index;
     uint32_t max_prefetch_command_size;
     uint32_t packed_write_max_unicast_sub_cmds;
@@ -342,7 +343,7 @@ void finalize_dfb_masks(
         for (const auto& dfb : dataflow_buffers) {
             for (const CoreRange& kg_range : kg->core_ranges.ranges()) {
                 if (dfb->core_ranges.intersects(kg_range)) {
-                    kg_dfb_mask |= (uint64_t(1) << dfb->id);
+                    kg_dfb_mask |= (uint64_t(1) << dfb->device_slot);
                     break;
                 }
             }
@@ -351,6 +352,122 @@ void finalize_dfb_masks(
             kernel_config.local_cb_mask() = kg_dfb_mask;
         }
     }
+}
+
+// Size the CrossNodeDFB dense kernel-config index from the workload-wide slot count.
+// Full per-core pages live in dedicated program-owned L1 config Buffers, so only the
+// fixed [config_addr, entry_size, relay_id] entries consume ringbuffer space.
+//
+// Important for MeshWorkload: programs can share logical core coordinates across device
+// ranges. Merging participants by logical core would incorrectly give a non-NONE offset to a
+// program with no CrossNodeDFBs, causing firmware to parse stale kernel-config words.
+uint32_t finalize_cross_node_dfbs(
+    uint32_t programmable_core_type_index, ttsl::Span<ProgramImpl*> programs, uint32_t base_offset) {
+    uint8_t max_num_cross_node_dfbs = 0;
+    for (ProgramImpl* program : programs) {
+        max_num_cross_node_dfbs = std::max(max_num_cross_node_dfbs, program->num_cross_node_dfb_slots());
+    }
+
+    if (max_num_cross_node_dfbs == 0) {
+        for (ProgramImpl* program : programs) {
+            for (auto& kg : program->get_kernel_groups(programmable_core_type_index)) {
+                kg->launch_msg.view().kernel_config().cross_node_dfb_offset() = CROSS_NODE_DFB_OFFSET_NONE;
+            }
+        }
+        return base_offset;
+    }
+
+    const uint32_t cross_node_dfb_offset = base_offset;
+    const uint32_t cross_node_dfb_region_words = cross_node_dfb_config_region_words(max_num_cross_node_dfbs);
+    const uint32_t cross_node_dfb_region_bytes = cross_node_dfb_region_words * sizeof(uint32_t);
+    TT_FATAL(
+        cross_node_dfb_offset <= std::numeric_limits<uint16_t>::max(),
+        "CrossNodeDFB config offset {} overflows uint16_t launch-msg field",
+        cross_node_dfb_offset);
+    TT_FATAL(
+        cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE,
+        "CrossNodeDFB config offset collides with CROSS_NODE_DFB_OFFSET_NONE (0x{:x})",
+        CROSS_NODE_DFB_OFFSET_NONE);
+
+    for (ProgramImpl* program : programs) {
+        const auto& per_core_participants = program->get_per_core_cross_node_dfbs();
+        for (auto& kg : program->get_kernel_groups(programmable_core_type_index)) {
+            bool has_participants = false;
+            for (const CoreRange& cr : kg->core_ranges.ranges()) {
+                for (const auto& core : cr) {
+                    auto it = per_core_participants.find(core);
+                    if (it != per_core_participants.end() && !it->second.empty()) {
+                        has_participants = true;
+                        break;
+                    }
+                }
+                if (has_participants) {
+                    break;
+                }
+            }
+
+            auto kernel_config = kg->launch_msg.view().kernel_config();
+            kernel_config.cross_node_dfb_offset() =
+                has_participants ? static_cast<uint16_t>(cross_node_dfb_offset) : CROSS_NODE_DFB_OFFSET_NONE;
+        }
+    }
+
+    return tt::align(
+        base_offset + cross_node_dfb_region_bytes, MetalContext::instance().hal().get_alignment(HalMemType::L1));
+}
+
+// Build the dense device config region from a core's sparse host participant records.
+// Slots this core does not participate in stay zeroed; firmware skips config_page_addr == 0.
+std::vector<uint32_t> build_cross_node_dfb_config_payload(
+    uint8_t num_program_slots, const std::vector<ProgramImpl::CrossNodeDFBParticipant>& sparse_participants) {
+    std::vector<uint32_t> payload(cross_node_dfb_config_region_words(num_program_slots), 0u);
+    payload[0] = num_program_slots;
+    for (const auto& participant : sparse_participants) {
+        TT_FATAL(
+            participant.remote_dfb_id < num_program_slots,
+            "CrossNodeDFB sparse participant remote_dfb_id {} exceeds program slot count {}",
+            participant.remote_dfb_id,
+            num_program_slots);
+        const uint32_t base =
+            CROSS_NODE_DFB_REGION_HEADER_WORDS + participant.remote_dfb_id * CROSS_NODE_DFB_CONFIG_WORDS;
+        payload[base + 0] = participant.config_page_addr;
+        payload[base + 1] = participant.entry_size;
+        payload[base + 2] = participant.relay_dfb_id;
+    }
+    return payload;
+}
+
+std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
+    const CoreRangeSet& kernel_group_cores,
+    const std::unordered_map<CoreCoord, std::vector<ProgramImpl::CrossNodeDFBParticipant>>& per_core_cross_node_dfbs,
+    uint8_t num_program_slots) {
+    std::map<std::vector<uint32_t>, std::pair<CoreCoord, std::vector<CoreCoord>>> cores_by_payload;
+
+    for (const CoreRange& core_range : kernel_group_cores.ranges()) {
+        for (const CoreCoord& core : core_range) {
+            auto it = per_core_cross_node_dfbs.find(core);
+            if (it == per_core_cross_node_dfbs.end() || it->second.empty()) {
+                continue;
+            }
+
+            std::vector<uint32_t> payload = build_cross_node_dfb_config_payload(num_program_slots, it->second);
+            auto& entry = cores_by_payload[payload];
+            if (entry.second.empty()) {
+                entry.first = core;
+            }
+            entry.second.push_back(core);
+        }
+    }
+
+    std::vector<CrossNodeDFBCoreGroup> groups;
+    groups.reserve(cores_by_payload.size());
+    for (auto& [payload, representative_and_cores] : cores_by_payload) {
+        const auto& [representative_core, cores] = representative_and_cores;
+        // Constructing from CoreCoords merges them into maximal rectangles.
+        groups.push_back(
+            {payload, representative_core, CoreRangeSet(ttsl::Span<const CoreCoord>(cores.data(), cores.size()))});
+    }
+    return groups;
 }
 
 uint32_t finalize_kernel_bins(
@@ -442,6 +559,9 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
     calculator.add_dispatch_wait();
     const uint32_t cached_stall_cmd_seqB = calculator.write_offset_bytes();
 
+    // cq_id is a placeholder: this sequence is cached per-program (not per-CQ), so no real cq_id exists yet.
+    // update_program_dispatch_commands/update_traced_program_dispatch_commands patch in the real completion
+    // address for the enqueuing CQ before the sequence ever reaches hardware.
     program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx] =
         HostMemDeviceCommand(uncached_stall_cmd_sizeB);
     // Empty wait command initialized here. Will get updated when program is enqueued.
@@ -449,7 +569,8 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
         CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
         MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
-        0);
+        0,
+        /*cq_id=*/0);
     // Empty wait command initialized here. Will get updated when program is enqueued.
     program_command_sequence.stall_command_sequences[CachedStallSequenceIdx] =
         HostMemDeviceCommand(cached_stall_cmd_seqB);
@@ -457,7 +578,8 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
         MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
-        0);
+        0,
+        /*cq_id=*/0);
 }
 
 // Watcher only: pre-fill an RTA payload region with 0xBEEF0000 | rand16 so unused runtime-arg slots are
@@ -616,12 +738,48 @@ void generate_runtime_args_cmds(
     }
 }
 
+// Max cores whose RTA payloads fit in one large-unicast command. The command is inline: every core's
+// payload is embedded in the prefetcher command, so the whole command (relay-inline header + sub-cmds +
+// all per-core payloads) must fit max_prefetch_command_size — not just the 35-sub-cmd cap. On eth dispatch
+// max_prefetch_command_size is only 32KB (vs 128KB on worker) and the eth cmddat queue is 64KB (vs 256KB),
+// so a large per-core payload forces far fewer than 35 cores per command; exceeding it silently overflows
+// the eth cmddat queue and hangs the device. Returns >=1 (a single core's payload is L1-fit-checked at
+// finalize, so it is expected to fit).
+uint32_t max_cores_per_large_unicast_cmd(uint32_t rta_payload_sizeB, uint32_t max_prefetch_command_size) {
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t aligned_core_payload = tt::align(rta_payload_sizeB, l1_alignment);
+    for (uint32_t n = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS; n >= 1; --n) {
+        DeviceCommandCalculator calculator;
+        calculator.add_dispatch_write_packed_large_unicast(n, n * aligned_core_payload);
+        if (calculator.write_offset_bytes() <= max_prefetch_command_size) {
+            return n;
+        }
+    }
+    // Even a single core's inline payload does not fit one prefetcher command. This path embeds the RTA
+    // payload inline in the command, so it cannot be split across commands (only across cores). Fail loudly
+    // here rather than emit an oversized command that silently hangs the device (the fetch_queue_write size
+    // guard is a TT_ASSERT and compiles out in release builds). The kernel-side RTA ceiling
+    // (validate_runtime_args_size) is set before the dispatch core type is known, so this is the first point
+    // that can enforce the dispatch-core-specific prefetch command size.
+    DeviceCommandCalculator single_core;
+    single_core.add_dispatch_write_packed_large_unicast(1, aligned_core_payload);
+    TT_FATAL(
+        false,
+        "A single core's unique runtime args ({} B payload -> {} B prefetcher command) exceed the max prefetch "
+        "command size ({} B) for this dispatch core type. The large-unicast RTA path sends the payload inline and "
+        "cannot split one core across commands. Reduce the number of unique runtime args for this kernel.",
+        rta_payload_sizeB,
+        single_core.write_offset_bytes(),
+        max_prefetch_command_size);
+    return 1;  // unreachable
+}
+
 // Emit unique runtime args for a kernel group using CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST instead of
 // CQ_DISPATCH_CMD_WRITE_PACKED. Unlike the packed path, the large-unicast dispatch handler wraps CB pages
 // per sub-command, so a single core's RTA payload is no longer limited to one dispatch page. Used when a
 // kernel group's per-core payload exceeds that page (see assemble_runtime_args_commands). The command
 // layout mirrors BatchedTransferGenerator: one sub-command (core) per unicast destination, up to
-// CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS per command, with each core's payload laid out
+// max_cores_per_large_unicast_cmd() per command, with each core's payload laid out
 // exactly as the packed path lays out its per-core data region so the RTA-update pointers stay valid.
 void generate_runtime_args_cmds_large_unicast(
     std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
@@ -633,18 +791,20 @@ void generate_runtime_args_cmds_large_unicast(
     std::vector<std::vector<
         std::pair<std::reference_wrapper<RuntimeArgsData>, std::reference_wrapper<const std::vector<uint32_t>>>>>&
         rt_args_data,
+    uint32_t max_prefetch_command_size,
     uint32_t write_offset_index) {
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     // Device reads rta_payload_sizeB bytes per sub-command, then pads the read pointer to `alignment`, so
     // consecutive per-core payloads in the command stream are separated by this aligned size.
     const uint32_t aligned_core_payload = tt::align(rta_payload_sizeB, l1_alignment);
     const uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
+    // Cap cores/command by the prefetcher command size, not just the sub-cmd count (see helper above).
+    const uint32_t max_cores_per_cmd = max_cores_per_large_unicast_cmd(rta_payload_sizeB, max_prefetch_command_size);
 
     const uint32_t num_cores = sub_cmds.size();
     uint32_t offset_idx = 0;
     while (offset_idx < num_cores) {
-        const uint32_t num_in_chunk =
-            std::min<uint32_t>(num_cores - offset_idx, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
+        const uint32_t num_in_chunk = std::min<uint32_t>(num_cores - offset_idx, max_cores_per_cmd);
 
         std::vector<CQDispatchWritePackedLargeUnicastSubCmd> large_sub_cmds(num_in_chunk);
         // Per-core payload backing storage. Must outlive the add_dispatch call (memcpy'd into the command).
@@ -724,6 +884,9 @@ struct Transfer {
     std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>> dfbs;
     // RTAs must be updated from data every time update_program_dispatch_commmands is called.
     RuntimeArgsData* rta_data = nullptr;
+    // If set, this transfer materializes one host-only CrossNode page into its
+    // dedicated config Buffer and must be refreshed before every cached enqueue.
+    std::optional<std::pair<CoreCoord, uint8_t>> cross_node_config;
     size_t end() const { return start + data.size(); }
 };
 struct PairHash {
@@ -773,7 +936,9 @@ BatchedTransfers assemble_runtime_args_commands(
             if (kg->total_rta_size != 0) {
                 uint32_t num_sub_cmds = kg->core_ranges.num_cores();
                 if (unique_rta_requires_large_unicast(kg->total_rta_size)) {
-                    command_count += div_up(num_sub_cmds, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
+                    command_count += div_up(
+                        num_sub_cmds,
+                        max_cores_per_large_unicast_cmd(kg->total_rta_size, constants.max_prefetch_command_size));
                 } else {
                     uint32_t max_runtime_args_len = kg->total_rta_size / sizeof(uint32_t);
                     uint32_t max_packed_cmds =
@@ -928,6 +1093,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         unique_rt_data_and_sizes,
                         kg->total_rta_size,
                         unique_rt_args_data,
+                        constants.max_prefetch_command_size,
                         get_dispatch_write_offset(programmable_core_type));
                 } else {
                     generate_runtime_args_cmds(
@@ -1071,6 +1237,11 @@ public:
                 const auto& ranges, const CoreType core_type) -> std::vector<std::pair<transfer_info_cores, uint32_t>> {
             // This API extracts all the pairs of noc multicast encodings given a set of core ranges
             std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
+            size_t num_cores = 0;
+            for (const CoreRange& core_range : ranges) {
+                num_cores += core_range.size();
+            }
+            dst_noc_unicast_info.reserve(num_cores);
             for (const CoreRange& core_range : ranges) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -1197,16 +1368,31 @@ public:
         uint32_t max_cbs = hal.get_arch_num_circular_buffers();
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
-        const auto& circular_buffers_unique_coreranges = program.circular_buffers_unique_coreranges();
-        const uint16_t num_multicast_cb_sub_cmds = circular_buffers_unique_coreranges.size();
+        auto cb_config_coreranges = program.circular_buffers_unique_coreranges();
+        // circular_buffers_unique_coreranges() returns non-overlapping ranges, so this is a single build.
+        CoreRangeSet covered_cb_cores(cb_config_coreranges);
+        const auto& kernel_groups = program.get_kernel_groups(index);
+        for (const auto& kernel_group : kernel_groups) {
+            const auto kernel_config = kernel_group->launch_msg.view().kernel_config();
+            if (kernel_config.min_remote_cb_start_index() >= max_cbs) {
+                continue;
+            }
+            // Firmware scans remote CB configs down through min_remote_cb_start_index. Include cores with no CBs so
+            // fast dispatch explicitly clears stale configs there instead of leaving a prior program's remote CB.
+            const auto uncovered_cores = kernel_group->core_ranges.subtract(covered_cb_cores);
+            cb_config_coreranges.insert(
+                cb_config_coreranges.end(), uncovered_cores.ranges().begin(), uncovered_cores.ranges().end());
+            covered_cb_cores = covered_cb_cores.merge(uncovered_cores);
+        }
+
+        const uint16_t num_multicast_cb_sub_cmds = cb_config_coreranges.size();
         cb_config_payloads = std::vector<std::vector<uint32_t>>(
             num_multicast_cb_sub_cmds,
             std::vector<uint32_t>(program.get_program_config(index).cb_size / sizeof(uint32_t), 0));
         if (num_multicast_cb_sub_cmds > 0) {
             uint32_t i = 0;
             uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
-            auto index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-            for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
+            for (const CoreRange& core_range : cb_config_coreranges) {
                 const CoreCoord& virtual_start =
                     device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
                 const CoreCoord& virtual_end =
@@ -1214,6 +1400,19 @@ public:
 
                 auto& cb_config_payload = cb_config_payloads[i];
                 uint32_t max_index = 0;
+                for (const auto& kernel_group : kernel_groups) {
+                    if (!kernel_group->core_ranges.intersects(core_range)) {
+                        continue;
+                    }
+                    const auto kernel_config = kernel_group->launch_msg.view().kernel_config();
+                    const uint32_t min_remote_cb_start_index = kernel_config.min_remote_cb_start_index();
+                    if (min_remote_cb_start_index < max_cbs) {
+                        max_index = std::max(
+                            max_index,
+                            remote_offset_index +
+                                (max_cbs - min_remote_cb_start_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                    }
+                }
                 const auto& circular_buffers_on_corerange = program.circular_buffers_on_corerange(core_range);
                 for (const std::shared_ptr<CircularBufferImpl>& cb : circular_buffers_on_corerange) {
                     const uint32_t cb_address = cb->address();
@@ -1303,24 +1502,27 @@ public:
             const CoreCoord logical_representative = core_range.start_coord;
 
             size_t max_byte_end = 0;
-            size_t sequential_byte_offset = 0;
-            for (const auto& dfb : dfbs_on_corerange) {
-                size_t dfb_byte_offset = 0;
-                if (!hal.has_tile_counter_registers()) {
-                    // WH/BH: DFBs reuse the CB slot format; slot N starts at N * 4 words.
-                    dfb_byte_offset =
-                        static_cast<size_t>(dfb->id) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-                } else {
-                    // Quasar: DFBs are laid out sequentially in the dfb config region.
-                    dfb_byte_offset = sequential_byte_offset;
-                    sequential_byte_offset += dfb->serialized_size();
+            if (!hal.has_tile_counter_registers()) {
+                // WH/BH: DFBs reuse the CB slot format; device slot N starts at N * 4 words.
+                for (const auto& dfb : dfbs_on_corerange) {
+                    size_t dfb_byte_offset = static_cast<size_t>(dfb->device_slot) *
+                                            UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+                    auto serialized = dfb->serialize_for_core(logical_representative);
+                    TT_FATAL(
+                        dfb_byte_offset + serialized.size() <= payload.size(),
+                        "DFB {} (device slot {}) config at byte offset {} does not fit in the {}-byte config payload "
+                        "sized by finalize_dfbs",
+                        dfb->id,
+                        dfb->device_slot,
+                        dfb_byte_offset,
+                        payload.size());
+                    std::copy(serialized.begin(), serialized.end(), payload.begin() + dfb_byte_offset);
+                    max_byte_end = std::max(max_byte_end, dfb_byte_offset + serialized.size());
                 }
-
-                auto serialized = dfb->serialize_for_core(logical_representative);
-                TT_ASSERT(serialized.size() == dfb->serialized_size());
-                TT_ASSERT(dfb_byte_offset + serialized.size() <= payload.size());
-                std::copy(serialized.begin(), serialized.end(), payload.begin() + dfb_byte_offset);
-                max_byte_end = std::max(max_byte_end, dfb_byte_offset + serialized.size());
+            } else {
+                max_byte_end = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
+                    logical_representative, dfbs_on_corerange, payload);
+                TT_ASSERT(max_byte_end <= payload.size());
             }
 
             CoreRange virtual_range(virtual_start, virtual_end);
@@ -1350,6 +1552,98 @@ private:
     std::vector<std::vector<uint8_t>> dfb_config_payloads;
 };
 
+// Generates multicast writes for the dense CrossNode index in the worker-config
+// ringbuffer and unicast writes for host config pages (including zeroed credits) into
+// dedicated program-owned L1 config Buffers.
+// Dense region: word[0]=num_slots, then [config_page_addr, entry_size, relay_dfb_id] slots
+// (slot index == remote_dfb_id; config_page_addr is an absolute L1 address).
+class CrossNodeDFBCommandGenerator {
+public:
+    void construct_commands(
+        IDevice* device,
+        const CommandConstants& constants,
+        ProgramImpl& program,
+        BatchedTransfers& batched_transfers,
+        BatchedTransfers& absolute_config_transfers) {
+        const auto& per_core_cross_node_dfbs = program.get_per_core_cross_node_dfbs();
+        if (per_core_cross_node_dfbs.empty()) {
+            return;
+        }
+
+        const auto& hal = MetalContext::instance().hal();
+        const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const auto& kernel_groups = program.get_kernel_groups(index);
+        const auto& program_config = program.get_program_config(index);
+        const uint32_t cross_node_dfb_offset = program_config.cross_node_dfb_offset;
+        TT_FATAL(
+            cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE,
+            "CrossNodeDFBCommandGenerator: unexpected CROSS_NODE_DFB_OFFSET_NONE with participants present");
+        const uint32_t start_addr = cross_node_dfb_offset;
+        const uint8_t num_program_slots = program.num_cross_node_dfb_slots();
+        for (const auto& kg : kernel_groups) {
+            // A kernel-group range can mix participant and non-participant cores, and sender and
+            // receiver cores carry different relay metadata, so each group of cores sharing a
+            // dense payload gets its own multicast for the dense region.
+            for (auto& group : partition_cores_by_cross_node_dfb_payload(
+                     kg->core_ranges, per_core_cross_node_dfbs, num_program_slots)) {
+                payloads_.push_back(std::move(group.payload));
+                const auto& payload = payloads_.back();
+                const uint32_t payload_bytes = static_cast<uint32_t>(payload.size() * sizeof(uint32_t));
+
+                for (const CoreRange& core_range : group.cores.ranges()) {
+                    const CoreCoord virtual_start =
+                        device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
+                    const CoreCoord virtual_end =
+                        device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
+                    CoreRange virtual_range(virtual_start, virtual_end);
+                    auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+
+                    batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] =
+                        std::vector<Transfer>{
+                            {.start = start_addr,
+                             .data = ttsl::Span<const uint8_t>(
+                                 reinterpret_cast<const uint8_t*>(payload.data()), payload_bytes)}};
+                }
+
+                // Config pages differ per core (sender vs receiver, per-receiver credit slots),
+                // so materialize each host page into its sharded config Buffer via unicast.
+                for (const CoreCoord& logical_core : corerange_to_cores(group.cores)) {
+                    const auto& participants = per_core_cross_node_dfbs.at(logical_core);
+                    const CoreCoord virtual_core =
+                        device->virtual_core_from_logical_core(logical_core, CoreType::WORKER);
+                    CoreRange virtual_range(virtual_core, virtual_core);
+                    auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+                    for (const auto& participant : participants) {
+                        const auto& page =
+                            program.get_cross_node_dfb(participant.remote_dfb_id).config_page(logical_core);
+                        page_payloads_.push_back(page);
+                        const auto& page_payload = page_payloads_.back();
+                        const uint32_t page_bytes = static_cast<uint32_t>(page_payload.size() * sizeof(uint32_t));
+                        const auto& gdfb = program.get_cross_node_dfb(participant.remote_dfb_id);
+                        TT_FATAL(
+                            page_bytes <= gdfb.config_buffer().page_size(),
+                            "CrossNodeDFB config page ({} B) exceeds config Buffer page size ({} B)",
+                            page_bytes,
+                            gdfb.config_buffer().page_size());
+                        const uint32_t page_addr = participant.config_page_addr;
+                        absolute_config_transfers[std::make_pair(noc_xy_addr, /*num_dests=*/1u)][page_addr] =
+                            std::vector<Transfer>{
+                                {.start = page_addr,
+                                 .data = ttsl::Span<const uint8_t>(
+                                     reinterpret_cast<const uint8_t*>(page_payload.data()), page_bytes),
+                                 .cross_node_config = std::make_pair(logical_core, participant.remote_dfb_id)}};
+                    }
+                }
+            }
+        }
+    }
+
+private:
+    // Payload buffers kept alive until batched_transfers is consumed.
+    std::vector<std::vector<uint32_t>> payloads_;
+    std::vector<std::vector<uint32_t>> page_payloads_;
+};
+
 class ProgramBinaryCommandGenerator {
 public:
     // Generate kernel_bins_cmds (for multicast) and kernel_bins_unicast_cmds (for unicast) for the binaries in the
@@ -1363,8 +1657,7 @@ public:
         DeviceCommandCalculator& calculator,
         bool using_prefetcher_cache) {
         const auto& hal = MetalContext::instance().hal();
-        const uint32_t max_length_per_sub_cmd =
-            MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).scratch_db_size() / 2;
+        const uint32_t max_length_per_sub_cmd = MetalContext::instance().dispatch_mem_map().scratch_db_size() / 2;
         const uint32_t max_paged_length_per_sub_cmd =
             max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
 
@@ -1722,7 +2015,9 @@ public:
 
     // Assemble the batched transfer commands into the device command sequence.
     void assemble_commands(
-        ProgramCommandSequence& program_command_sequence, HostMemDeviceCommand& device_command_sequence) {
+        ProgramCommandSequence& program_command_sequence,
+        HostMemDeviceCommand& device_command_sequence,
+        DispatchWriteOffsets write_offset = DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE) {
         const auto& hal = MetalContext::instance().hal();
         uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
         const std::vector<uint8_t> fill_data(l1_alignment, 0);
@@ -1735,6 +2030,7 @@ public:
             auto& cmd_data = batched_cmd_data[i];
             size_t last_end = cmd_data.front().start;
             std::vector<ttsl::Span<const uint8_t>> batched_data;
+            batched_data.reserve(cmd_data.size() * 2);
             for (const Transfer& transfer : cmd_data) {
                 if (last_end != transfer.start) {
                     TT_ASSERT(transfer.start - last_end <= fill_data.size());
@@ -1775,7 +2071,7 @@ public:
                 batched_data,
                 &data_collection_location,
                 0,
-                DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
+                write_offset);
 
             last_end = cmd_data.front().start;
             size_t j = 0;
@@ -1791,6 +2087,14 @@ public:
                 if (!transfer.dfbs.empty()) {
                     program_command_sequence.dataflow_buffers_on_core_ranges.push_back(std::move(transfer.dfbs));
                     program_command_sequence.dfb_configs_payloads.push_back(data_collection_location[j]);
+                }
+                if (transfer.cross_node_config.has_value()) {
+                    const auto& [logical_core, remote_dfb_id] = *transfer.cross_node_config;
+                    program_command_sequence.cross_node_config_updates.push_back(
+                        {logical_core,
+                         remote_dfb_id,
+                         data_collection_location[j],
+                         static_cast<uint32_t>(transfer.data.size())});
                 }
                 if (transfer.rta_data) {
                     // When watcher enabled, transfer.data contains [count | args...]
@@ -2074,7 +2378,6 @@ public:
     void assemble_commands(
         ProgramCommandSequence& program_command_sequence,
         HostMemDeviceCommand& device_command_sequence,
-        const CommandConstants& constants,
         distributed::MeshDevice* mesh_device,
         SubDeviceId sub_device_id,
         const ProgramTransferInfo& program_transfer_info,
@@ -2096,7 +2399,9 @@ public:
         } else {
             // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
             if (program_transfer_info.num_active_cores > 0) {
-                device_command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+                // cq_id is unused here: add_dispatch_wait only consults it for WAIT_STREAM/CLEAR_STREAM waits,
+                // and this is a plain barrier wait.
+                device_command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, /*cq_id=*/0);
             }
         }
         uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
@@ -2108,12 +2413,8 @@ public:
                 // Dispatch X/Y resolved when the program is enqueued
                 0,
                 0,
-                MetalContext::instance()
-                    .dispatch_mem_map(constants.dispatch_core_type)
-                    .get_dispatch_message_update_offset(sub_device_index)),
-            MetalContext::instance()
-                .dispatch_mem_map(constants.dispatch_core_type)
-                .get_dispatch_stream_index(sub_device_index),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index)),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
             has_multicast_launch_cmds ? sub_device_index : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             num_noc_unicast_txns,
             noc_data_start_idx,
@@ -2127,9 +2428,7 @@ public:
             sub_device_index,
             num_noc_unicast_txns,
             noc_data_start_idx,
-            MetalContext::instance()
-                .dispatch_mem_map(constants.dispatch_core_type)
-                .get_dispatch_stream_index(sub_device_index));
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(sub_device_index));
 
         program_command_sequence.mcast_go_signal_cmd_ptr =
             &(reinterpret_cast<CQDispatchCmd*>(
@@ -2156,11 +2455,8 @@ void assemble_device_commands(
         use_prefetcher_cache ? "enabled" : "disabled");
 
     CommandConstants constants{};
-    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    constants.dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     constants.noc_index = k_dispatch_downstream_noc;
-    constants.max_prefetch_command_size =
-        MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).max_prefetch_command_size();
+    constants.max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
     constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(mesh_device);
     BatchedTransfers batched_transfers =
         assemble_runtime_args_commands(program_command_sequence, program, mesh_device, constants);
@@ -2178,13 +2474,25 @@ void assemble_device_commands(
     DataflowBufferCommandGenerator dfb_command_generator;
     dfb_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
 
+    BatchedTransfers absolute_cross_node_config_transfers;
+    CrossNodeDFBCommandGenerator cross_node_dfb_command_generator;
+    cross_node_dfb_command_generator.construct_commands(
+        mesh_device, constants, program, batched_transfers, absolute_cross_node_config_transfers);
+
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(batched_transfers, program_config_buffer_calculator);
+    BatchedTransferGenerator absolute_cross_node_config_generator;
+    absolute_cross_node_config_generator.construct_commands(
+        absolute_cross_node_config_transfers, program_config_buffer_calculator);
 
     program_command_sequence.program_config_buffer_command_sequence =
         HostMemDeviceCommand(program_config_buffer_calculator.write_offset_bytes());
     batched_transfer_generator.assemble_commands(
         program_command_sequence, program_command_sequence.program_config_buffer_command_sequence);
+    absolute_cross_node_config_generator.assemble_commands(
+        program_command_sequence,
+        program_command_sequence.program_config_buffer_command_sequence,
+        DISPATCH_WRITE_OFFSET_ZERO);
     semaphore_command_generator.assemble_unicast_commands(
         program_command_sequence.program_config_buffer_command_sequence, program, constants);
     // Ensure that we use the correct amount of space for each command sequence
@@ -2225,8 +2533,10 @@ void assemble_device_commands(
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_wait();
         program_command_sequence.wait_barrier_command_sequence = HostMemDeviceCommand(calculator.write_offset_bytes());
+        // cq_id is unused here: add_dispatch_wait only consults it for WAIT_STREAM/CLEAR_STREAM waits, and this
+        // is a plain barrier wait.
         program_command_sequence.wait_barrier_command_sequence.add_dispatch_wait(
-            CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+            CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, /*cq_id=*/0);
         TT_ASSERT(
             program_command_sequence.wait_barrier_command_sequence.size_bytes() ==
             program_command_sequence.wait_barrier_command_sequence.write_offset_bytes());
@@ -2253,7 +2563,6 @@ void assemble_device_commands(
     go_signal_generator.assemble_commands(
         program_command_sequence,
         program_command_sequence.go_msg_command_sequence,
-        constants,
         mesh_device,
         sub_device_id,
         program_transfer_info,
@@ -2333,6 +2642,7 @@ void reserve_space_in_kernel_config_buffer(
     ProgramBinaryStatus program_binary_status,
     uint32_t num_program_workers,
     uint32_t expected_num_workers_completed,
+    uint32_t program_ordering_sync_count,
     ProgramDispatchMetadata& dispatch_md) {
     // Reserve space in kernel config ring buffer for the current program
     std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reservation =
@@ -2363,6 +2673,26 @@ void reserve_space_in_kernel_config_buffer(
         // TODO: config_buffer_mgr is stateful so code below restores original reservation state
         // pull state out of the config_buffer_mgr
         reservation = config_buffer_mgr.reserve(program_config_sizes);
+    }
+
+    if (program_ordering_sync_count != 0) {
+        // The dispatcher compares stream counters mod 2^MEM_WORD_ADDR_WIDTH with a
+        // 2^16 window (stream_wrap_ge), so a count that is far behind — or that
+        // predates a counter reset by trace replay / reset_worker_state — reads as
+        // "in the future" and stalls forever. Fall back to a full barrier on all
+        // prior work, which is always in-window and always at least as strong.
+        constexpr uint32_t safe_ordering_window = 1u << 15;
+        const int32_t age = static_cast<int32_t>(expected_num_workers_completed - program_ordering_sync_count);
+        if (age < 0 || static_cast<uint32_t>(age) > safe_ordering_window) {
+            program_ordering_sync_count = expected_num_workers_completed;
+        }
+        // Wait only until prior launches of the same CrossNode program(s) complete.
+        // When the same program moves between CQs, the user must record
+        // an event on the previous CQ and enqueue a wait for that event on this CQ.
+        // Take the max with any ringbuffer-driven sync to avoid weakening an existing wait.
+        dispatch_md.stall_first = true;
+        dispatch_md.stall_before_program = false;
+        dispatch_md.sync_count = std::max(dispatch_md.sync_count, program_ordering_sync_count);
     }
 
     if (program_binary_status == ProgramBinaryStatus::InFlight) {
@@ -2400,14 +2730,15 @@ void update_program_dispatch_commands(
     uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
-    CoreType dispatch_core_type,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update) {
+    std::pair<bool, int> unicast_go_signal_update,
+    uint8_t cq_id) {
     uint32_t i = 0;
 
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
+    static constexpr uint32_t wait_addr_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.addr));
     static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
     static constexpr uint32_t tensix_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t);
     static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 2);
@@ -2427,6 +2758,17 @@ void update_program_dispatch_commands(
     auto& curr_stall_seq_idx = cached_program_command_sequence.current_stall_seq_idx;
     cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
         wait_count_offset, &(dispatch_md.sync_count), sizeof(uint32_t));
+    // insert_stall_cmds baked in a placeholder wait.addr; patch in the real completion address for cq_id here. Unused
+    // when this arch waits via a NOC stream register instead of an L1 address.
+    if (!MetalContext::instance().hal().has_stream_registers()) {
+        const auto& mem_map = MetalContext::instance().dispatch_mem_map();
+        const uint32_t wait_addr = mem_map.get_dispatch_message_addr_start() +
+                                   mem_map.get_completion_counter_offset(cq_id) *
+                                       MetalContext::instance().hal().get_alignment(HalMemType::L1) +
+                                   mem_map.get_sync_offset(*sub_device_id);
+        cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
+            wait_addr_offset, &wait_addr, sizeof(uint32_t));
+    }
 
     // Update preamble based on kernel config ring buffer slot
     const auto& hal = MetalContext::instance().hal();
@@ -2446,8 +2788,7 @@ void update_program_dispatch_commands(
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         program_host_id_offset, &runtime_id, sizeof(runtime_id));
 
-    tt::TieRuntimeIdToProgramId(program);
-    tt::RecordKernelSourceMap(program);
+    RecordProgramMetadata(program);
 
     if (hal.get_programmable_core_type_count() >= 2) {
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
@@ -2492,7 +2833,7 @@ void update_program_dispatch_commands(
             if (!hal.has_tile_counter_registers()) {
                 // WH/BH: overwrite the 4 uint32 words for each DFB slot in-place.
                 for (const auto& dfb : dfbs_on_core_range) {
-                    uint32_t base_index = dfb->id * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
+                    uint32_t base_index = dfb->device_slot * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
                     uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload) + base_index;
                     words[0] = dfb->uniform_alloc_addr();
                     words[1] = dfb->config.entry_size * dfb->config.num_entries;
@@ -2502,6 +2843,20 @@ void update_program_dispatch_commands(
             }
             dfb_i++;
         }
+    }
+
+    // Refresh launch-time writes to the dedicated CrossNode config Buffers. This
+    // picks up host-only UpdateDynamic changes and resets credits from the zeroed
+    // host page image on every ordered re-launch.
+    for (const auto& update : cached_program_command_sequence.cross_node_config_updates) {
+        const auto& page = program.get_cross_node_dfb(update.remote_dfb_id).config_page(update.logical_core);
+        const uint32_t page_bytes = static_cast<uint32_t>(page.size() * sizeof(uint32_t));
+        TT_FATAL(
+            page_bytes == update.size,
+            "CrossNodeDFB cached config page size changed from {} to {} bytes",
+            update.size,
+            page_bytes);
+        std::memcpy(update.dst, page.data(), page_bytes);
     }
 
     // Update RTAs.
@@ -2574,9 +2929,8 @@ void update_program_dispatch_commands(
         dev_msgs::RUN_MSG_GO,
         dispatch_core.x,
         dispatch_core.y,
-        MetalContext::instance()
-            .dispatch_mem_map(dispatch_core_type)
-            .get_dispatch_message_update_offset(*sub_device_id));
+        MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
+            MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
@@ -2598,12 +2952,12 @@ void update_traced_program_dispatch_commands(
     uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
-    CoreType dispatch_core_type,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update) {
+    std::pair<bool, int> unicast_go_signal_update,
+    uint8_t cq_id) {
     uint32_t i = 0;
-    ZoneScopedN("program_loaded_on_device");
+    TTZoneScopedDN(DISPATCH, "program_loaded_on_device");
     const auto& hal = MetalContext::instance().hal();
     const ProgramImpl& program = *trace_node.program;
     const TraceDispatchMetadata& dispatch_md = trace_node.dispatch_metadata;
@@ -2612,6 +2966,7 @@ void update_traced_program_dispatch_commands(
     const ProgramConfig& program_config = program.get_program_config(tensix_index);
 
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
+    static constexpr uint32_t wait_addr_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.addr));
     static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
     static constexpr uint32_t tensix_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t);
     static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 2);
@@ -2631,6 +2986,16 @@ void update_traced_program_dispatch_commands(
     auto& curr_stall_seq_idx = cached_program_command_sequence.current_stall_seq_idx;
     cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
         wait_count_offset, &(dispatch_md.sync_count), sizeof(uint32_t));
+    // insert_stall_cmds baked in a placeholder wait.addr; patch in the real completion address for cq_id here. Unused
+    // when this arch waits via a NOC stream register instead of an L1 address.
+    if (!hal.has_stream_registers()) {
+        const auto& mem_map = MetalContext::instance().dispatch_mem_map();
+        const uint32_t wait_addr = mem_map.get_dispatch_message_addr_start() +
+                                   mem_map.get_completion_counter_offset(cq_id) * hal.get_alignment(HalMemType::L1) +
+                                   mem_map.get_sync_offset(*sub_device_id);
+        cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
+            wait_addr_offset, &wait_addr, sizeof(uint32_t));
+    }
 
     // Update preamble based on kernel config ring buffer slot
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
@@ -2687,6 +3052,21 @@ void update_traced_program_dispatch_commands(
                 trace_node.dfb_configs_payloads[dfb_i].size());
             dfb_i++;
         }
+    }
+    // Refresh the launch-time writes to the dedicated CrossNode config Buffers from the
+    // capture-time snapshot (see create_trace_node), matching the non-trace path above.
+    TT_ASSERT(
+        trace_node.cross_node_config_pages.size() == cached_program_command_sequence.cross_node_config_updates.size());
+    for (size_t update_idx = 0; update_idx < cached_program_command_sequence.cross_node_config_updates.size();
+         update_idx++) {
+        const auto& update = cached_program_command_sequence.cross_node_config_updates[update_idx];
+        const auto& page = trace_node.cross_node_config_pages[update_idx];
+        TT_FATAL(
+            page.size() * sizeof(uint32_t) == update.size,
+            "CrossNodeDFB traced config page size changed from {} to {} bytes",
+            update.size,
+            page.size() * sizeof(uint32_t));
+        std::memcpy(update.dst, page.data(), update.size);
     }
     // Update RTAs.
     TT_ASSERT(cached_program_command_sequence.rta_updates.size() == trace_node.rta_data.size());
@@ -2770,9 +3150,8 @@ void update_traced_program_dispatch_commands(
         dev_msgs::RUN_MSG_GO,
         dispatch_core.x,
         dispatch_core.y,
-        MetalContext::instance()
-            .dispatch_mem_map(dispatch_core_type)
-            .get_dispatch_message_update_offset(*sub_device_id));
+        MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
+            MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
@@ -2791,7 +3170,6 @@ void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
     SystemMemoryManager& manager,
     uint32_t command_queue_id,
-    CoreType dispatch_core_type,
     bool stall_first,
     bool stall_before_program,
     bool send_binary) {
@@ -2808,8 +3186,7 @@ void write_program_command_sequence(
     // Check if it's possible to write all commands in a single fetch queue entry
     uint32_t one_shot_fetch_size =
         program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
-    bool one_shot = one_shot_fetch_size <=
-                    MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
+    bool one_shot = one_shot_fetch_size <= MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
 
     LOG_TRACE_LAZY(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
     if (one_shot) {
@@ -2920,6 +3297,7 @@ TraceNode create_trace_node(
     }
 
     std::vector<std::vector<uint32_t>> all_cb_configs_payloads;
+    all_cb_configs_payloads.reserve(cached_program_command_sequence.circular_buffers_on_core_ranges.size());
     const auto& hal = MetalContext::instance().hal();
     uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
@@ -2956,12 +3334,14 @@ TraceNode create_trace_node(
 
     std::vector<std::vector<uint8_t>> all_dfb_configs_payloads;
     if (!hal.has_tile_counter_registers()) {
+        all_dfb_configs_payloads.reserve(cached_program_command_sequence.dataflow_buffers_on_core_ranges.size());
         for (const auto& dfbs_on_core_range : cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
             std::vector<uint8_t> dfb_config_payload(
                 max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t), 0);
             size_t first_unused_byte = 0;
             for (const auto& dfb : dfbs_on_core_range) {
-                size_t base_index = static_cast<size_t>(dfb->id) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
+                size_t base_index =
+                    static_cast<size_t>(dfb->device_slot) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
                 size_t byte_offset = base_index * sizeof(uint32_t);
                 uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload.data()) + base_index;
                 words[0] = dfb->uniform_alloc_addr();
@@ -2976,8 +3356,21 @@ TraceNode create_trace_node(
         }
     }
 
-    tt::TieRuntimeIdToProgramId(program);
-    tt::RecordKernelSourceMap(program);
+    // Snapshot the CrossNodeDFB host config pages so the traced launch replays the binding
+    // that was current at capture time
+    std::vector<std::vector<uint32_t>> cross_node_config_pages;
+    cross_node_config_pages.reserve(cached_program_command_sequence.cross_node_config_updates.size());
+    for (const auto& update : cached_program_command_sequence.cross_node_config_updates) {
+        const auto& page = program.get_cross_node_dfb(update.remote_dfb_id).config_page(update.logical_core);
+        TT_FATAL(
+            page.size() * sizeof(uint32_t) == update.size,
+            "CrossNodeDFB config page size {} bytes does not match cached command size {} bytes",
+            page.size() * sizeof(uint32_t),
+            update.size);
+        cross_node_config_pages.push_back(page);
+    }
+
+    RecordProgramMetadata(program);
 
     return TraceNode{
         program.shared_from_this(),
@@ -2986,7 +3379,8 @@ TraceNode create_trace_node(
         num_workers,
         std::move(rta_data),
         std::move(all_cb_configs_payloads),
-        std::move(all_dfb_configs_payloads)};
+        std::move(all_dfb_configs_payloads),
+        std::move(cross_node_config_pages)};
 }
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
@@ -3085,7 +3479,8 @@ void reset_worker_dispatch_state_on_device(
                     dev_msgs::RUN_MSG_RESET_READ_PTR,
                     dispatch_core.x,
                     dispatch_core.y,
-                    MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i)),
+                    MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i) +
+                        MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id)),
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
                 mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
                 mesh_device->impl().num_noc_unicast_txns(sub_device_id),
@@ -3109,13 +3504,15 @@ void reset_worker_dispatch_state_on_device(
                 0,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
                 expected_num_workers,
+                cq_id,
                 1);
         }
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
             MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
-            expected_num_workers);
+            expected_num_workers,
+            cq_id);
     }
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);
@@ -3188,6 +3585,7 @@ void reset_expected_num_workers_completed_on_device(
             0,
             tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
             num_expected_workers,
+            cq_id,
             dispatcher_type);
     };
 
@@ -3238,12 +3636,16 @@ void set_core_go_message_mapping_on_device(
     std::vector<std::pair<const void*, uint32_t>> data;
     std::vector<CQDispatchWritePackedMulticastSubCmd> sub_cmds;
     std::vector<std::pair<uint32_t, uint32_t>> payload;
-    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    auto dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     uint32_t noc_index = k_dispatch_downstream_noc;
-    uint32_t max_prefetch_command_size =
-        MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
+    uint32_t max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
     uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
+
+    size_t num_core_ranges = 0;
+    for (const auto& [core_range_set, go_msg_offset] : core_go_message_mapping) {
+        num_core_ranges += core_range_set.ranges().size();
+    }
+    data.reserve(num_core_ranges);
+    sub_cmds.reserve(num_core_ranges);
 
     for (const auto& [core_range_set, go_msg_offset] : core_go_message_mapping) {
         for (const auto& core_range : core_range_set.ranges()) {
@@ -3289,7 +3691,7 @@ void set_core_go_message_mapping_on_device(
         go_msg_size,
         go_data.data());
     // Wait for previous writes before updating index.
-    command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+    command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, cq_id);
 
     // Write go index to all cores.
     if (!sub_cmds.empty()) {
@@ -3318,7 +3720,7 @@ void set_core_go_message_mapping_on_device(
         }
     }
     // Ensure go message index is received before writing out data for the next program.
-    command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+    command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, cq_id);
     TT_ASSERT(command_sequence.size_bytes() == command_sequence.write_offset_bytes());
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);

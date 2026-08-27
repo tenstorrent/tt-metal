@@ -13,8 +13,6 @@
 #include "command_queue_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
-#define BANDWIDTH_THRESHOLD 320.0
-
 namespace tt::tt_metal {
 
 using namespace std;
@@ -29,13 +27,14 @@ static bool run_test_bandwidth(
     const CoreCoord& send_core,
     const CoreCoord& recv_core,
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
-    /* ========================= */
-    bool same_device = send_mesh_device == recv_mesh_device;
+    /* ======================= */
     auto* const send_device = send_mesh_device->get_devices()[0];
     auto* const recv_device = recv_mesh_device->get_devices()[0];
-    uint32_t num_bytes_per_send = 100 * 1024;
-    uint32_t transfer_size = 200 * 1024;
-    uint32_t transfer_count = 10240;
+
+    TEST_PARAM(uint32_t, transfer_size, 160 * 1024, "ETH_TEST_TRANSFER_SIZE");
+    TEST_PARAM(uint32_t, transfer_count, 10 << 10, "ETH_TEST_TRANSFER_COUNT");
+
+    uint32_t num_bytes_per_send = transfer_size / 2;
     uint64_t total_transferred = (uint64_t)transfer_size * transfer_count;
 
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, transfer_size / sizeof(uint32_t));
@@ -43,10 +42,16 @@ static bool run_test_bandwidth(
     struct l1_allocator send_allocator = new_erisc_allocator();
     struct l1_allocator recv_allocator = new_erisc_allocator();
 
+    uint32_t progress_counter = l1_alloc(&recv_allocator, sizeof(uint32_t));
+    uint32_t send_progress_counter = l1_alloc(&send_allocator, sizeof(uint32_t));
+    TT_FATAL(progress_counter == send_progress_counter, "Progress counters should be at the same address");
+
     uint32_t recv_l1_address = 0;
 
-    tt_metal::Program send_program = tt_metal::Program(), recv_program_ = tt_metal::Program();
-    tt_metal::Program& recv_program = same_device ? send_program : recv_program_;
+    map<shared_ptr<distributed::MeshDevice>, shared_ptr<tt_metal::Program>> programs = {
+        {send_mesh_device, make_shared<Program>()},
+        {recv_mesh_device, make_shared<Program>()},
+    };
 
     prepare_receiver(
         recv_device,
@@ -56,8 +61,9 @@ static bool run_test_bandwidth(
         transfer_count,
         inputs,
         processor,
+        progress_counter,
         &recv_l1_address,
-        &recv_program);
+        programs[recv_mesh_device].get());
 
     uint32_t send_delta_addr = 0;
     prepare_sender(
@@ -70,25 +76,44 @@ static bool run_test_bandwidth(
         inputs,
         processor,
         num_bytes_per_send,
+        send_progress_counter,
         recv_l1_address,
-        &send_program);
+        programs[send_mesh_device].get());
 
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    wait_to_finish(fixture, send_program, recv_program, send_mesh_device, recv_mesh_device, device_range);
+    vector<struct core_setup> cores = {
+        {
+            .program = programs[send_mesh_device],
+            .mesh_device = send_mesh_device,
+            .core = send_core,
+            .iter_l1_addr = progress_counter,
+            .expected_count = transfer_count,
+        },
+        {
+            .program = programs[recv_mesh_device],
+            .mesh_device = recv_mesh_device,
+            .core = recv_core,
+            .iter_l1_addr = progress_counter,
+            .expected_count = transfer_count,
+        },
+    };
+    wait_to_finish_eth_timeout_cores(fixture, cores, programs);
+
+    double threshold = get_eth_bw() * 0.75;
 
     bool pass = true;
-    pass &= eth_data_check(recv_device, recv_core, recv_l1_address, inputs);
-    pass &= eth_bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD);
+    pass &= data_check(recv_device, recv_core, recv_l1_address, inputs);
+    pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, threshold);
     return pass;
 }
 
-TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetBandwidth) {
+TEST_F(MeshDispatchFixture, TensixDeploymentEthernet01Bandwidth) {
     const auto num_eriscs = MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
-    SignalGuard g(SIGINT, handle_sigint);
+    vector<LinkError> errors;
+    int n = 0;
 
-    bool pass = true;
+    print_detected_devices();
+    ASSERT_TRUE(ensure_links(devices_));
 
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
@@ -97,34 +122,52 @@ TEST_F(UnitMeshCQProgramFixture, TensixDeploymentEthernetBandwidth) {
 
             log_info(
                 tt::LogTest,
-                "sender device id: {}, receiver device id: {}",
+                "sender device id: {} ({}, {}), receiver device id: {} ({}, {})",
                 sender_device->id(),
-                receiver_device->id());
+                pci_bdf_for_device_id(sender_device->id()),
+                get_ubb(sender_device),
+                receiver_device->id(),
+                pci_bdf_for_device_id(receiver_device->id()),
+                get_ubb(receiver_device));
 
             for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
+                if (!eth_core_connects_within_cluster(sender_device, sender_core)) {
+                    continue;
+                }
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
                 if (receiver_device->id() != device_id) {
                     continue;
                 }
 
-                log_info(tt::LogTest, "  sender core: {}, receiver core: {}", sender_core, receiver_core);
-                for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
-                    if (g_stop_requested.load()) {
-                        GTEST_SKIP() << "Test interrupted by user after current test finished.";
-                        return;
-                    }
+                log_info(
+                    tt::LogTest,
+                    "  sender core: {}, receiver core: {} ({})",
+                    sender_core,
+                    receiver_core,
+                    get_connector(sender_device, sender_core));
 
+                for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
 
                     log_info(tt::LogTest, "    running on {}", processor);
-                    pass &= run_test_bandwidth(
+                    bool passed = run_test_bandwidth(
                         this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core, processor);
+                    if (!passed) {
+                        errors.emplace_back(
+                            sender_device->id(), receiver_device->id(), sender_core, receiver_core, processor);
+                    }
+                    log_info(tt::LogTest, "    done");
+
+                    n++;
                 }
             }
         }
     }
 
-    ASSERT_TRUE(pass);
+    log_info(tt::LogTest, "Ran {} tests", n);
+
+    print_summary(errors);
+    ASSERT_TRUE(errors.empty());
 }
 
 }  // namespace tt::tt_metal

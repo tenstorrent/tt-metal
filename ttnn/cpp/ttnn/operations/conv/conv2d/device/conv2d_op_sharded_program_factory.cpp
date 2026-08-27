@@ -126,6 +126,7 @@ ActivationReuseConfig calculate_activation_reuse_params(
     config.num_cores_with_non_meaningful_work = tt::div_up(total_remaining_tiles_to_push, single_core_height_ntiles);
 
     std::vector<CoreCoord> all_input_cores;
+    all_input_cores.reserve(input_cores.num_cores());
     for (const CoreRange& range : input_cores.ranges()) {
         for (const CoreCoord& core : range) {
             all_input_cores.push_back(core);
@@ -768,11 +769,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         }
     }
 
-    // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
-    const bool partials_cb_uses_output =
-        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
-    log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
-
     std::string reader_kernel;
     std::string compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
     std::string writer_mcast_sender_kernel =
@@ -870,7 +866,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";               // Needed for split reader
         writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
-        reader_compile_time_args.push_back(conv_reader_indices_buffer->address());
+        reader_compile_time_args.push_back(
+            conv_reader_indices_buffer->address());  // smuggled-rta-ok: compile-time workload-owned buffer
         reader_compile_time_args.push_back(conv_reader_indices_buffer->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(reader_compile_time_args);
     } else {
@@ -1096,7 +1093,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).index,
             get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
             get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
-            partials_cb_uses_output,
             conv_act_c_blocks,
             check_skip_compute,
             pack_relu,

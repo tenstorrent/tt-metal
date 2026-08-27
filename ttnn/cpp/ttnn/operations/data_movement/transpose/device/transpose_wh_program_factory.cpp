@@ -24,8 +24,8 @@ void emit_runtime_args_wh_tiled(
     KernelDescriptor& writer_desc,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    uint32_t num_cores_total,
-    uint32_t num_cores_y,
+    uint32_t num_cores,
+    const CoreRangeSet& all_cores,
     const CoreRangeSet& core_group_1,
     uint32_t num_tiles_per_core_group_1,
     const CoreRangeSet& core_group_2,
@@ -39,12 +39,13 @@ void emit_runtime_args_wh_tiled(
 
     auto HtWt = Ht * Wt;
 
-    reader_desc.runtime_args.reserve(num_cores_total);
-    compute_desc.runtime_args.reserve(num_cores_total);
-    writer_desc.runtime_args.reserve(num_cores_total);
+    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    reader_desc.runtime_args.reserve(num_cores);
+    compute_desc.runtime_args.reserve(num_cores);
+    writer_desc.runtime_args.reserve(num_cores);
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    uint32_t num_tiles_read = 0;
+    for (const auto& core : cores) {
         uint32_t num_tiles_per_core;
 
         if (core_group_1.contains(core)) {
@@ -52,7 +53,7 @@ void emit_runtime_args_wh_tiled(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            num_tiles_per_core = 0;
+            TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t h = num_tiles_read % Ht;
@@ -83,8 +84,8 @@ void emit_runtime_args_wh_rm(
     KernelDescriptor& writer_desc,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    uint32_t num_cores_total,
-    uint32_t num_cores_y,
+    uint32_t num_cores,
+    const CoreRangeSet& all_cores,
     const CoreRangeSet& core_group_1,
     uint32_t num_hw_blocks_per_core_group_1,
     const CoreRangeSet& core_group_2,
@@ -93,12 +94,13 @@ void emit_runtime_args_wh_rm(
 
     uint32_t W = input_shape[3], H = input_shape[2];
 
-    reader_desc.runtime_args.reserve(num_cores_total);
-    compute_desc.runtime_args.reserve(num_cores_total);
-    writer_desc.runtime_args.reserve(num_cores_total);
+    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    reader_desc.runtime_args.reserve(num_cores);
+    compute_desc.runtime_args.reserve(num_cores);
+    writer_desc.runtime_args.reserve(num_cores);
 
-    for (uint32_t i = 0, num_sticks_read = 0, num_sticks_write = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    uint32_t num_sticks_read = 0, num_sticks_write = 0;
+    for (const auto& core : cores) {
         uint32_t num_hw_blocks_per_core;
 
         if (core_group_1.contains(core)) {
@@ -106,7 +108,7 @@ void emit_runtime_args_wh_rm(
         } else if (core_group_2.contains(core)) {
             num_hw_blocks_per_core = num_hw_blocks_per_core_group_2;
         } else {
-            num_hw_blocks_per_core = 0;
+            TT_THROW("Core not in specified core ranges");
         }
 
         reader_desc.emplace_runtime_args(core, {input_tensor.buffer(), num_sticks_read, num_hw_blocks_per_core});
@@ -152,10 +154,6 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
                             src0_cb_data_format == tt::DataFormat::UInt32;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, row_major ? NC : num_tensor_tiles);
@@ -167,7 +165,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     uint32_t num_input_tiles = row_major ? wt * 2 : 2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * src0_single_tile_size,
-        .core_ranges = total_cores,
+        .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = src0_cb_data_format,
@@ -179,7 +177,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     uint32_t num_output_tiles = row_major ? ht * 2 : 2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_output_tiles * dst_single_tile_size,
-        .core_ranges = total_cores,
+        .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = dst_cb_data_format,
@@ -192,7 +190,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
         uint32_t num_im_tiles = ht * wt;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_im_tiles * src0_single_tile_size,
-            .core_ranges = total_cores,
+            .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(im_cb_index),
                 .data_format = src0_cb_data_format,
@@ -204,7 +202,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
         uint32_t num_im2_tiles = ht;
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_im2_tiles * dst_single_tile_size,
-            .core_ranges = total_cores,
+            .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(im2_cb_index),
                 .data_format = dst_cb_data_format,
@@ -214,8 +212,8 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     }
 
     std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> reader_common_runtime_args;
     if (row_major) {
+        reader_compile_time_args.reserve(9);
         reader_compile_time_args.push_back(ht);
         reader_compile_time_args.push_back(H > TILE_HEIGHT ? TILE_HEIGHT : H % TILE_HEIGHT);
         reader_compile_time_args.push_back(H % TILE_HEIGHT == 0 ? TILE_HEIGHT : H % TILE_HEIGHT);
@@ -226,11 +224,9 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
         reader_compile_time_args.push_back(wt * input_tensor.element_size() * TILE_WIDTH);
         reader_compile_time_args.push_back(src0_buffer->aligned_page_size());
     }
-    TensorAccessorArgs(*src0_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(reader_compile_time_args, reader_common_runtime_args);
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-    std::vector<uint32_t> writer_common_runtime_args;
     if (row_major) {
         writer_compile_time_args.push_back(ht);
         writer_compile_time_args.push_back(H);
@@ -242,8 +238,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
         writer_compile_time_args.push_back(ht * output_tensor.element_size() * TILE_HEIGHT);
         writer_compile_time_args.push_back(dst_buffer->aligned_page_size());
     }
-    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
-        .append_to(writer_compile_time_args, writer_common_runtime_args);
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = row_major ? "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
@@ -251,10 +246,9 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
                                           : "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
                                             "reader_unary_transpose_wh_interleaved_start_id.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = total_cores;
+    reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.common_runtime_args = std::move(reader_common_runtime_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -263,13 +257,13 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
               "writer_unary_transpose_wh_interleaved_start_id_rm.cpp"
             : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = total_cores;
+    writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
 
     std::vector<uint32_t> compute_kernel_args = {};
     if (row_major) {
+        compute_kernel_args.reserve(3);
         compute_kernel_args.push_back(ht);
         compute_kernel_args.push_back(wt);
         compute_kernel_args.push_back(ht * wt);
@@ -297,7 +291,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
         row_major ? "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_rm.cpp"
                   : "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = total_cores;
+    compute_desc.core_ranges = all_cores;
     compute_desc.compile_time_args = std::move(compute_kernel_args);
     compute_desc.defines = std::move(compute_defines);
     compute_desc.config = ComputeConfigDescriptor{
@@ -312,8 +306,8 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
             writer_desc,
             input_tensor,
             output_tensor,
-            num_cores_total,
-            num_cores_y,
+            num_cores,
+            all_cores,
             core_group_1,
             num_tiles_per_core_group_1,
             core_group_2,
@@ -325,8 +319,8 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
             writer_desc,
             input_tensor,
             output_tensor,
-            num_cores_total,
-            num_cores_y,
+            num_cores,
+            all_cores,
             core_group_1,
             num_tiles_per_core_group_1,
             core_group_2,

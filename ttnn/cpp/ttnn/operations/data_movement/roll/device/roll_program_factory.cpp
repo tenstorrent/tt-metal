@@ -3,13 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "roll_program_factory.hpp"
+#include "roll_device_operation.hpp"
 
 #include <algorithm>
+#include <unordered_map>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/host_api.hpp>
 
 // Why ROW_MAJOR sharded roll needs a dedicated kernel instead of the slice + concat composite
 // used for interleaved roll:
@@ -54,12 +58,31 @@ struct ColPiece {
     uint32_t len;
 };
 
-}  // namespace
+// Everything create_descriptor() and override_runtime_arguments() need, computed once from the
+// (hashed) shape/shift/dim/memory-config so the two paths can never disagree on layout or indices.
+struct RollPlan {
+    bool is_dram = false;
+    bool is_dram_rm = false;
+    bool is_tile = false;
+    tt::DataFormat cb_data_format{};
+    CoreRangeSet grid;
+    tt::tt_metal::Buffer* input_buffer = nullptr;
+    tt::tt_metal::Buffer* output_buffer = nullptr;
 
-ProgramDescriptor RollShardedProgramFactory::create_descriptor(
-    const RollParams& operation_attributes, const RollInputs& tensor_args, Tensor& tensor_return_value) {
+    // CB sizing (create_descriptor builds the CB descriptors from these).
+    uint32_t shard_l1_size = 0;
+    uint32_t cb_page_size = 0;
+    uint32_t scratch_size = 0;
+
+    std::vector<uint32_t> compile_time_args;
+    // Fully-resolved per-core reader args (DRAM modes bake base+offset addresses from the current
+    // buffers). override_runtime_arguments re-applies these + re-points the tensor-backed CBs on hit.
+    std::vector<std::pair<CoreCoord, KernelDescriptor::CoreRuntimeArgs>> per_core_args;
+};
+
+RollPlan compute_roll_plan(
+    const RollParams& operation_attributes, const RollInputs& tensor_args, const Tensor& output) {
     const Tensor& input = tensor_args.input;
-    Tensor& output = tensor_return_value;
 
     TT_FATAL(input.is_sharded() && output.is_sharded(), "Native sharded roll requires sharded input and output");
 
@@ -281,72 +304,24 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
         flush();
     }
 
-    // --- Circular buffers ---
+    // --- Circular buffer sizing ---
     // L1 mode: cb0 backed by input buffer, cb16 backed by output buffer, cb1 scratch.
     // DRAM mode: only the scratch cb1 is allocated in L1. Input/output CBs are not used
     // because DRAM data is addressed via bank IDs in the runtime args, not CB read ptrs.
-    constexpr uint32_t input_cb_id = 0;
     constexpr uint32_t output_cb_id = 16;
     constexpr uint32_t scratch_cb_id = 1;
     const uint32_t cb_page_size = is_tile ? cell_size : row_pitch_bytes;
 
-    ProgramDescriptor desc;
     const uint32_t shard_l1_size = shard_cells_h * row_pitch_bytes;
-    if (!is_dram) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = shard_l1_size,
-            .core_ranges = out_ss.grid,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(input_cb_id),
-                .data_format = cb_data_format,
-                .page_size = cb_page_size,
-            }}},
-            .buffer = input.buffer(),
-        });
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = shard_l1_size,
-            .core_ranges = out_ss.grid,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(output_cb_id),
-                .data_format = cb_data_format,
-                .page_size = cb_page_size,
-            }}},
-            .buffer = output.buffer(),
-        });
-    }
     // Scratch CB: L1 mode uses it double-buffered; DRAM TILE uses it single-buffered.
     // DRAM RM allocates separate staging CBs (2/3/4) instead, so scratch is L1-only.
     const uint32_t scratch_half = row_pitch_bytes + 2 * l1_alignment;
     const uint32_t scratch_size = (is_dram && !is_dram_rm) ? shard_l1_size : 2 * scratch_half;
-    if (!is_dram_rm) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = scratch_size,
-            .core_ranges = out_ss.grid,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(scratch_cb_id),
-                .data_format = cb_data_format,
-                .page_size = scratch_size,
-            }}},
-        });
-    }
 
-    // DRAM RM staging CBs: two source slots + one destination, each = full shard size.
+    // DRAM RM staging CB ids: two source slots + one destination, each = full shard size.
     constexpr uint32_t dram_rm_src0_cb_id = 2;
     constexpr uint32_t dram_rm_src1_cb_id = 3;
     constexpr uint32_t dram_rm_dst_cb_id = 4;
-    if (is_dram_rm) {
-        for (uint8_t cb_id : {dram_rm_src0_cb_id, dram_rm_src1_cb_id, dram_rm_dst_cb_id}) {
-            desc.cbs.push_back(CBDescriptor{
-                .total_size = shard_l1_size,
-                .core_ranges = out_ss.grid,
-                .format_descriptors = {{CBFormatDescriptor{
-                    .buffer_index = cb_id,
-                    .data_format = cb_data_format,
-                    .page_size = shard_l1_size,
-                }}},
-            });
-        }
-    }
 
     // --- DRAM shard address helpers ---
     const uint32_t num_dram_banks = device->num_dram_channels();
@@ -356,7 +331,7 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
         return static_cast<uint32_t>(buf->address()) + (shard_idx / num_dram_banks) * dram_shard_size;
     };
 
-    // --- Kernel ---
+    // --- Kernel arg budget ---
     uint32_t max_num_transfers = 0;
     for (const auto& t : all_transfers) {
         max_num_transfers = std::max(max_num_transfers, static_cast<uint32_t>(t.size()));
@@ -375,7 +350,8 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
 
     // mode: 0=L1, 1=DRAM_TILE, 2=DRAM_RM
     const uint32_t mode = is_dram_rm ? 2u : (is_dram ? 1u : 0u);
-    const std::vector<uint32_t> compile_time_args = {
+    constexpr uint32_t input_cb_id = 0;
+    std::vector<uint32_t> compile_time_args = {
         output_cb_id,
         scratch_cb_id,
         l1_alignment,
@@ -386,14 +362,23 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
         dram_rm_src1_cb_id,
         dram_rm_dst_cb_id};
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/roll/device/kernels/dataflow/roll_sharded_reader.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = out_ss.grid;
-    reader_desc.compile_time_args = compile_time_args;
-    reader_desc.config = ReaderConfigDescriptor{};
+    RollPlan plan;
+    plan.is_dram = is_dram;
+    plan.is_dram_rm = is_dram_rm;
+    plan.is_tile = is_tile;
+    plan.cb_data_format = cb_data_format;
+    plan.grid = out_ss.grid;
+    plan.input_buffer = input.buffer();
+    plan.output_buffer = output.buffer();
+    plan.shard_l1_size = shard_l1_size;
+    plan.cb_page_size = cb_page_size;
+    plan.scratch_size = scratch_size;
+    plan.compile_time_args = std::move(compile_time_args);
 
+    // --- Per-core runtime args ---
+    // The three builders emit args in a fixed layout the reader kernel reads positionally.  DRAM modes
+    // bake the buffer base+offset addresses straight into the args from the CURRENT buffers, so
+    // override_runtime_arguments re-derives the identical values by re-running this builder on a hit.
     auto build_runtime_args_l1 = [&](const std::vector<RollTransferDesc>& descs) {
         KernelDescriptor::CoreRuntimeArgs args;
         args.reserve(1 + descs.size() * 9);
@@ -416,13 +401,14 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
         KernelDescriptor::CoreRuntimeArgs args;
         args.reserve(3 + descs.size() * 7);
         args.push_back(dram_bank_id(dst_core_idx));
-        args.push_back(dram_bank_base(output.buffer(), dst_core_idx));
+        // dst bank base = output buffer address + shard offset, from the current buffer.
+        args.push_back(dram_bank_base(plan.output_buffer, dst_core_idx));
         args.push_back(static_cast<uint32_t>(descs.size()));
         for (const auto& td : descs) {
             // src_bank_id, src_bank_addr (= bank_base + intra_shard_offset), dst_offset,
             // copy_size, src_stride, dst_stride, num_rows
             args.push_back(dram_bank_id(td.src_dram_shard_idx));
-            args.push_back(dram_bank_base(input.buffer(), td.src_dram_shard_idx) + td.src_l1_offset);
+            args.push_back(dram_bank_base(plan.input_buffer, td.src_dram_shard_idx) + td.src_l1_offset);
             args.push_back(td.dst_offset);
             args.push_back(td.copy_size);
             args.push_back(td.src_stride);
@@ -447,11 +433,12 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
         }
         KernelDescriptor::CoreRuntimeArgs args;
         args.push_back(dram_bank_id(dst_core_idx));
-        args.push_back(dram_bank_base(output.buffer(), dst_core_idx));
+        // dst bank base = output buffer address + shard offset, from the current buffer.
+        args.push_back(dram_bank_base(plan.output_buffer, dst_core_idx));
         args.push_back(static_cast<uint32_t>(src_shards.size()));
         for (uint32_t s : src_shards) {
             args.push_back(dram_bank_id(s));
-            args.push_back(dram_bank_base(input.buffer(), s));
+            args.push_back(dram_bank_base(plan.input_buffer, s));
         }
         args.push_back(static_cast<uint32_t>(descs.size()));
         for (const auto& td : descs) {
@@ -466,6 +453,7 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
         return args;
     };
 
+    plan.per_core_args.reserve(num_cores);
     for (uint32_t c = 0; c < num_cores; c++) {
         CoreCoord logical(grid_range.start_coord.x + c % grid_cols, grid_range.start_coord.y + c / grid_cols);
         KernelDescriptor::CoreRuntimeArgs args;
@@ -474,13 +462,137 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
         } else if (is_dram) {
             args = build_runtime_args_dram(c, all_transfers[c]);
         } else {
+            // L1 mode: data rides on the input/output .buffer-bound CBs; override_runtime_arguments
+            // re-points those CB addresses on every cache hit (no placeholder rt-arg needed).
             args = build_runtime_args_l1(all_transfers[c]);
         }
-        reader_desc.runtime_args.emplace_back(logical, std::move(args));
+        plan.per_core_args.emplace_back(logical, std::move(args));
+    }
+
+    return plan;
+}
+
+}  // namespace
+
+ProgramDescriptor RollShardedProgramFactory::create_descriptor(
+    const RollParams& operation_attributes, const RollInputs& tensor_args, Tensor& tensor_return_value) {
+    const RollPlan plan = compute_roll_plan(operation_attributes, tensor_args, tensor_return_value);
+
+    ProgramDescriptor desc;
+
+    // --- Circular buffers ---
+    // L1 mode: cb0 backed by input buffer, cb16 backed by output buffer, cb1 scratch.
+    // DRAM mode: only the scratch cb1 is allocated in L1. Input/output CBs are not used
+    // because DRAM data is addressed via bank IDs in the runtime args, not CB read ptrs.
+    constexpr uint32_t input_cb_id = 0;
+    constexpr uint32_t output_cb_id = 16;
+    constexpr uint32_t scratch_cb_id = 1;
+    constexpr uint32_t dram_rm_src0_cb_id = 2;
+    constexpr uint32_t dram_rm_src1_cb_id = 3;
+    constexpr uint32_t dram_rm_dst_cb_id = 4;
+
+    if (!plan.is_dram) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = plan.shard_l1_size,
+            .core_ranges = plan.grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(input_cb_id),
+                .data_format = plan.cb_data_format,
+                .page_size = plan.cb_page_size,
+            }}},
+            .buffer = plan.input_buffer,
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = plan.shard_l1_size,
+            .core_ranges = plan.grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(output_cb_id),
+                .data_format = plan.cb_data_format,
+                .page_size = plan.cb_page_size,
+            }}},
+            .buffer = plan.output_buffer,
+        });
+    }
+    // Scratch CB: L1 mode uses it double-buffered; DRAM TILE uses it single-buffered.
+    // DRAM RM allocates separate staging CBs (2/3/4) instead, so scratch is L1-only.
+    if (!plan.is_dram_rm) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = plan.scratch_size,
+            .core_ranges = plan.grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(scratch_cb_id),
+                .data_format = plan.cb_data_format,
+                .page_size = plan.scratch_size,
+            }}},
+        });
+    }
+
+    // DRAM RM staging CBs: two source slots + one destination, each = full shard size.
+    if (plan.is_dram_rm) {
+        for (uint8_t cb_id : {dram_rm_src0_cb_id, dram_rm_src1_cb_id, dram_rm_dst_cb_id}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = plan.shard_l1_size,
+                .core_ranges = plan.grid,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = cb_id,
+                    .data_format = plan.cb_data_format,
+                    .page_size = plan.shard_l1_size,
+                }}},
+            });
+        }
+    }
+
+    // --- Kernel ---
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/roll/device/kernels/dataflow/roll_sharded_reader.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = plan.grid;
+    reader_desc.compile_time_args = plan.compile_time_args;
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    reader_desc.runtime_args.reserve(plan.per_core_args.size());
+    for (const auto& [core, args] : plan.per_core_args) {
+        reader_desc.runtime_args.emplace_back(core, args);
     }
 
     desc.kernels.push_back(std::move(reader_desc));
     return desc;
+}
+
+void RollShardedProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const RollParams& operation_attributes,
+    const RollInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Buffer addresses and bank ids move per dispatch, so re-run the planner -- create_descriptor's own
+    // source of truth -- and write its args into the cached program instead of rebuilding it.
+    const RollPlan plan = compute_roll_plan(operation_attributes, tensor_args, tensor_return_value);
+    for (const auto& [core, args] : plan.per_core_args) {
+        auto& a = tt::tt_metal::GetRuntimeArgs(program, 0, core);
+        // The arg count encodes the transfer count, which padded_shape fixes and the hash keys on, so a
+        // mismatch means the key stopped matching the program -- never silently write a prefix.
+        TT_FATAL(
+            a.size() == args.size(),
+            "roll cache hit on core ({}, {}) expected {} runtime args, cached program has {}",
+            core.x,
+            core.y,
+            args.size(),
+            a.size());
+        for (uint32_t i = 0; i < args.size(); ++i) {
+            a[i] = args[i];
+        }
+    }
+
+    // L1 mode addresses data through the input/output-backed CBs; DRAM mode carries bank ids in the
+    // args above. CBs are matched positionally, and create_descriptor pushes input then output first.
+    if (!plan.is_dram) {
+        tt::tt_metal::ProgramDescriptor cb_addr_only;
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = plan.input_buffer});
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = plan.output_buffer});
+        tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
+    }
 }
 
 }  // namespace ttnn::prim

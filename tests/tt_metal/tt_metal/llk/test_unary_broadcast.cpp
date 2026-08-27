@@ -37,6 +37,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <impl/context/metal_context.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
@@ -45,7 +46,7 @@
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/buffer.hpp>
 
@@ -281,7 +282,6 @@ void get_packed_tilized_input_output_pair(
 
 void run_single_core_unary_broadcast_quasar(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const UnaryBroadcastConfig& test_config) {
-    auto* device = mesh_device->get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     constexpr uint32_t num_tiles = 32;
@@ -293,10 +293,9 @@ void run_single_core_unary_broadcast_quasar(
     const uint32_t out_tile_size = tile_size(out_t);
     const uint32_t dfb_num_entries = block_size * 2;
 
-    auto in_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(in_tile_size, num_tiles), TensorTopology{});
-    auto out_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(out_tile_size, num_tiles), TensorTopology{});
+    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(in_tile_size, num_tiles));
+    auto out_tensor =
+        MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(out_tile_size, num_tiles));
 
     const experimental::DFBSpecName SRC_DFB{"src_dfb"};
     const experimental::DFBSpecName DST_DFB{"dst_dfb"};
@@ -318,6 +317,13 @@ void run_single_core_unary_broadcast_quasar(
         .data_format_metadata = out_t,
     };
 
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        reader_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp",
@@ -325,15 +331,16 @@ void run_single_core_unary_broadcast_quasar(
         .dfb_bindings = {experimental::ProducerOf(SRC_DFB, "out")},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = reader_hw_config,
     };
 
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        writer_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
@@ -341,13 +348,7 @@ void run_single_core_unary_broadcast_quasar(
         .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = writer_hw_config,
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -372,7 +373,7 @@ void run_single_core_unary_broadcast_quasar(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_block_cnt", num_blocks}, {"per_core_block_dim", block_size}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -397,17 +398,17 @@ void run_single_core_unary_broadcast_quasar(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_dram_addr},
-                   {"src_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", 1u},
-                   {"reader_only", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_dram_addr},
+                 {"src_dram_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"ublock_size_tiles", 1u},
+                 {"reader_only", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"num_tiles", num_tiles}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles}}),
         },
     };
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}}};
@@ -419,7 +420,7 @@ void run_single_core_unary_broadcast_quasar(
         in_t, out_t, num_tiles, test_config.broadcast_dim, packed_tilized_input, golden_packed_tilized_output);
     tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), packed_tilized_input);
 
-    tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), dest_buffer_data);
@@ -561,8 +562,7 @@ void run_single_core_unary_broadcast(
 
 using namespace unit_tests::compute::unary_broadcast;
 
-// FIXME: https://github.com/tenstorrent/tt-metal/issues/36142
-TEST_F(LLKMeshDeviceFixture, DISABLED_TensixComputeSingleTileUnaryBroadcast) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
     if (this->arch_ == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar uses TensixComputeUnaryBroadcastQuasarDfb";
     }

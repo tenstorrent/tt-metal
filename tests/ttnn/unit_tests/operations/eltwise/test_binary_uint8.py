@@ -25,10 +25,6 @@ from models.common.utility_functions import is_blackhole
     [ttnn.ne, ttnn.eq, ttnn.lt, ttnn.gt, ttnn.le, ttnn.ge],
 )
 def test_binary_relational_uint8(a_shape, b_shape, ttnn_op, device):
-    # TODO: Remove this when typecasting uint8 to uint16 support is added to the BH simulator
-    # issue: https://github.com/tenstorrent/tt-metal/issues/44988
-    if is_blackhole() and os.environ.get("TT_METAL_SIMULATOR"):
-        pytest.skip("Skipping on BH tt-sim: UINT8->UINT16 typecast not supported")
     low, high = 0, 255
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high, low, num_elements, dtype=torch.int32)
@@ -72,10 +68,6 @@ def test_binary_relational_uint8(a_shape, b_shape, ttnn_op, device):
     [ttnn.lt, ttnn.gt, ttnn.le, ttnn.ge, ttnn.ne, ttnn.eq],
 )
 def test_binary_relational_uint8_tensor_scalar(shape, scalar, ttnn_op, device):
-    # TODO: Remove this when typecasting uint8 to uint16 support is added to the BH simulator
-    # issue: https://github.com/tenstorrent/tt-metal/issues/44988
-    if is_blackhole() and os.environ.get("TT_METAL_SIMULATOR"):
-        pytest.skip("Skipping on BH tt-sim: UINT8->UINT16 typecast not supported")
     # scalar must be in [0, 255] to stay within the UINT8 value range
     num_elements = int(torch.prod(torch.tensor(shape)).item())
     torch_input = torch.arange(num_elements, dtype=torch.int32).remainder(256).reshape(shape)

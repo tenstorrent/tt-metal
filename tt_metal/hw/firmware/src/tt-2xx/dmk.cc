@@ -17,6 +17,7 @@
 #include "hostdev/dev_msgs.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
 #include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
 #include "api/kernel_thread_globals.h"
@@ -49,14 +50,7 @@ uint32_t _start() {
     uint32_t my_kt = launch_msg->kernel_config.kernel_text_offset[hartid];
     uint32_t thread_0_hartid = hartid;
     if (launch_msg->kernel_config.enables & (1u << hartid)) {
-        for (uint32_t j = 0; j < MaxDMProcessorsPerCoreType; j++) {
-            // DM0 and DM1 are reserved, so their kernel_text_offset[] slots are
-            // left zero-initialized. Skip reserved slots here, otherwise if the
-            // user binary happens to land at offset 0 (e.g. no RTAs/CRTAs/sems/CBs/DFBs
-            // precede it in the kernel-config ring buffer), the search would falsely
-            // match slot 0 and set thread_0_hartid = 0. DM0 never sets
-            // shared_globals_ready[0] = GO, so the user DMs hang forever in the
-            // wait loop below.
+        for (uint32_t j = 2; j < MaxDMProcessorsPerCoreType; j++) {
             if ((launch_msg->kernel_config.enables & (1u << j)) &&
                 launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
                 thread_0_hartid = j;
@@ -98,21 +92,24 @@ uint32_t _start() {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
+
+    // Setup after the go signal so the previous kernel has completed.
+    num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
+    my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
+
+    // Paint stack after all thread_local writes and CRT init are done.
+    mark_stack_usage();
+
     {
-        DeviceZoneScopedMainChildN("BRISC-KERNEL");
-
-        // Setup after the go signal so the previous kernel has completed.
-        num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
-        my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
-
-        // Paint stack after all thread_local writes and CRT init are done.
-        mark_stack_usage();
-
+        DeviceZoneScopedMainChildN("DM-KERNEL");
         EARLY_RETURN_FOR_DEBUG
 
         WAYPOINT("K");
         kernel_main();
         WAYPOINT("KD");
+        // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
+        // DFBs stays trivially copyable.
+        RECORD_DFB_REGION_CLEAR();
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
             // TODO enable once NOC is ready

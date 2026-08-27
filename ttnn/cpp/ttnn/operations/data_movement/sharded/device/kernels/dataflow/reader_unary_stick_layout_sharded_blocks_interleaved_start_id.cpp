@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
@@ -21,22 +21,30 @@ void kernel_main() {
     const uint32_t aligned_offset           = get_arg_val<uint32_t>(8);
     const uint32_t start_id                 = get_arg_val<uint32_t>(9);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t num_trids = get_compile_time_arg_val(2);
     constexpr auto src_args = TensorAccessorArgs<3>();
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in1(cb_id_in1);
 
-    const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes);
+    // The accessor base must stay the unshifted buffer base: Metal 2.0 supplies it from the tensor
+    // binding and offers no seam for a pre-offset base. The per-core column shift rides each read
+    // as a source `offset_bytes` instead, which resolves to the same NoC address.
+    const auto s0 = TensorAccessor(src_args, src_addr);
     uint32_t stick_id = start_id;
-    cb_in0.reserve_back(block_height);
+    dfb_in0.reserve_back(block_height);
     if (aligned) {
         uint32_t dest_off = 0;
         for (uint32_t h = 0; h < block_height; ++h) {
-            noc.async_read(s0, cb_in0, block_width_bytes, {.page_id = stick_id}, {.offset_bytes = dest_off});
+            noc.async_read(
+                s0,
+                dfb_in0,
+                block_width_bytes,
+                {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
+                {.offset_bytes = dest_off});
             stick_id++;
             dest_off += padded_block_width_bytes;
         }
@@ -51,7 +59,7 @@ void kernel_main() {
 
         constexpr uint32_t trid_base = 1;
 
-        cb_in1.reserve_back(num_trids);
+        dfb_in1.reserve_back(num_trids);
         uint32_t scratch_cb_page_size = get_local_cb_interface(cb_id_in1).fifo_page_size;
         SlotState slot_states[num_trids];
         uint32_t dest_offsets[num_trids];
@@ -68,9 +76,9 @@ void kernel_main() {
         const uint32_t my_noc_x = my_x[noc.get_noc_id()];
         const uint32_t my_noc_y = my_y[noc.get_noc_id()];
         // Base L1 address of the scratch CB
-        const uint32_t scratch_l1_base = cb_in1.get_write_ptr();
+        const uint32_t scratch_l1_base = dfb_in1.get_write_ptr();
 
-        uint32_t dest_off = 0;         // running offset into cb_in0
+        uint32_t dest_off = 0;         // running offset into dfb_in0
         uint32_t rows_issued = 0;      // Number of src->scratch transfers started
         uint32_t rows_completed = 0;   // Number of scratch->dest transfers completed
 
@@ -82,9 +90,9 @@ void kernel_main() {
                     // Start new src->scratch transfer (TRID-tagged).
                     noc.async_read<NocOptions::TXN_ID>(
                         s0,
-                        cb_in1,
+                        dfb_in1,
                         aligned_block_width_bytes,
-                        {.page_id = stick_id},
+                        {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
                         {.offset_bytes = scratch_offsets[slot]},
                         NocOptVals{.trid = static_cast<uint8_t>(active_trid)});
                     dest_offsets[slot] = dest_off;
@@ -104,7 +112,7 @@ void kernel_main() {
                     // Start scratch->dest transfer: local L1 loopback read tagged with the same trid.
                     noc.async_read<NocOptions::TXN_ID>(
                         self_ep,
-                        cb_in0,
+                        dfb_in0,
                         block_width_bytes,
                         {.noc_x = my_noc_x,
                          .noc_y = my_noc_y,
@@ -124,9 +132,9 @@ void kernel_main() {
             }
         }
 
-        // cb_in1 is reserved once as an alignment scratchpad (no downstream consumer);
+        // dfb_in1 is reserved once as an alignment scratchpad (no downstream consumer);
         // commit the reservation so the CB is left balanced.
-        cb_in1.push_back(num_trids);
+        dfb_in1.push_back(num_trids);
     }
     // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads
     UnicastEndpoint self_ep;
@@ -137,5 +145,5 @@ void kernel_main() {
          .noc_y = (uint32_t)my_y[noc.get_noc_id()],
          .addr = 0},
         NocOptVals{.trid = 0});
-    cb_in0.push_back(block_height);
+    dfb_in0.push_back(block_height);
 }

@@ -441,7 +441,7 @@ def test_paged_update_cache_asymmetric_num_heads_per_block_match(device):
     assert eq, f"asymmetric num_heads update_cache round trip mismatch: {msg}"
 
 
-def test_paged_update_cache_negative_asymmetric_num_heads_byte_count_mismatch(device):
+def test_paged_update_cache_negative_asymmetric_num_heads_byte_count_mismatch(device, expect_error):
     """Different ``num_kv_heads`` between cache and ``num_kv_heads`` kwarg *without*
     the per-block element count being preserved must still be rejected. Guards
     against the relaxation accidentally allowing arbitrary mismatched-byte
@@ -472,7 +472,7 @@ def test_paged_update_cache_negative_asymmetric_num_heads_byte_count_mismatch(de
     x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - view_kv), "constant", 0)
     xt = _sharded_input(device, x_padded)
 
-    with pytest.raises(RuntimeError, match="geometry mismatch"):
+    with expect_error(RuntimeError, "geometry mismatch"):
         ttnn.experimental.paged_update_cache(
             cache_tt,
             xt,
@@ -483,7 +483,7 @@ def test_paged_update_cache_negative_asymmetric_num_heads_byte_count_mismatch(de
         )
 
 
-def test_paged_update_cache_negative_num_kv_heads_override_without_page_table(device):
+def test_paged_update_cache_negative_num_kv_heads_override_without_page_table(device, expect_error):
     """``num_kv_heads`` override is paged-mode only; validator must reject it
     without a page_table (analogous to the ``block_size`` gate)."""
     torch.manual_seed(8)
@@ -503,7 +503,7 @@ def test_paged_update_cache_negative_num_kv_heads_override_without_page_table(de
     x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_kv_heads), "constant", 0)
     xt = _sharded_input(device, x_padded)
 
-    with pytest.raises(RuntimeError, match="num_kv_heads_override is only supported in paged mode"):
+    with expect_error(RuntimeError, "num_kv_heads_override is only supported in paged mode"):
         ttnn.experimental.paged_update_cache(
             cache_tt,
             xt,
@@ -513,7 +513,7 @@ def test_paged_update_cache_negative_num_kv_heads_override_without_page_table(de
         )
 
 
-def test_paged_update_cache_negative_byte_count_mismatch(device):
+def test_paged_update_cache_negative_byte_count_mismatch(device, expect_error):
     """Override that breaks the per-block byte invariant must be rejected at validation."""
     torch.manual_seed(4)
     num_users = 4
@@ -535,7 +535,7 @@ def test_paged_update_cache_negative_byte_count_mismatch(device):
     x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_kv_heads), "constant", 0)
     xt = _sharded_input(device, x_padded)
 
-    with pytest.raises(RuntimeError, match="geometry mismatch"):
+    with expect_error(RuntimeError, "geometry mismatch"):
         ttnn.experimental.paged_update_cache(
             cache_tt,
             xt,
@@ -545,7 +545,7 @@ def test_paged_update_cache_negative_byte_count_mismatch(device):
         )
 
 
-def test_paged_update_cache_negative_override_without_page_table(device):
+def test_paged_update_cache_negative_override_without_page_table(device, expect_error):
     """``block_size`` is paged-mode only; validator must reject it without a page_table."""
     torch.manual_seed(5)
     num_users = 4
@@ -564,7 +564,7 @@ def test_paged_update_cache_negative_override_without_page_table(device):
     x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_kv_heads), "constant", 0)
     xt = _sharded_input(device, x_padded)
 
-    with pytest.raises(RuntimeError, match="block_size_override is only supported in paged mode"):
+    with expect_error(RuntimeError, "block_size_override is only supported in paged mode"):
         ttnn.experimental.paged_update_cache(
             cache_tt,
             xt,
@@ -602,7 +602,9 @@ def _sharded_input_with_num_cores(device, x_padded, num_cores):
         (4, 2),
     ],
 )
-def test_paged_update_cache_negative_input_shard_grid_num_cores_mismatch(num_users, bad_num_cores, device):
+def test_paged_update_cache_negative_input_shard_grid_num_cores_mismatch(
+    num_users, bad_num_cores, device, expect_error
+):
     """Validator must reject input shard grids whose num_cores != num_users; the program
     factory iterates one user per core and silently miscomputes otherwise (issue #44923)."""
     torch.manual_seed(9)
@@ -621,7 +623,7 @@ def test_paged_update_cache_negative_input_shard_grid_num_cores_mismatch(num_use
     x_padded = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_kv_heads), "constant", 0)
     xt = _sharded_input_with_num_cores(device, x_padded, bad_num_cores)
 
-    with pytest.raises(RuntimeError, match="num_cores"):
+    with expect_error(RuntimeError, "num_cores"):
         ttnn.experimental.paged_update_cache(
             cache_tt,
             xt,
@@ -734,7 +736,7 @@ def test_paged_fill_cache_override_view_sliding_into_full_buffer(device):
     )
 
 
-def test_paged_fill_cache_negative_byte_count_mismatch(device):
+def test_paged_fill_cache_negative_byte_count_mismatch(device, expect_error):
     """Same as ``paged_update_cache`` byte-count mismatch but for fill."""
     torch.manual_seed(13)
     num_users = 2
@@ -756,7 +758,7 @@ def test_paged_fill_cache_negative_byte_count_mismatch(device):
     x = torch.randn([1, num_kv_heads, input_seq_len, view_head_dim]).bfloat16().float()
     xt = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
 
-    with pytest.raises(RuntimeError, match="geometry mismatch"):
+    with expect_error(RuntimeError, "geometry mismatch"):
         ttnn.experimental.paged_fill_cache(cache_tt, xt, page_table_tt, batch_idx=0, block_size=view_block_size)
 
 
@@ -818,7 +820,7 @@ def test_paged_fill_cache_asymmetric_num_heads_per_block_match(device):
     assert eq, f"asymmetric num_heads fill cache round trip mismatch: {msg}"
 
 
-def test_paged_fill_cache_negative_asymmetric_num_heads_byte_count_mismatch(device):
+def test_paged_fill_cache_negative_asymmetric_num_heads_byte_count_mismatch(device, expect_error):
     """Different ``num_kv_heads`` between cache and input *without* the per-block
     element count being preserved must still be rejected. Guards against the
     relaxation accidentally allowing arbitrary mismatched-byte writes.
@@ -848,5 +850,42 @@ def test_paged_fill_cache_negative_asymmetric_num_heads_byte_count_mismatch(devi
     x = torch.randn([1, view_kv, input_seq_len, view_head_dim]).bfloat16().float()
     xt = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
 
-    with pytest.raises(RuntimeError, match="geometry mismatch"):
+    with expect_error(RuntimeError, "geometry mismatch"):
         ttnn.experimental.paged_fill_cache(cache_tt, xt, page_table_tt, batch_idx=0, block_size=view_block_size)
+
+
+def test_paged_fill_cache_program_cache_scalar_batch_idx(device):
+    """Program-cache hit with a DIFFERENT scalar ``batch_idx`` must still fill the
+    correct physical block. ``batch_idx`` is excluded from the program hash and baked
+    into a writer runtime arg, so a frozen value would re-route the 2nd fill to the
+    1st user's block. Two fills reuse one cache entry; each re-allocates its input so
+    buffer addresses differ across the hit too.
+    """
+    torch.manual_seed(20)
+    num_users = 2
+    num_kv_heads = 1
+    block_size = 64
+    head_dim = 256
+    input_seq_len = block_size  # one block per user
+
+    cache_tt, cache_torch = _make_paged_cache(num_users, num_kv_heads, block_size, head_dim, device)
+    ref = cache_torch.clone()
+
+    # page_table[u] = [u]: user u -> physical block u. A frozen batch_idx would send
+    # both fills to block 0 and leave block 1 unchanged.
+    page_table = torch.arange(num_users, dtype=torch.int32).reshape(num_users, 1)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    entries_before = device.num_program_cache_entries()
+    for u in range(num_users):
+        x = torch.randn([1, num_kv_heads, input_seq_len, head_dim]).bfloat16().float()
+        xt = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+        ttnn.experimental.paged_fill_cache(cache_tt, xt, page_table_tt, batch_idx=u)
+        ref[u, 0:num_kv_heads, :, :] = x[0, :, :, :]
+
+    # Second fill reuses the first fill's entry (only batch_idx differs, which is unhashed).
+    assert device.num_program_cache_entries() - entries_before == 1
+
+    got = _read_paged_cache(cache_tt)
+    eq, msg = comp_equal(ref, got)
+    assert eq, f"program-cache fill mismatch (frozen batch_idx?): {msg}"

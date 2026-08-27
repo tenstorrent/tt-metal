@@ -9,6 +9,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -24,8 +25,8 @@ constexpr std::uint16_t UINT16_LOW_MASK = 0xFFFF;
 constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
 
 // Disarms the SFPLOADMACRO "Misc" / Load-Macro-Control config that the typecast init functions program
-// unconditionally (the init dispatch passes only APPROX, so it cannot see DST_ACCUM_MODE and always arms
-// the macro). The 32-bit Dest (DST_ACCUM_MODE) typecast paths fall back to a plain TTI_ loop that never
+// unconditionally (the init dispatch passes only APPROX, so it cannot see is_fp32_dest_acc_en and always arms
+// the macro). The 32-bit Dest (is_fp32_dest_acc_en) typecast paths fall back to a plain TTI_ loop that never
 // issues an SFPLOADMACRO. On Wormhole, leaving the Misc word armed with UnitDelayKind=WaitForElapsedInstructions
 // and then running plain SFP instructions hard-hangs the SFPU (all three Tensix threads enter but never
 // complete) -- see #46751. Blackhole tolerates the un-consumed macro state, so this is a WH-specific quirk.
@@ -40,7 +41,7 @@ inline void disarm_sfploadmacro_misc() {
 #endif
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool DST_ACCUM_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_typecast_fp32_to_uint16() {
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
@@ -48,14 +49,14 @@ inline void calculate_typecast_fp32_to_uint16() {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        if (DST_ACCUM_MODE) {
+        if (is_fp32_dest_acc_en) {
             TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
         } else {
             TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_2, 0);
         }
     }
 #else
-    if constexpr (!DST_ACCUM_MODE) {
+    if constexpr (!is_fp32_dest_acc_en) {
         // 16-bit Dest: SFPLOADMACRO fast path, throughput of 2 cycles per input row.
         //
         // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
@@ -274,7 +275,7 @@ inline void calculate_typecast_fp32_to_fp16b() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool DST_ACCUM_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_typecast_uint16_to_fp32() {
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
@@ -285,7 +286,7 @@ inline void calculate_typecast_uint16_to_fp32() {
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
     }
 #else
-    if constexpr (!DST_ACCUM_MODE) {
+    if constexpr (!is_fp32_dest_acc_en) {
         // 16-bit Dest: SFPLOADMACRO fast path, throughput of 1 cycle per input row. The LO16 load
         // keeps only the low 16 bits (the UInt16 value), so casting it matches the plain loop's
         // INT32 load + 0xFFFF mask + cast.
@@ -486,7 +487,7 @@ inline void calculate_typecast_uint32_to_fp32() {
 #endif
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool DST_ACCUM_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_typecast_uint16_to_uint32() {
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
@@ -496,7 +497,7 @@ inline void calculate_typecast_uint16_to_uint32() {
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0);
     }
 #else
-    if constexpr (!DST_ACCUM_MODE) {
+    if constexpr (!is_fp32_dest_acc_en) {
         // 16-bit Dest: SFPLOADMACRO fast path, throughput of 1 cycle per input row. The LO16 load
         // keeps only the low 16 bits (the UInt16 value) and zero-extends them, so the INT32 store
         // matches the plain loop's INT32 load + 0xFFFF mask.
@@ -597,6 +598,8 @@ inline void calculate_typecast_int32_to_uint16() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_fp16b() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 1;
     sfpi::vConstIntPrgm1 = 0x7fff;
     sfpi::vConstIntPrgm2 = 0xffff0000;
@@ -604,14 +607,16 @@ inline void init_typecast_fp32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint16_to_uint32() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifdef DISABLE_SFPLOADMACRO
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 #else
-    // The 32-bit Dest (DST_ACCUM_MODE) path of calculate_typecast_uint16_to_uint32 falls
+    // The 32-bit Dest (is_fp32_dest_acc_en) path of calculate_typecast_uint16_to_uint32 falls
     // back to the plain loop, which masks the loaded word with LREG1. Load the mask here
     // so that path is correct; the macro-programming below only targets LREG0, so LREG1
     // survives. The 16-bit Dest macro path does not read LREG1. The init cannot see
-    // DST_ACCUM_MODE (the dispatch passes only APPROX), so the 32-bit Dest calc disarms the
+    // is_fp32_dest_acc_en (the dispatch passes only APPROX), so the 32-bit Dest calc disarms the
     // macro before its plain loop (see disarm_sfploadmacro_misc / #46751).
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 
@@ -644,6 +649,8 @@ inline void preload_sign_magnitude_cast_fixup() { sfpi::vConstIntPrgm0 = -31; }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_fp32() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     preload_sign_magnitude_cast_fixup();
 
@@ -698,6 +705,8 @@ inline void init_typecast_uint32_to_fp32() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_int32_to_fp32() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int t = p_sfpu::LREG4;
 
@@ -732,6 +741,8 @@ inline void init_typecast_int32_to_fp32() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_int32_to_fp16b() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int t = p_sfpu::LREG4;
 
@@ -769,14 +780,16 @@ inline void init_typecast_int32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint16_to_fp32() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifdef DISABLE_SFPLOADMACRO
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 #else
-    // The 32-bit Dest (DST_ACCUM_MODE) path of calculate_typecast_uint16_to_fp32 falls
+    // The 32-bit Dest (is_fp32_dest_acc_en) path of calculate_typecast_uint16_to_fp32 falls
     // back to the plain loop, which masks the loaded word with LREG1. Load the mask here
     // so that path is correct; the macro-programming below only targets LREG0, so LREG1
     // survives. The 16-bit Dest macro path does not read LREG1. The init cannot see
-    // DST_ACCUM_MODE (the dispatch passes only APPROX), so the 32-bit Dest calc disarms the
+    // is_fp32_dest_acc_en (the dispatch passes only APPROX), so the 32-bit Dest calc disarms the
     // macro before its plain loop (see disarm_sfploadmacro_misc / #46751).
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 
@@ -806,6 +819,8 @@ inline void init_typecast_uint16_to_fp32() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint16_to_fp16b() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
     TTI_SFPCAST(0, 12, 0);
@@ -836,6 +851,8 @@ inline void init_typecast_uint16_to_fp16b() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_fp16b() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     preload_sign_magnitude_cast_fixup();
 
@@ -871,10 +888,12 @@ inline void init_typecast_uint32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint16() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // Programs the macro used by the 16-bit Dest (LO16 store) path of
     // calculate_typecast_fp32_to_uint16. The 32-bit Dest path uses the plain loop and
-    // disarms this macro first (the init cannot see DST_ACCUM_MODE; see #46751).
+    // disarms this macro first (the init cannot see is_fp32_dest_acc_en; see #46751).
 
     // InstructionTemplate[0]
     TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, 0xf);  // L[VD] = max(0, L[VD])
@@ -904,10 +923,15 @@ inline void init_typecast_fp32_to_uint16() {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void init_typecast_uint32_to_uint16() {}
+inline void init_typecast_uint32_to_uint16() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_int32_to_uint16() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
     TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, 0xf);  // L[VD] = max(0, L[VD])
@@ -987,11 +1011,15 @@ inline void calculate_typecast_uint_to_uint8() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint8() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 0xFF;
 }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint_to_uint8() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 0xFF;
     sfpi::vConstIntPrgm1 = UINT16_LOW_MASK;
 }

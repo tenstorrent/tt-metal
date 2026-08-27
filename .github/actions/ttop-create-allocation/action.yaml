@@ -14,6 +14,14 @@ inputs:
     description: 'Target namespace for the allocation'
     required: false
     default: 'ttop-ci'
+  timeoutSeconds:
+    description: 'Max seconds to keep retrying for allocation before failing.'
+    required: false
+    default: '59940'
+  retries:
+    description: 'Number of retries minting the OIDC in one attempt before giving up'
+    required: false
+    default: '3'
 
 runs:
   using: 'composite'
@@ -51,8 +59,14 @@ runs:
         echo "Creating allocation..."
         printf "%s" "${ALLOCATION_MANIFEST}" | kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} apply -f -
 
-    - name: Wait for allocation
+    - name: Wait for Allocation
       shell: bash
-      run: |
-        echo "Waiting for allocation to be ready..."
-        kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m
+      env:
+        NAMESPACE: ${{ inputs.namespace }}
+        RESOURCE: allocation/${{ inputs.allocationName }}
+        MODE: poll
+        JSONPATH: '{.status.phase}'
+        EXPECTED: Allocated
+        OVERALL_TIMEOUT: ${{ inputs.timeoutSeconds }}
+        RETRIES: ${{ inputs.retries }}
+      run: "$GITHUB_ACTION_PATH/../ttop-await-resource/await.sh"

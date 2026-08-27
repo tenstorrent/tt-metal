@@ -29,6 +29,7 @@ from fast_untilize_common import (
     fast_untilize_formats,
 )
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.device_io import read_from_device
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, DestSync, PerfRunType, format_dict
@@ -45,7 +46,6 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.utils import passed_test
-from ttexalens.tt_exalens_lib import read_from_device
 
 
 def generate_tile_face_row_ids(tile_count, dtype=torch.bfloat16):

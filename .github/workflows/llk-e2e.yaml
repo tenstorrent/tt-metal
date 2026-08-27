@@ -9,7 +9,7 @@ on:
       pytest_markers:
         description: "Pytest mark expression for testing (e.g., 'nightly', 'perf')"
         required: false
-        default: "not perf and not quasar"
+        default: "not perf and not quasar and not accuracy"
         type: string
 
 permissions:
@@ -23,15 +23,15 @@ jobs:
     uses: ./.github/workflows/llk-e2e-impl.yaml
     secrets: inherit
     with:
-      pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
-      coverage: true
+      pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar and not accuracy' }}
+      coverage: false
 
   llk-e2e-summary:
     name: "LLK e2e summary"
     if: always()
     needs:
       - llk-e2e-tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Check e2e test results
         uses: re-actors/alls-green@release/v1
@@ -40,7 +40,7 @@ jobs:
 
   report-status:
     name: "Report status"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: always()
     needs: llk-e2e-summary
     steps:

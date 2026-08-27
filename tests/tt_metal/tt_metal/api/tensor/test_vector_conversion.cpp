@@ -19,14 +19,16 @@
 #include <tt-metalium/tile.hpp>
 #include <tt_stl/span.hpp>
 
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -77,7 +79,7 @@ std::vector<T> arange(int64_t start, int64_t end, int64_t step, std::optional<in
 template <typename T>
 class VectorConversionTest : public ::testing::Test {};
 
-using TestTypes = ::testing::Types<float, bfloat16, uint8_t, uint16_t, uint32_t, int32_t>;
+using TestTypes = ::testing::Types<float, bfloat16, uint8_t, uint16_t, uint32_t, int32_t, int8_t>;
 TYPED_TEST_SUITE(VectorConversionTest, TestTypes);
 
 TYPED_TEST(VectorConversionTest, InvalidSize) {
@@ -181,7 +183,8 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_EQ(ctor_count, 1);
         EXPECT_EQ(dtor_count, 0);
         {
-            auto copy = HostTensor::from_buffer(tensor.buffer(), tensor.tensor_spec(), tensor.tensor_topology());
+            auto copy = host_tensor_from_buffer_with_topology(
+                tensor.buffer(), tensor.tensor_spec(), get_tensor_topology(tensor));
             EXPECT_EQ(ctor_count, 2);
             EXPECT_EQ(dtor_count, 0);
         }
@@ -214,28 +217,13 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
     EXPECT_EQ(ctor_count, 1);
     EXPECT_EQ(dtor_count, 0);
     {
-        auto copy = HostTensor::from_buffer(tensor.buffer(), tensor.tensor_spec(), tensor.tensor_topology());
+        auto copy =
+            host_tensor_from_buffer_with_topology(tensor.buffer(), tensor.tensor_spec(), get_tensor_topology(tensor));
         EXPECT_EQ(ctor_count, 2);
         EXPECT_EQ(dtor_count, 0);
     }
     EXPECT_EQ(ctor_count, 2);
     EXPECT_EQ(dtor_count, 1);
-}
-
-TYPED_TEST(BorrowedStorageVectorConversionTest, CustomTile) {
-    Shape shape{32, 32};
-    auto input = arange<TypeParam>(0, shape.volume(), 1);
-
-    auto tensor = HostTensor::from_borrowed_data(
-        std::span<TypeParam>(input),
-        shape,
-        MemoryPin(/*increment_ref_count=*/[]() {}, /*decrement_ref_count=*/[]() {}),
-        /*tile=*/Tile({16, 16}));
-
-    // Retain row major layout, but use custom tile.
-    // TODO: #18536 - this should be illegal.
-    EXPECT_EQ(tensor.tensor_spec().layout(), Layout::ROW_MAJOR);
-    EXPECT_EQ(tensor.tensor_spec().tile(), Tile({16, 16}));
 }
 
 class BlockFloatVectorConversionTest : public ::testing::TestWithParam<DataType> {};
@@ -300,13 +288,111 @@ TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
     MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
 
     auto host = HostTensor::from_vector(input, spec);
-    auto mesh = enqueue_write_tensor(mesh_device_->mesh_command_queue(), host, *mesh_device_, mem_cfg);
+    auto mesh = mesh_device_->mesh_command_queue().enqueue_write_tensor(host, mem_cfg);
 
     EXPECT_TRUE(mesh.memory_config().is_l1());
 
-    auto readback = enqueue_read_tensor(mesh_device_->mesh_command_queue(), mesh);
+    auto readback = mesh_device_->mesh_command_queue().enqueue_read_tensor(mesh);
 
     EXPECT_THAT(readback.to_vector<float>(), Pointwise(Eq(), input));
+}
+
+TEST_F(DeviceVectorConversionTest, RoundtripInt8) {
+    Shape shape{128, 128};
+
+    auto input = arange<int8_t>(0, shape.volume(), 1);
+
+    input[0] = -128;
+    input[1] = 127;
+
+    TensorSpec spec(
+        shape,
+        TensorLayout(DataType::INT8, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
+    MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
+
+    auto host = HostTensor::from_vector(input, spec);
+    auto mesh = mesh_device_->mesh_command_queue().enqueue_write_tensor(host, mem_cfg);
+
+    EXPECT_TRUE(mesh.memory_config().is_l1());
+    EXPECT_EQ(mesh.dtype(), DataType::INT8);
+
+    auto readback = mesh_device_->mesh_command_queue().enqueue_read_tensor(mesh);
+
+    EXPECT_THAT(readback.to_vector<int8_t>(), Pointwise(Eq(), input));
+}
+
+bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {
+    return a == b && experimental::per_core_allocation::is_per_core_allocation(a.memory_config()) ==
+                         experimental::per_core_allocation::is_per_core_allocation(b.memory_config());
+}
+
+TEST(VectorConversionTest, ExactSpecPredicateCustomAlignment) {
+    Shape shape{32, 32};
+    auto input = arange<float>(0, shape.volume(), 1);
+
+    auto alignment = tt::tt_metal::Alignment({64, 64});
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+
+    auto host_tensor = HostTensor::from_vector(input, spec);
+
+    // Exact spec match!
+    EXPECT_TRUE(exact_spec_match(host_tensor.tensor_spec(), spec));
+}
+
+TEST(VectorConversionTest, ExactSpecPredicateCustomAlignmentRvalueVector) {
+    Shape shape{64, 64};  // Matches alignment so logical_matches_physical is true
+    auto input = arange<float>(0, shape.volume(), 1);
+
+    auto alignment = tt::tt_metal::Alignment({64, 64});
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+
+    auto host_tensor = HostTensor::from_vector(std::move(input), spec);
+
+    EXPECT_TRUE(exact_spec_match(host_tensor.tensor_spec(), spec));
+}
+
+TEST(VectorConversionTest, ExactSpecPredicateCustomAlignmentFromSpan) {
+    Shape shape{32, 32};
+    auto input = arange<float>(0, shape.volume(), 1);
+
+    auto alignment = tt::tt_metal::Alignment({64, 64});
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+
+    auto host_tensor = HostTensor::from_span<float>(std::span<float>(input), spec);
+
+    EXPECT_TRUE(exact_spec_match(host_tensor.tensor_spec(), spec));
+}
+
+TEST(VectorConversionTest, ExactSpecShardedPackedSizes) {
+    Shape shape{64, 64};
+    auto input = arange<float>(0, shape.volume(), 1);
+
+    auto memory_config = MemoryConfig{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec{CoreRangeSet({CoreRange({0, 0}, {0, 1})}), {32, 64}, ShardOrientation::ROW_MAJOR}};
+    experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
+    auto alignment = tt::tt_metal::Alignment({64, 64});
+    auto spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+
+    auto host_tensor = HostTensor::from_vector(input, spec);
+
+    EXPECT_TRUE(exact_spec_match(host_tensor.tensor_spec(), spec));
+
+    // Check packed size
+    const size_t expected_shard_size = spec.compute_packed_buffer_size_bytes();
+    for (const auto& coord : host_tensor.buffer().shard_coords()) {
+        auto shard = host_tensor.buffer().get_shard(coord);
+        ASSERT_TRUE(shard.has_value());
+        EXPECT_EQ(shard->view_bytes().size(), expected_shard_size);
+    }
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE

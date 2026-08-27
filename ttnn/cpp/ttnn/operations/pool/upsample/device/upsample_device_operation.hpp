@@ -12,8 +12,8 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -28,31 +28,26 @@ struct UpsampleBilinearProgramFactory {
 };
 
 struct UpsampleMultiCoreInterleavedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
 };
 
 struct UpsampleMultiCoreShardedProgramFactory {
-    // create_workload_descriptor() uploads the per-core halo lookup config
-    // tensor and parks its backing MeshBuffer on the returned
-    // WorkloadDescriptor (held by the program cache) so its lifetime
-    // outlives the cached programs.
-    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
-        const UpsampleParams& operation_attributes,
-        const Tensor& input_tensor,
-        Tensor& output_tensor,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    // create_program_artifacts() uploads the per-core halo lookup config tensor and parks it in
+    // op_owned_tensors (held by the program cache) so its lifetime outlives the cached Program.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
 };
 
 struct UpsampleNearestFloatProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
 };
 
 struct UpsampleOperation {
     using operation_attributes_t = UpsampleParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         UpsampleBilinearProgramFactory,

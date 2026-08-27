@@ -42,7 +42,7 @@ namespace {
 
 // Returns true if the parameter's current placement on the given mesh axis is a
 // Shard{...} rather than Replicate.
-bool is_sharded_on_axis(const tt::tt_metal::Tensor& value, uint32_t axis) {
+bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
     const auto& topology = value.tensor_topology();
     const auto& placements = topology.placements();
     if (axis >= placements.size()) {
@@ -60,8 +60,12 @@ ttnn::Tensor force_replicate_axes(const ttnn::Tensor& t, const ttsl::SmallVector
     bool changed = false;
     for (uint32_t axis : reduced_mesh_axes) {
         const size_t idx = (placements.size() == 1) ? 0 : axis;
-        if (idx < placements.size() &&
-            !std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placements[idx])) {
+        TT_FATAL(
+            idx < placements.size(),
+            "force_replicate_axes: reduced axis {} out of range for placements (size={})",
+            axis,
+            placements.size());
+        if (!std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placements[idx])) {
             placements[idx] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
             changed = true;
         }

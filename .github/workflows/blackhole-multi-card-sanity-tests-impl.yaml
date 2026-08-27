@@ -25,10 +25,24 @@ on:
         type: boolean
         default: false
         description: "Enable LLK asserts"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+    outputs:
+      matrix:
+        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
+        value: ${{ jobs.load-test-matrix.outputs.matrix }}
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
@@ -94,6 +108,7 @@ jobs:
         with:
           submodules: recursive
           path: docker-job
+          ref: ${{ inputs.ref || github.sha }}
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
@@ -128,7 +143,7 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
       - name: 🤖 AI job summary
-        if: always() && !cancelled()
+        if: ${{ !cancelled() }}
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
         with:
@@ -137,47 +152,11 @@ jobs:
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["generated/test_logs"],
-              "output_dir": "generated/ai_summaries"
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}"
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
           job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-
-  ai-run-summary:
-    name: "AI Run Summary"
-    needs: [load-test-matrix, multi-card-unit-tests]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-      - id: ai-run-summary
-        continue-on-error: true
-        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
-        with:
-          config: |
-            {
-              "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE",
-              "input_dir": "ai_job_summaries",
-              "output_dir": "ai_run_summaries"
-            }
-          api-key: ${{ secrets.TT_CHAT_API_KEY }}
-          api-url: ${{ secrets.TT_CHAT_URL }}
-          expected-jobs: ${{ needs.load-test-matrix.outputs.matrix }}
-          run-result: ${{ needs.multi-card-unit-tests.result }}
-      - name: Show report
-        if: always() && steps.ai-run-summary.outputs.report-file != ''
-        continue-on-error: true
-        shell: bash
-        env:
-          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
-        run: |
-          if [ -f "$REPORT_FILE" ]; then
-            cat "$REPORT_FILE"
-            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::warning::Report file not found: $REPORT_FILE"
-          fi

@@ -65,7 +65,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
 
   determine-runner-config:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       runs-on-labels: ${{ steps.config.outputs.runs-on-labels }}
       arch-name: ${{ steps.config.outputs.arch-name }}
@@ -104,6 +104,7 @@ jobs:
 
   test-dispatch:
     needs: [check-harbor, determine-runner-config]
+    if: ${{ !cancelled() && needs.determine-runner-config.result == 'success' }}
     timeout-minutes: 1440
     runs-on: ${{ fromJSON(needs.determine-runner-config.outputs.runs-on-labels) }}
     container:

@@ -399,6 +399,13 @@ OpConfig::OpConfig(
     }
 }
 
+// ADD/SUB/RSUB only reach the SFPU when the caller asked for the accurate path
+// (fast_and_approximate_mode = false), so the bf16 narrowing is always RNE, matching what
+// mul_binary_tile/div_binary_tile do. The LLK guards this on !is_fp32_dest_acc_en, and
+// binary_ng always enables fp32 dest accumulation for FLOAT32 operands, so the fp32 route
+// that already used the SFPU is unaffected.
+constexpr auto kRneDstRoundingMode = "ckernel::DstRoundingMode::NearestEven";
+
 std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu_binary_op, DataType dtype) {
     using enum OpConfig::SfpuBinaryOp;
 
@@ -411,12 +418,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             if (int_data_format) {
                 return {"add_int_tile_init();", fmt::format("add_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"add_binary_tile_init();", "add_binary_tile"};
+            return {"add_binary_tile_init();", fmt::format("add_binary_tile<{}>", kRneDstRoundingMode)};
         case SUB:
             if (int_data_format) {
                 return {"sub_int_tile_init();", fmt::format("sub_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"sub_binary_tile_init();", "sub_binary_tile"};
+            return {"sub_binary_tile_init();", fmt::format("sub_binary_tile<{}>", kRneDstRoundingMode)};
         case MUL:
             if (int_data_format) {
                 return {
@@ -451,7 +458,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             if (int_data_format) {
                 return {"rsub_int_tile_init();", fmt::format("rsub_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+            return {"rsub_binary_tile_init();", fmt::format("rsub_binary_tile<{}>", kRneDstRoundingMode)};
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LEFT_SHIFT:
@@ -673,9 +680,6 @@ std::map<std::string, std::string> make_dataflow_defines(
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
 
 uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataType dtype, const bool is_quant_op) {
-    // std::visit([&](auto v) {
-    //     std::cout << "pack_scalar_runtime_arg: " << v << std::endl;
-    // }, scalar);
     return std::visit(
         [&](auto v) -> uint32_t {
             // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
@@ -733,11 +737,11 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     return ret;
 }
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();
 }
 
-bool is_uneven(const TensorSpec& t) {
+bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (not t.memory_config().is_sharded()) {
         return false;
     }
@@ -759,7 +763,8 @@ bool is_uneven(const TensorSpec& t) {
 // the check is based on user facing information, input tensors and output memory config
 // more info may be checked in other places, such as actual output is uneven or not
 // this function is called in both earlier and later stages of the program execution
-bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c) {
+bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c) {
     if (!c.is_sharded()) {
         return false;
     }

@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 from models.tt_transformers.tt.model_config import parse_optimizations
 
 
@@ -20,7 +22,9 @@ def pytest_addoption(parser):
         "--paged_attention", action="store", type=bool, help="Whether to use paged attention or default attention"
     )
     parser.addoption("--page_params", action="store", type=dict, help="Page parameters for paged attention")
-    parser.addoption("--sampling_params", action="store", type=dict, help="Sampling parameters for decoding")
+    # type=dict cannot parse a command-line string, so the option was write-only until now;
+    # accept a JSON object, e.g. --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
+    parser.addoption("--sampling_params", action="store", type=json.loads, help="Sampling parameters for decoding")
     parser.addoption(
         "--stop_at_eos", action="store", type=int, help="Whether to stop decoding when the model generates an EoS token"
     )
@@ -80,4 +84,16 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Whether to use HF-style rope, if not passed, the default mllama will be used",
+    )
+    parser.addoption(
+        "--skip_perf_report",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip writing the perf benchmark JSON and the CI perf-target check for this run. "
+            "Use when the same test is run in more than one configuration and only one of them "
+            "should report/validate perf (e.g. Llama-8B runs ci-eval-32 both without the prefetcher "
+            "for repeat-batch coverage and with the prefetcher on a single batch for perf; only the "
+            "latter should report perf). See issue #47820."
+        ),
     )

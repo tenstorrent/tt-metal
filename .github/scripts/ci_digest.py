@@ -4,7 +4,7 @@
 """CI digest: report the current state of watched workflows.
 
 Thin aggregator. For each watched workflow it finds the latest completed
-scheduled run and reads that run's machine-readable ``ai_run_summary_<run_id>``
+scheduled run and reads that run's machine-readable ``ai_run_summary[_<scope>]_r<run>_a<attempt>``
 artifact — a factual JSON the ai_summary/run action already produces (succeeded
 / failed / infra_failure jobs). The digest does no classification of its own; it
 collects those per-run summaries and renders them at one point so a team can
@@ -15,11 +15,18 @@ from __future__ import annotations
 import argparse
 import glob as _glob
 import json
+import contextlib
+import io
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
+import zipfile
+from dataclasses import dataclass
+from types import SimpleNamespace
 from datetime import datetime, timezone
 
 
@@ -58,45 +65,155 @@ def latest_run(repo: str, workflow: str, branch: str) -> dict | None:
     return runs[0] if runs else None
 
 
+def _summary_name_re(run_id: int) -> "re.Pattern[str]":
+    """Matches this run's report artifacts, capturing the attempt.
+
+    ``ai_run_summary[_<scope>]_r<run>_a<n>``. The scope is present when a
+    workflow is invoked more than once per run and publishes one report per
+    invocation. Anchored at both ends, so a longer run id (``r421`` for run 42),
+    an unrelated prefix and a suffixed copy (``_a3_backup``) are all rejected.
+
+    The scope segment is ``[^_]+`` rather than a character class: the producer
+    (``qualified_stem``/``slugify_scope`` in
+    tenstorrent/tt-github-actions ``.github/actions/ai_summary/tool/common/artifact_names.py``)
+    slugifies every non-alphanumeric character to ``-``, so a slug never
+    contains ``_`` but may hold any alphanumeric, Unicode included.
+    """
+    return re.compile(rf"^ai_run_summary_(?:[^_]+_)?r{run_id}_a(\d+)$")
+
+
+def _artifacts_jq() -> str:
+    """jq projection listing every artifact as ``name\\tcreated_at\\tid``.
+
+    Projection only — the name match happens in Python, so one engine decides
+    it and the tests exercise the same code CI runs.
+    """
+    return '.artifacts[] | "\\(.name)\\t\\(.created_at)\\t\\(.id)"'
+
+
+def _pick_latest_report(listing: list[str], run_id: int) -> tuple[str, str] | None:
+    """``(name, id)`` of the highest-attempt report, or None if none match.
+
+    The attempt in the name ranks first; created_at then the higher id settle
+    ties. Ties are real: an unscoped workflow invoked more than once per run
+    publishes one report per invocation under a single name, and only one of
+    them can be read — so that case is reported rather than resolved quietly.
+
+    Lines that don't parse are skipped, not raised: one bad line must not cost
+    the caller every other workflow's result.
+    """
+    name_re = _summary_name_re(run_id)
+    ranked = []
+    for line in listing:
+        if not line.strip():
+            continue
+        # Artifact names may contain tabs — GitHub rejects only " : < > | * ?
+        # \r \n \ / — so just the two machine-generated trailing fields split off.
+        parts = line.rsplit("\t", 2)
+        if len(parts) != 3 or not (parts[2].isascii() and parts[2].isdigit()):
+            print(f"Skipping malformed artifact listing line: {line!r}", file=sys.stderr)
+            continue
+        name, created_at, art_id = parts
+        m = name_re.match(name)
+        if m:
+            ranked.append(((int(m.group(1)), created_at, int(art_id)), name, art_id))
+    if not ranked:
+        return None
+    best = max(ranked, key=lambda r: r[0])
+    tied = [r for r in ranked if r[0][0] == best[0][0]]
+    if len(tied) > 1:
+        print(
+            f"Run {run_id} has {len(tied)} reports at attempt {best[0][0]}; "
+            f"reading {best[1]} and ignoring the rest — the producing workflow "
+            f"is invoked more than once per run without a distinct scope",
+            file=sys.stderr,
+        )
+    return best[1], best[2]
+
+
 def fetch_run_summary(repo: str, run_id: int) -> dict | None:
-    """Download a run's ``ai_run_summary_<run_id>`` artifact and parse its JSON.
+    """Download the highest attempt's ``ai_run_summary[_<scope>]_r<run>_a<n>`` JSON.
 
-    The ai_summary/run action uploads ``ai_run_summary_<run_id>.json`` (the
-    factual, deterministic run report: succeeded / failed / infra_failure) inside
-    that artifact. Returns None when the artifact is absent — the workflow doesn't
-    run ai_summary/run, or the run predates JSON output — so the caller can fall
-    back to the run's conclusion.
+    Each attempt uploads its own report, so every attempt stays downloadable and
+    the highest wins. Returns None when the run has no such artifact — the
+    workflow doesn't run ai_summary/run, or it produced only markdown — so the
+    caller can fall back to the run's conclusion.
     """
-    name = f"ai_run_summary_{run_id}"
+    listing = subprocess.run(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100",
+            "--jq",
+            _artifacts_jq(),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    latest = _pick_latest_report(listing, run_id)
+    if latest is None:
+        return None
+    art_name, art_id = latest
     with tempfile.TemporaryDirectory() as d:
-        try:
-            subprocess.run(
-                ["gh", "run", "download", str(run_id), "-R", repo, "-n", name, "-D", d],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError:
-            return None  # no such artifact on this run
-        matches = _glob.glob(os.path.join(d, "**", f"{name}.json"), recursive=True)
+        zip_path = os.path.join(d, "artifact.zip")
+        with open(zip_path, "wb") as fh:
+            subprocess.run(["gh", "api", f"repos/{repo}/actions/artifacts/{art_id}/zip"], stdout=fh, check=True)
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(d)
+        # Escaped: GitHub permits [ and ] in an artifact name, and glob would
+        # read them as a character class and resolve to a different file.
+        matches = _glob.glob(os.path.join(d, "**", _glob.escape(art_name) + ".json"), recursive=True)
         if not matches:
-            return None  # artifact present but .md-only (run predates JSON output)
-        with open(matches[0], encoding="utf-8") as f:
-            return json.load(f)
+            return None  # artifact present but markdown-only
+        with open(matches[0], encoding="utf-8") as fh:
+            return json.load(fh)
 
 
-def summarize_run(data: dict) -> tuple[str, list[dict], list[dict], int]:
-    """Map a run-summary JSON into (outcome, failed_rows, infra_rows, passing).
+# Conclusions where the run genuinely broke, as opposed to merely not finishing
+# (cancelled/skipped/neutral/…), which we can't score either way.
+_BROKEN_CONCLUSIONS = {"failure", "timed_out", "startup_failure"}
 
-    A run is REAL_FAIL if it has any real failure, else INFRA if it has any infra
-    failure, else GREEN. failed/infra rows are passed through verbatim — they
-    already carry job_name, job_url, status, category, error_message, root_cause.
+
+@dataclass(frozen=True)
+class RunReport:
+    """One watched run's result: the failure rows plus the run's own conclusion.
+
+    ``outcome`` is derived, never stored, so it cannot drift from the rows it
+    summarizes. With no rows to show, the conclusion decides: a broken one
+    (matrix generation died before any leg, checkout failed) is REAL_FAIL — an
+    empty summary must never read as GREEN — while a merely-unfinished one
+    (cancelled, skipped) is UNKNOWN rather than a false red.
+
+    failed/infra rows are passed through verbatim — they already carry job_name,
+    job_url, status, category, error_message, root_cause.
     """
-    failed = data.get("failed") or []
-    infra = data.get("infra_failure") or []
-    passing = len(data.get("succeeded") or [])
-    outcome = "REAL_FAIL" if failed else "INFRA" if infra else "GREEN"
-    return outcome, failed, infra, passing
+
+    conclusion: str
+    failed: list[dict]
+    infra: list[dict]
+    passing: int
+
+    @property
+    def outcome(self) -> str:
+        if self.failed:
+            return "REAL_FAIL"
+        if self.infra:
+            return "INFRA"
+        if self.conclusion == "success":
+            return "GREEN"
+        return "REAL_FAIL" if self.conclusion in _BROKEN_CONCLUSIONS else "UNKNOWN"
+
+
+def summarize_run(data: dict, conclusion: str) -> RunReport:
+    """Build a RunReport from a run-summary JSON and the run's GH conclusion."""
+    return RunReport(
+        conclusion=conclusion,
+        failed=data.get("failed") or [],
+        infra=data.get("infra_failure") or [],
+        passing=len(data.get("succeeded") or []),
+    )
 
 
 def _sev_emoji(row: dict) -> str:
@@ -136,12 +253,11 @@ def _fmt_ts(iso: str) -> str:
     return datetime.fromisoformat(iso.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
 
 
-def _health_bar(counts: dict, width: int = 20) -> str | None:
-    """Bar of passing / total jobs; None when there are no jobs to score."""
+def _health_bar(counts: dict, width: int = 20) -> str:
+    """Bar of passing / total jobs. No jobs scores 0% — a failed run with no
+    per-job detail is 0% healthy, and the bar keeps every section uniform."""
     total = counts.get("broken", 0) + counts.get("infra", 0) + counts.get("passing", 0)
-    if not total:
-        return None
-    pct = round(100 * counts.get("passing", 0) / total)
+    pct = round(100 * counts.get("passing", 0) / total) if total else 0
     filled = round(pct / 100 * width)
     return f"Health: `{'█' * filled}{'░' * (width - filled)}` {pct}%"
 
@@ -157,19 +273,24 @@ def _section(r: dict) -> list[str]:
     failed-jobs table; a green run stops at the counts line (it's enough to see
     it's green)."""
     when = f" · {_fmt_ts(r['latest_ts'])} UTC" if r.get("latest_ts") else ""
-    out = [f"### {_link(r)}"]
+    attempt = r.get("run_attempt")
+    hdr = _link(r) + (f" (attempt {attempt})" if attempt and attempt > 1 else "")
+    out = [f"### {hdr}"]
     c = r.get("counts") or {}
-    total = c.get("broken", 0) + c.get("infra", 0) + c.get("passing", 0)
-    if total:
-        bar = _health_bar(c)
-        if bar:
-            out.append(bar)
-        out.append(f"🔴 {c.get('broken', 0)} · 🟣 {c.get('infra', 0)} · 🟢 {c.get('passing', 0)}{when}")
+    broken, infra, passing = c.get("broken", 0), c.get("infra", 0), c.get("passing", 0)
+    if broken or infra or (r.get("outcome") == "GREEN" and passing):
+        out.append(_health_bar(c))
+        out.append(f"🔴 {broken} · 🟣 {infra} · 🟢 {passing}{when}")
     elif r.get("outcome") == "GREEN":
         # Green via the run-conclusion fallback (no per-job counts available).
         out.append(f"🟢 green{when}")
+    elif passing:
+        # Broken run whose summarized legs all passed — the failure is outside
+        # them, so neither a 100% nor a 0% bar is meaningful. State it plainly.
+        out.append(f"🔴 run failed; {passing} summarized leg(s) passed, none failed{when}")
     else:
-        out.append(f"🔴 run not green — no per-job detail in the run summary{when}")
+        out.append(_health_bar(c))  # 0% — uniform with scored sections
+        out.append(f"🔴 no per-job summary{when}")
     jobs = (r.get("real_jobs") or []) + (r.get("infra_jobs") or [])
     if jobs:
         rows = [
@@ -227,28 +348,34 @@ def check_workflow(repo: str, branch: str, workflow: str) -> dict:
             return {**base, "outcome": "UNKNOWN", "note": "no completed run found"}
         label = run.get("workflowName") or workflow
         meta = {"label": label, "latest_url": run["url"], "latest_ts": run["createdAt"]}
+        conclusion = run.get("conclusion") or ""
         data = fetch_run_summary(repo, run["databaseId"])
         if data is None:
-            # No machine-readable summary. Fall back to the run conclusion: a green
-            # run is healthy; a non-green one we can't detail (workflow doesn't run
-            # ai_summary/run, or the run predates JSON output).
-            if run.get("conclusion") == "success":
-                return {**base, **meta, "outcome": "GREEN"}
-            return {**base, **meta, "outcome": "UNKNOWN", "note": "no ai_run_summary artifact"}
-        outcome, failed, infra, passing = summarize_run(data)
+            # No machine-readable summary (uninstrumented workflow, or the run
+            # predates JSON output); classify from the conclusion alone, the same
+            # rule a present-but-empty summary gets.
+            outcome = RunReport(conclusion, [], [], 0).outcome
+            result = {**base, **meta, "outcome": outcome}
+            if outcome == "UNKNOWN":
+                result["note"] = "no ai_run_summary artifact"
+            return result
+        report = summarize_run(data, conclusion)
         return {
             **base,
             **meta,
-            "outcome": outcome,
-            "real_jobs": failed,
-            "infra_jobs": infra,
-            "counts": {"broken": len(failed), "infra": len(infra), "passing": passing},
+            "outcome": report.outcome,
+            "run_attempt": data.get("run_attempt"),
+            "real_jobs": report.failed,
+            "infra_jobs": report.infra,
+            "counts": {"broken": len(report.failed), "infra": len(report.infra), "passing": report.passing},
         }
     except subprocess.CalledProcessError as exc:
         # One flaky gh call must not discard the other workflows' results.
         err = ((exc.stderr or "").strip().splitlines() or ["gh command failed"])[-1]
         return {**base, "outcome": "ERROR", "note": err[:200]}
-    except (json.JSONDecodeError, OSError) as exc:
+    except (json.JSONDecodeError, ValueError, OSError, zipfile.BadZipFile) as exc:
+        # A corrupt/truncated artifact, or any parse error, marks only this
+        # workflow ERROR and never aborts the others' reports.
         return {**base, "outcome": "ERROR", "note": str(exc)[:200]}
 
 
@@ -280,20 +407,183 @@ def main(argv: list[str]) -> int:
 
 class TestSummarizeRun(unittest.TestCase):
     def test_real_fail_when_any_failure(self):
-        out, failed, infra, passing = summarize_run(
-            {"failed": [{"job_name": "a"}], "infra_failure": [{"job_name": "b"}], "succeeded": [{}, {}]}
+        r = summarize_run(
+            {"failed": [{"job_name": "a"}], "infra_failure": [{"job_name": "b"}], "succeeded": [{}, {}]},
+            "failure",
         )
-        self.assertEqual((out, len(failed), len(infra), passing), ("REAL_FAIL", 1, 1, 2))
+        self.assertEqual((r.outcome, len(r.failed), len(r.infra), r.passing), ("REAL_FAIL", 1, 1, 2))
 
     def test_infra_when_only_infra(self):
-        out, _, infra, passing = summarize_run({"infra_failure": [{"job_name": "b"}], "succeeded": [{}]})
-        self.assertEqual((out, len(infra), passing), ("INFRA", 1, 1))
+        r = summarize_run({"infra_failure": [{"job_name": "b"}], "succeeded": [{}]}, "failure")
+        self.assertEqual((r.outcome, len(r.infra), r.passing), ("INFRA", 1, 1))
 
-    def test_green_when_only_success(self):
-        self.assertEqual(summarize_run({"succeeded": [{}, {}, {}]}), ("GREEN", [], [], 3))
+    def test_green_when_success_and_only_success(self):
+        r = summarize_run({"succeeded": [{}, {}, {}]}, "success")
+        self.assertEqual((r.outcome, r.failed, r.infra, r.passing), ("GREEN", [], [], 3))
 
-    def test_empty_is_green(self):
-        self.assertEqual(summarize_run({}), ("GREEN", [], [], 0))
+    def test_empty_summary_but_failed_conclusion_is_real_fail(self):
+        # A run that failed before producing any leg (matrix generation died,
+        # checkout failed) has an empty summary — must not read as green.
+        r = summarize_run({}, "failure")
+        self.assertEqual((r.outcome, r.passing), ("REAL_FAIL", 0))
+
+    def test_empty_summary_and_success_is_green(self):
+        self.assertEqual(summarize_run({}, "success").outcome, "GREEN")
+
+    def test_cancelled_or_skipped_with_no_rows_is_unknown(self):
+        # A run that didn't finish isn't broken — don't render it as a false red.
+        self.assertEqual(summarize_run({}, "cancelled").outcome, "UNKNOWN")
+        self.assertEqual(summarize_run({}, "skipped").outcome, "UNKNOWN")
+
+
+class TestPickLatestReport(unittest.TestCase):
+    NAME = "ai_run_summary_r42"
+
+    def _id(self, lines):
+        got = _pick_latest_report(lines, 42)
+        return got[1] if got else None
+
+    def test_higher_attempt_wins_over_newer_created_at(self):
+        # The attempt is authoritative; created_at is incidental.
+        lines = [
+            f"{self.NAME}_a2\t2026-07-23T01:00:00Z\t100",
+            f"{self.NAME}_a1\t2026-07-23T09:00:00Z\t900",
+        ]
+        self.assertEqual(self._id(lines), "100")
+
+    def test_created_at_then_id_settle_same_attempt_ties(self):
+        newer_lower_id = [
+            f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t900",
+            f"{self.NAME}_a1\t2026-07-23T09:00:00Z\t100",
+        ]
+        self.assertEqual(self._id(newer_lower_id), "100")
+        same_time = [
+            f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t100",
+            f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t200",
+        ]
+        self.assertEqual(self._id(same_time), "200")
+
+    def test_a_tie_is_reported_because_the_other_reports_are_lost(self):
+        # An unscoped workflow invoked more than once per run publishes one
+        # report per invocation under a single name; only one can be read.
+        lines = [
+            f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t100",
+            f"{self.NAME}_a1\t2026-07-23T02:00:00Z\t200",
+            f"{self.NAME}_a1\t2026-07-23T03:00:00Z\t300",
+        ]
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            self.assertEqual(self._id(lines), "300")
+        self.assertIn("3 reports at attempt 1", buf.getvalue())
+
+    def test_returns_the_winning_name_for_addressing_the_report(self):
+        lines = [f"{self.NAME}_a2\t2026-07-23T01:00:00Z\t100"]
+        self.assertEqual(_pick_latest_report(lines, 42), (f"{self.NAME}_a2", "100"))
+
+    def test_malformed_lines_are_skipped_not_raised(self):
+        # A ValueError here escapes check_workflow's guards and leaves the
+        # digest silent instead of red.
+        lines = [
+            "not-a-tabbed-line",
+            "",
+            f"{self.NAME}_a1\t2026-07-23T01:00:00Z\tnope",
+            f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t100",
+        ]
+        self.assertEqual(self._id(lines), "100")
+
+    def test_a_non_ascii_digit_id_is_skipped_not_raised(self):
+        # "²".isdigit() is True while int("²") raises, and a ValueError here
+        # would abort every remaining workflow.
+        lines = [f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t²", f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t100"]
+        self.assertEqual(self._id(lines), "100")
+
+    def test_a_tab_bearing_name_is_accepted(self):
+        # GitHub rejects " : < > | * ? in artifact names but not tab, so the
+        # split takes only the two machine-generated trailing fields.
+        lines = [f"ai_run_summary_r42\tstray_a1\t2026-07-23T01:00:00Z\t100"]
+        self.assertIsNone(self._id(lines))
+
+    def test_nothing_matching_is_none(self):
+        lines = ["garbage", "", f"ai_run_summary_r7_a1\t2026-07-23T01:00:00Z\t100"]
+        self.assertIsNone(_pick_latest_report(lines, 42))
+
+
+class TestFetchRunSummary(unittest.TestCase):
+    """The download seam: which artifact is asked for, and which file is read."""
+
+    def _fake_gh(self, listing, members):
+        def run(argv, **kw):
+            if "--jq" in argv:
+                return SimpleNamespace(stdout="\n".join(listing), stderr="", returncode=0)
+            self.requested = argv[-1]
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as z:
+                for name, body in members.items():
+                    z.writestr(name, body)
+            kw["stdout"].write(buf.getvalue())
+            return SimpleNamespace(stdout=b"", stderr="", returncode=0)
+
+        return run
+
+    def test_reads_the_highest_attempt_report_by_exact_name(self):
+        # A scope containing [ ] would make an unescaped glob resolve to the
+        # sibling file instead. GitHub permits both characters.
+        name = "ai_run_summary_[ab]_r42_a2"
+        listing = [
+            f"ai_run_summary_x_r42_a1\t2026-07-23T09:00:00Z\t900",
+            f"{name}\t2026-07-23T01:00:00Z\t100",
+        ]
+        members = {
+            f"{name}.json": json.dumps({"run_id": "42", "failed": [], "infra_failure": [], "succeeded": []}),
+            "ai_run_summary_a_r42_a2.json": json.dumps({"run_id": "WRONG"}),
+        }
+        with unittest.mock.patch("subprocess.run", side_effect=self._fake_gh(listing, members)):
+            data = fetch_run_summary("o/r", 42)
+        self.assertEqual(data["run_id"], "42")
+        self.assertIn("/100/", self.requested)
+
+    def test_no_matching_artifact_is_none(self):
+        listing = ["ai_run_summary_r7_a1\t2026-07-23T01:00:00Z\t100"]
+        with unittest.mock.patch("subprocess.run", side_effect=self._fake_gh(listing, {})):
+            self.assertIsNone(fetch_run_summary("o/r", 42))
+
+
+class TestSummaryNameRe(unittest.TestCase):
+    def _matches(self, name):
+        return _summary_name_re(42).match(name) is not None
+
+    def test_accepts_plain_and_scoped(self):
+        for name in ("ai_run_summary_r42_a3", "ai_run_summary_ubuntu-24-04_r42_a1"):
+            self.assertTrue(self._matches(name), name)
+
+    def test_accepts_a_unicode_scope(self):
+        # The producer keeps any alphanumeric, so the segment cannot be an
+        # ASCII character class.
+        self.assertTrue(self._matches("ai_run_summary_ubuntú_r42_a1"))
+
+    def test_captures_the_attempt(self):
+        self.assertEqual(_summary_name_re(42).match("ai_run_summary_s_r42_a13").group(1), "13")
+
+    def test_rejects_near_misses(self):
+        # r421 for run 42, another run, another artifact kind, a stray prefix,
+        # an unversioned name, a suffixed copy, and a missing attempt.
+        for name in (
+            "ai_run_summary_r421_a1",
+            "ai_run_summary_r7_a1",
+            "ai_job_summary_r42_a1_j99",
+            "xai_run_summary_r42_a1",
+            "ai_run_summary_42",
+            "ai_run_summary_r42_a3_backup",
+            "ai_run_summary_r42",
+        ):
+            self.assertFalse(self._matches(name), name)
+
+
+class TestArtifactsJq(unittest.TestCase):
+    def test_projects_the_three_fields_resolution_needs(self):
+        # Dropping a field makes every line fail the parse guard, so every
+        # workflow silently degrades to its run conclusion.
+        self.assertEqual(_artifacts_jq(), '.artifacts[] | "\\(.name)\\t\\(.created_at)\\t\\(.id)"')
 
 
 class TestRender(unittest.TestCase):
@@ -304,6 +594,7 @@ class TestRender(unittest.TestCase):
             "outcome": "REAL_FAIL",
             "latest_url": "http://run/2",
             "latest_ts": "2026-06-14T06:34:32Z",
+            "run_attempt": 2,
             "counts": {"broken": 1, "infra": 1, "passing": 3},
             "real_jobs": [
                 {
@@ -330,6 +621,7 @@ class TestRender(unittest.TestCase):
             "models", [self._broken(), {"workflow": "WF-D", "outcome": "GREEN", "latest_url": "http://run/3"}]
         )
         self.assertIn("[WF-A](http://run/2)", md)
+        self.assertIn("(attempt 2)", md)  # re-run exposed in the header
         self.assertIn("[job-x](http://job/x)", md)
         self.assertIn("🟣", md)
         self.assertIn("TESTS_FAILED", md)  # precise status surfaced
@@ -353,8 +645,29 @@ class TestRender(unittest.TestCase):
                 }
             ],
         )
-        self.assertIn("no per-job detail", md)
+        self.assertIn("no per-job summary", md)
+        self.assertIn("0%", md)  # health bar present and at zero, uniform with scored sections
         self.assertNotIn("Failed jobs", md)
+
+    def test_broken_run_with_only_passing_legs_is_not_100_percent(self):
+        # Run concluded failure but every summarized leg passed (failure outside
+        # them): must not render as a healthy 100% bar.
+        md = render_markdown(
+            "m",
+            [
+                {
+                    "workflow": "WF-P",
+                    "outcome": "REAL_FAIL",
+                    "latest_url": "u",
+                    "real_jobs": [],
+                    "infra_jobs": [],
+                    "counts": {"broken": 0, "infra": 0, "passing": 5},
+                }
+            ],
+        )
+        self.assertIn("run failed", md)
+        self.assertIn("5 summarized leg(s) passed", md)
+        self.assertNotIn("100%", md)
 
     def test_infra_only(self):
         md = render_markdown(

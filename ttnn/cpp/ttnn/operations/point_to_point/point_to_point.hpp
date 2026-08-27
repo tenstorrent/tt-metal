@@ -16,17 +16,17 @@ ttnn::Tensor point_to_point(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& receiver_coord,
     const MeshCoordinate& sender_coord,
-    ccl::Topology topology = ccl::Topology::Linear,
+    ::ttnn::ccl::Topology topology = ::ttnn::ccl::Topology::Linear,
     const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt);
 
 namespace operations::point_to_point {
 
-ttnn::TensorSpec p2p_compute_intermediate_tensor_spec(
+tt::tt_metal::TensorSpec p2p_compute_intermediate_tensor_spec(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& receiver_coord,
     const MeshCoordinate& sender_coord,
-    ccl::Topology topology);
+    ::ttnn::ccl::Topology topology);
 
 }  // namespace operations::point_to_point
 

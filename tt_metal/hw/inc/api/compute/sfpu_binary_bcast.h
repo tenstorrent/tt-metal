@@ -235,7 +235,7 @@ ALWI void sfpu_bcast_init() {
  * are supported.
  */
 // clang-format on
-template <BroadcastType Dim, EltwiseBinaryType Op>
+template <BroadcastType Dim, EltwiseBinaryType Op, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx) {
     static_assert(
         Dim == BroadcastType::COL || Dim == BroadcastType::ROW,
@@ -245,19 +245,19 @@ ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx) {
         "sfpu_bcast: only EltwiseBinaryType::ELW{ADD,SUB,MUL} are supported");
     if constexpr (Dim == BroadcastType::COL) {
         if constexpr (Op == EltwiseBinaryType::ELWADD) {
-            sfpu_add_bcast_col(dst_data_idx, dst_bcast_idx);
+            sfpu_add_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else if constexpr (Op == EltwiseBinaryType::ELWSUB) {
-            sfpu_sub_bcast_col(dst_data_idx, dst_bcast_idx);
+            sfpu_sub_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else {
-            sfpu_mul_bcast_col(dst_data_idx, dst_bcast_idx);
+            sfpu_mul_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         }
     } else {
         if constexpr (Op == EltwiseBinaryType::ELWADD) {
-            sfpu_add_bcast_row(dst_data_idx, dst_bcast_idx);
+            sfpu_add_bcast_row<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else if constexpr (Op == EltwiseBinaryType::ELWSUB) {
-            sfpu_sub_bcast_row(dst_data_idx, dst_bcast_idx);
+            sfpu_sub_bcast_row<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else {
-            sfpu_mul_bcast_row(dst_data_idx, dst_bcast_idx);
+            sfpu_mul_bcast_row<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         }
     }
 }

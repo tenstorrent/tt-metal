@@ -38,6 +38,19 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
+# --- Galaxy: Ethernet only (#46302; fabric team owns full galaxy stress) ---
+- name: galaxy_eth
+  cmd: |
+    ./build/test/tt_metal/unit_tests_eth
+    TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
+  skus:
+    wh_galaxy:
+      timeout: 15
+    bh_galaxy:
+      timeout: 15
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
 # =============================================================================
 # FD Python API Tests (eager ops + sweep)
 # =============================================================================

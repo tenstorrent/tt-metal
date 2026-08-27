@@ -162,6 +162,39 @@ inline void _llk_pack_mop_config_(
         const std::uint32_t MOP_INNER_LOOP  = 1;
         const std::uint32_t MOP_OUTER_LOOP  = (num_faces > 1) ? (num_faces >> 1) : 1;
 
+        if (face_r_dim == 1)
+        {
+            // Single-row faces (e.g. a 1x32 tile = two 1x16 faces). The tileize unpacker splits the
+            // single source row into two consecutive DEST rows (row 0 -> face 0, row 1 -> face 1). With
+            // one row per face the two faces are contiguous in L1 ([face 0 | face 1] == one 1x32 row), so
+            // a single PACR with two active read interfaces (interface k reads DEST row base + k) packs
+            // both faces at once - the row-interleave the replay buffer un-swizzles for face_r_dim >= 2
+            // collapses to these two rows. The replay-buffer path cannot express this anyway
+            // (replay_buf_len = face_r_dim - 1 = 0 is an invalid replay length, and num_instrs_per_face
+            // underflows).
+            LLK_ASSERT(num_faces == 2, "Tilize with face_r_dim == 1 supports num_faces == 2 only");
+            ckernel::ckernel_template tmp(
+                MOP_OUTER_LOOP,
+                MOP_INNER_LOOP,
+                // Interfaces 0 and 1 read DEST rows 0 and 1 (face 0 and face 1); ADDR_MOD_2, close the tile.
+                TT_OP_PACR(
+                    p_pacr::CFG_CTXT_0,
+                    p_pacr::NO_ROW_PAD_ZERO,
+                    p_pacr::DST_ACCESS_NORMAL_MODE,
+                    ADDR_MOD_2,
+                    p_pacr::ADDR_CNT_CTXT_0,
+                    ZERO_OUTPUT_FLAG,
+                    p_pacr::TWO_INTFS_ACTIVE,
+                    0,
+                    0,
+                    p_pacr::NO_CTXT_CTRL,
+                    0,
+                    1));
+            tmp.set_end_op(TT_OP_SETADCZW(p_setadc::PAC, 0, num_faces >> 1, 0, 0, 0b0100)); // ch0_z = 0, ch1_z = num_faces >> 1;
+            tmp.program();
+            return;
+        }
+
         // Last row of half-tile (face_r_dim rows) is different between halves, so can't be replayed.
         LLK_ASSERT(face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 2, 4, 8, or 16 for tilize");
         const std::uint32_t replay_buf_len = face_r_dim - 1;
@@ -346,6 +379,8 @@ namespace llk_pack_internal_bh
  * @tparam zero_output: When true, the packer emits zeros instead of dest data.
  * @tparam skip_addrmod_config: When true, leave the ADDR_MOD slots untouched.
  * @tparam skip_packer_strides: When true, do not re-program the packer strides.
+ * @tparam mutex_ADC: When true, serialize the SETADCXX issue against mutex::THREAD2_ADC. Needed only
+ *         when another thread borrows the pack thread's ADCs.
  * @param pack_src_format: Source (dest register) data format; only used when programming strides.
  * @param face_r_dim: Number of rows per face.
  * @param tile_c_dim: Tile column dimension (datums).
@@ -353,8 +388,10 @@ namespace llk_pack_internal_bh
  * @param num_tiles: Number of tiles processed per MOP run.
  * @note Init owns the packer X (datum) counter (SETADCXX): every init programs its own value, mirroring
  *       the Wormhole contract. On Blackhole the value is always a single row (FACE_C_DIM - 1).
+ * @note mutex_ADC has to match the value given to @ref _llk_pack_ ; guarding only one of the two
+ *       leaves unguarded SETADC issues. Supported for PackMode::Default only.
  */
-template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides>
+template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool mutex_ADC>
 inline void pack_init_apply(
     const std::uint32_t pack_src_format,
     const std::uint32_t face_r_dim,
@@ -362,6 +399,11 @@ inline void pack_init_apply(
     const std::uint32_t num_faces,
     const std::uint32_t num_tiles)
 {
+    static_assert(
+        !mutex_ADC || pack_mode == PackMode::Default,
+        "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "
+        "which the mutex cannot cover");
+
     if constexpr (!skip_addrmod_config)
     {
         _llk_pack_configure_addrmod_<pack_mode>();
@@ -374,7 +416,10 @@ inline void pack_init_apply(
 
     // Program the packer X (datum) counter. Per the "inits own SETADCXX" contract, every init sets its
     // own value; on Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    {
+        T6MutexLockGuard<mutex_ADC> guard(mutex::THREAD2_ADC);
+        TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    }
 }
 } // namespace llk_pack_internal_bh
 
@@ -472,6 +517,9 @@ inline void _llk_pack_hw_configure_(
  * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
  * @tparam skip_packer_strides: When true, do not re-program the packer strides (e.g. when a prior
  *         hw-configure / reconfig already established them, or the caller programs them itself).
+ * @tparam mutex_ADC: When true, serialize the SETADCXX issue against mutex::THREAD2_ADC. Needed only
+ *         when another thread borrows the pack thread's ADCs. Exposed upstream as
+ *         llk_pack_init_mutex_ADC / pack_init_mutex_ADC.
  * @param pack_src_format: Source (dest register) data format. Only consulted when programming strides.
  * @param face_r_dim: Number of rows per face.
  * @param tile_c_dim: Tile column dimension (datums).
@@ -479,8 +527,17 @@ inline void _llk_pack_hw_configure_(
  * @param num_tiles: Number of tiles processed per MOP run.
  * @param skip_bh_tilize_workaround: When true (8-bit src datums), skip the Blackhole tilize row-unswizzle workaround.
  * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
+ * @note mutex_ADC has to match the value given to @ref _llk_pack_ ; guarding only one of the two
+ *       leaves unguarded SETADC issues. Supported for PackMode::Default only: the other modes embed ADC
+ *       instructions in the MOP itself (e.g. the Tilize MOP's SETADCZW end op), which execute inside
+ *       ckernel_template::run() where a scope guard cannot reach them.
  */
-template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+template <
+    PackMode pack_mode       = PackMode::Default,
+    bool zero_output         = false,
+    bool skip_addrmod_config = false,
+    bool skip_packer_strides = false,
+    bool mutex_ADC           = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_src_format,
     const std::uint32_t face_r_dim,
@@ -489,6 +546,11 @@ inline void _llk_pack_init_(
     const std::uint32_t num_tiles,
     const bool skip_bh_tilize_workaround)
 {
+    static_assert(
+        !mutex_ADC || pack_mode == PackMode::Default,
+        "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "
+        "which the mutex cannot cover");
+
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const DataFormat src_format = static_cast<DataFormat>(pack_src_format);
     if (src_format == DataFormat::Float32)
@@ -507,12 +569,12 @@ inline void _llk_pack_init_(
     // so we can skip the workaround which involves unswizzling rows in the tile.
     if (skip_bh_tilize_workaround && pack_mode == PackMode::Tilize)
     {
-        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides>(
+        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides, mutex_ADC>(
             pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
     else
     {
-        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, mutex_ADC>(
             pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
 }
@@ -542,23 +604,36 @@ inline void _llk_pack_uninit_()
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @tparam pack_mode: Packing layout, values = <Default/Untilize> (Tilize not supported here)
+ * @tparam mutex_ADC: When true, serialize the per-tile SETADC issues against mutex::THREAD2_ADC. Needed
+ *         only when another thread borrows the pack thread's ADCs. Exposed upstream as
+ *         llk_pack_mutex_ADC / pack_tile_mutex_ADC.
  * @param tile_index: Index of the source tile in the destination register.
  * @param address: L1 destination address for the packed tile.
  * @note Call @ref _llk_pack_init_ with matching template/runtime args before this function, and
  *       @ref _llk_pack_uninit_ once all pack calls are complete.
+ * @note mutex_ADC has to match the value given to @ref _llk_pack_init_ ; guarding only one of the two
+ *       leaves unguarded SETADC issues. Supported for PackMode::Default only, see @ref _llk_pack_init_.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool mutex_ADC = false>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
     llk::san::operation_check<llk::san::Operation::Pack>();
 
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Blackhole: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
-    set_dst_write_addr(tile_index);
+    static_assert(
+        !mutex_ADC || pack_mode == PackMode::Default,
+        "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "
+        "which the mutex cannot cover");
+
+    set_dst_write_addr<mutex_ADC>(tile_index);
 
     program_packer_destination(address);
 
     ckernel::ckernel_template::run();
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+    {
+        T6MutexLockGuard<mutex_ADC> guard(mutex::THREAD2_ADC);
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+    }
 }

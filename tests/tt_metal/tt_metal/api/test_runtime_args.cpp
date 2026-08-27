@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <limits>
 #include <map>
 #include <memory>
 #include <cstddef>
@@ -32,6 +31,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
@@ -122,12 +122,13 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
     // Both gen1 and gen2 DM configs are populated; the runtime selects the one
     // matching the active arch. On Quasar all 6 user DMs (DM2..DM7) run the
     // kernel; on WH/BH the legacy DM was a single RISCV_0 thread.
-    experimental::DataMovementHardwareConfig dm_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
+    experimental::DataMovementHardwareConfig dm_cfg;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        dm_cfg = experimental::DataMovementGen2Config{};
+    } else {
+        dm_cfg = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
     const bool is_quasar = MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
     const uint32_t num_threads = is_quasar ? kQuasarNumUserDms : 1u;
 
@@ -141,7 +142,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
         .hw_config = dm_cfg,
         .advanced_options =
             experimental::KernelAdvancedOptions{
-                .num_runtime_varargs = num_unique_rt_args,
+                .num_runtime_varargs = common_rtas ? 0u : num_unique_rt_args,
                 .num_common_runtime_varargs = common_rtas ? num_unique_rt_args : 0u,
             },
     };
@@ -160,6 +161,20 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
 
     workload.add_program(device_range, std::move(program));
     return workload;
+}
+
+experimental::ProgramRunArgs make_data_movement_program_run_args(
+    const std::map<CoreCoord, std::vector<uint32_t>>& core_to_rt_args,
+    const std::vector<uint32_t>& common_runtime_args = {}) {
+    experimental::ProgramRunArgs::KernelRunArgs kernel_args{.kernel = experimental::KernelSpecName{"dm_runtime_args"}};
+    for (const auto& [core, runtime_args] : core_to_rt_args) {
+        kernel_args.advanced_options.runtime_varargs[core] = runtime_args;
+    }
+    kernel_args.advanced_options.common_runtime_varargs = common_runtime_args;
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args.push_back(std::move(kernel_args));
+    return params;
 }
 
 // Quasar-specific helper - handles all Quasar DM kernel patterns
@@ -216,9 +231,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
                 "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp",
             .num_threads = dm_processors_per_kernel,
             .compiler_options = {.defines = defines_vec},
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
             .advanced_options =
                 experimental::KernelAdvancedOptions{
                     .num_runtime_varargs = num_runtime_args,
@@ -327,8 +340,7 @@ void verify_core_rt_args(
     const std::vector<uint32_t>& written_args,
     const uint32_t incr_val) {
     std::vector<uint32_t> observed_args;
-    auto* device = mesh_device->get_devices()[0];
-    tt_metal::detail::ReadFromDeviceL1(device, core, base_addr, written_args.size() * sizeof(uint32_t), observed_args);
+    slow_dispatch::ReadFromL1(*mesh_device, core, base_addr, written_args.size() * sizeof(uint32_t), observed_args);
 
     for (size_t i = 0; i < written_args.size(); i++) {
         uint32_t expected_result = written_args.at(i) + incr_val;
@@ -358,12 +370,11 @@ void verify_results(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     const auto& program = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
         const auto kernel = program.impl().get_kernel(kernel_id);
         auto rt_args_base_addr = get_runtime_arg_addr(
-            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+            mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
             kernel->get_kernel_processor_class(),
             kernel->get_kernel_processor_type(0),
             false);
@@ -381,7 +392,7 @@ void verify_results(
         // Verify common RT Args (same for all cores) if they exist.
         if (!common_rt_args.empty()) {
             auto common_rt_args_base_addr = get_runtime_arg_addr(
-                device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+                mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
                 kernel->get_kernel_processor_class(),
                 kernel->get_kernel_processor_type(0),
                 true);
@@ -414,7 +425,6 @@ void verify_quasar_crtas(
     const CoreCoord& core,
     const std::vector<std::vector<uint32_t>>& per_user_dm_crtas,
     bool expect_shared_address) {
-    auto* device = mesh_device->get_devices()[0];
     uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     uint32_t results_base = get_runtime_arg_addr(l1_base, tt::tt_metal::HalProcessorClassType::DM, 0, true);
     uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
@@ -438,7 +448,7 @@ void verify_quasar_crtas(
         uint32_t crta_addr = results_base + ((kCommonRTASeparation + physical_dm_id * num_crtas) * sizeof(uint32_t));
 
         std::vector<uint32_t> observed;
-        tt_metal::detail::ReadFromDeviceL1(device, core, crta_addr, num_crtas * sizeof(uint32_t), observed);
+        slow_dispatch::ReadFromL1(*mesh_device, core, crta_addr, num_crtas * sizeof(uint32_t), observed);
 
         for (size_t j = 0; j < num_crtas; j++) {
             EXPECT_EQ(observed[j], expected_crtas[j]) << "DM" << physical_dm_id << " CRTA[" << j << "]";
@@ -450,7 +460,7 @@ void verify_quasar_crtas(
         uint32_t physical_dm_id = kQuasarFirstUserDm + user_dm_idx;
         uint32_t addr_offset = addr_base + (physical_dm_id * sizeof(uint32_t));
         std::vector<uint32_t> addr;
-        tt_metal::detail::ReadFromDeviceL1(device, core, addr_offset, sizeof(uint32_t), addr);
+        slow_dispatch::ReadFromL1(*mesh_device, core, addr_offset, sizeof(uint32_t), addr);
         crta_addrs.push_back(addr[0]);
     }
 
@@ -478,22 +488,19 @@ namespace tt::tt_metal {
 
 // Write unique and common runtime args to device and readback to verify written correctly.
 TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& mesh_device : this->devices_) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
-        auto mesh_device = this->devices_.at(id);
         auto& cq = mesh_device->mesh_command_queue();
-        auto* device = this->devices_.at(id)->get_devices()[0];
-        auto workload =
-            unit_tests::runtime_args::initialize_program_data_movement_rta(this->devices_.at(id), core_range_set, 2);
+        auto* device = mesh_device->get_devices()[0];
+        auto workload = unit_tests::runtime_args::initialize_program_data_movement_rta(mesh_device, core_range_set, 2);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         auto& program = workload.get_programs().at(device_range);
         ASSERT_TRUE(program.impl().num_kernels() == 1);
         std::vector<uint32_t> initial_runtime_args = {0xfeadbeef, 0xabababab};
-        SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
@@ -504,6 +511,8 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
                 }
             }
         }
+        experimental::SetProgramRunArgs(
+            program, unit_tests::runtime_args::make_data_movement_program_run_args(core_to_rt_args));
 
         detail::WriteRuntimeArgsToDevice(device, program);
         distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -511,14 +520,15 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
 
         std::vector<uint32_t> second_runtime_args = {0x12341234, 0xcafecafe};
-        SetRuntimeArgs(program, 0, first_core_range, second_runtime_args);
-        detail::WriteRuntimeArgsToDevice(device, program);
         for (auto x = first_core_range.start_coord.x; x <= first_core_range.end_coord.x; x++) {
             for (auto y = first_core_range.start_coord.y; y <= first_core_range.end_coord.y; y++) {
                 CoreCoord logical_core(x, y);
                 core_to_rt_args[logical_core] = second_runtime_args;
             }
         }
+        experimental::SetProgramRunArgs(
+            program, unit_tests::runtime_args::make_data_movement_program_run_args(core_to_rt_args));
+        detail::WriteRuntimeArgsToDevice(device, program);
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
@@ -528,7 +538,8 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         auto& program2 = workload2.get_programs().at(device_range);
         // Set common runtime args, automatically sent to all cores used by kernel.
         std::vector<uint32_t> common_runtime_args = {0x30303030, 0x60606060, 0x90909090, 1234};
-        SetCommonRuntimeArgs(program2, 0, common_runtime_args);
+        experimental::SetProgramRunArgs(
+            program2, unit_tests::runtime_args::make_data_movement_program_run_args({}, common_runtime_args));
         detail::WriteRuntimeArgsToDevice(device, program2);
         distributed::EnqueueMeshWorkload(cq, workload2, false);
         distributed::Finish(cq);
@@ -537,8 +548,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
 }
 
 TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsCompute) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -575,8 +585,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsCompute) {
 
 // Don't cover all cores of kernel with SetRuntimeArgs. Verify that correct offset used to access common runtime args.
 TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsSubsetOfCoresCompute) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -610,8 +619,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsSubsetOfCoresCompute) {
 
 // Different unique runtime args per core. Not overly special, but verify that it works.
 TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsUniqueValuesCompute) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -650,8 +658,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsUniqueValuesCompute) {
 // Some cores have more unique runtime args than others. Unused in kernel, but API supports it, so verify it works and
 // that common runtime args are appropriately offset by amount from core(s) with most unique runtime args.
 TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -709,8 +716,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
 // Too many unique and common runtime args, overflows allowed space and throws expected exception from both
 // unique/common APIs.
 TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         CoreRange first_core_range(CoreCoord(1, 1), CoreCoord(2, 2));
@@ -719,27 +725,28 @@ TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
             mesh_device, core_range_set, 0, 0);  // Kernel isn't run here.
         auto& program = workload.get_programs().at(device_range);
 
-        // The enforced TENSIX ceiling is bounded by the uint16_t RTA offset field (see
-        // Kernel::validate_runtime_args_size). Mirror that here.
-        const uint32_t tensix_max_rt_args = std::numeric_limits<uint16_t>::max() / sizeof(uint32_t);
+        // A count comfortably above the enforced TENSIX ceiling (see Kernel::validate_runtime_args_size).
+        // The RTA-offset field is a uint16_t region size in bytes, so its hard maximum is 65535 B = 16383 words;
+        // 16384 words (65536 B) is one word past that, so it exceeds any valid TENSIX ceiling regardless of the
+        // exact enforced cap.
+        constexpr uint32_t over_tensix_ceiling_rt_args = 16384;
 
         // Set 100 unique args, then try to set enough common args to overflow the combined ceiling and fail.
         std::vector<uint32_t> initial_runtime_args(100);
         SetRuntimeArgs(program, kernel, core_range_set, initial_runtime_args);
-        std::vector<uint32_t> common_runtime_args(tensix_max_rt_args + 1);
+        std::vector<uint32_t> common_runtime_args(over_tensix_ceiling_rt_args);
         EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, common_runtime_args));
 
         // Set 100 common args, then try to set enough unique args to overflow the combined ceiling and fail.
         std::vector<uint32_t> more_common_runtime_args(100);
         SetCommonRuntimeArgs(program, kernel, more_common_runtime_args);
-        std::vector<uint32_t> more_unique_args(tensix_max_rt_args + 1);
+        std::vector<uint32_t> more_unique_args(over_tensix_ceiling_rt_args);
         EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, core_range_set, more_unique_args));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -752,7 +759,6 @@ TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
         auto& program = workload.get_programs().at(device_range);
         ASSERT_TRUE(program.impl().num_kernels() == 1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
-        SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
@@ -763,29 +769,68 @@ TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
                 }
             }
         }
+        experimental::SetProgramRunArgs(
+            program, unit_tests::runtime_args::make_data_movement_program_run_args(core_to_rt_args));
         detail::WriteRuntimeArgsToDevice(device, program);
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
 
         std::vector<uint32_t> invalid_runtime_args = {303, 404, 505};
-        EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, first_core_range, invalid_runtime_args));
+        auto invalid_core_to_rt_args = core_to_rt_args;
+        for (auto& [core, runtime_args] : invalid_core_to_rt_args) {
+            runtime_args = invalid_runtime_args;
+        }
+        EXPECT_ANY_THROW(experimental::SetProgramRunArgs(
+            program, unit_tests::runtime_args::make_data_movement_program_run_args(invalid_core_to_rt_args)));
 
-        // Cannot modify number of common runtime args either.
+        // The common runtime argument count is fixed by the ProgramSpec schema.
         std::vector<uint32_t> common_runtime_args = {11, 22, 33, 44};
-        SetCommonRuntimeArgs(program, 0, common_runtime_args);
+        auto common_workload =
+            unit_tests::runtime_args::initialize_program_data_movement_rta(mesh_device, core_range_set, 4, true);
+        auto& common_program = common_workload.get_programs().at(device_range);
+        experimental::SetProgramRunArgs(
+            common_program, unit_tests::runtime_args::make_data_movement_program_run_args({}, common_runtime_args));
         std::vector<uint32_t> illegal_common_runtime_args = {0, 1, 2, 3, 4, 5};
-        EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, illegal_common_runtime_args));
+        EXPECT_ANY_THROW(experimental::SetProgramRunArgs(
+            common_program,
+            unit_tests::runtime_args::make_data_movement_program_run_args({}, illegal_common_runtime_args)));
+    }
+}
+
+TEST_F(MeshDeviceFixture, Metal2RejectsLegacyRuntimeArgsAPIs) {
+    for (const auto& mesh_device : devices_) {
+        const CoreCoord core(0, 0);
+        CoreRangeSet core_range_set{CoreRange(core)};
+        auto workload =
+            unit_tests::runtime_args::initialize_program_data_movement_rta(mesh_device, core_range_set, 1, true);
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        auto& program = workload.get_programs().at(device_range);
+
+        std::vector<uint32_t> runtime_args{0x12345678};
+        EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, core, runtime_args));
+        EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, core, {0x12345678}));
+
+        std::vector<CoreCoord> cores{core};
+        std::vector<std::vector<uint32_t>> runtime_args_per_core{runtime_args};
+        EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, cores, runtime_args_per_core));
+
+        EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, runtime_args));
+        EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, {0x12345678}));
+
+        EXPECT_ANY_THROW(GetRuntimeArgs(program, 0, core));
+        EXPECT_ANY_THROW(GetRuntimeArgs(program, 0));
+        EXPECT_ANY_THROW(GetCommonRuntimeArgs(program, 0));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        auto grid_size = this->devices_.at(id)->logical_grid_size();
+        auto grid_size = mesh_device->logical_grid_size();
         auto max_x = grid_size.x - 1;
         auto max_y = grid_size.y - 1;
 
@@ -823,8 +868,7 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
     uint32_t active_eth_max_runtime_args =
         hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t) -
         watcher_reserved_count_words;
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         auto active_eth_cores = device->get_active_ethernet_cores(true);
 
@@ -909,8 +953,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
     uint32_t idle_eth_max_runtime_args =
         hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t) -
         watcher_reserved_count_words;
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         auto idle_eth_cores = device->get_inactive_ethernet_cores();
 
@@ -1099,9 +1142,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         };
     };
     experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {K1, K2}, .target_nodes = core_range_set};
@@ -1113,13 +1154,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
     experimental::ProgramRunArgs part1;
     part1.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = K1,
-        .runtime_arg_values = {{node, {{"address", address_1}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_1}}),
         .common_runtime_arg_values = {{"value", value_1}},
     }};
     experimental::ProgramRunArgs part2;
     part2.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = K2,
-        .runtime_arg_values = {{node, {{"address", address_2}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_2}}),
         .common_runtime_arg_values = {{"value", value_2}},
     }};
 
@@ -1159,9 +1200,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = unit_tests::runtime_args::kQuasarNumUserDms,
         .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
     experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core_range_set};
     experimental::ProgramSpec spec{
@@ -1178,7 +1217,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
     experimental::ProgramRunArgs params1;
     params1.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = {{node, {{"address", address_1}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_1}}),
         .common_runtime_arg_values = {{"value", value_1}},
     }};
     experimental::SetProgramRunArgs(prog, params1);
@@ -1188,7 +1227,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
     experimental::ProgramRunArgs params2;
     params2.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = {{node, {{"address", address_2}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_2}}),
         .common_runtime_arg_values = {{"value", value_2}},
     }};
     experimental::UpdateProgramRunArgs(prog, params2);

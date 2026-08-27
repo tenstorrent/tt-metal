@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// To run:
-// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Dirty_CB_*"
+// To run (from the tt-metal repo root, after an emule build):
+//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="UnitMeshFixture.Dirty_CB_*"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -11,6 +11,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
 
@@ -30,14 +31,13 @@ namespace tt::tt_metal {
 // more than they push but always push after their last reserve (see
 // Dirty_CB_LookaheadReserve_NoViolation). The sanitizer must catch a truly
 // un-followed reserve/wait while leaving the lookahead idiom alone.
-TEST_F(MeshDeviceFixture, Dirty_CB_ReserveWithoutPush) {
+TEST_F(UnitMeshFixture, Dirty_CB_ReserveWithoutPush) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
     // This test validates the Dirty CB check itself, so force it on regardless
     // of any environment-level opt-out (TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB) that a
     // regression run may have exported to skip the check elsewhere.
     ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -62,20 +62,20 @@ TEST_F(MeshDeviceFixture, Dirty_CB_ReserveWithoutPush) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program), ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
 }
 
 // The consumer-side mirror: a kernel that waits on a page but never pops it
 // leaves the CB un-flushed — the consumer claimed read access it never released,
 // so the read pointer desyncs. The sanitizer must catch this too.
-TEST_F(MeshDeviceFixture, Dirty_CB_WaitWithoutPop) {
+TEST_F(UnitMeshFixture, Dirty_CB_WaitWithoutPop) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
     // This test validates the Dirty CB check itself, so force it on regardless
     // of any environment-level opt-out (TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB) that a
     // regression run may have exported to skip the check elsewhere.
     ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -103,7 +103,8 @@ TEST_F(MeshDeviceFixture, Dirty_CB_WaitWithoutPop) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program), ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
 }
 
 // Lookahead / double-buffer producer: reserves more pages than it pushes on
@@ -115,11 +116,10 @@ TEST_F(MeshDeviceFixture, Dirty_CB_WaitWithoutPop) {
 // NOT abort. It is the regression guard for the false positive that a net-count
 // Dirty-CB check produced (it flagged ~num_blocks*block_tiles "unpushed" pages on
 // a correct matmul reader); the trailing-dangling-flag detection fixes it.
-TEST_F(MeshDeviceFixture, Dirty_CB_LookaheadReserve_NoViolation) {
+TEST_F(UnitMeshFixture, Dirty_CB_LookaheadReserve_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
     ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -150,7 +150,7 @@ TEST_F(MeshDeviceFixture, Dirty_CB_LookaheadReserve_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort — lookahead over-reservation is correct on silicon.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -161,14 +161,13 @@ TEST_F(MeshDeviceFixture, Dirty_CB_LookaheadReserve_NoViolation) {
 // nothing was popped). Leftover occupancy is NOT what this check is about — only
 // unmatched reserve/wait. This must NOT abort. It also guards against regressing
 // to the old (mistaken) "any occupied CB aborts" rule.
-TEST_F(MeshDeviceFixture, Dirty_CB_Balanced_NoViolation) {
+TEST_F(UnitMeshFixture, Dirty_CB_Balanced_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
     // This test validates the Dirty CB check itself, so force it on regardless
     // of any environment-level opt-out (TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB) that a
     // regression run may have exported to skip the check elsewhere.
     ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -194,7 +193,7 @@ TEST_F(MeshDeviceFixture, Dirty_CB_Balanced_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -206,11 +205,10 @@ TEST_F(MeshDeviceFixture, Dirty_CB_Balanced_NoViolation) {
 // the runner's sweep_per_kernel_dirty_cbs returns early. This lets a regression
 // run proceed past a known un-flushed-CB bug while every other sanitizer stays
 // active.
-TEST_F(MeshDeviceFixture, Dirty_CB_SkipEnv_Suppresses) {
+TEST_F(UnitMeshFixture, Dirty_CB_SkipEnv_Suppresses) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
     ::setenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -235,7 +233,7 @@ TEST_F(MeshDeviceFixture, Dirty_CB_SkipEnv_Suppresses) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort — the Dirty CB check is suppressed by the opt-out env var.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");

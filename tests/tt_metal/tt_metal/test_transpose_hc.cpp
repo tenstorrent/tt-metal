@@ -14,18 +14,18 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
 
-TEST_F(MeshDeviceSingleCardFixture, TransposeHC) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+TEST_F(UnitMeshFixture, TransposeHC) {
     Program program = CreateProgram();
     constexpr bool multibank = true;
 
@@ -47,14 +47,14 @@ TEST_F(MeshDeviceSingleCardFixture, TransposeHC) {
     const uint32_t dram_buffer_bytes = single_tile_bytes * num_tensor_tiles;
     const uint32_t page_size = (!multibank) ? dram_buffer_bytes : single_tile_bytes;
 
-    const InterleavedBufferConfig dram_config = {
-        .device = dev, .size = dram_buffer_bytes, .page_size = page_size, .buffer_type = BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = page_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_bytes};
 
-    auto src0_dram_buffer = CreateBuffer(dram_config);
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
     const uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
     const uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-    const uint32_t alignment = dst_dram_buffer->alignment();
+    const uint32_t alignment = dst_dram_buffer->get_reference_buffer()->alignment();
     const bool misaligned = alignment > subtile_line_bytes;
 
     const uint32_t src0_cb_index = 0U;
@@ -120,15 +120,15 @@ TEST_F(MeshDeviceSingleCardFixture, TransposeHC) {
     // Execute
     std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 100U, 0x1234);
     auto src_4f_16 = u16_from_u32_vector(src0_vec);
-    detail::WriteToBuffer(src0_dram_buffer, src0_vec);
+    slow_dispatch::WriteToBuffer(*src0_dram_buffer, src0_vec);
 
     SetRuntimeArgs(program, reader_kernel, core, {dram_buffer_src0_addr, 0U, W, H, C, HW, N, CHW});
     SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0U, num_tensor_tiles});
 
-    detail::LaunchProgram(dev, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
 
     // Validation
     auto comparison_function = [](float a, float b) {

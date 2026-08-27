@@ -69,6 +69,16 @@ def _reduce_to_one_for_format(formats):
 
 
 @parametrize(
+    tile_dimensions=[
+        [1, 32],
+        [2, 32],
+        [4, 32],
+        [8, 32],
+        [16, 16],
+        [16, 32],
+        [32, 32],
+        [32, 16],
+    ],
     formats=input_output_formats(
         [
             DataFormat.Float32,
@@ -80,7 +90,6 @@ def _reduce_to_one_for_format(formats):
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
     math_fidelity=_fidelities_for_format,
     is_reduce_to_one=_reduce_to_one_for_format,
-    tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32], [32, 16]],
 )
 def test_reduce(
     formats,

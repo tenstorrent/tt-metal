@@ -43,4 +43,14 @@ struct RingSDPAOpReceiver {
             }
         });
     }
+
+    uint32_t get_next_ring_id_and_consume_one_signal() {
+        ASSERT(initialized);
+        return seq.get_next_ring_id([&](uint32_t dir, uint32_t val) {
+            if (this->wait_for_op_signal && val > 0) {
+                ASSERT(val == 1);
+                Semaphore<>(this->signal_op_semaphore_ids[dir]).down(1);
+            }
+        });
+    }
 };

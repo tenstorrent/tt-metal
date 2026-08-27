@@ -697,8 +697,6 @@ inline uint breakpoint_data() {
 inline void dbg_dump_array_enable() { memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, 1); }
 
 inline void dbg_dump_array_disable() {
-    // Invalidate array_id to invalid to set logic rd_en to 0
-    memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, DBG_RD_CMD_PAYLOAD(0, 0xF, 0));
     memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, 0);
 }
 
