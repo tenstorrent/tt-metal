@@ -23,6 +23,7 @@
 #include <optional>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <climits>
 #include <unistd.h>
 
@@ -49,8 +50,11 @@ inline bool has_genuine_torus_axis(FabricType fabric_type, const MeshShape& mesh
 
 // Validates that a FabricConfig requesting a ring/torus is applied to a mesh whose wrapped
 // dimension has more than two devices. Throws instead of letting the wrap silently degrade to a
-// line. Extent-1 axes and single-chip meshes are exempt (they carry no links at all).
-void validate_fabric_config_ring_extents(tt::tt_fabric::FabricConfig fabric_config, const MeshShape& mesh_shape);
+// line. FABRIC_2D_TORUS_X/Y/XY require every requested axis to have more than 2 devices;
+// FABRIC_1D_RING requires a dimension larger than 2 (single-chip meshes exempt). When provided,
+// mesh_graph_desc_path names the descriptor file in the error message.
+void validate_fabric_config_ring_extents(
+    tt::tt_fabric::FabricConfig fabric_config, const MeshShape& mesh_shape, std::string_view mesh_graph_desc_path = {});
 
 // Helper to validate that requested FabricType doesn't require more connectivity than available FabricType provides
 // Returns true if requested_type requires more connections than available_type provides

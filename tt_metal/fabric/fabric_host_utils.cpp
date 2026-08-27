@@ -84,19 +84,26 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ub
     }
 }
 
-void validate_fabric_config_ring_extents(tt::tt_fabric::FabricConfig fabric_config, const MeshShape& mesh_shape) {
+void validate_fabric_config_ring_extents(
+    tt::tt_fabric::FabricConfig fabric_config, const MeshShape& mesh_shape, std::string_view mesh_graph_desc_path) {
     // A ring/torus wrap is only meaningful with more than two devices along the wrapped dimension.
     // Reject configs that request one on a smaller extent instead of silently degrading to a line.
-    // Extent-1 axes and single-chip meshes are exempt: they carry no links at all (e.g. the 1x1
-    // gateway meshes of a TG MGD, or the trivial axis of a 1xN mesh under FABRIC_1D_RING on galaxy,
-    // where the blanket TORUS_XY mapping declares a wrap the mesh never realizes).
+    // FABRIC_1D_RING exempts single-chip meshes (they carry no links at all, e.g. the 1x1 gateway
+    // meshes of a TG MGD) and checks the ring length rather than a specific axis, because on UBB
+    // galaxy its blanket TORUS_XY mapping declares a wrap on the trivial axis of a 1xN mesh that the
+    // mesh never realizes. Explicit 2D torus configs are strict: every requested axis needs more
+    // than 2 devices.
+    const std::string mgd_hint =
+        mesh_graph_desc_path.empty() ? std::string{} : fmt::format(" (mesh graph descriptor: {})", mesh_graph_desc_path);
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING:
             TT_FATAL(
                 mesh_shape.mesh_size() == 1 || std::max(mesh_shape[0], mesh_shape[1]) > 2,
                 "FabricConfig FABRIC_1D_RING requires a ring of more than 2 devices, but mesh shape {} has no "
-                "dimension larger than 2",
-                mesh_shape);
+                "dimension larger than 2. Change the requested fabric config (e.g. FABRIC_1D) or use a mesh graph "
+                "descriptor with a longer dimension{}",
+                mesh_shape,
+                mgd_hint);
             break;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
@@ -105,12 +112,15 @@ void validate_fabric_config_ring_extents(tt::tt_fabric::FabricConfig fabric_conf
             for (uint32_t axis = 0; axis < 2; ++axis) {
                 if (has_flag(requested_type, torus_flag_for_axis(axis))) {
                     TT_FATAL(
-                        mesh_shape[axis] != 2,
+                        is_genuine_torus_dim(mesh_shape[axis]),
                         "FabricConfig {} requests a torus wrap along axis {} of mesh shape {}, but a ring requires "
-                        "more than 2 devices along the wrapped dimension",
+                        "more than 2 devices along the wrapped dimension. Change the requested fabric config (e.g. "
+                        "FABRIC_2D) or use a mesh graph descriptor whose axis {} has more than 2 devices{}",
                         enchantum::to_string(fabric_config),
                         axis,
-                        mesh_shape);
+                        mesh_shape,
+                        axis,
+                        mgd_hint);
                 }
             }
             break;

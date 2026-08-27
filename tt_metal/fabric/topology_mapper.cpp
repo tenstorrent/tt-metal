@@ -1646,7 +1646,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     TT_FATAL(
         fabric_config != tt::tt_fabric::FabricConfig::FABRIC_1D_RING || total_number_of_chips > 2,
         "FabricConfig FABRIC_1D_RING requires a ring of more than 2 devices, but the physical system has only {} "
-        "chip(s)",
+        "chip(s). Change the requested fabric config (e.g. FABRIC_1D)",
         total_number_of_chips);
 
     // Extract ASIC IDs from the descriptors map

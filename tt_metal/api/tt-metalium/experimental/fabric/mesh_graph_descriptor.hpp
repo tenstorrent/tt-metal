@@ -119,6 +119,12 @@ public:
     explicit MeshGraphDescriptor(const std::string& text_proto, bool backwards_compatible = false);
     explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, bool backwards_compatible = false);
 
+private:
+    // Shared implementation; source_path (when non-empty) names the descriptor file in error messages.
+    MeshGraphDescriptor(const std::string& text_proto, bool backwards_compatible, std::string_view source_path);
+
+public:
+
     ~MeshGraphDescriptor();
 
     // Debugging/inspection

@@ -164,6 +164,10 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 }  // namespace
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+    MeshGraphDescriptor(text_proto, backwards_compatible, /*source_path=*/{}) {}
+
+MeshGraphDescriptor::MeshGraphDescriptor(
+    const std::string& text_proto, const bool backwards_compatible, std::string_view source_path) :
     top_level_id_(static_cast<GlobalNodeId>(-1)) {
     proto::MeshGraphDescriptor temp_proto;
     google::protobuf::TextFormat::Parser parser;
@@ -172,14 +176,23 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
     parser.AllowUnknownField(true);
     parser.AllowUnknownExtension(true);
 
-    TT_FATAL(parser.ParseFromString(text_proto, &temp_proto), "Failed to parse MeshGraphDescriptor textproto");
+    TT_FATAL(
+        parser.ParseFromString(text_proto, &temp_proto),
+        "Failed to parse MeshGraphDescriptor textproto{}{}",
+        source_path.empty() ? "" : ": ",
+        source_path);
 
     // Set defaults for missing fields
     set_defaults(temp_proto);
 
     // Validate the proto
     const auto errors = static_validate(temp_proto, backwards_compatible);
-    TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
+    TT_FATAL(
+        errors.empty(),
+        "Failed to validate MeshGraphDescriptor textproto{}{}: \n{}",
+        source_path.empty() ? "" : " ",
+        source_path,
+        get_validation_report(errors));
 
     proto_ = std::make_shared<proto::MeshGraphDescriptor>(temp_proto);
 
@@ -200,7 +213,8 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
 
 MeshGraphDescriptor::MeshGraphDescriptor(
     const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
-    MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
+    MeshGraphDescriptor(
+        read_file_to_string(text_proto_file_path.string()), backwards_compatible, text_proto_file_path.string()) {}
 
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
 
@@ -521,9 +535,11 @@ void MeshGraphDescriptor::validate_mesh_topology(
                     mesh.device_topology().dims(i) <= 2) {
                     error_messages.push_back(fmt::format(
                         "Device topology dimension {} has type RING but extent {}; RING requires an extent of at "
-                        "least 3 — use LINE for this dimension (Mesh: {})",
+                        "least 3 — change device_topology.dim_types[{}] to LINE in this mesh graph descriptor "
+                        "(Mesh: {})",
                         i,
                         mesh.device_topology().dims(i),
+                        i,
                         mesh.name()));
                 }
             }
@@ -637,9 +653,11 @@ void MeshGraphDescriptor::validate_switch_descriptors(
                     switch_desc.device_topology().dims(i) <= 2) {
                     error_messages.push_back(fmt::format(
                         "Device topology dimension {} has type RING but extent {}; RING requires an extent of at "
-                        "least 3 — use LINE for this dimension (Switch: {})",
+                        "least 3 — change device_topology.dim_types[{}] to LINE in this mesh graph descriptor "
+                        "(Switch: {})",
                         i,
                         switch_desc.device_topology().dims(i),
+                        i,
                         switch_desc.name()));
                 }
             }
