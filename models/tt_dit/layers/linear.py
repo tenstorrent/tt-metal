@@ -9,7 +9,13 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ..utils.matmul import get_fabric_agmm_config, get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+from ..utils.matmul import (
+    get_agmm_config,
+    get_fabric_agmm_config,
+    get_fused_mmrs_config,
+    get_matmul_config,
+    get_matmul_core_grid,
+)
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
@@ -348,6 +354,7 @@ class ColParallelLinear(Module):
         addcmul_scalar: float = 1.0,
         core_grid=None,
         use_heuristic_mmcfg=False,
+        force_transpose: bool = True,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -400,8 +407,26 @@ class ColParallelLinear(Module):
             if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
                 return self._forward_fabric_agmm(x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype)
 
-            core_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic=use_heuristic_mmcfg)
+            # The op transposes the core grid when force_transpose is set or the output is wide
+            # (M > N), and puts its in0 muxes on whichever axis the worker grid leaves free -- so
+            # the grid has to reserve the matching one (row when transposed, column when not).
+            # get_agmm_config resolves grid, blocking and workers together: an explicit core_grid /
+            # default_block_size and swept (M, K, N) table entries keep the legacy derivation,
+            # unswept shapes go through the v3 rule engine (see utils/agmm_rules.py).
+            core_grid, matmul_config, num_workers_per_link = get_agmm_config(
+                M,
+                K,
+                N,
+                full_grid=full_grid,
+                cluster_size=parallel_config.tensor_parallel.factor,
+                num_links=self.ccl_manager.num_links,
+                core_grid=core_grid,
+                default_block_size=default_block_size,
+                use_heuristic=use_heuristic_mmcfg,
+                fuse_swiglu=self.fuse_swiglu,
+                use_addcmul=addcmul_a is not None,
+                force_transpose=force_transpose,
+            )
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
                 x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
@@ -422,7 +447,8 @@ class ColParallelLinear(Module):
                 topology=self.ccl_manager.topology,
                 cluster_axis=parallel_config.tensor_parallel.mesh_axis,
                 barrier_semaphore=None,
-                num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
+                force_transpose=force_transpose,
+                num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
                 # Op's N is per-device, so pass per-device widths (each global width is % TP == 0).
