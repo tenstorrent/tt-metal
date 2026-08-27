@@ -60,9 +60,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def compare_hidden(got, exp):
     """Device vs reference hidden state -> {"pcc", "worst_pct"}.
 
-    ALWAYS both. PCC is a correlation and hides outliers -- it sits at 0.9998 while individual
-    samples are badly wrong, and for audio the outliers are what you hear (STATUS 5.9). The
-    worst-sample bound is the gate that matters."""
+    Always both: a correlation can sit high while individual samples are badly wrong."""
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import pcc as _pcc
 
     return {
@@ -74,9 +72,8 @@ def compare_hidden(got, exp):
 def compare_codes_frame(c_ref, c_dev):
     """One frame of integer codes -> {"sem_ok", "n_diff", "max_delta", "deltas"}.
 
-    Semantic code (index 0) is reported separately from the 36 acoustic codes: a wrong semantic
-    code changes the audio outright, while an acoustic code is one of 21 FSQ levels, so off-by-one
-    is the smallest representable difference (STATUS 6.54 -- the bare count gets misread)."""
+    The semantic code is reported apart from the 36 acoustic ones: a wrong semantic code changes the
+    audio outright, while an acoustic code is one of 21 FSQ levels."""
     d = (c_ref[0, 1:].long() - c_dev[0, 1:].long()).abs()
     nz = d[d != 0].tolist()
     return {

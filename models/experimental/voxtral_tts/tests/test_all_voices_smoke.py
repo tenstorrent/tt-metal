@@ -3,15 +3,9 @@
 
 """Every voice preset runs, on a sentence in its own language.
 
-The checkpoint ships **20** voices and `prompt_fixture.json` exercises **13**, so seven were never
-run by any test: de_female, es_male, fr_male, hi_male, it_female, nl_female, pt_female. That is not
-cosmetic -- the placeholder count is voice-specific (ar_male 67 rows, casual_female 214), so an
-untested voice is an untested prompt geometry, and a wrong placeholder count shifts every
-downstream position.
-
-This is the analogue of the sibling xtts_v2 suite's `test_all_languages_smoke.py`: breadth, not
-accuracy. It asserts the request completes and emits structurally valid codes through the TRACED
-path -- accuracy per block is the PCC files' job.
+The placeholder count is voice-specific, so each preset is a different prompt geometry. Prefill is
+compared against fp32 in two parts: the placeholder region, which the geometry controls, and the
+text region, which varies with the token sequence.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_all_voices_smoke.py
@@ -49,29 +43,8 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (  # noqa: 
 
 N_FRAMES = 4          # breadth, not depth: 20 voices x a few frames each
 N_CODES = 37          # 1 semantic + 36 acoustic
-# TWO gates, because the two regions of a prompt behave differently and only one of them is what
-# this test is about.
-#
-# The PLACEHOLDER region is the voice's own preset rows -- the geometry this test exists to check --
-# and it is remarkably stable: measured 0.999705..0.999809 across voices, and IDENTICAL to six
-# decimals for a given voice no matter what text follows it (nl_male reads 0.999769 with Dutch,
-# English and Arabic sentences).
-#
-# The TEXT region varies with the token sequence, 0.994736..0.999789 across (voice, text) pairs --
-# the same content-dependent bf16 sensitivity seen everywhere else in this port. nl_male + its Dutch
-# sentence is the low tail (0.994736) while nl_male + an English sentence is 0.999789 and the same
-# Dutch sentence on nl_female is 0.999205. Gating that tightly would be gating the text, not the
-# voice.
-# Measured over ALL 20 voices, 2026-08-27 (I set this gate twice from partial samples first and it
-# failed twice -- 5 voices, then 19):
-#
-#   placeholders  0.999487 (es_male, 208 preset rows) .. 0.999816 (hi_female)
-#   text          0.994736 (nl_male)                  .. 0.999821
-#   pooled        0.998901 (nl_male)                  .. 0.999805
-#
-# es_male is the low tail on placeholders and has the most preset rows of any voice, which is a
-# benign reason to sit slightly lower. A wrong placeholder COUNT does not shave 2e-4 off -- it
-# shifts every downstream position and collapses the number -- so the floor is set to catch that.
+# The placeholder region is the voice's own geometry and is stable across texts; the text region
+# varies with the token sequence, so it gets the looser pooled gate.
 VOICE_PCC_PLACEHOLDERS = 0.999
 VOICE_PCC_POOLED = 0.998
 
@@ -86,8 +59,7 @@ def pipe():
 
 
 def test_corpus_covers_every_voices_language():
-    """A voice whose language has no sentences would silently fall back to English prose, which
-    would then be scored as that language later. Catch it here instead."""
+    """A voice whose language has no corpus sentence would silently fall back to English."""
     missing = sorted({
         v.split("_")[0] for v in all_voices()
         if "_" in v and len(v.split("_")[0]) == 2 and v.split("_")[0] not in SENTENCES
@@ -102,12 +74,7 @@ def test_every_voice_has_a_sentence():
 
 @pytest.mark.parametrize("voice", all_voices())
 def test_voice_smoke(pipe, voice):
-    """Prompt assembly through Block 1 through Block 2, on the traced path, for one voice.
-
-    Compared against the fp32 reference, not just checked for plausible shape: each voice has its
-    own placeholder count (ar_male 67 rows, casual_female 214), so each is a different prompt
-    geometry, and a geometry that assembles but shifts positions would emit valid-looking codes.
-    """
+    """Prompt assembly through Blocks 1 and 2 for one voice, prefill checked against fp32."""
     embeds = corpus_embeds(first_sentence_for(voice), voice, pipe.wb)
 
     exp = bref.reference_forward(embeds, pipe.wb, n_layers=N_LAYERS)

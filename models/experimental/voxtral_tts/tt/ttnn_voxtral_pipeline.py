@@ -48,10 +48,7 @@ class TtVoxtralPipeline:
         self.flow = TtVoxtralFlow(device, ckpt_path=ckpt_path)
         self.codec = TtVoxtralCodecDecoder(device, ckpt_path=ckpt_path)
         self._tr = None            # (trace_id, input buffers, output tensors), built per generate()
-        # Per-stage wall times from the LAST request, so a perf test can report where a request
-        # went instead of deriving it. The codec is timed too: without it the codec column has to
-        # be computed as total - prefill - decode, which silently folds in the per-frame host
-        # overhead and reads as if the codec were 20x its real cost.
+        # Per-stage wall times from the last request, including the codec.
         self.last_timings = {}
         # What warmup() actually compiled, so callers (and tests) can check rather than assume.
         self.warmed = {}
@@ -147,32 +144,20 @@ class TtVoxtralPipeline:
     def warmup(self, max_frames=640, capture_trace=True, verbose=False):
         """Compile every program the request path can reach, then capture the frame-loop trace.
 
-        Without this, the first request at each new prompt length pays a JIT compile mid-request.
-        Prefill compiles PER PADDED LENGTH -- `Sp = ceil(S/PREFILL_MULTIPLE)*PREFILL_MULTIPLE` -- so
-        a 2048-row cache has 16 reachable shapes, and the codec buckets its frame count the same way.
-        This walks all of them, the way the sibling xtts_v2 model's `warmup()` walks every prefill
-        shape and every vocoder bucket.
+        Prefill compiles per padded length and the codec per frame bucket, so without this the first
+        request at each new length pays a compile. Everything that allocates is compiled BEFORE the
+        trace capture, since a program compiled afterwards can land where the trace keeps its
+        intermediates.
 
-        ORDER MATTERS, and it is the same discipline xtts_v2 follows: everything that ALLOCATES
-        compiles BEFORE any trace capture. A program compiled after a capture risks landing where the
-        trace keeps its intermediates -- BUG-5, which shows up as a warning, then a hang, then a card
-        that needs `tt-smi -r`.
-
-        `torch.zeros` inputs are correct here and only here: warmup needs the kernels built, not the
-        right numbers, and it never asserts anything. (Trap 12 forbids quoting ACCURACY off synthetic
-        activations, which this does not do.) Block 2 emits [END_AUDIO] on zeros, which is fine for
-        compiling Block 2 itself but useless downstream -- see the codec step, which synthesises its
-        own codes for that reason.
+        Zero inputs are enough: this builds kernels and asserts nothing. The codec stage synthesises
+        its own codes, because Block 2 on zeros emits [END_AUDIO] and the trim would leave nothing.
 
         Args:
-            max_frames: how many frames of codec bucket to compile for. Defaults to 640, i.e. ~51 s
-                of audio, which covers every utterance the quality set produces. Raise it if callers
-                generate longer, or the first long request pays a codec compile.
-            capture_trace: also capture and release the per-frame trace, so the first `generate()`
-                does not pay the capture. Skip only when debugging the eager path.
+            max_frames: how many frames of codec bucket to compile for.
+            capture_trace: also capture and release the per-frame trace.
             verbose: per-stage timings.
 
-        Sets `self.warmed` to what was actually compiled, so it can be asserted rather than assumed.
+        Sets `self.warmed` to what was compiled.
         """
         import time as _time
 
@@ -201,11 +186,6 @@ class TtVoxtralPipeline:
         log(f"block 2: 1 shape in {_time.perf_counter() - t0:.1f}s")
 
         # 3) Codec, at every length bucket a request can reach.
-        #
-        # Synthetic CODEC-side codes, not Block 2's output: on zero inputs Block 2 emits
-        # [END_AUDIO], and `self.decode()` runs `strip_offset_and_trim`, which cuts at END_AUDIO and
-        # hands the codec an EMPTY tensor -- `slice start[2] (0) must be less than shape[2] (0)`.
-        # Driving `self.codec` directly with `make_synthetic_codes` compiles the same programs.
         t0 = _time.perf_counter()
         from models.experimental.voxtral_tts.reference import voxtral_codec_ref as _cref
 
@@ -242,11 +222,7 @@ class TtVoxtralPipeline:
         return self
 
     def close(self):
-        """Release the trace and drop the per-request state.
-
-        Does NOT close the device: the caller owns it (it is passed into `__init__`), and may hold
-        several pipelines on it or reuse it afterwards.
-        """
+        """Release the trace and drop per-request state. Does not close the device: the caller owns it."""
         self._trace_release()
         self.last_timings = {}
         self.warmed = {}

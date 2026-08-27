@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block 2 on device vs the fp32 reference. Replaces `tt_gates.py --gate flow`.
+"""Block 2 on device against the fp32 reference.
 
-Block 2's output is INTEGER codes, so the frame comparison is exact-or-not rather than a PCC, and
-the velocity field is the only continuous quantity worth a PCC. Synthetic inputs are acceptable
-here (unlike Block 1, see BUG-9): the criterion is exact code agreement given identical input, not
-a weight-precision level read off off-manifold activations.
+Block 2 emits integer codes, so the frame comparison is exact-or-not and the velocity field is the
+only continuous quantity worth a PCC. Synthetic inputs are acceptable for the exactness checks; the
+real-hidden-state tests below drive it from the reference's own last-position hidden state, which is
+what Block 1 hands it at inference.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_flow_pcc.py
@@ -70,10 +70,7 @@ def test_semantic_code_is_exact(rig):
     assert bool((exp == got).all()), f"semantic code mismatch: ref {exp.flatten().tolist()} dev {got.flatten().tolist()}"
 
 
-# Measured on the shipped build: 2 of 74 codes differ, each by one FSQ level of 21. That is the
-# recorded `flow_codes_74` metric, not a defect -- so the gate is "no worse than shipped, and every
-# difference still only one level", not "identical".
-MAX_FRAME_CODES_DIFF = 4
+MAX_FRAME_CODES_DIFF = 4    # a small number of codes may differ by one FSQ level
 
 
 def test_full_frame_codes_close_to_reference(rig):
@@ -93,16 +90,9 @@ def test_full_frame_codes_close_to_reference(rig):
     assert worst <= 1, f"a code is off by {worst} FSQ levels, not one -- that is not rounding"
 
 
-# ── Real hidden states ────────────────────────────────────────────────────────────────────────
-# Everything above drives Block 2 from `make_synthetic_inputs`, which is fine for exact-code
-# agreement but leaves the block untested on the distribution it actually sees. Block 2 is
-# ~14.2 ms of a 27.7 ms frame -- half the model -- and had three device tests on one synthetic
-# tensor. These drive it from the fp32 reference's own last-position hidden state on real prompts,
-# which is exactly what Block 1 hands it at inference.
-#
-# The hidden state comes from the REFERENCE, not the device, deliberately: this isolates Block 2.
-# Block 1's device accuracy is `test_backbone_ttnn_pcc.py`'s job, and feeding Block 2 a device
-# hidden state would fold the two together.
+# ── Real hidden states ──
+# Driven from the reference's own last-position hidden state, which isolates Block 2: Block 1's
+# device accuracy is test_backbone_pcc.py's job.
 
 REAL_CASES = (0, 2, 3)
 X0_SEEDS = (0, 7)
@@ -141,7 +131,7 @@ def test_velocity_pcc_on_real_hidden_states(rig, wb, ci):
 @pytest.mark.slow
 @pytest.mark.parametrize("ci", REAL_CASES, ids=lambda c: f"case{c}")
 def test_frame_codes_on_real_hidden_states(rig, wb, ci):
-    """Integer codes on a real hidden state: exact-or-not, per x_0 draw."""
+    """Integer codes on a real hidden state, per x_0 draw."""
     gen, w, _, _ = rig
     h, case = _real_hidden(wb, ci)
     for seed in X0_SEEDS:

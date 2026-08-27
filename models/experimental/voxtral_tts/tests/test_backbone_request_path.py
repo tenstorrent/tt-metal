@@ -1,25 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block 1 across a SEQUENCE of requests, not one in isolation.
+"""Block 1 across a sequence of requests, not one in isolation.
 
-The codec has this class of test (`test_codec_ttnn_pcc.py`: bucketing, chunked == unchunked,
-prepared-weight dedup, bias cache not growing). Blocks 1 and 2 had none -- every Block 1 test
-built a fresh model, prefilled once and asserted. A server does not do that.
-
-What can go wrong here, and why each test exists:
-
-  - **Per-length state reused across lengths.** BUG-2 is the codec's version: prepared conv weights
-    are the same SHAPE at every length and different VALUES, so cross-length reuse computes PCC
-    0.19 while crashing nothing. Block 1's matmuls have no prepared weights, but its prefill pads
-    to a tile multiple and its program cache is keyed per shape, so the same failure mode is
-    available. Prefilling several lengths through ONE model and checking each against its own
-    reference is the test.
-  - **A short prompt after a long one.** The KV cache still holds the long prompt's tail. Causal
-    attention should never reach it, but "should" is what a test is for.
-  - **Repeated trace capture/release.** BUG-1 and BUG-5: a failed capture wedges the card, and
-    allocations after a capture can be corrupted. Cycling capture/release and then checking
-    prefill is still numerically right covers the quiet half of that.
+  * several lengths through one model, unsorted, each against its own reference.
+  * a short prompt after a long one, whose cache tail must stay unreachable.
+  * position accounting through prefill and decode steps.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_backbone_request_path.py
@@ -43,8 +29,8 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT  # 
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
 
 PCC_GATE = 0.999
-# Deliberately unsorted and spanning a wide P range, so "worked because it was warm for this shape"
-# and "worked because lengths only ever grew" both fail.
+# Unsorted and spanning a wide P range, so neither warm-for-this-shape nor monotonically
+# growing lengths can pass by accident.
 SEQUENCE = (3, 0, 2, 0)
 
 
@@ -75,7 +61,7 @@ def _prefill_pcc(gen, w, ci):
 
 
 def test_prefill_stays_correct_across_lengths_in_one_session(gen, w):
-    """Four requests of three different lengths through ONE model, each vs its own reference."""
+    """Four requests of three lengths through one model, each against its own reference."""
     worst = None
     for ci in SEQUENCE:
         P, voice, m = _prefill_pcc(gen, w, ci)
@@ -87,7 +73,7 @@ def test_prefill_stays_correct_across_lengths_in_one_session(gen, w):
 
 
 def test_short_prompt_after_a_long_one(gen, w):
-    """The long prompt's KV tail must be unreachable, not merely unused-by-luck."""
+    """A shorter prompt after a longer one must not reach the previous request's cache tail."""
     long_ci, short_ci = 2, 0          # P=312 then P=200
     P_long, _, _ = _prefill_pcc(gen, w, long_ci)
     P_short, voice, m = _prefill_pcc(gen, w, short_ci)
@@ -99,7 +85,7 @@ def test_short_prompt_after_a_long_one(gen, w):
 
 
 def test_decode_position_accounting(gen, w):
-    """`pos` after prefill+k steps must be P+k on both sides, or every later RoPE angle is wrong."""
+    """pos after prefill plus k steps must be P+k on both sides, or later RoPE angles are wrong."""
     frames = torch.load(__import__("os").path.join(
         __import__("os").path.dirname(__import__("os").path.dirname(
             __import__("os").path.abspath(__file__))), "tests", "real_frames_fixture.pt")).long()

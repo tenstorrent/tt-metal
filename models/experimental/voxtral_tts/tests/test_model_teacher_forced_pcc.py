@@ -1,21 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Blocks 1+2 end to end: do device and reference emit the same INTEGER codes?
+"""Blocks 1+2 end to end: do device and reference emit the same integer codes?
 
-Replaces `tt_gates.py --gate codes`, the gate that predicts audio quality.
+Teacher-forced -- both loops are fed the reference's codes each step, so every frame is an
+independent measurement. Feeding each loop its own codes compares diverging sequences instead.
 
-TEACHER-FORCED. Both loops are fed the reference's codes each step, so every frame is an
-INDEPENDENT measurement of "given identical input, do they agree?". Feeding each loop its own codes
--- what real generation does -- is useless for attribution: after the first semantic mismatch the
-two are generating different sequences, so later frames compare unrelated trajectories. Measured
-that way, frame 0 agreed exactly and every later frame looked catastrophic. That was an artefact.
-
-SYNTHETIC AND REAL PROMPTS ARE BOTH REPORTED AND THEY ARE NOT COMPARABLE (STATUS 6.54). The
-synthetic number reads ~6x worse, and the cause is Block 1, not Block 2 or FSQ: off-manifold,
-PCC(h_dev, h_ref) is 0.9865 against 0.9999 on real prompts. It is also NON-MONOTONIC in precision
-(6.55) -- bf16 FF weights make it worse. **Never rank a config on the synthetic number.** Only the
-real-prompt block is asserted.
+Synthetic and real-prompt figures are both printed and are not comparable; only the real-prompt
+block is asserted.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_model_teacher_forced_pcc.py
@@ -54,11 +46,10 @@ def pipe():
 
 
 def _compare_codes(pipe, embeds, n_frames=N_FRAMES, cfg_alpha=CFG_ALPHA, seed=0):
-    """-> (sem_bad, ac_bad, total_ac, delta_histogram). Quiet version of the retired gate's helper.
+    """-> (sem_bad, ac_bad, total_ac, delta histogram).
 
-    The semantic code is reported separately from the 36 acoustic codes: a wrong semantic code
-    changes the audio outright, while an acoustic code is one of 21 FSQ levels, so off-by-one is a
-    small perturbation."""
+    The semantic code is reported apart from the 36 acoustic ones: a wrong semantic code changes the
+    audio outright, while an acoustic code is one of 21 FSQ levels."""
     wf = fref.load_flow_state()
     ref_dec = bref.IncrementalBackbone(pipe.wb)
     torch.manual_seed(seed)
@@ -87,7 +78,7 @@ def _compare_codes(pipe, embeds, n_frames=N_FRAMES, cfg_alpha=CFG_ALPHA, seed=0)
 
 @pytest.mark.slow
 def test_model_teacher_forced_codes(pipe):
-    """The real-prompt code agreement -- this is the accuracy number that predicts audio."""
+    """Real-prompt code agreement: the number that predicts audio."""
     tot_sem = tot_bad = tot_n = 0
     all_deltas = Counter()
     for ci in REAL_CASES:

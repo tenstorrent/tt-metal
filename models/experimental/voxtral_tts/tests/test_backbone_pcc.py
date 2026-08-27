@@ -1,22 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block 1 on device vs the fp32 reference: wiring, prefill, and teacher-forced decode.
+"""Block 1 on device against the fp32 reference: wiring, prefill, decode, and the KV cache.
 
-Replaces `tt_gates.py --gate wiring / --gate prefill26 / --gate decode`, which printed these
-numbers for a human to judge. They assert now.
+  * wiring    -- one layer, which is where a rotation-convention error shows.
+  * prefill   -- all 15 fixture prompts, pooled and last-position, each paired with a
+    worst-sample bound because a correlation alone can hide one far-off element.
+  * decode    -- teacher-forced on real frames, so each step is an independent measurement.
+  * KV cache  -- every cached K and V entry, all 26 layers, at four prompt lengths, plus a check
+    that decode leaves the prompt's positions untouched.
 
-WHAT IS AND IS NOT ASSERTABLE HERE, because the gate this came from was misread twice
-(STATUS 6.15):
-
-  - **PCC floors are assertable.** They are deterministic and reproduce across sessions: an
-    audio-tier re-run on a different day reproduced `decode_min_pcc` 0.999316 and
-    `prefill_pcc_last` 0.999855 exactly.
-  - **Worst-sample AGGREGATE LEVELS are not.** Prompt-to-prompt spread is ~0.45 pp on mean and
-    ~0.96 pp on p90 -- larger than any change ever gated with this, w2's BFP8 drop (0.10 pp)
-    included. So an aggregate over a different prompt set is not comparable to a recorded one.
-    Those belong in a paired same-session A/B, which is what `scripts/quality_report.py --compare`
-    is for. The thresholds below are deliberately loose tripwires, not the measured levels.
+PCC floors are assertable here; worst-sample aggregate LEVELS are not, since they vary more between
+prompts than between builds. Those belong in the paired comparison `scripts/quality_report.py`
+performs.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_backbone_pcc.py
@@ -58,30 +54,10 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device
 
 PCC_PREFILL = 0.999
 PCC_DECODE = 0.999
-# The per-position MINIMUM is printed but NOT asserted, because it is not a stable level: it swings
-# 0.938473 (case 2, position 217) to 0.998110 (case 0) while the pooled and last-position figures
-# stay above 0.9997.
-#
-# It is NOT a scale artefact -- measured, position 217 has ordinary variance (ref std 1.78 vs 1.93
-# at the strongest positions) and a genuinely larger error: worst-sample 7.28% of scale against
-# ~0.4% typical, a ~13x bigger absolute deviation. So intermediate prefill positions really are
-# less accurate than the pooled number suggests. It does not reach the audio -- only the last
-# position feeds Block 2, and that one reads 0.99988 / 0.68% -- but see VOXTRAL_TTS_BACKBONE.md's
-# open questions, because prefill also writes the KV cache that every decode step then attends to.
-#
-# What IS gated is the worst-sample bound on the last position: "that worst-sample bound is the gate
-# that matters" (STATUS trap 9, PCC hides outliers). Loose -- case 0 measures 0.70%.
+# The per-position minimum is printed, not asserted: a single position's PCC is far noisier than
+# the pooled or last-position figure. What is gated is the worst-sample bound on the last position.
 MAX_WORST_SAMPLE_PCT = 5.0
-# The POOLED worst-sample: the largest single-element error anywhere in the whole [1, S, 3072]
-# output, as a percentage of the reference's scale. Gated because "PCC HIDES OUTLIERS -- the single
-# most expensive lesson" (STATUS trap 9: sdpa passed at PCC 0.9998 per slab and still failed 11
-# tests). It is LARGER than the last-position figure because pooling takes the max over every
-# position, so it picks up the weak late ones.
-#
-# Measured over all 15 real prompts, 2026-08-27: 0.74% (case 8) .. 5.17% (case 10), with case 12 at
-# 3.86%. Gate at 8% -- clear of the measured band, and an order of magnitude below the kind of
-# misplacement that matters (a dropped head reads 47%).
-MAX_POOLED_WORST_SAMPLE_PCT = 8.0
+MAX_POOLED_WORST_SAMPLE_PCT = 8.0   # largest single-element error over all positions
 DECODE_STEPS = 8
 
 
@@ -105,10 +81,9 @@ def gen(dev, w):
 
 
 def test_one_layer_wiring_pcc(dev):
-    """ONE layer against the reference. A RoPE convention error shows up here and nowhere else.
+    """One layer against the reference, where a rotation-convention error shows.
 
-    Random inputs are fine for this test and only this test: it checks wiring and the rotation
-    convention, not accuracy. Accuracy is judged on real prompts at 26 layers below."""
+    Random inputs are fine for this test alone: it checks wiring, not accuracy."""
     S = 128
     one = TtVoxtralGPT(dev, n_layers=1)
     ws = bref.load_backbone_state()
@@ -123,11 +98,7 @@ def test_one_layer_wiring_pcc(dev):
 
 @pytest.mark.parametrize("ci", case_ids(), ids=lambda c: f"case{c}")
 def test_prefill_pcc(gen, w, ci):
-    """Full 26-layer prefill on a REAL prompt vs `reference_forward`.
-
-    The last position is reported separately because it is the only one Block 2 consumes; the
-    all-positions number catches a bug that only touches part of the sequence, and the per-position
-    minimum catches one that a pooled PCC would hide behind the high-magnitude positions."""
+    """Full 26-layer prefill on a real prompt, pooled and at the last position."""
     embeds, case = fixture_embeds(ci, w)
     P = embeds.shape[1]
     exp = bref.reference_forward(embeds, w, n_layers=N_LAYERS)
@@ -136,12 +107,8 @@ def test_prefill_pcc(gen, w, ci):
     all_pcc = m_all["pcc"]
     m_last = compare_hidden(got[:, -1:], exp[:, -1:])
     last_pcc = m_last["pcc"]
-    # The call the PIPELINE makes is prefill_last -> prefill(last_only=True), which is a different
-    # op sequence: slice to one row on device THEN rms_norm it, versus rms_norm all Sp rows then
-    # index on the host. Mathematically the same (RMSNorm is per-row) but a different invocation at
-    # a different shape, and norm configs are shape-sensitive in this port -- 6.39/6.40 deleted both
-    # width-sharded norms, and the sharded norm is decode-only because its shard spec fixes the
-    # height at one tile. Measured bit-identical on all 15 prompts; asserted so it stays that way.
+    # The pipeline calls prefill_last, a different op sequence: slice one row then norm it, versus
+    # norm every row then index. Asserted equal so the gates above cover the shipped path.
     gen.reset()
     shipped = gen.prefill(embeds, last_only=True).reshape(1, -1)
     per = [pcc(got[:, i], exp[:, i]) for i in range(P)]
@@ -166,8 +133,7 @@ def test_prefill_pcc(gen, w, ci):
 
 @pytest.mark.parametrize("ci", case_ids(), ids=lambda c: f"case{c}")
 def test_decode_pcc_teacher_forced(gen, w, ci):
-    """On-device KV cache + decode steps vs `IncrementalBackbone.step()`, teacher-forced on real
-    frames so every step is an independent measurement."""
+    """Device KV cache and decode steps against the reference, teacher-forced on real frames."""
     frames = real_frames()
     embeds, case = fixture_embeds(ci, w)
     P = embeds.shape[1]
@@ -193,10 +159,7 @@ def test_decode_pcc_teacher_forced(gen, w, ci):
 
 
 def test_decode_is_bit_deterministic(gen, w):
-    """The same config re-run must reproduce bit-identically.
-
-    The gate this replaced documented that property and relied on it -- a paired A/B is only
-    readable at 0.01 pp because of it -- but nothing asserted it."""
+    """The same config re-run must reproduce bit-identically."""
     frames = real_frames()
     embeds, _ = fixture_embeds(0, w)
 
@@ -214,57 +177,16 @@ def test_decode_is_bit_deterministic(gen, w):
     print(f"\n  {len(a)} decode steps reproduced bit-identically across two runs")
 
 
-# ── The KV cache prefill writes ───────────────────────────────────────────────────────────────
-# Prefill has TWO jobs: produce the last hidden state (which Block 2 consumes, gated above) and
-# populate the KV cache that every later decode step attends to. Only the first was gated. The
-# second was covered transitively -- a wrong entry drifts the decode hidden states -- but weakly:
-# attention averages over 200+ positions, so one bad entry is heavily diluted, and the decode test
-# only runs 8 steps.
-#
-# BUG-5 is exactly this surface: warm-up/capture writing the cache "corrupts the prompt unless
-# aimed at a scratch row; measured decode PCC 0.9998 -> 0.86 with NO error raised". Decode PCC
-# caught that because it was catastrophic. These tests localise instead of detect: they name the
-# layer, the position and the side (K or V).
-#
-# Both sides cache POST-RoPE: the reference applies `apply_rope` before writing the cache, and the
-# device caches what `_qkv` returns, which is also post-RoPE. So this compares like with like.
-# Cache VALUES were verified at one length only (P=200). These four span P=100..357 -- the reads
-# are 0.1 s even at S=2043, so there was never a cost reason to check just one.
-CACHE_CASES = (0, 2, 3, 12)
+# ── The KV cache prefill writes ──
+CACHE_CASES = (0, 2, 3, 12)         # P = 100..357
 CACHE_CASE = CACHE_CASES[0]
-# Measured across all four prompts, 2026-08-27 (P=100..357). The gate was 0.999, set from case 0
-# alone, which turned out to be the BEST of the four:
-#
-#   case  0 (P=200)  worst 0.999658  worst-sample  7.42%  weakest position 189
-#   case  2 (P=312)  worst 0.998761  worst-sample 27.06%  weakest position 217
-#   case  3 (P=357)  worst 0.999132  worst-sample 31.49%  weakest position 308
-#   case 12 (P=100)  worst 0.998872  worst-sample 17.99%  weakest position  96
-#
-# Always the V side, always in the late layers (16..25).
-#
-# AND THE WEAK CACHE POSITION IS THE WEAK HIDDEN-STATE POSITION. An independent per-position probe
-# of the same prompts put their weakest hidden states at 189, 217 and 308 -- the same three numbers.
-# Two different tensors, measured separately, same position: each prompt has one position that is
-# markedly worse in both. It does not reach the audio (WER 0 of 894, 5.2% of acoustic codes off by
-# one FSQ level), but it is the most concrete lead in this port for where precision goes.
-#
-# Cache worst-sample is deliberately NOT gated: at 7..31% a threshold would have to be ~40% to pass,
-# which asserts nothing. The hidden-state worst-sample IS gated, at 8% pooled, above.
+# Cache worst-sample is not gated: it is dominated by one position per prompt, so a threshold
+# loose enough to pass would assert nothing. The hidden-state worst-sample is gated above.
 CACHE_PCC = 0.998
 CACHE_STEPS = 4
 
 # THE K CACHE IS STORED IN A DIFFERENT HEAD-DIM ORDER ON THE TWO SIDES, and comparing raw K without
 # accounting for it reads PCC ~0.02 in all 26 layers while the model is perfectly healthy. Measured
-# 2026-08-27: as-is -0.0035, permuted 0.999975 (layer 0); 0.0357 vs 0.999928 (layer 12).
-#
-# The reference lays a rotated head out HALF-SPLIT -- first half, then second -- and the device lays
-# it out INTERLEAVED, pairs adjacent. That is a permutation of the head dimension, and RoPE applies
-# it to Q as well, so Q.K is unchanged and attention is identical either way. Hence V, which is
-# never rotated, matches with no permutation at all, and only K needs one. Decode PCC 0.9998 and
-# WER 0 of 894 are the independent confirmation that both layouts are self-consistent.
-#
-# This matters beyond the test: anything that reads, transplants or pages the K cache -- or compares
-# it against another implementation -- has to know which order it is in.
 def _reference_cache(w, embeds):
     """-> {layer_index: (k, v)} after a reference prefill, each [1, N_KV_HEADS, P, HEAD_DIM]."""
     inc = bref.IncrementalBackbone(w, n_layers=N_LAYERS)
@@ -282,7 +204,7 @@ def _device_cache(gen, P):
 
 @pytest.mark.parametrize("ci", CACHE_CASES, ids=lambda c: f"case{c}")
 def test_prefill_kv_cache_matches_reference(gen, w, ci):
-    """Every cached K and V entry, all 26 layers, against the fp32 reference's own cache."""
+    """Every cached K and V entry, all 26 layers, against the reference's own cache."""
     embeds, case = fixture_embeds(ci, w)
     P = embeds.shape[1]
     ref_cache, _ = _reference_cache(w, embeds)
@@ -317,13 +239,9 @@ def test_prefill_kv_cache_matches_reference(gen, w, ci):
 
 
 def test_decode_does_not_disturb_the_prompt_cache(gen, w):
-    """After prefill, decode steps must leave positions [0, P) exactly as prefill wrote them.
+    """Decode must leave the prompt's positions exactly as prefill wrote them.
 
-    This is BUG-5's shape. A step that writes at the wrong index -- or a warm-up/capture aimed at a
-    live row instead of a scratch one -- corrupts the prompt the whole utterance is conditioned on,
-    and raises nothing. Compared device-against-itself, so it isolates the write index from any
-    numerical question.
-    """
+    Device against itself, so it isolates the write index from any numerical question."""
     embeds, _ = fixture_embeds(CACHE_CASE, w)
     P = embeds.shape[1]
     frames = real_frames()
