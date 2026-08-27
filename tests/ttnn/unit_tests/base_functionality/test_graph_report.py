@@ -638,13 +638,79 @@ class TestImportGraphUnit:
         report = _make_report(mock_graph)
         conn, cursor = _import_to_db(report, tmp_path)
 
-        cursor.execute("SELECT operation_name, error_type, error_message FROM errors")
-        rows = cursor.fetchall()
+        cursor.execute("SELECT operation_id, name FROM operations")
+        operations = cursor.fetchall()
+        assert len(operations) == 1, f"the unfinished op must be recorded, got {operations}"
+        operation_id, name = operations[0]
+        assert name == "ttnn::bad_op"
 
-        assert len(rows) == 1
-        assert rows[0][0] == "ttnn::bad_op"
-        assert rows[0][1] == "exception"
-        assert rows[0][2] == "Something went wrong"
+        cursor.execute("SELECT operation_id, operation_name, error_type, error_message FROM errors")
+        rows = cursor.fetchall()
+        assert rows == [
+            (operation_id, "ttnn::bad_op", "exception", "Something went wrong")
+        ], f"legacy error node must join the unfinished operation by operation_id, got {rows}"
+
+        conn.close()
+
+    def test_retried_operation_keeps_the_orphan_error(self, tmp_path):
+        """A completed failure of ttnn.conv2d must not suppress a later orphaned ttnn.conv2d error."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [2],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [3],
+                "duration_ns": 100,
+            },
+            {
+                "counter": 3,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn.conv2d",
+                "arguments": {},
+                "error": {"type": "RuntimeError", "message": "first failure"},
+            },
+            {
+                "name": "ttnn.conv2d",
+                "arguments": {},
+                "error": {"type": "RuntimeError", "message": "second failure"},
+            },
+        ]
+
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT operation_id, name FROM operations ORDER BY operation_id")
+        operations = cursor.fetchall()
+        assert len(operations) == 2, f"retried op must produce two rows, got {operations}"
+        first_id, first_name = operations[0]
+        second_id, second_name = operations[1]
+        assert first_name == second_name == "ttnn.conv2d"
+        assert first_id != second_id
+
+        cursor.execute(
+            "SELECT operation_id, operation_name, error_type, error_message FROM errors ORDER BY operation_id"
+        )
+        errors = cursor.fetchall()
+        assert errors == [
+            (first_id, "ttnn.conv2d", "RuntimeError", "first failure"),
+            (second_id, "ttnn.conv2d", "RuntimeError", "second failure"),
+        ], f"each failure must join its own operation_id, got {errors}"
 
         conn.close()
 
