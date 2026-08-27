@@ -173,9 +173,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self._defer_trace_recording = False
         self._pending_decode_trace = None
 
-    # Class-level capabilities (VLLM specific, to be overridden by subclasses)
+    # Class-level capabilities (VLLM specific, to be overridden by subclasses).
+    # A subclass dict replaces this one rather than merging into it, so a default
+    # of True would be claimed by every subclass that declares nothing at all.
     model_capabilities = {
-        "supports_prefix_caching": True,
+        "supports_prefix_caching": False,
     }
 
     def _any_trace_captured(self):
@@ -275,7 +277,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         for model_id in range(self.data_parallel):
             model_args = self.model_args[model_id]
             for prefill_seq_len in model_args.trace_prefill_supported_seq_lens:
-                if not model_args.can_enable_trace(prefill_seq_len):
+                # A nonzero probe: ``can_enable_trace`` reads this argument only to
+                # test it against zero, and a model that refuses a resumed prefill
+                # refuses it for every offset. The declaration alone is not enough,
+                # because the model args can reject what the capability allows.
+                if not model_args.can_enable_trace(prefill_seq_len, 1):
                     continue
                 # The offset a real request will be floored to for this length, so
                 # the captured program config is the one those replays need.
