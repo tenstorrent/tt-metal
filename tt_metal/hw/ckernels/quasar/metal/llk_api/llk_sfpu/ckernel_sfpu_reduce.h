@@ -53,10 +53,22 @@ constexpr std::uint32_t REDUCE_RECIP_REG = p_sfpu::LREG6;  // row AVG: 1/num_col
 constexpr std::uint32_t REDUCE_RECIP_COL_EXTENT_FP16B = 0x3D00;
 static_assert(REDUCE_COL_EXTENT == 32, "REDUCE_RECIP_COL_EXTENT_FP16B is the bfloat16 encoding of 1/32");
 
-// SFPSETCC imm12 bit 11: interpret src_c as two's-complement INT32 rather than FP32/SMAG32,
-// which turns "less than zero" into a plain sign-bit test. Same encoding the Quasar
-// element-wise max/min kernel uses (@ref calculate_binary_max_min).
-constexpr std::uint32_t REDUCE_SFPSETCC_INT32_SIGNBIT = 0x800;
+// Integer column AVG divides by that same 32 with a shift instead of a multiply. Encodings below
+// are from instructions/assembly.yaml; note SFPSHFT reads its immediate as a two's-complement shift
+// amount, so shifting right means passing a negative one.
+constexpr std::uint32_t REDUCE_AVG_SHIFT_LOG2 = 5;
+constexpr std::uint32_t REDUCE_AVG_SHIFT_IMM12 = static_cast<std::uint32_t>(-REDUCE_AVG_SHIFT_LOG2) & 0xFFF;
+constexpr std::uint32_t REDUCE_AVG_SHFT_MOD_LOGICAL_IMM = 0x1;  // amount from imm12, logical shift
+constexpr std::uint32_t REDUCE_SETCC_IMM12_INT32 = 0x0;         // read src_c as two's-complement int32
+constexpr std::uint32_t REDUCE_SETCC_MOD_NEGATIVE = 0x0;        // set CC where src_c is negative
+constexpr std::uint32_t REDUCE_IADD_MOD_NEGATE_KEEP_CC = 0x6;   // dest = lreg_c - dest, leaving CC alone
+static_assert(REDUCE_COL_EXTENT == (1U << REDUCE_AVG_SHIFT_LOG2), "the integer column AVG shift must divide by 32");
+
+// SFPSWAP imm12 bit 0 picks how the comparison reads its operands (instructions/assembly.yaml):
+// 0 = two's-complement int32, 1 = fp32. Int32 Dest words are already two's-complement; floats take
+// the fp32 compare, which orders them - both-negative pairs included - without a correction swap.
+constexpr std::uint32_t REDUCE_SWAP_IMM12_INT32 = 0x0;
+constexpr std::uint32_t REDUCE_SWAP_IMM12_FP32 = 0x1;
 
 // SFPSHFT2 instr_mod1 3: rotate an LREG sideways across the 8 SFPU column instances, column X
 // feeding column X+1 and wrapping around. This is the only instruction that moves data between
@@ -99,42 +111,38 @@ constexpr bool is_supported_reduce_format(DataFormat format) {
  * @brief Fold @p SRC into @p DST with the reduction's operator, leaving the result in @p DST.
  *
  * The single step every reduce is built from. SUM and AVG both just add; AVG differs only in the
- * scaling its caller applies at the end. MAX uses SFPSWAP, which writes the larger operand to its
- * first register and the smaller to its second - naming @p DST first is what leaves the max there.
+ * scaling its caller applies at the end.
  *
- * SFPSWAP compares as two's-complement int32, which is exactly right for Int32 (Dest already
- * holds two's-complement words). Float bits are sign-magnitude, and comparing those as two's
- * complement orders them correctly except when *both* operands are negative, where the ordering
- * inverts. The second, CC-guarded swap fixes only those lanes - so floats cost a compare plus a
- * correction, Int32 only a compare.
+ * MAX and MIN are the same instruction. SFPSWAP puts the smaller operand in its lreg_dest and the
+ * larger in its lreg_c, so the operand order alone decides which one @p DST keeps - Quasar has no
+ * MIN compare mode and needs none. The comparison itself reads the operands in whichever domain
+ * @ref REDUCE_SWAP_IMM12_INT32 / @ref REDUCE_SWAP_IMM12_FP32 selects, so both integer and float
+ * operands are ordered correctly by the hardware.
  *
- * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX>
- * @tparam IS_INT: Whether the operands are integers (skips the float sign-magnitude correction)
+ * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
+ * @tparam IS_INT: Whether the operands are integers (selects the adder and the compare domain)
  * @tparam DST: LREG holding the running result; overwritten with the folded value
  * @tparam SRC: LREG holding the incoming value; clobbered
- * @note Every MAX fold ends in an SFPNOP: SFPSWAP takes 2 cycles and its result must not be read
- *       by the next instruction (the SFPSWAP -> SFPSTORE auto-stall bug). That trailing NOP is
- *       what makes this safe back-to-back and directly before a store.
+ * @note Every MAX/MIN fold ends in an SFPNOP: SFPSWAP takes 2 cycles and its result must not be
+ *       read by the next instruction (the SFPSWAP -> SFPSTORE auto-stall bug). That trailing NOP
+ *       is what makes this safe back-to-back and directly before a store.
  */
 template <PoolType POOL_TYPE, bool IS_INT, std::uint32_t DST, std::uint32_t SRC>
 inline void reduce_combine() {
     static_assert(DST <= p_sfpu::LREG7 && SRC <= p_sfpu::LREG7, "reduce may only write LREG0-7");
     static_assert(DST != SRC, "reduce_combine needs two distinct registers");
 
-    if constexpr (POOL_TYPE == PoolType::MAX) {
-        // Two's-complement compare: DST <- larger, SRC <- smaller.
-        TTI_SFPSWAP(0 /* imm12 */, DST, SRC, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
+    if constexpr (POOL_TYPE == PoolType::MAX || POOL_TYPE == PoolType::MIN) {
+        constexpr std::uint32_t SWAP_IMM12 = IS_INT ? REDUCE_SWAP_IMM12_INT32 : REDUCE_SWAP_IMM12_FP32;
 
-        if constexpr (!IS_INT) {
-            // Successive SFPSETCCs AND into CC, so the swap below fires only where both
-            // operands are negative - the lanes the two's-complement compare ordered backwards.
-            TTI_SFPSETCC(REDUCE_SFPSETCC_INT32_SIGNBIT, DST, sfpi::SFPSETCC_MOD1_LREG_LT0);
-            TTI_SFPSETCC(REDUCE_SFPSETCC_INT32_SIGNBIT, SRC, sfpi::SFPSETCC_MOD1_LREG_LT0);
-            TTI_SFPSWAP(0 /* imm12 */, DST, SRC, p_sfpswap::UNCONDITIONALLY);
-            TTI_SFPENCC(0 /* imm12 */, 0 /* mod1: clear CC */);
-            TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
+        if constexpr (POOL_TYPE == PoolType::MAX) {
+            // DST as lreg_c: DST <- larger.
+            TTI_SFPSWAP(SWAP_IMM12, DST, SRC, p_sfpswap::ALL_ROWS_MAX);
+        } else {
+            // DST as lreg_dest: DST <- smaller. Same mode, operands reversed.
+            TTI_SFPSWAP(SWAP_IMM12, SRC, DST, p_sfpswap::ALL_ROWS_MAX);
         }
+        TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
     } else if constexpr (IS_INT) {
         // SFPIADD raises CC off the result sign by default; the reduce never predicates on it.
         TTI_SFPIADD(0 /* imm12 */, SRC, DST, p_sfpu::sfp_binary_mod::SFPIADD_DISABLE_CC);
@@ -142,6 +150,35 @@ inline void reduce_combine() {
         // SFPADD is dest = a * b + c, so a = DST and b = 1.0 makes it dest = DST + SRC.
         TTI_SFPADD(DST, p_sfpu::LCONST_1, SRC, DST, 0 /* instr_mod1: no negation */);
     }
+}
+
+/**
+ * @brief Divide LREG0 by the 32-row column extent for an integer AVG, in place.
+ *
+ * A right shift by 5 divides by 32 - but rounds the wrong way. On a negative two's-complement
+ * value both a logical shift and Quasar's arithmetic shift round toward negative infinity, while
+ * the golden and Blackhole truncate toward zero (-33/32 is -1, not -2). So shift the magnitude and
+ * put the sign back afterwards.
+ *
+ * @note Clobbers LREG1 and reads LREG0. Call only once the column tree has collapsed into LREG0,
+ *       where LREG1-7 are dead.
+ */
+inline void reduce_int_average_col() {
+    // Keep the original - its sign decides whether to negate again after the shift.
+    TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0 /* instr_mod1: plain copy */);
+
+    // Negate the negative lanes, so every lane holds |x|.
+    TTI_SFPSETCC(REDUCE_SETCC_IMM12_INT32, p_sfpu::LREG0, REDUCE_SETCC_MOD_NEGATIVE);
+    TTI_SFPIADD(0 /* imm12 */, p_sfpu::LCONST_0, p_sfpu::LREG0, REDUCE_IADD_MOD_NEGATE_KEEP_CC);
+    TTI_SFPENCC(0 /* imm12 */, 0 /* mod1: clear CC */);
+
+    // |x| / 32.
+    TTI_SFPSHFT(REDUCE_AVG_SHIFT_IMM12, p_sfpu::LREG0, p_sfpu::LREG0, REDUCE_AVG_SHFT_MOD_LOGICAL_IMM);
+
+    // Put the sign back where the original had one.
+    TTI_SFPSETCC(REDUCE_SETCC_IMM12_INT32, p_sfpu::LREG1, REDUCE_SETCC_MOD_NEGATIVE);
+    TTI_SFPIADD(0 /* imm12 */, p_sfpu::LCONST_0, p_sfpu::LREG0, REDUCE_IADD_MOD_NEGATE_KEEP_CC);
+    TTI_SFPENCC(0 /* imm12 */, 0 /* mod1: clear CC */);
 }
 
 // ============================================================================
@@ -160,7 +197,7 @@ inline void reduce_combine() {
  * r+4, r+8, r+12 at column c. Those quarters are stacked in LREG0's rows, out of reach - which is
  * what SFPTRANSP is for. It spreads them into row 0 of LREG0-3, where the ordinary fold finishes.
  *
- * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX>
+ * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
  * @tparam MODE: SFPLOAD/SFPSTORE format-select code, @ref reduce_sfpmem_mode
  * @tparam IS_INT: Whether operands are integers
  * @tparam TOP_FACE_ADDR: Dest address of the top face of the pair, values = <0/REDUCE_FACE_STRIDE>
@@ -204,8 +241,12 @@ inline void reduce_col_group() {
 
     if constexpr (POOL_TYPE == PoolType::AVG) {
         // A column always spans exactly 32 rows, so the divisor is a compile-time power of two.
-        // It fits in the SFPMULI immediate, so no constant register is tied up for it.
-        TTI_SFPMULI(REDUCE_RECIP_COL_EXTENT_FP16B, p_sfpu::LREG0, 0 /* instr_mod1 */);
+        if constexpr (IS_INT) {
+            reduce_int_average_col();
+        } else {
+            // Fits in the SFPMULI immediate, so no constant register is tied up for it.
+            TTI_SFPMULI(REDUCE_RECIP_COL_EXTENT_FP16B, p_sfpu::LREG0, 0 /* instr_mod1 */);
+        }
     }
 
     TTI_SFPSTORE(p_sfpu::LREG0, MODE, ADDR_MOD_7, 0 /* done */, TOP);
@@ -217,7 +258,7 @@ inline void reduce_col_group() {
  * Walks the tile's four column groups - both parities of the two top faces - which between them
  * cover all 32 columns of row 0.
  *
- * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX>
+ * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
  * @tparam FORMAT: Math-side data format of the operand
  */
 template <PoolType POOL_TYPE, DataFormat FORMAT>
@@ -244,7 +285,7 @@ inline void reduce_col_tile() {
  * then by 2, then by 1. After three stages every column holds the total of all eight, so the store
  * that follows is correct whichever lane the packer reads.
  *
- * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX>
+ * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
  * @tparam IS_INT: Whether operands are integers
  * @note An SFPNOP separates each rotate from its reader: SFPSHFT2 takes 2 cycles and this kernel
  *       does not assume the pipeline interlocks a dependent read.
@@ -269,7 +310,7 @@ inline void reduce_row_fold_columns() {
  * left to right over the tile row's @p block_ct_dim tiles, then the quad's 8 SFPU columns fold
  * together and the total is stored to column 0 of the tile row's first tile.
  *
- * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX>
+ * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
  * @tparam FORMAT: Math-side data format of the operand
  * @param block_ct_dim: Tiles per tile row, i.e. the width being reduced
  * @param block_rt_dim: Tile rows in the block
@@ -315,8 +356,8 @@ inline void reduce_row_block(const std::uint32_t block_ct_dim, const std::uint32
                     reduce_combine<POOL_TYPE, IS_INT, p_sfpu::LREG0, p_sfpu::LREG2>();
 
                     if (ct == 0) {
-                        // Start the accumulator from the first tile instead of an identity value.
-                        // MAX would otherwise need a per-format -infinity to start from.
+                        // Seed from the first tile rather than an identity value: MAX/MIN would
+                        // otherwise each need a per-format infinity to start from.
                         TTI_SFPMOV(p_sfpu::LREG0, REDUCE_ACC_REG, 0 /* instr_mod1: plain copy */);
                     } else {
                         reduce_combine<POOL_TYPE, IS_INT, REDUCE_ACC_REG, p_sfpu::LREG0>();
@@ -380,7 +421,7 @@ inline void reduce_row_load_reciprocal(const std::uint32_t num_cols) {
  * @ref _llk_math_eltwise_sfpu_init_. No reduce path claims a programmable constant register or a
  * replay slot, so this cannot disturb a neighbouring op's setup, or be disturbed by one.
  *
- * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX>
+ * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
  * @tparam FORMAT: Math-side data format of the operand
  * @tparam IS_FP32_DEST_ACC_EN: Whether Dest holds 32-bit words
  * @param block_ct_dim: Unused; nothing here depends on the block width. Present so the signature
@@ -393,8 +434,9 @@ inline void init_reduce([[maybe_unused]] const std::uint32_t block_ct_dim = 1) {
     static_assert(
         is_supported_reduce_format(FORMAT), "Unsupported reduce format: expected Float32, Float16_b, Float16 or Int32");
     static_assert(
-        POOL_TYPE == PoolType::SUM || POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::MAX,
-        "Unsupported pool_type: Quasar PoolType provides SUM, AVG and MAX");
+        POOL_TYPE == PoolType::SUM || POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::MAX ||
+            POOL_TYPE == PoolType::MIN,
+        "Unsupported pool_type: expected SUM, AVG, MAX or MIN");
 
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -408,7 +450,7 @@ inline void init_reduce([[maybe_unused]] const std::uint32_t block_ct_dim = 1) {
  * REDUCE_ROW folds a tile row's columns onto column 0. A row spans every tile in its tile row, so
  * call once for the whole block - which must be resident in Dest.
  *
- * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX>
+ * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
  * @tparam REDUCE_DIM: Axis to collapse, values = <REDUCE_COL/REDUCE_ROW>
  * @tparam FORMAT: Math-side data format of the operand
  * @tparam IS_FP32_DEST_ACC_EN: Whether Dest holds 32-bit words
@@ -426,11 +468,13 @@ inline void calculate_reduce(
     static_assert(
         REDUCE_DIM == ReduceDim::REDUCE_COL || REDUCE_DIM == ReduceDim::REDUCE_ROW,
         "Unsupported reduce_dim: expected REDUCE_COL or REDUCE_ROW");
-    // Averaging integers has to round the quotient, and how to round is the caller's decision -
-    // not one this kernel should make silently.
+    // A column AVG always divides by 32, which an integer can do with a shift
+    // (@ref reduce_int_average_col). A row AVG divides by the runtime column count - rarely a power
+    // of two, and only the float reciprocal-multiply divides it exactly. So integer AVG is column-only.
     static_assert(
-        !(POOL_TYPE == PoolType::AVG && reduce_is_int_format<FORMAT>()),
-        "Integer AVG reduce is not supported: reduce as a float format and typecast the result");
+        !(REDUCE_DIM == ReduceDim::REDUCE_ROW && POOL_TYPE == PoolType::AVG && reduce_is_int_format<FORMAT>()),
+        "Integer row AVG is not supported: the row divisor is a runtime column count. Integer AVG is "
+        "column-only; reduce as a float format if you need the row axis.");
 
     if constexpr (REDUCE_DIM == ReduceDim::REDUCE_COL) {
         reduce_col_tile<POOL_TYPE, FORMAT>();
