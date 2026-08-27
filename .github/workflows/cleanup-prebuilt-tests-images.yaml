@@ -4,9 +4,11 @@ name: "Cleanup prebuilt tests images"
 #
 # Keeps the newest N and deletes the rest, oldest first.
 #
-# What actually protects an in-flight run is the oldest-first ordering plus the
-# action's own limit of 100 deletions per run, not min-versions-to-keep. Note
-# that N counts untagged versions too, so tagged retention is lower than it says.
+# min-versions-to-keep is what protects an in-flight run: it excludes the newest
+# N from deletion, and the action removes oldest-first. The 100-per-run limit
+# only bounds how much backlog one sweep clears, so do not treat it as the
+# safety mechanism. Note that N counts untagged versions too, so tagged
+# retention is lower than the number says.
 #
 # That 100/run limit is why this is sized for today's volume, where only the
 # producer's own test workflow pushes. Once a gate workflow consumes these

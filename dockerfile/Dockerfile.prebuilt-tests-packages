@@ -28,6 +28,13 @@ RUN --mount=type=bind,source=artifact,target=/tmp/pkgs \
         "/tmp/pkgs/${PRODUCT}"-validation_*.deb \
     ) \
     && if [ "${#pkgs[@]}" -eq 0 ]; then echo "No packages matched in artifact/" >&2; exit 1; fi \
+    && product=( "/tmp/pkgs/${PRODUCT}"_*.deb "/tmp/pkgs/${PRODUCT}"-validation_*.deb ) \
+    && if [ "${#product[@]}" -eq 0 ]; then \
+        echo "No packages matched PRODUCT=${PRODUCT} in artifact/" >&2; \
+        echo "Without this the tt-metalium packages alone satisfy the check above" >&2; \
+        echo "and the image publishes without the payload the caller asked for." >&2; \
+        exit 1; \
+       fi \
     && apt-get update \
     && apt-get install -y "${pkgs[@]}" \
     && rm -rf /var/lib/apt/lists/* \
