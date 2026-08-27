@@ -127,9 +127,7 @@ class SamplingState1D:
                     presence_penalties=_materialize(self.penalties.config.presence_penalties),
                     frequency_penalties=_materialize(self.penalties.config.frequency_penalties),
                     repetition_penalties=_materialize(self.penalties.config.repetition_penalties),
-                    inverse_repetition_penalties=_materialize(
-                        self.penalties.config.inverse_repetition_penalties
-                    ),
+                    inverse_repetition_penalties=_materialize(self.penalties.config.inverse_repetition_penalties),
                 ),
                 penalty_accumulator=PenaltyAccumulator(
                     output_mask=_materialize(self.penalties.config.output_mask),
@@ -165,9 +163,7 @@ class SamplingState1D:
         """Return the trace/program identity for one prepared request."""
 
         self._validate_prepared(prepared)
-        active_modes = tuple(
-            mode for active, mode in zip(prepared.active_mask, prepared.logprob_modes) if active
-        )
+        active_modes = tuple(mode for active, mode in zip(prepared.active_mask, prepared.logprob_modes) if active)
         return SamplingStaticIdentity1D(
             sampling_path=prepared.sampling_path,
             penalties_enabled=prepared.penalties_enabled,
@@ -506,14 +502,9 @@ class SamplingState1D:
         self._validate_state(state)
         if state.pending_sample_id != int(sample_id):
             raise RuntimeError(
-                f"sample_id {sample_id} is not the pending sampling step "
-                f"({state.pending_sample_id})"
+                f"sample_id {sample_id} is not the pending sampling step " f"({state.pending_sample_id})"
             )
-        if (
-            count_tokens
-            and state.static_identity is not None
-            and state.static_identity.penalties_enabled
-        ):
+        if count_tokens and state.static_identity is not None and state.static_identity.penalties_enabled:
             # Leave the step pending if the device update fails: retrying blindly
             # could count a partially applied token twice.
             self.penalties.update_output_tokens(state.penalty_accumulator, sampled_tokens)
@@ -567,11 +558,7 @@ class SamplingState1D:
                 k=k,
                 p=p,
                 temp=temp,
-                seeds=(
-                    self.seed_manager.get_seed_device_buffer()
-                    if prepared.sampling_path == "topk"
-                    else None
-                ),
+                seeds=(self.seed_manager.get_seed_device_buffer() if prepared.sampling_path == "topk" else None),
                 tt_out_tok=tt_out_tok,
                 enable_log_probs=list(prepared.enable_log_probs),
             )
@@ -657,9 +644,7 @@ class SamplingState1D:
     def _require_idle(self, state: SamplingState1DState) -> None:
         self._validate_state(state)
         if state.pending_sample_id is not None:
-            raise RuntimeError(
-                f"sampling step {state.pending_sample_id} must be completed or cancelled first"
-            )
+            raise RuntimeError(f"sampling step {state.pending_sample_id} must be completed or cancelled first")
 
     def _validate_prepared(self, prepared: PreparedSamplingParams) -> None:
         if not isinstance(prepared, PreparedSamplingParams):
@@ -689,8 +674,7 @@ class SamplingState1D:
             active_mask=prepared.active_mask,
         )
         if prompt is None and any(
-            active and float(value) != 1.0
-            for active, value in zip(prepared.active_mask, prepared.repetition_penalty)
+            active and float(value) != 1.0 for active, value in zip(prepared.active_mask, prepared.repetition_penalty)
         ):
             raise ValueError("prompt_tokens are required when repetition penalty is enabled")
         self._history_tensor(
@@ -735,12 +719,8 @@ class SamplingState1D:
             frequency.append(float(prepared.frequency_penalty[slot]) if active else 0.0)
             repetition.append(float(prepared.repetition_penalty[slot]) if active else 1.0)
         inverse = [1.0 / value for value in repetition]
-        self._update_penalty_buffer(
-            "presence_penalties", torch.tensor(presence, dtype=torch.float32).reshape(-1, 1)
-        )
-        self._update_penalty_buffer(
-            "frequency_penalties", torch.tensor(frequency, dtype=torch.float32).reshape(-1, 1)
-        )
+        self._update_penalty_buffer("presence_penalties", torch.tensor(presence, dtype=torch.float32).reshape(-1, 1))
+        self._update_penalty_buffer("frequency_penalties", torch.tensor(frequency, dtype=torch.float32).reshape(-1, 1))
         self._update_penalty_buffer(
             "repetition_penalties", torch.tensor(repetition, dtype=torch.float32).reshape(-1, 1)
         )
@@ -750,9 +730,7 @@ class SamplingState1D:
 
     def _update_penalty_buffer(self, name: str, source: torch.Tensor) -> None:
         specification = getattr(self.penalties.config, name)
-        if not isinstance(specification, LazyBuffer) and not callable(
-            getattr(specification, "update", None)
-        ):
+        if not isinstance(specification, LazyBuffer) and not callable(getattr(specification, "update", None)):
             raise TypeError(f"Penalties1DConfig.{name} must be a mutable LazyBuffer")
         specification.update(source)
 
@@ -772,8 +750,7 @@ class SamplingState1D:
             active_mask=active_mask,
         )
         repetition_needs_prompt = any(
-            active and float(value) != 1.0
-            for active, value in zip(active_mask, self._current_repetition_values())
+            active and float(value) != 1.0 for active, value in zip(active_mask, self._current_repetition_values())
         )
         if prompt is None and repetition_needs_prompt:
             raise ValueError("prompt_tokens are required when repetition penalty is enabled")

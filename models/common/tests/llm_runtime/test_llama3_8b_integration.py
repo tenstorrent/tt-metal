@@ -122,6 +122,7 @@ def test_executor_resolves_batched_prefill_policy(
     )
     model = _model()
     if device_sampling_enabled:
+
         class _Sampling:
             pass
 

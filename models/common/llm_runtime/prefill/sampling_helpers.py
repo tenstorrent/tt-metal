@@ -74,14 +74,10 @@ def _sampled_log_probs_for_rows(value, row_count):
     elif isinstance(value, (list, tuple)):
         output = torch.as_tensor(value)
     else:
-        raise TypeError(
-            "sampled-token logprobs must be a TT tensor, Torch tensor, or numeric sequence"
-        )
+        raise TypeError("sampled-token logprobs must be a TT tensor, Torch tensor, or numeric sequence")
     flat = output.reshape(-1)
     if int(flat.numel()) == 1 and int(row_count) > 1:
         flat = flat.expand(int(row_count))
     if int(flat.numel()) < int(row_count):
-        raise ValueError(
-            f"sampled-token logprobs contain {flat.numel()} rows, expected at least {row_count}"
-        )
+        raise ValueError(f"sampled-token logprobs contain {flat.numel()} rows, expected at least {row_count}")
     return flat[: int(row_count)].to(torch.float32)

@@ -633,9 +633,11 @@ class TracedExecutor:
                 lambda artifact, _decision, chunk=chunk: (
                     prefill.refresh_trace(prepared, artifact.persistent_inputs.values, workspace, chunk)
                     if canonical_workspace and chunk is not None
-                    else prefill.refresh_trace(prepared, artifact.persistent_inputs.values, workspace)
-                    if canonical_workspace
-                    else prefill.refresh_trace(prepared, artifact.persistent_inputs.values)
+                    else (
+                        prefill.refresh_trace(prepared, artifact.persistent_inputs.values, workspace)
+                        if canonical_workspace
+                        else prefill.refresh_trace(prepared, artifact.persistent_inputs.values)
+                    )
                 ),
                 reset_batch=True,
             )

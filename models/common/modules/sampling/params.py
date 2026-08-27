@@ -214,9 +214,7 @@ def prepare_sampling_params(
         logprob_modes[row] = "none" if not enabled else ("sampled_token" if count == 0 else "top_n")
         row_paths[row] = "argmax" if is_greedy and allow_force_argmax and not enabled else "topk"
 
-    sampling_path: SamplingPath = (
-        "argmax" if all(path == "argmax" for path in row_paths[:active_rows]) else "topk"
-    )
+    sampling_path: SamplingPath = "argmax" if all(path == "argmax" for path in row_paths[:active_rows]) else "topk"
     return PreparedSamplingParams(
         top_k=tuple(int(value) for value in top_k),
         top_p=tuple(float(value) for value in top_p),
@@ -421,11 +419,7 @@ def slice_sampling_params(sampling_params: SamplingParams, rows: Sequence[int]) 
 def _validate_policy(batch_size: int, max_device_top_k: int, allow_force_argmax: bool) -> None:
     if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0:
         raise ValueError("batch_size must be a positive integer")
-    if (
-        not isinstance(max_device_top_k, int)
-        or isinstance(max_device_top_k, bool)
-        or max_device_top_k <= 0
-    ):
+    if not isinstance(max_device_top_k, int) or isinstance(max_device_top_k, bool) or max_device_top_k <= 0:
         raise ValueError("max_device_top_k must be a positive integer")
     if not isinstance(allow_force_argmax, bool):
         raise TypeError("allow_force_argmax must be bool")

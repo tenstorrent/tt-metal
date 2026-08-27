@@ -288,9 +288,7 @@ def test_seed_manager_1d_imports_no_legacy_sampling_state_or_generator():
     module_path = Path(__file__).parents[3] / "modules" / "sampling" / "seed_manager_1d.py"
     tree = ast.parse(module_path.read_text())
     imported_modules = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module is not None
     }
 
     assert "models.common.sampling.generator" not in imported_modules

@@ -581,10 +581,13 @@ def test_qwen3_prefill_capture_primes_are_t3k_product_owned(
     )
 
     num_devices = int(cluster_shape[0]) * int(cluster_shape[1])
-    assert qwen3_32b_executor._resolve_trace_capture_prime_sequence_lengths(
-        runtime,
-        num_devices=num_devices,
-    ) == expected
+    assert (
+        qwen3_32b_executor._resolve_trace_capture_prime_sequence_lengths(
+            runtime,
+            num_devices=num_devices,
+        )
+        == expected
+    )
 
 
 def test_phi4_binding_preserves_cap8_trace_buckets_and_pinned_revision():
@@ -672,6 +675,7 @@ def _device_sampling_executor(binding, monkeypatch, *, runtime_disable: bool):
     model = binding.make_model()
     model.sampling = FakeSampling1D()
     if binding.executor_module in (llama33_70b_executor, qwen3_32b_executor):
+
         class FakeSamplingState1D:
             def __init__(self, sampling):
                 self.sampling = sampling
@@ -851,9 +855,7 @@ def test_llama32_1b_warms_every_q128_topk_tile_start_once_per_execution_mode():
 )
 def test_executor_call_contract(binding, method, positional, keyword_only):
     if binding.executor_module not in (llama33_70b_executor, qwen3_32b_executor):
-        keyword_only = [
-            name for name in keyword_only if name not in {"prompt_tokens", "output_tokens", "slot_remap"}
-        ]
+        keyword_only = [name for name in keyword_only if name not in {"prompt_tokens", "output_tokens", "slot_remap"}]
     signature = inspect.signature(getattr(binding.executor_class, method))
     parameters = signature.parameters
     required = {

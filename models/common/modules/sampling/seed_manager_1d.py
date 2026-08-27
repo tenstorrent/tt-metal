@@ -178,8 +178,10 @@ class SeedManager1D:
         entropy_factory: Callable[[int], int] = secrets.randbits,
     ) -> None:
         seed_buffer = getattr(sampling_config, "seeds", None)
-        if seed_buffer is None or not callable(getattr(seed_buffer, "update", None)) or not callable(
-            getattr(seed_buffer, "get_device_buffer", None)
+        if (
+            seed_buffer is None
+            or not callable(getattr(seed_buffer, "update", None))
+            or not callable(getattr(seed_buffer, "get_device_buffer", None))
         ):
             raise TypeError("Sampling1DConfig.seeds must be a mutable LazyBuffer-compatible object")
         source = getattr(seed_buffer, "source", None)
@@ -272,8 +274,7 @@ class SeedManager1D:
         changed = [slot for slot in active if not state.active[slot] or state.request_seeds[slot] != desired[slot]]
         if changed and not reset_batch:
             raise RuntimeError(
-                "new or changed active seed slots require reset_batch=True or an explicit admit() call: "
-                f"{changed}"
+                "new or changed active seed slots require reset_batch=True or an explicit admit() call: " f"{changed}"
             )
 
         live = set(active)

@@ -272,11 +272,7 @@ class DecodeRuntimeConfig:
                 raise TypeError("device sampling requires model.sampling.decode_forward()")
             if not isinstance(allow_force_argmax, bool):
                 raise TypeError("model sampling allow_force_argmax must be bool")
-            if (
-                not isinstance(max_device_top_k, int)
-                or isinstance(max_device_top_k, bool)
-                or max_device_top_k <= 0
-            ):
+            if not isinstance(max_device_top_k, int) or isinstance(max_device_top_k, bool) or max_device_top_k <= 0:
                 raise ValueError("model sampling max_top_k must be a positive integer")
             if (
                 not isinstance(sampling_batch_size, int)
@@ -364,16 +360,12 @@ class DecodeRuntime:
         self._seed_manager = (
             self._sampling_state_controller.seed_manager
             if self._sampling_state_controller is not None
-            else SeedManager1D(sampling_config)
-            if config.device_sampling_enabled and has_mutable_seed_buffer
-            else None
+            else SeedManager1D(sampling_config) if config.device_sampling_enabled and has_mutable_seed_buffer else None
         )
         self._seed_state = (
             self._sampling_state.seed_state
             if self._sampling_state is not None
-            else self._seed_manager.create_state()
-            if self._seed_manager is not None
-            else None
+            else self._seed_manager.create_state() if self._seed_manager is not None else None
         )
         if self._seed_state is not None and self._seed_state.capacity < config.lane_capacity:
             raise ValueError("model sampling seed buffer is smaller than the decode lane capacity")
@@ -411,11 +403,7 @@ class DecodeRuntime:
         feedback = self._classify_feedback(sampling_params)
         prepared_sampling = None
         if sampling_params is not None:
-            active_slots = tuple(
-                slot
-                for slot, position in enumerate(start_pos)
-                if int(position) >= 0
-            )
+            active_slots = tuple(slot for slot, position in enumerate(start_pos) if int(position) >= 0)
             if not active_slots:
                 raise ValueError("decode sampling requires at least one active slot")
             request_sampling = slice_sampling_params(sampling_params, active_slots)
@@ -881,9 +869,7 @@ class DecodeRuntime:
         if self._sampling_state_controller is not None:
             sampling = prepared.prepared_sampling
             if sampling is None:
-                self._sampling_state_controller.seed_manager.restore_defaults(
-                    self._sampling_state.seed_state
-                )
+                self._sampling_state_controller.seed_manager.restore_defaults(self._sampling_state.seed_state)
                 return
             sampling = self._sampling_state_controller.synchronize_decode(
                 self._sampling_state,
@@ -1055,9 +1041,7 @@ def _select_decode_request_state(
             f"or at least lane capacity {lane_capacity}"
         )
     rows = (
-        torch.tensor(active_slots, dtype=torch.long, device=value.device)
-        if isinstance(value, torch.Tensor)
-        else None
+        torch.tensor(active_slots, dtype=torch.long, device=value.device) if isinstance(value, torch.Tensor) else None
     )
     if rows is not None:
         return value.index_select(0, rows)
@@ -1316,9 +1300,7 @@ def _process_sampled_log_probs(value, batch_size):
         return value
     flat = output.reshape(-1)
     if int(flat.numel()) < int(batch_size):
-        raise ValueError(
-            f"sampled-token logprobs contain {flat.numel()} rows, expected at least {batch_size}"
-        )
+        raise ValueError(f"sampled-token logprobs contain {flat.numel()} rows, expected at least {batch_size}")
     return flat[: int(batch_size)].to(torch.float32)
 
 

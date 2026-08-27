@@ -2060,7 +2060,9 @@ def test_chunk_sequence_allocates_kpt_before_steps_and_reuses_final_position(mon
     monkeypatch.setattr(
         runtime.postprocessor,
         "finish_prefill_sequence",
-        lambda prepared, final_step_output, kpt, position_inputs, *, sampled_output, owned, count_tokens=True: events.append("finish")
+        lambda prepared, final_step_output, kpt, position_inputs, *, sampled_output, owned, count_tokens=True: events.append(
+            "finish"
+        )
         or final_step_output,
     )
 

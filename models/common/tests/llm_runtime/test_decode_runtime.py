@@ -978,9 +978,7 @@ def test_capture_plan_describes_full_step_refresh_and_typed_persistent_inputs(mo
     assert persistent.kpt == "kpt"
     sampling = prepared.prepared_sampling
     assert sampling is not None
-    assert persistent.kpt_signature == [
-        (sampling.top_k, sampling.top_p, sampling.temperature)
-    ]
+    assert persistent.kpt_signature == [(sampling.top_k, sampling.top_p, sampling.temperature)]
     assert plan.capture(persistent) == "captured"
     assert plan.refresh_policy.every_replay == ("sampling",)
     assert plan.refresh_policy.full_on_batch_reset
@@ -1022,8 +1020,7 @@ def test_eager_invoke_returns_owned_result_and_advances_submission_state(monkeyp
     monkeypatch.setattr(
         runtime,
         "_run_body",
-        lambda inputs, prepared, kpt, *, device_feedback, **kwargs: calls.append(device_feedback)
-        or ("raw", None),
+        lambda inputs, prepared, kpt, *, device_feedback, **kwargs: calls.append(device_feedback) or ("raw", None),
     )
 
     result = runtime.invoke(prepared)

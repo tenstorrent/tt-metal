@@ -138,13 +138,18 @@ class FakePenalties:
     def __init__(self, config, events, *, config_updates=None):
         buffers = {}
         for name in self._BUFFER_NAMES:
-            shape = (config.max_batch_size, config.vocab_size) if name in {
-                "prompt_mask",
-                "output_mask",
-                "output_counts",
-                "output_counts_gathered",
-                "zeros",
-            } else (config.max_batch_size, 1)
+            shape = (
+                (config.max_batch_size, config.vocab_size)
+                if name
+                in {
+                    "prompt_mask",
+                    "output_mask",
+                    "output_counts",
+                    "output_counts_gathered",
+                    "zeros",
+                }
+                else (config.max_batch_size, 1)
+            )
             buffers[name] = FakeBuffer(torch.zeros(shape))
         self.config = replace(config, **buffers, **(config_updates or {}))
         self.events = events

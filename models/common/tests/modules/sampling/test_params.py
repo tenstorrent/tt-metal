@@ -292,7 +292,9 @@ def test_legacy_device_sampling_capabilities_declare_the_exact_limit(relative_pa
         for statement in node.body:
             if not isinstance(statement, ast.Assign):
                 continue
-            if not any(isinstance(target, ast.Name) and target.id == "model_capabilities" for target in statement.targets):
+            if not any(
+                isinstance(target, ast.Name) and target.id == "model_capabilities" for target in statement.targets
+            ):
                 continue
             capabilities = ast.literal_eval(statement.value)
             if capabilities.get("supports_sample_on_device"):

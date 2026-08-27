@@ -448,11 +448,11 @@ class LaneGroupExecutor:
                 stack.enter_context(coordinator.defer_capture())
             operation()
             states = tuple(
-                "activated"
-                if coordinator.trace_activated
-                else "pending"
-                if coordinator.capture_pending
-                else "incomplete"
+                (
+                    "activated"
+                    if coordinator.trace_activated
+                    else "pending" if coordinator.capture_pending else "incomplete"
+                )
                 for coordinator in coordinators
             )
             if len(set(states)) != 1:

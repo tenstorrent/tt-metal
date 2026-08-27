@@ -452,11 +452,7 @@ def _prompt_history_from_prefill_tokens(
 ) -> torch.Tensor:
     history = tokens.clone()
     width = int(tokens.shape[1])
-    lengths = (
-        [width] * int(tokens.shape[0])
-        if prompt_lens is None
-        else [int(value) for value in prompt_lens]
-    )
+    lengths = [width] * int(tokens.shape[0]) if prompt_lens is None else [int(value) for value in prompt_lens]
     for row, length in enumerate(lengths):
         if length < 0 or length > width:
             raise ValueError("prompt_lens must fit the prefill token width")

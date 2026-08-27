@@ -691,9 +691,11 @@ class LlamaForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.from_string(optimizations)
-            if optimizations is not None
-            else DecodersPrecision.performance,
+            optimizations=(
+                DecodersPrecision.from_string(optimizations)
+                if optimizations is not None
+                else DecodersPrecision.performance
+            ),
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -771,9 +773,11 @@ class QwenForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.from_string(optimizations)
-            if optimizations is not None
-            else DecodersPrecision.performance,
+            optimizations=(
+                DecodersPrecision.from_string(optimizations)
+                if optimizations is not None
+                else DecodersPrecision.performance
+            ),
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -844,9 +848,11 @@ class MistralForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.from_string(optimizations)
-            if optimizations is not None
-            else DecodersPrecision.performance,
+            optimizations=(
+                DecodersPrecision.from_string(optimizations)
+                if optimizations is not None
+                else DecodersPrecision.performance
+            ),
         )
         return cls(tt_model, model_args, mesh_device)
 
