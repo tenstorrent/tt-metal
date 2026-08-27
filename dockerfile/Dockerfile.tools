@@ -410,7 +410,7 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # cannot install them itself.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget ca-certificates binutils xz-utils \
-    autoconf automake bison build-essential expect flex gawk git \
+    autoconf automake bison build-essential expect file flex gawk git \
     libexpat1-dev libgmp-dev libmpc-dev libmpfr-dev patchutils python3 texinfo \
     && rm -rf /var/lib/apt/lists/*
 
