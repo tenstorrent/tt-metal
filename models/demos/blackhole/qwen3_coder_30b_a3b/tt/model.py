@@ -1235,6 +1235,9 @@ class Qwen3CoderModel:
         *,
         kv_cache: Sequence[KVCache] | None = None,
         user_id: int = 0,
+        start_pos: int = 0,
+        chunk_page_table=None,
+        fill_page_table=None,
     ) -> ttnn.Tensor:
         """Run the whole stack over one user's prompt. ``S`` is arbitrary.
 
@@ -1247,11 +1250,18 @@ class Qwen3CoderModel:
             raise ValueError(f"kv_cache has {len(caches)} layers, expected {self.num_layers}")
         hidden = self.embed_prefill(tokens)
         seq_len = int(hidden.shape[-2])
-        self.ensure_rope_capacity(seq_len)
+        # A split prefill's suffix occupies absolute positions
+        # [start_pos, start_pos + seq_len), so the tables must cover the END of
+        # the range, not its length.
+        self.ensure_rope_capacity(start_pos + seq_len)
         # Exactly ``seq_len`` rows, including non-tile-aligned lengths -- the
         # same shape the single-layer prefill gates pass at S = 33/100/257.
-        cos = ttnn.slice(self.cos_table, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
-        sin = ttnn.slice(self.sin_table, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
+        # RoPE is applied at ABSOLUTE positions: the suffix of a split prefill
+        # must rotate at [start_pos, start_pos + seq_len), not from 0, or its keys
+        # disagree with the ones already in the cache. Identical to the shipped
+        # slice when start_pos == 0.
+        cos = ttnn.slice(self.cos_table, [0, 0, start_pos, 0], [1, 1, start_pos + seq_len, self.head_dim])
+        sin = ttnn.slice(self.sin_table, [0, 0, start_pos, 0], [1, 1, start_pos + seq_len, self.head_dim])
         for layer_idx in range(self.num_layers):
             hidden = decoder_layer_prefill_multichip(
                 hidden,
@@ -1264,6 +1274,9 @@ class Qwen3CoderModel:
                 kv_cache=caches[layer_idx],
                 user_id=user_id,
                 precision=self.precision,
+                start_pos=start_pos,
+                chunk_page_table=chunk_page_table,
+                fill_page_table=fill_page_table,
             )
         ttnn.deallocate(cos, True)
         ttnn.deallocate(sin, True)

@@ -174,7 +174,14 @@ _FIDELITY_FIELDS = frozenset(
         "norm_fidelity",
     }
 )
-_INT_FIELDS = frozenset({"experts_gate_up_in0_block_w", "experts_down_in0_block_w"})
+_INT_FIELDS = frozenset(
+    {
+        "experts_gate_up_in0_block_w",
+        "experts_down_in0_block_w",
+        "prefill_experts_gate_up_in0_block_w",
+        "prefill_experts_down_in0_block_w",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -243,6 +250,35 @@ class PrecisionConfig:
     # See ``doc/datatype_sweep/README.md``.
     experts_gate_up_in0_block_w: int = 64
     experts_down_in0_block_w: int = 24
+
+    # PREFILL-only inner block widths. Default to the decode values above, so
+    # the shipped graph is byte-identical until a sweep says otherwise.
+    #
+    # Why they exist separately: the two widths above were selected by stage 07,
+    # the DATATYPE sweep, optimised against single-token DECODE (52.05 t/s/u),
+    # where the expert matmuls run at M = 1. Prefill runs the same matmuls at
+    # M = EXPERT_CHUNK_SIZE = 32 and simply inherited decode's tuning; an
+    # optimum for a latency-bound M=1 matmul has no reason to be the optimum at
+    # M=32. Consumed at optimized_decoder.py:782-784 (prefill) while 926-927
+    # (decode, M=1) keeps reading the fields above.
+    #
+    # Scheduling only, not numerics: the graph and the tokens are the same, only
+    # the matmuls' inner blocking differs.
+    #
+    # SHIPPED 16/12, which are the PRE-stage-07 values. Stage 07 moved the decode
+    # fields 16 -> 64 and 12 -> 24 and, because prefill shared them, regressed
+    # prefill by ~4 % without measuring it. Sweeping prefill on its own lands
+    # exactly back on the old pair:
+    #
+    #   64/24 (stage 07)  3.741 s      16/24  3.664 s
+    #   32/12             3.604 s      16/12  3.596 s   <- 1.0404x
+    #
+    # at 4,096 tokens, 15 configurations, every one PCC 1.0000000000000058 with
+    # identical greedy tokens -- scheduling only, no numerical dimension. The 4 %
+    # is modest but free, and decode keeps its own 64/24 above.
+    # See doc/batch_scaling/README.md, "Where prefill time is NOT going".
+    prefill_experts_gate_up_in0_block_w: int = 16
+    prefill_experts_down_in0_block_w: int = 12
 
     # -- activations ----------------------------------------------------------
     # The dtype of every hidden state, including the inter-layer residual. The

@@ -1656,6 +1656,9 @@ def decoder_layer_prefill_multichip(
     kv_cache: KVCache | None = None,
     user_id: int = 0,
     precision: PrecisionConfig = DEFAULT_PRECISION,
+    start_pos: int = 0,
+    chunk_page_table=None,
+    fill_page_table=None,
 ) -> ttnn.Tensor:
     """Prefill one layer on the mesh. ``x`` / return replicated ``[1, 1, S, 2048]``.
 
@@ -1684,6 +1687,9 @@ def decoder_layer_prefill_multichip(
         # the config is built and measured; passing it costs a top-1 point on
         # run_teacher_forcing, so prefill stays at the op default.
         sdpa_program_config=None,
+        start_pos=start_pos,
+        chunk_page_table=chunk_page_table,
+        fill_page_table=fill_page_table,
     )
     ttnn.deallocate(normed)
     attn_out = all_reduce_prefill(attn_partial, ctx, precision)

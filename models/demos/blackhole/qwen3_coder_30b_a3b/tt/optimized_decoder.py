@@ -778,10 +778,16 @@ def _experts_chunk_packed(
     device = hidden.device()
     compute_config = _expert_compute_kernel_config(device, precision)
     output_tile = ttnn.Tile([32, 32])
+    # PREFILL blocking. Separate from the decode fields (see precision.py): these
+    # matmuls run at M = EXPERT_CHUNK_SIZE here and M = 1 in decode, and the
+    # shipped values were tuned only for the latter. Defaults are identical, so
+    # this is a no-op until the prefill fields are changed.
     gate_up_config = _tuned_sparse_matmul_config(
-        EXPERT_CHUNK_SIZE, 2 * inter, hidden_size, precision.experts_gate_up_in0_block_w
+        EXPERT_CHUNK_SIZE, 2 * inter, hidden_size, precision.prefill_experts_gate_up_in0_block_w
     )
-    down_config = _tuned_sparse_matmul_config(EXPERT_CHUNK_SIZE, hidden_size, inter, precision.experts_down_in0_block_w)
+    down_config = _tuned_sparse_matmul_config(
+        EXPERT_CHUNK_SIZE, hidden_size, inter, precision.prefill_experts_down_in0_block_w
+    )
 
     hidden_grouped = ttnn.reshape(hidden, (1, group_size, EXPERT_CHUNK_SIZE, hidden_size))
     sparsity = ttnn.repeat(sparsity_base, (1, 1, group_size, 1))

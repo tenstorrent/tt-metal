@@ -381,6 +381,7 @@ class Qwen3CoderGenerator(Generator):
         return_all_logits: bool = False,
         sampling_mode: str = "host",
         preserve_decode_traces: bool = False,
+        start_pos: Sequence[int] | int | None = None,
         **kwargs: Any,
     ):
         """Prefill arbitrary logical lengths, one user at a time into the cache.
@@ -443,6 +444,8 @@ class Qwen3CoderGenerator(Generator):
                 prompt_lens=prompt_lens,
                 return_all_logits=return_all_logits,
                 sampling_mode=sampling_mode,
+                start_pos=start_pos,
+                page_table=page_host,
             )
         finally:
             if self._trace_inputs is not None:
@@ -461,32 +464,84 @@ class Qwen3CoderGenerator(Generator):
         prompt_lens: Sequence[int],
         return_all_logits: bool,
         sampling_mode: str,
+        start_pos: Sequence[int] | int | None = None,
+        page_table=None,
     ):
+        # ``start_pos`` is how many tokens of each row are ALREADY in the cache.
+        # None/0 is the shipped whole-prompt prefill and takes an identical path.
+        starts = (
+            [0] * active_batch
+            if start_pos is None
+            else ([int(start_pos)] * active_batch if isinstance(start_pos, int) else [int(v) for v in start_pos])
+        )
         per_user_logits: list[torch.Tensor] = []
         selected_rows = []
         for user in range(active_batch):
             prompt_len = int(prompt_lens[user])
+            start = starts[user]
+            chunk_pt = fill_pt = None
+            if start:
+                block = int(caches[0].block_size)
+                if start % block:
+                    raise ValueError(f"start_pos {start} is not a multiple of the block size {block}")
+                if not 0 < start < prompt_len:
+                    raise ValueError(f"start_pos {start} must be inside (0, prompt_len={prompt_len})")
+                if page_table is None:
+                    raise ValueError("a split prefill needs a page table")
+                row = torch.as_tensor(page_table)[user : user + 1].to(torch.int32)
+                # Two different tables, and the difference is the whole trick:
+                #   chunk_pt -- the user's FULL row, so chunked SDPA can read the
+                #               cached prefix from absolute block 0;
+                #   fill_pt  -- the row SLICED to the suffix's blocks, because
+                #               paged_fill_cache writes relative to block 0 of the
+                #               table it is handed.
+                chunk_pt = ttnn.from_torch(
+                    row,
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                fill_pt = ttnn.from_torch(
+                    row[:, start // block :].contiguous(),
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
             token_device = ttnn.from_torch(
-                tokens[user : user + 1, :prompt_len].to(torch.int32),
+                tokens[user : user + 1, start:prompt_len].to(torch.int32),
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-            hidden = self.model.prefill_hidden(token_device, kv_cache=caches, user_id=user)
+            hidden = self.model.prefill_hidden(
+                token_device,
+                kv_cache=caches,
+                user_id=user,
+                start_pos=start,
+                chunk_page_table=chunk_pt,
+                fill_page_table=fill_pt,
+            )
             ttnn.deallocate(token_device, True)
+            for t in (chunk_pt, fill_pt):
+                if t is not None:
+                    ttnn.deallocate(t, True)
             if return_all_logits:
                 normed = self.model.prefill_norm(hidden)
                 ttnn.deallocate(hidden, True)
                 local = self.model.local_logits(normed)
                 ttnn.deallocate(normed, True)
-                host = self.model.gather_logits_to_torch(local)[0, 0, :prompt_len, :]
+                host = self.model.gather_logits_to_torch(local)[0, 0, : prompt_len - start, :]
                 ttnn.deallocate(local, True)
                 per_user_logits.append(
-                    torch.nn.functional.pad(host, (0, 0, 0, logical_width - prompt_len)).unsqueeze(0)
+                    torch.nn.functional.pad(host, (0, 0, 0, logical_width - (prompt_len - start))).unsqueeze(0)
                 )
             else:
-                selected_rows.append(self.model.select_prefill_rows(hidden, [prompt_len - 1]))
+                # The last row of THIS chunk: absolute prompt_len-1 is row
+                # prompt_len-1-start within the suffix.
+                selected_rows.append(self.model.select_prefill_rows(hidden, [prompt_len - 1 - start]))
                 ttnn.deallocate(hidden, True)
 
         if return_all_logits:

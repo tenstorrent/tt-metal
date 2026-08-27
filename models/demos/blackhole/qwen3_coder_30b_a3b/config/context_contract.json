@@ -1,9 +1,9 @@
 {
   "hf_model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
   "hf_advertised_context": 262144,
-  "current_supported_context": 262144,
-  "capability_reduction": false,
-  "limiting_reason": null,
+  "current_supported_context": 256000,
+  "capability_reduction": true,
+  "limiting_reason": "Serving prefill. TWO independent limits, both above this bound. (1) An UNRESOLVED prefill cliff: 259,000 tokens completes in 1130.8 s, tracking the O(S^2) curve to within 0.3 %, but 262,136 tokens does not complete in 3600 s -- one continuous blocking prefill, no watchdog throw, engine healthy. The cliff is confined to the last ~3,100 tokens of the advertised context and its mechanism was deliberately not chased (see stage11_serving_context). (2) LATENCY: prefill at this length is minutes, not seconds -- 253,000 tokens costs 1049.3 s (17.5 min) of TTFT on the path that WORKS. The usable interactive range is bounded far below this figure by latency, not by the cliff.",
   "stage": "optimized_full_model",
   "scope": "the complete 48-layer causal LM on the full 4-die P300_X2 mesh (1x4), batch 1, AFTER the stage-06 optimizations: embeddings, 48 stage-04 multichip decoder layers, final norm, column-parallel lm_head and on-device traced sampling with a distributed argmax. The single-layer stage-02/03/04 numbers and the stage-05 full-model numbers below are retained unchanged; the stage06_* fields are the shipped ones.",
   "device": {
@@ -37,6 +37,25 @@
       "65536": 1.45,
       "131072": 1.77,
       "262144": 2.42
+    },
+    "prefill_sweep_seconds_PROVENANCE": "SINGLE-LAYER, PRE-OPTIMISATION. Not comparable to the shipped 48-layer model and not to be divided into any full-model figure. This file's own `scope` says 'The single-layer stage-02/03/04 numbers ... are retained unchanged', and `prefill_probe` describes 'a single-shot prefill ... through the full decoder LAYER' -- one complete layer, not the stack. The evidence list points at doc/functional_decoder/ and doc/multichip_decoder/, i.e. stages 02-04, before the stage-04/06 optimisations. Measured on the current tree, the whole 48-layer model prefills 32,768 tokens in 37.638 s, i.e. 0.78 s per layer, against 23.79 s for the single layer recorded here -- ~30x apart, so the two are measuring different things on different code. In particular the 262144 -> 192.23 s entry does NOT describe the shipped model, and no current-tree measurement of that length exists.",
+    "prefill_same_tree_seconds": {
+      "note": "Full 48-layer model on the current tree. Standalone and served at a MATCHED length, which is the comparison that retires the suspected serving penalty.",
+      "32768": {
+        "standalone": 37.638,
+        "served": 37.778,
+        "served_over_standalone": 1.004
+      },
+      "65536": {
+        "served": 98.557,
+        "standalone": null,
+        "warning": "Do NOT divide 98.557 by the 42.05 s single-layer entry above; that repeats the exact error this block exists to correct."
+      },
+      "evidence": [
+        "doc/batch_scaling/probes/expert_chunk_sweep_v3.json (standalone 32,768)",
+        "doc/batch_scaling/probes/long_prompt_gap_32768.json",
+        "doc/batch_scaling/probes/long_prompt_gap_65536.json"
+      ]
     }
   },
   "kv_cache": {
@@ -289,13 +308,53 @@
   },
   "stage11_note": "Stage 11 (batch scaling, doc/batch_scaling/) added the variable-width decode ladder and re-validated the context bound under the SHIPPED SERVING configuration -- vLLM KV pool 263168, max_num_seqs 32, QWEN3_DECODE_WIDTHS 1,2,4,8,16,32 -- which is a different setup from the standalone batch-1 probe recorded in `measured` above. current_supported_context is unchanged at 262144 and there is still no capability reduction: `get_max_tokens_all_users` serves min(max_model_len, 262144). The fields below record exactly how far that bound has been exercised in serving, so that this file -- which tt/generator_vllm.py reads as the source of truth -- and doc/batch_scaling/README.md's limitations state the same thing rather than each carrying half of it.",
   "stage11_serving_context": {
-    "served_context_tokens": 262144,
-    "serving_validated_prefill_tokens": 262080,
-    "serving_validation_gap_tokens": 64,
-    "serving_validation_gap_fraction": 0.000244140625,
-    "serving_config": "KV pool 263168 tokens (8224 blocks), max_num_seqs 32, QWEN3_DECODE_WIDTHS 1,2,4,8,16,32, trace_region_size 50331648",
-    "evidence": "doc/batch_scaling/probes/kv_pool_ceiling_sixwidth_production.json",
-    "note": "A 262080-token prefill completes at this configuration with 21.9228 GB/die free. The last 64 tokens of the advertised context have NOT been exercised in serving. The standalone batch-1 probe in `measured` did reach 262144, so this is a serving-configuration gap rather than a model-capability one, and the practical risk is small -- but 'measured at 262080' and 'proven at 262144' are different claims and only the first is true for the serving path.",
-    "closes_when": "a 262144-token prefill is run at the serving configuration above; update serving_validated_prefill_tokens to 262144, set the gap fields to 0, and drop the matching limitation from doc/batch_scaling/README.md."
+    "bound_tokens": 256000,
+    "bound_blocks": 8000,
+    "bound_rationale": "Block-aligned (8000 blocks x 32) and 3,000 tokens below the largest length actually validated in serving (259,000). 259,000 is not block-aligned (8093.75 blocks); the largest aligned value at or below it is 258,976, but that leaves NO margin under a cliff whose onset is not located and whose mechanism is unresolved. 256,000 is a clean figure for a catalog, sits 6,136 tokens below the known-bad 262,136, and costs 1.2 % of the validated range.",
+    "validated_by": "a real vLLM server, prompt sent as exact token ids",
+    "evidence": [
+      "doc/batch_scaling/probes/long_prompt_t120_253k.json",
+      "doc/batch_scaling/probes/long_prompt_t120_259k.json",
+      "doc/batch_scaling/probes/long_prompt_t120_full.json",
+      "doc/batch_scaling/logs/bd_engine_len259.log"
+    ],
+    "serving_measurements": {
+      "253000": {
+        "elapsed_s": 1049.3,
+        "ok": true
+      },
+      "259000": {
+        "elapsed_s": 1130.8,
+        "ok": true,
+        "note": "O(S^2) predicted 1127 s; 0.3 % error"
+      },
+      "262136": {
+        "elapsed_s": null,
+        "ok": false,
+        "note": "did not complete in 3600 s; one blocking prefill; no watchdog throw"
+      }
+    },
+    "conditional_on_env": {
+      "TT_METAL_OPERATION_TIMEOUT_SECONDS": "120.0",
+      "why": "This bound is only reachable with the tt-metal dispatch STALL watchdog set generously. It is not an elapsed-time limit: loop_and_wait_with_timeout resets its clock whenever the device dispatch progress counter moves, and fires only after that counter has been still for the whole duration. tt-metal's own default is 0.0 (off). tt-inference-server/vllm-tt-metal/src/run_vllm_api_server.py:521 sets 5.0 unconditionally, and at 5.0 a 253,000-token prompt KILLED a deployment and required tt-smi -r. Measured: 259,000 passes at 120.0 and at 30.0, and FAILS at 10.0 (fired at 17.7 s). Recommended 120.0 -- see timeout_recommendation."
+    },
+    "timeout_recommendation": {
+      "value": 120.0,
+      "largest_legitimate_gap_bracketed_between_s": [
+        10.0,
+        30.0
+      ],
+      "rationale": "A genuine hang NEVER advances dispatch progress, so ANY finite timeout detects it -- a larger value costs detection LATENCY, not detection ability. The costs are therefore asymmetric: too low misdiagnoses a legitimate long op as a hang, kills the server and requires tt-smi -r (observed); too high only delays detection of a real hang. 120.0 is 4x the largest known-passing value (30.0) and still catches a genuine hang within two minutes. DO NOT disable the watchdog: this port has a documented NoC hang (PRESERVE_DECODE_TRACES) that this watchdog is the thing to catch."
+    },
+    "standalone_result_is_separate": "The 262144-token result in `measured` is STANDALONE (batch 1, direct generator calls, no vLLM) and remains correct as such. It is not a serving result and must not be quoted as one.",
+    "correction": "A previous version of this block published serving_validated_prefill_tokens 262080 with a 64-token gap, citing kv_pool_ceiling_sixwidth_production.json as evidence and describing a vLLM serving_config. That probe NEVER went through vLLM -- its own `what` field says 'measured through configure_paging rather than vLLM' and kv_pool_ceiling.py calls gen.prefill_forward() directly. A standalone single-user measurement was labelled serving-validated. The 4x timing discrepancy that should have exposed it was sitting in this same file unexamined: 192 s standalone at 262144 against 387 s SERVED at 168,901 tokens, i.e. serving prefill is ~4x slower per token. The real serving bound is 256000, not 262080.",
+    "why_our_own_runs_never_saw_this": "Every serving measurement in doc/batch_scaling/ was taken with TT_METAL_OPERATION_TIMEOUT_SECONDS UNSET, i.e. tt-metal's default 0.0 = watchdog DISABLED, because models/common/readiness_check does not set it. The TTI deployment sets 5.0. Our serving numbers were therefore measured under a different safety configuration from the one users actually deploy.",
+    "unresolved": {
+      "what": "the prefill cliff between 259,000 and 262,136 tokens",
+      "leading_hypothesis": "KV-pool edge. The pool is 263,168 tokens; a 262,144-token request leaves 1,024 tokens (32 blocks) while 259,000 leaves 4,168. The sharpness -- quadratic to within 0.3 % at 259,000, then >=3.5x the prediction 3.6 % later -- fits an allocation-constrained step.",
+      "second_hypothesis": "An L1/memory-config step function in the prefill path, analogous to the measured width-19 decode cliff where _decode_expert_memory_config flips L1->DRAM.",
+      "what_is_already_ruled_out": "Preemption/recompute THRASH. Engine telemetry shows ZERO loggers.py lines across the 59-minute attempt, and the scheduler runs (and logs) between steps, so a preempt/recompute loop would have emitted a line per interval. This does NOT rule out a SINGLE allocation-constrained step -- do not re-run this refutation believing it closed the question.",
+      "why_not_chased": "At 253,000 tokens TTFT is already 17.5 minutes, so no interactive deployment operates near the cliff; the usable range is bounded by latency far below it. Locating the mechanism would have cost 2-3 further 20-60 minute board runs for near-zero operational value."
+    }
   }
 }

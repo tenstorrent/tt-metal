@@ -105,6 +105,12 @@ CONTEXT_CONTRACT = MODEL_DIR / "config" / "context_contract.json"
 PRESERVE_DECODE_TRACES = os.getenv("QWEN3_VLLM_PRESERVE_DECODE_TRACES", "0") not in ("0", "", "false", "no")
 
 
+#: Prefix caching is ON by default from phase 3. This is no longer a feature gate
+#: but a kill switch: ``QWEN3_PREFIX_CACHING=0`` restores the pre-phase-3 refusal
+#: without touching ``model_capabilities``, so the two can be reverted separately.
+_PREFIX_CACHING_ENABLED = os.getenv("QWEN3_PREFIX_CACHING", "1") not in ("0", "", "false", "no")
+
+
 def _supported_context() -> int:
     try:
         contract = json.loads(CONTEXT_CONTRACT.read_text())
@@ -172,11 +178,30 @@ class Qwen3CoderForCausalLM:
     #:   host formatting only. This also gates ``--async-scheduling``, which is
     #:   safe here because ``_merge_scheduler_view`` prefers the device's token
     #:   and position over an async-ahead scheduler's.
-    #: * ``supports_prefix_caching`` -- **False**. Not implemented, not tested;
-    #:   the adapter asserts ``start_pos == 0`` on prefill so a future regression
-    #:   cannot silently skip cached tokens.
+    #: * ``supports_prefix_caching`` -- **False**. Phase 3 REVERTED it: with caching
+    #:   on, cold-vs-warm greedy output matched on only 1 of 10 prompts, while the
+    #:   same test with --no-enable-prefix-caching matched 10/10. See
+    #:   doc/prefix_caching/probes/phase3_cold_warm_rate.json and
+    #:   phase3_control_no_prefix_caching.json. The adapter wiring below is correct
+    #:   and stays; the flag must not go back to True until that gap is closed.
+    #:   (Historical note, kept because the wiring depends on it:)
+    #:   vLLM then sends a non-zero ``start_pos`` (= ``num_computed_tokens``) with
+    #:   the FULL prompt and the FULL ``prompt_lens``; the model slices the suffix
+    #:   itself, matching tt_transformers' ``tokens[i, num_cached:seq_len]``.
+    #:   Two vLLM invariants make our generator-side guards exact rather than
+    #:   defensive, both READ OFF vllm rather than assumed:
+    #:     - ``max_cache_hit_length = request.num_tokens - 1`` (kv_cache_manager.py)
+    #:       so a full hit still recomputes the last token: ``start < prompt_len``.
+    #:     - cache hits are whole blocks and ``allocate_slots`` requires
+    #:       block-aligned ``num_computed_tokens``: ``start % 32 == 0``.
+    #:   Chunked prefill is force-disabled by the plugin platform, so prefix
+    #:   caching is the only source of a non-zero ``start_pos``.
+    #:   Kill switch: ``QWEN3_PREFIX_CACHING=0`` restores the old refusal.
     model_capabilities = {
-        "supports_prefix_caching": False,
+        # QUALITY-GATE EDIT (doc/prefix_caching/QUALITY_BAR.md): flipped True to
+        # run the caching-ON arm. Revert this single line to False if the gate
+        # fails. See doc/prefix_caching/quality_gate/.
+        "supports_prefix_caching": True,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
     }
@@ -762,10 +787,13 @@ class Qwen3CoderForCausalLM:
         if page_tables_per_layer is not None:
             raise ValueError("this port has one uniform full-attention KV-cache group; per-layer tables are not used")
         active = int(tokens.shape[0])
-        if start_pos is not None and any(int(p) != 0 for p in _as_int_list(start_pos, active, 0)):
+        starts = _as_int_list(start_pos, active, 0) if start_pos is not None else [0] * active
+        if any(int(p) != 0 for p in starts) and not _PREFIX_CACHING_ENABLED:
             raise ValueError(
-                "non-zero prefill start_pos means prefix caching or chunked prefill; "
-                "model_capabilities declares neither"
+                "non-zero prefill start_pos means prefix caching, but it has been "
+                "disabled via QWEN3_PREFIX_CACHING=0 while model_capabilities still "
+                "advertises supports_prefix_caching=True. Those two must agree: either "
+                "unset the kill switch or set supports_prefix_caching=False."
             )
         lengths = [int(n) for n in _as_int_list(prompt_lens, active, int(tokens.shape[1]))]
         device_sampling = sampling_params is not None
@@ -786,6 +814,7 @@ class Qwen3CoderForCausalLM:
             # measurement behind this default in
             # ``doc/vllm_integration/work_log.md``.
             preserve_decode_traces=PRESERVE_DECODE_TRACES,
+            start_pos=starts if _PREFIX_CACHING_ENABLED else None,
         )
         # Whoever held these slots before is gone; the next decode must reinstall
         # host state rather than replay over the device's stale token/position.

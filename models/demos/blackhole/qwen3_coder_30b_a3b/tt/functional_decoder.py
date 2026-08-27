@@ -318,7 +318,30 @@ def match_cache_dtype(cache: ttnn.Tensor, x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.typecast(x, cache.dtype, memory_config=x.memory_config())
 
 
-def _fill_cache(kv_cache: KVCache, k: ttnn.Tensor, v: ttnn.Tensor, user_id: int) -> None:
+#: Which prefill attention branch ran, and at what chunk size. Instrumentation
+#: only -- nothing reads it in production. It exists because a PCC of ~1.0 on a
+#: split prefill has two explanations, "the arithmetic coincided" and "the
+#: chunked branch never executed", and they are indistinguishable from the PCC
+#: alone. A probe can assert `chunked > 0` and make the question un-askable.
+PREFILL_ATTENTION_BRANCHES = {"standard": 0, "chunked": 0, "chunk_sizes": []}
+
+
+def sdpa_chunk_size(chunk_start_idx: int) -> int:
+    """q_chunk_size == k_chunk_size for a chunked-prefill offset.
+
+    ``chunk_start_idx`` must be a multiple of BOTH q_chunk_size and k_chunk_size
+    (sdpa_nanobind.cpp:487-493), so the largest legal power of two is the offset's
+    own lowest set bit. Capped at 256: 512 overflows L1 -- measured
+    (1760704 B against a 1572864 B limit) and already recorded at
+    multichip_decoder.py:972 as rejected at every length.
+
+    Derivation copied from models/tt_transformers model_config.py:1552-1582
+    rather than hardcoded, so it tracks upstream.
+    """
+    return min(256, chunk_start_idx & -chunk_start_idx)
+
+
+def _fill_cache(kv_cache: KVCache, k: ttnn.Tensor, v: ttnn.Tensor, user_id: int, fill_page_table=None) -> None:
     """Write a whole prompt's K/V into the cache.
 
     The paged kernel writes block-at-a-time, so a prompt that does not fill its
@@ -342,12 +365,15 @@ def _fill_cache(kv_cache: KVCache, k: ttnn.Tensor, v: ttnn.Tensor, user_id: int)
         k = ttnn.pad(k, pad, value=0.0)
         v = ttnn.pad(v, pad, value=0.0)
 
-    ttnn.experimental.paged_fill_cache(
-        kv_cache.k, match_cache_dtype(kv_cache.k, k), kv_cache.page_table, batch_idx=user_id
-    )
-    ttnn.experimental.paged_fill_cache(
-        kv_cache.v, match_cache_dtype(kv_cache.v, v), kv_cache.page_table, batch_idx=user_id
-    )
+    # ``fill_page_table`` is the suffix write of a split prefill: a SINGLE-ROW
+    # table already sliced to the blocks the suffix occupies, so the op's
+    # block-0-relative write lands at the right absolute offset. batch_idx is 0
+    # because the row has already been selected. None => the shipped whole-prompt
+    # write, unchanged.
+    table = kv_cache.page_table if fill_page_table is None else fill_page_table
+    batch_idx = user_id if fill_page_table is None else 0
+    ttnn.experimental.paged_fill_cache(kv_cache.k, match_cache_dtype(kv_cache.k, k), table, batch_idx=batch_idx)
+    ttnn.experimental.paged_fill_cache(kv_cache.v, match_cache_dtype(kv_cache.v, v), table, batch_idx=batch_idx)
 
 
 def attention_decode(
@@ -462,6 +488,9 @@ def attention_prefill(
     compute_kernel_config=None,
     sdpa_program_config=None,
     activation_dtype=ttnn.bfloat16,
+    start_pos: int = 0,
+    chunk_page_table=None,
+    fill_page_table=None,
 ) -> ttnn.Tensor:
     """Causal self-attention over a full sequence. ``x``/return ``[1, 1, S, hidden]``.
 
@@ -511,11 +540,37 @@ def attention_prefill(
 
     # Seed the cache with the prompt's post-RoPE K/V so decode can continue.
     if kv_cache is not None:
-        _fill_cache(kv_cache, k, v, user_id=user_id)
+        _fill_cache(kv_cache, k, v, user_id=user_id, fill_page_table=fill_page_table)
 
     # GQA is handled inside SDPA: it broadcasts the 4 KV heads across 32 Q heads.
     # Default scale is head_dim ** -0.5, which is what Qwen3 uses.
-    attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, program_config=sdpa_program_config)
+    if start_pos > 0:
+        # Split prefill: this chunk's Q attends to the WHOLE cached prefix, which
+        # lives in the paged cache -- so the read goes through the paged kernel
+        # with the user's full page-table row, not the local k/v above.
+        chunk = sdpa_chunk_size(start_pos)
+        PREFILL_ATTENTION_BRANCHES["chunked"] += 1
+        PREFILL_ATTENTION_BRANCHES["chunk_sizes"].append(chunk)
+        prog = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=q.device().compute_with_storage_grid_size(),
+            q_chunk_size=chunk,
+            k_chunk_size=chunk,
+            exp_approx_mode=True,
+        )
+        attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+            q,
+            kv_cache.k,
+            kv_cache.v,
+            chunk_page_table,
+            chunk_start_idx=start_pos,
+            program_config=prog,
+            compute_kernel_config=compute_kernel_config,
+        )
+    else:
+        PREFILL_ATTENTION_BRANCHES["standard"] += 1
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=True, program_config=sdpa_program_config
+        )
     for t in (q, k, v):
         ttnn.deallocate(t)
 
