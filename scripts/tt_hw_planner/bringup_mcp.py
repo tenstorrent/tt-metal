@@ -128,21 +128,77 @@ def _is_torch_wrapper(stub: Path) -> bool:
     return not _stub_body_is_native(stub)
 
 
-def _graduation_block_reason(stub: Path) -> str | None:
+_STATUS_FILE = "bringup_status.json"
+
+
+def _status_doc() -> dict:
+    """The bring-up status document, or {} when absent/unreadable.
+
+    Single reader for the plan: the gate's universe, a component's tier, and its
+    binding all come from this document, so they cannot disagree about what a
+    component is."""
+    try:
+        doc = json.loads((_DEMO_DIR / _STATUS_FILE).read_text())
+        return doc if isinstance(doc, dict) else {}
+    except Exception:
+        return {}
+
+
+def _status_component(component: str) -> dict:
+    """The declared entry for ``component``, or {} if the plan never declared it."""
+    for c in _status_doc().get("components") or []:
+        if isinstance(c, dict) and str(c.get("name", "")).strip() == component:
+            return c
+    return {}
+
+
+def _component_submodule_path(component: str) -> str | None:
+    """The declared address of ``component`` inside the model, or None if unbound."""
+    sp = _status_component(component).get("submodule_path")
+    return sp if isinstance(sp, str) and sp.strip() else None
+
+
+def _graduation_block_reason(stub: Path, component: str = "") -> str | None:
     """Why a PCC-passing stub must NOT graduate, or None if it may — the SINGLE graduation criterion
     for the cc engine, shared by run_component and record_result, and identical to the fsm loop
     (`auto_iterate._is_eligible_for_graduation`).
 
-    A component graduates iff its PCC test PASSED (>= threshold, asserted inside the test) AND the stub
-    is a NATIVE ttnn forward — i.e. NOT a torch-delegating wrapper. This is UNCONDITIONAL, with no env
-    flags: a trivial PCC pass from a torch-delegating stub is worthless proof (its output is the torch
-    reference itself, == golden, so PCC is ~1.0 without any native ttnn running), so it never graduates
-    (the seamless-m4t / XTTS permissive-run bug)."""
+    A component graduates iff its PCC test PASSED (>= threshold, asserted inside the test), the stub
+    is a NATIVE ttnn forward (NOT a torch-delegating wrapper), AND the component is actually BOUND to
+    a module of the model under bring-up. All three are UNCONDITIONAL, with no env flags.
+
+    * torch-delegating stub: a trivial PCC pass proves nothing — its output IS the torch reference,
+      so PCC is ~1.0 without any native ttnn running (the seamless-m4t / XTTS permissive-run bug).
+    * unbound component (``submodule_path`` null): there is no module in THIS model to compare
+      against, so the test either skips or compares against something that is not part of the model.
+      This is how a template's generic roles (patch_embed / self_attention / mlp / layer /
+      encoder_stack / decoder_head), invented when discovery failed, were reported 6/6 ON_DEVICE for
+      a model none of them belonged to.
+    * skipped PCC run: a skip is not a pass. It means the test could not evaluate the component, and
+      counting it as graduated reports work that was never done."""
     if stub.is_file() and _is_torch_wrapper(stub):
         return (
             "PCC passed but the stub still delegates to the torch reference "
             "(_get_torch_submodule / torch-wrapper) — write a native ttnn forward to graduate"
         )
+    if component:
+        if not _component_submodule_path(component):
+            return (
+                f"component {component!r} is not bound to any module of this model "
+                "(submodule_path is null), so its PCC test has no reference from this model to "
+                "compare against — a pass proves nothing. Re-run discovery so the component is "
+                "bound to a real named_modules() path, or drop the component"
+            )
+        try:
+            _st = _load_state()
+        except Exception:
+            _st = {}
+        _skip = (_st.get("harness_skip_reason") or {}).get(component)
+        if _skip:
+            return (
+                f"the last PCC run for {component!r} SKIPPED, which is not a pass — the test could "
+                f"not evaluate the component. Fix the skip cause first: {str(_skip)[:200]}"
+            )
     return None
 
 
@@ -211,9 +267,8 @@ def _declared_components() -> list[str]:
     attempted AND did not block can_stop (the gate reported "all graduated" over
     a component it never saw). Enumerating the DECLARED set closes that hole:
     the missing-test state is handled below (auto-emit) instead of vanishing."""
-    try:
-        data = json.loads((_DEMO_DIR / "bringup_status.json").read_text())
-    except Exception:
+    data = _status_doc()
+    if not data:
         return []
     try:
         from scripts.tt_hw_planner.overlay_manager import load_no_emit_tests
@@ -246,9 +301,8 @@ def _ensure_component_tests() -> list[str]:
     This is the self-heal both auto-up and promote get for free (both obey this
     gate): a declared component can never stay test-less and therefore
     unattended. Best-effort per component; returns the names it emitted."""
-    try:
-        data = json.loads((_DEMO_DIR / "bringup_status.json").read_text())
-    except Exception:
+    data = _status_doc()
+    if not data:
         return []
     try:
         from scripts.tt_hw_planner.overlay_manager import load_no_emit_tests
@@ -510,7 +564,7 @@ def run_component(component: str, mode: str = "single") -> dict:
     if mode == "shard" and _is_fabric_failure(res.get("summary", "") + "\n" + res.get("details", "")):
         st["fabric_unhealthy"] = True
     _save_state(st)
-    _block = _graduation_block_reason(stub) if bool(res["passed"]) else None
+    _block = _graduation_block_reason(stub, component) if bool(res["passed"]) else None
     return {
         "ok": bool(res["passed"]),
         "graduated": bool(res["passed"]) and _block is None,
@@ -592,7 +646,7 @@ def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str
                 pass
 
     if ok:
-        _block = _graduation_block_reason(stub)
+        _block = _graduation_block_reason(stub, component)
         if _block:
             st.setdefault("consecutive_same_class", {})[component] = 0
             _save_state(st)
@@ -661,14 +715,7 @@ def _unmark_fallback(component: str) -> None:
 
 def _status_of(component: str) -> str:
     """The component's plan tier (NEW/ADAPT/REUSE) from bringup_status.json; '' if unknown."""
-    try:
-        data = json.loads((_DEMO_DIR / "bringup_status.json").read_text())
-    except Exception:
-        return ""
-    for c in data.get("components", []) or []:
-        if str(c.get("name", "")).strip() == component:
-            return str(c.get("status") or "")
-    return ""
+    return str(_status_component(component).get("status") or "")
 
 
 def _new_is_unlimited(component: str) -> bool:

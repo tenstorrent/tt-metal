@@ -6,6 +6,7 @@ forward (NOT a torch-delegating wrapper). A trivial PCC pass by delegating to th
 (output == golden) is not evidence of a native port (the seamless-m4t / XTTS permissive-run bug), so
 it never graduates."""
 import importlib
+import json
 
 import pytest
 
@@ -56,6 +57,12 @@ def test_record_result_refuses_torch_wrapper_without_flag(bmcp):
 def test_record_result_graduates_native(bmcp):
     m, tmp = bmcp
     _write_stub(tmp, "block", NATIVE)
+    # A real demo dir always has bringup_status.json declaring its components with
+    # the module each is bound to; graduation now requires that binding, because an
+    # unbound component's PCC test has no module of the model to compare against.
+    (tmp / "bringup_status.json").write_text(
+        json.dumps({"components": [{"name": "block", "status": "NEW", "submodule_path": "blocks.0"}]})
+    )
     r = m.record_result("block", ok=True, pcc=0.999)
     assert r["graduated"] is True
     assert (tmp / "_stubs" / "block.py.last_good_native").is_file()
