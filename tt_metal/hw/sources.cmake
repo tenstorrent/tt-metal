@@ -237,6 +237,9 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/eth_chan_noc_mapping.h
     inc/internal/tt-2xx/quasar/eth_fw_api.h
     inc/internal/tt-2xx/quasar/eth_l1_address_map.h
+    inc/internal/tt-2xx/quasar/noc/att/att.h
+    inc/internal/tt-2xx/quasar/noc/att/configs/grendel_qsr1_att_config.h
+    inc/internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h
     inc/internal/tt-2xx/quasar/noc/noc.h
     inc/internal/tt-2xx/quasar/noc/noc_overlay_parameters.h
     inc/internal/tt-2xx/quasar/noc/noc_parameters.h
