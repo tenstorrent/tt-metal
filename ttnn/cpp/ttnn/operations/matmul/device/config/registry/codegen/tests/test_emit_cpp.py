@@ -289,7 +289,7 @@ int main() {
     )
 
 
-def test_exact_grid_cohorts_are_distinct_and_sorted() -> None:
+def test_exact_grid_cohorts_are_distinct_and_sorted(expect_error) -> None:
     lock = direct_lock()
     first = lock["program_config_exact_entries"][0]
     first["key"]["compute_grid_x"] = 12
@@ -312,7 +312,7 @@ def test_exact_grid_cohorts_are_distinct_and_sorted() -> None:
         key=lambda item: emitter.canonical_bytes({"domain": item["domain"], "key": item["key"]})
     )
     _seal(duplicate)
-    with pytest.raises(emitter.LockValidationError, match="duplicates a program-config exact key"):
+    with expect_error(emitter.LockValidationError, "duplicates a program-config exact key"):
         emitter.validate_lock(duplicate)
 
 
@@ -334,11 +334,11 @@ def test_exact_grid_cohorts_are_distinct_and_sorted() -> None:
         ),
     ],
 )
-def test_exact_or_evidence_tamper_fails_closed(mutation) -> None:
+def test_exact_or_evidence_tamper_fails_closed(mutation, expect_error) -> None:
     lock = direct_lock()
     mutation(lock)
     lock["content_sha256"] = emitter.content_sha256(lock)
-    with pytest.raises(emitter.LockValidationError):
+    with expect_error(emitter.LockValidationError, "."):
         emitter.validate_lock(lock)
 
 
@@ -351,23 +351,23 @@ def test_exact_or_evidence_tamper_fails_closed(mutation) -> None:
         (lambda lock: lock.__setitem__("unknown", True), "field mismatch"),
     ],
 )
-def test_non_direct_or_runtime_identity_surface_is_rejected(mutation, message: str) -> None:
+def test_non_direct_or_runtime_identity_surface_is_rejected(mutation, message: str, expect_error) -> None:
     lock = direct_lock()
     mutation(lock)
     lock["content_sha256"] = emitter.content_sha256(lock)
-    with pytest.raises(emitter.LockValidationError, match=message):
+    with expect_error(emitter.LockValidationError, message):
         emitter.validate_lock(lock)
 
 
-def test_runtime_model_field_is_rejected() -> None:
+def test_runtime_model_field_is_rejected(expect_error) -> None:
     lock = direct_lock()
     lock["online_program_config_models"] = [{}]
     lock["content_sha256"] = emitter.content_sha256(lock)
-    with pytest.raises(emitter.LockValidationError, match="field mismatch"):
+    with expect_error(emitter.LockValidationError, "field mismatch"):
         emitter.validate_lock(lock)
 
 
-def test_public_domains_are_disjoint_and_addmm_scalars_are_exact() -> None:
+def test_public_domains_are_disjoint_and_addmm_scalars_are_exact(expect_error) -> None:
     keys = []
     for domain in ("dense.matmul", "dense.linear", "dense.addmm"):
         lock = direct_lock()
@@ -393,19 +393,19 @@ def test_public_domains_are_disjoint_and_addmm_scalars_are_exact() -> None:
     bad = direct_lock()
     bad["program_config_exact_entries"][0]["key"]["alpha_f32_bits"] = 0x3F800000
     bad["content_sha256"] = emitter.content_sha256(bad)
-    with pytest.raises(emitter.LockValidationError, match="exclusive to dense.addmm"):
+    with expect_error(emitter.LockValidationError, "exclusive to dense.addmm"):
         emitter.validate_lock(bad)
 
 
-def test_load_lock_rejects_duplicate_members_and_noncanonical_bytes(tmp_path: Path) -> None:
+def test_load_lock_rejects_duplicate_members_and_noncanonical_bytes(tmp_path: Path, expect_error) -> None:
     duplicate = tmp_path / "duplicate.json"
     duplicate.write_text('{"artifact_kind":"x","artifact_kind":"y"}', encoding="utf-8")
-    with pytest.raises(emitter.LockValidationError, match="duplicate JSON key"):
+    with expect_error(emitter.LockValidationError, "duplicate JSON key"):
         emitter.load_lock(duplicate)
 
     noncanonical = tmp_path / "noncanonical.json"
     noncanonical.write_text(json.dumps(direct_lock(), indent=2), encoding="utf-8")
-    with pytest.raises(emitter.LockValidationError, match="not canonical"):
+    with expect_error(emitter.LockValidationError, "not canonical"):
         emitter.load_lock(noncanonical)
 
 
