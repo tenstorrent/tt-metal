@@ -16,12 +16,13 @@ as a specification for your own work.
 
 ## Your environment
 
-You run on an internal runner inside the CI build image, so the full toolchain
-is already installed — do **not** try to install compilers or dependencies:
+You run on an internal runner. The tt-metal toolchain is **not** installed on
+that host — it lives in the CI build image, and you reach it through a wrapper
+script. Do not try to install compilers or dependencies; do not run
+`install_dependencies.sh`.
 
-- `clang++-20`, `cmake`, `ninja`, `ccache`, `python3`
-- A shared remote ccache. Warm-cache incremental builds take minutes; a cold
-  full build takes over an hour.
+What the host does have: `docker`, a checkout with submodules already
+initialised, and a shared remote ccache.
 
 ## You are expected to compile your change
 
@@ -32,25 +33,29 @@ entirely to post-hoc CI. Do not do that.
 Build from the repository root:
 
 ```bash
-./build_metal.sh --enable-ccache
+.github/scripts/copilot-build.sh
 ```
 
-Always pass `--enable-ccache`. Without it you lose the shared cache and the
-build will not finish within your session.
+That runs `build_metal.sh --enable-ccache` inside the CI build image against
+your working tree, and prints a ccache summary when it finishes. Any arguments
+you pass go straight through to `build_metal.sh`:
 
-Useful flags (see `./build_metal.sh --help` for the full list):
-
-| Flag | When |
+| Command | When |
 | --- | --- |
-| `--build-tests` | you added or changed a test |
-| `--build-metal-tests` / `--build-ttnn-tests` | narrow the above to one area |
-| `--build-programming-examples` | you touched `tt_metal/programming_examples/` |
-| `--build-tt-train` | you touched `tt-train/` |
-| `-b Debug` | you need assertions to reproduce something |
-| `--configure-only` | you only need to prove CMake still configures |
+| `.github/scripts/copilot-build.sh` | default — the usual case |
+| `… --configure-only` | you only need to prove CMake still configures (~6 min) |
+| `… --build-metal-tests` | you changed something under `tt_metal/` with tests |
+| `… --build-ttnn-tests` | likewise for `ttnn/` |
+| `… --build-programming-examples` | you touched `tt_metal/programming_examples/` |
+| `… --build-tt-train` | you touched `tt-train/` |
+| `… -b Debug` | you need assertions to reproduce something |
 
-Build the narrowest thing that actually exercises your change. Do not reach for
-`--build-all`.
+`--enable-ccache` is always applied for you. Build the narrowest thing that
+actually exercises your change; do not reach for `--build-all`.
+
+If the wrapper warns that Garage credentials are missing, you are building
+against a cold cache and it will most likely not finish. Say so in the PR
+rather than burning the session on it.
 
 ## What to do about the result
 
@@ -58,7 +63,7 @@ Build the narrowest thing that actually exercises your change. Do not reach for
   exact command you ran.
 - **Fails to build** — fix it and rebuild. Do not open the PR and let CI find
   a compile error you could have caught.
-- **Genuinely cannot build** (missing hardware, cold cache, environment
+- **Genuinely cannot build** (cold cache, docker unavailable, environment
   problem) — open the PR anyway, but state plainly in the description that the
   change is **unverified** and why. An honest "not compiled" is far more useful
   to a reviewer than silence.
