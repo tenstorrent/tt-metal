@@ -15,6 +15,16 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
+ROPE_PERM_VERSION = "v1"
+"""Cache-busting tag for permuted-RoPE weight construction (rope_channel_perm /
+permute_rope_channels). attention/tp.py::load_attention_weights_tp folds this into every ".rp"
+cache file name alongside a content hash of the pre-permutation source weight, so a cached
+tensorbin is used ONLY if both the source weights AND this version are unchanged from the run
+that produced it. Bump this string (any change is enough, e.g. "v2") whenever the permutation's
+semantics change -- rope_channel_perm's index derivation, permute_rope_channels' gather, the
+stride convention, etc. -- so existing on-disk caches are automatically orphaned and rebuilt
+instead of silently being served as if still correct. See README-N300-9B.md Known limitations."""
+
 
 def rope_full_head_dim(args):
     """The ``full_head_dim`` every rot_mats_* producer must pass so its cos/sin match TPAttention.
