@@ -231,6 +231,9 @@ class Vocoder(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
+        # H3 opt-ins; LTX leaves both False so its T-partition stays tile-aligned.
+        tight_t_align: bool = False,
+        local_tpad_tail: bool = False,
     ) -> None:
         super().__init__()
 
@@ -257,6 +260,8 @@ class Vocoder(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.tight_t_align = tight_t_align
+        self.local_tpad_tail = local_tpad_tail
         self._tpad_mask_cache: dict = {}
         self._t_pad = 0  # set per-input by _host_to_device
         # Traced decode: _forward_device is @traced_function, keyed per input shape via
@@ -300,6 +305,7 @@ class Vocoder(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
+                    tight_t_align=tight_t_align,
                 )
                 for i in range(self.num_upsamples)
             ]
