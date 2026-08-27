@@ -1967,30 +1967,30 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
     MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
-    // Was a flat `<= 32` per axis, which predates the indexed vectors and no longer describes any
-    // real limit. The binding constraint is that the packed action maps address both coordinates and
-    // fit the L1 slot; shape_is_indexable() is the same predicate the packer enforces, so a shape
-    // that passes here cannot later fail to pack. The packet header's Y + X <= 67 bound is separate
-    // and reported by FabricContext.
+    // Was a flat `<= 32` per axis, which predates the destination-major 2D route table and no longer
+    // describes any real limit. The binding constraint is that the packed action maps address both
+    // coordinates and fit the L1 slot. shape_fits_route_table() is the same predicate the packer
+    // enforces, so a shape that passes here cannot later fail to pack. The packet header's
+    // Y + X <= 67 bound is separate and reported by FabricContext.
     TT_ASSERT(
-        IndexedMeshRoutingFields::shape_is_indexable(mesh_shape[0], mesh_shape[1]),
-        "Mesh {} shape {}x{} cannot be indexed: axes must be <= {} and the packed routing vectors must "
-        "fit {} B of L1.",
+        Routing2DCodec::shape_fits_route_table(mesh_shape[0], mesh_shape[1]),
+        "Mesh {} shape {}x{} cannot use the 2D route table: axes must be <= {} and the packed action maps must "
+        "fit the {} B L1 slot.",
         *mesh_id,
         mesh_shape[0],
         mesh_shape[1],
-        IndexedMeshRoutingFields::MAX_INDEXED_MESH_AXIS,
-        IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES);
+        Routing2DCodec::MAX_AXIS_SIZE,
+        Routing2DCodec::ROUTE_TABLE_BYTES);
 
-    // Every 2D mesh embeds the indexed destination-major vectors. The legacy compressed 2D table is
-    // gone from the union's live meaning; a chip's L1 layout and its decode are now the same for all
-    // 2D meshes rather than agreeing per-mesh by construction.
+    // Every 2D mesh embeds the destination-major 2D action-map route table. The legacy compressed 2D
+    // table is gone from the union's live meaning; a chip's L1 layout and its decode are now the same
+    // for all 2D meshes rather than agreeing per-mesh by construction.
     {
-        indexed_route_vectors_t indexed_vectors;
-        indexed_vectors.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
+        route_table_2d_t route_table_2d;
+        route_table_2d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
 
-        // The unicast vectors above are mesh-identical, but the reverse trees are not: this chip gets
-        // only T(its own row) and T(its own column), written into the tail of the same slot.
+        // The unicast action-map rows above are mesh-identical, but the reverse trees are not: this
+        // chip gets only T(its own row) and T(its own column), written into the tail of the same slot.
         // axis_topology() rather than ring_for_direction(): the latter is null on a non-express mesh
         // (Y) or a non-closing dimension (X), and a null topology here means the tree region stays
         // zeroed -- which on device decodes as feeder=0/command=0 for every row, yielding an empty
@@ -2036,7 +2036,7 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
                     *x_topo,
                     static_cast<int>(coord[0]),
                     static_cast<int>(coord[1]),
-                    indexed_vectors.data,
+                    route_table_2d.data,
                     &failure),
                 "mesh {} chip {}: cannot encode 2D multicast: {}",
                 *mesh_id,
@@ -2044,7 +2044,7 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
                 failure);
         }
 
-        std::memcpy(&routing_info.indexed_route_vectors, &indexed_vectors, sizeof(indexed_route_vectors_t));
+        std::memcpy(&routing_info.route_table_2d, &route_table_2d, sizeof(route_table_2d_t));
     }
 
     // Build per-dst-mesh exit node table (1 byte per mesh) for this src chip
@@ -2072,7 +2072,7 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
     routing_info.state_manager.state = RouterState::INITIALIZING;
     routing_info.my_mesh_id = *mesh_id;
     routing_info.my_device_id = chip_id;
-    // Same accessor and scope the indexed packer, the router named args, and the worker shape defines
+    // Same accessor and scope the 2D route-table packer, the router named args, and the worker shape defines
     // use. A Galaxy presents as either 8x4 or 4x8, so a shape from a second source risks transposed
     // coordinates that index valid-looking but wrong table slots.
     const auto mesh_shape = this->get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);

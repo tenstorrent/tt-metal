@@ -387,11 +387,9 @@ void inject_fabric_kernel_defines(
     }
     if (fabric_context.is_2D_routing_enabled()) {
         add_kernel_defines({{"FABRIC_2D", "1"}});
-        // Workers in an express mesh produce indexed action maps instead of hop programs. All four
-        // ABI gates (this encode define, the CP table embed, the router decode define and its CT
-        // args) key on express_routing_enabled: the express_links expansion in mesh_graph.cpp is
-        // the only writer of intramesh Z edges, and express_routing_enabled is its validated
-        // echo -- so encode, L1 layout, and decode agree with route generation by construction.
+        // Workers in every 2D mesh produce 2D action maps instead of hop programs. FABRIC_2D selects
+        // that encoding, while the per-mesh defines provide the global shape used by control-plane
+        // route-table packing and router decode, keeping packet encoding, L1 layout, and decode aligned.
         for (const auto& [name, value] :
              fabric_context.get_2d_kernel_defines(control_plane, src_fabric_node_id.mesh_id)) {
             add_kernel_defines({{name, value}});

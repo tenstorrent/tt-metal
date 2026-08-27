@@ -104,7 +104,7 @@ struct udm_read_fields {
  * @return Initial direction as uint32_t (eth_chan_directions enum value)
  */
 FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t my_chip_id) {
-    // The 2D union slot holds the indexed destination-keyed vectors. The initial direction is the
+    // The 2D union slot holds the destination-major action-map table. The initial direction is the
     // action the source coordinate carries toward the destination: the Y-axis action while rows
     // differ (dimension order), else the X-axis action. Can legitimately be Z on an express mesh --
     // which is why UDM + express is refused at compile time (see fabric_edm_packet_header.hpp): the
@@ -125,20 +125,18 @@ FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t
     const uint32_t my_x = routing_info->my_mesh_coord_x;
     (void)my_chip_id;
     if (my_y != dst_y) {
-        const std::uint8_t* y_vec =
-            IndexedMeshRoutingFields::y_row(routing_info->indexed_route_vectors.data, y_size, dst_y);
-        switch (IndexedMeshRoutingFields::get_action_2bit(y_vec, my_y)) {
-            case IndexedMeshRoutingFields::Y2_NORTH: return static_cast<uint32_t>(eth_chan_directions::NORTH);
-            case IndexedMeshRoutingFields::Y2_SOUTH: return static_cast<uint32_t>(eth_chan_directions::SOUTH);
-            case IndexedMeshRoutingFields::Y2_Z: return static_cast<uint32_t>(eth_chan_directions::Z);
+        const std::uint8_t* y_vec = Routing2DCodec::y_row(routing_info->route_table_2d.data, y_size, dst_y);
+        switch (Routing2DCodec::get_action_2bit(y_vec, my_y)) {
+            case Routing2DCodec::Y2_NORTH: return static_cast<uint32_t>(eth_chan_directions::NORTH);
+            case Routing2DCodec::Y2_SOUTH: return static_cast<uint32_t>(eth_chan_directions::SOUTH);
+            case Routing2DCodec::Y2_Z: return static_cast<uint32_t>(eth_chan_directions::Z);
             default: ASSERT(false); return static_cast<uint32_t>(eth_chan_directions::EAST);
         }
     } else {
-        const std::uint8_t* x_vec =
-            IndexedMeshRoutingFields::x_row(routing_info->indexed_route_vectors.data, y_size, x_size, dst_x);
-        switch (IndexedMeshRoutingFields::get_action_2bit(x_vec, my_x)) {
-            case IndexedMeshRoutingFields::X2_EAST: return static_cast<uint32_t>(eth_chan_directions::EAST);
-            case IndexedMeshRoutingFields::X2_WEST: return static_cast<uint32_t>(eth_chan_directions::WEST);
+        const std::uint8_t* x_vec = Routing2DCodec::x_row(routing_info->route_table_2d.data, y_size, x_size, dst_x);
+        switch (Routing2DCodec::get_action_2bit(x_vec, my_x)) {
+            case Routing2DCodec::X2_EAST: return static_cast<uint32_t>(eth_chan_directions::EAST);
+            case Routing2DCodec::X2_WEST: return static_cast<uint32_t>(eth_chan_directions::WEST);
             default: ASSERT(false); return static_cast<uint32_t>(eth_chan_directions::EAST);
         }
     }
