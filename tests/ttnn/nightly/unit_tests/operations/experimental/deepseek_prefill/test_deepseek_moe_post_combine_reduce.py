@@ -10,7 +10,7 @@ Validates correctness against:
 - Old implementation from tt_moe.py (to_layout + mul + sum)
 
 Tests structured data, random data, sparse weights, and non-local expert skipping.
-Shape: [1, 3200, 8, 7168] - DeepSeek-V3 dimensions.
+Shape: [1, 640, 8, 7168] - DeepSeek-V3 dimensions.
 """
 
 import pytest
@@ -24,8 +24,9 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSe
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.utils.chunk_config import ISL_TOKENS_PER_CHIP
 
-NUM_TOKENS = 3200
+NUM_TOKENS = ISL_TOKENS_PER_CHIP
 NUM_EXPERTS = 8
 EXPERT_DIM = 2
 PCC_THRESHOLD = 0.999
@@ -353,6 +354,8 @@ def test_output_layout(device, config):
 # ============================================================================
 # Multi-chunk-per-core tests: num_tokens / 32 > num_cores, so some cores must
 # process more than one 32-token chunk. Covers issue #41777.
+# These counts are deliberately not the 640-token prefill ISL: at 20 tile-rows every
+# core takes one chunk and the path under test stops being exercised.
 # ============================================================================
 
 
@@ -388,7 +391,7 @@ def test_multi_chunk_structured(device, num_tokens, config):
     assert_pcc(result, ref, threshold=0.998, label=f"multi_chunk_structured_{num_tokens}")
 
 
-@pytest.mark.parametrize("num_tokens", [4096, 6400, 8192])
+@pytest.mark.parametrize("num_tokens", _MULTI_CHUNK_NUM_TOKENS)
 @pytest.mark.parametrize("config", MODEL_PARAMS)
 def test_multi_chunk_random(device, num_tokens, config):
     """Random data with >100 chunks so some cores get 2+ chunks each."""

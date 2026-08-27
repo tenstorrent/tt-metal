@@ -19,6 +19,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from tests.ttnn.utils_for_testing import comp_pcc, assert_equal
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
+from models.demos.deepseek_v3_d_p.utils.chunk_config import ISL_TOKENS_PER_CHIP
 
 pytestmark = pytest.mark.use_module_device
 
@@ -29,9 +30,7 @@ E4M3_MAX = 448.0
 SHAPES = [
     (1, 1024),  # single row (partial tile-row)
     (30, 1152),  # partial tile-row + 9 scale blocks
-    (640, 7168),
-    (3200, 7168),
-    (6400, 7168),
+    (ISL_TOKENS_PER_CHIP, 7168),
     (2, 3, 30, 1152),  # 4D + partial tile-row (M = 180)
 ]
 

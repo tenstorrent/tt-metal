@@ -21,10 +21,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     distinct_logits,
     hash_gate_golden_act,
 )
+from models.demos.deepseek_v3_d_p.utils.chunk_config import ISL_TOKENS_PER_CHIP
 
 
 # (seq_len,) with num_batches == batch_size == 1 (single prefill sequence).
-SEQ_LENS = [32, 128, 100, 3200]
+SEQ_LENS = [32, 128, 100, ISL_TOKENS_PER_CHIP]
 SEQ_LEN_IDS = ["one_tile", "four_tiles", "remainder", "realistic"]
 
 # (total_experts, n_activated_experts, route_scale, vocab_size)
