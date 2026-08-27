@@ -131,8 +131,8 @@ safe-outputs:
       - galaxy-profiler-tests
       - galaxy-multi-user-isolation-tests
       - galaxy-deepseek-tests
-      - galaxy-perf-tests
       - galaxy-unit-tests
+      - models-t1-device-perf-tests
       - galaxy-integration-tests
       - galaxy-stress-tests
       - galaxy-e2e-tests

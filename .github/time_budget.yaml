@@ -336,7 +336,7 @@ models:
     bh_sc1: 20
   e2e_tier1:
     wh_n150: 28
-    wh_galaxy_perf: 190
+    wh_galaxy_perf: 215
     bh_p150: 27
     bh_quietbox_2: 255
     bh_galaxy: 78
@@ -389,10 +389,9 @@ models:
     bh_quietbox_2: 21
   integration:
     wh_llmbox: 0
-  perf:
-    wh_galaxy_perf: 55
   device_perf:
     wh_n150: 20
+    wh_galaxy_perf: 25
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
