@@ -581,8 +581,14 @@ def _program_config_only_evidence(
         _boolean(item["authorizes_exact_entries"], "$.program_config_only_evidence.authorizes_exact_entries")
         for name in fields - {"schema_version", "bank_policy_version", "authorizes_exact_entries"}:
             _hex(item[name], 64, f"$.program_config_only_evidence.{name}")
-            if set(item[name]) == {"0"} and not (name == "online_model_bundle_binding_sha256" and not online_models):
+            if set(item[name]) == {"0"} and not (
+                name == "build_identity_sha256" or (name == "online_model_bundle_binding_sha256" and not online_models)
+            ):
                 raise LockValidationError(f"$.program_config_only_evidence.{name} must be nonzero")
+        if set(item["build_identity_sha256"]) != {"0"}:
+            raise LockValidationError(
+                "$.program_config_only_evidence.build_identity_sha256 must be zero for a static direct-bank lock"
+            )
         bound_root = {
             "bank_entry_inventory_sha256": direct_bank_entry_inventory_hash(lock),
             "build_identity_sha256": lock["build_identity_sha256"],
@@ -1303,12 +1309,13 @@ def validate_lock(value: Any) -> dict[str, Any]:
     if entries or program_config_exact_entries:
         compatibility_values = (
             lock["semantic_source_sha256"],
-            lock["build_identity_sha256"],
             producer["codegen_commit"],
             producer["measured_tt_metal_commit"],
         )
         if policy_version == LEGACY_POLICY_VERSION:
-            compatibility_values += (lock["runtime_capability_sha256"],)
+            compatibility_values += (lock["build_identity_sha256"], lock["runtime_capability_sha256"])
+        elif set(lock["build_identity_sha256"]) != {"0"}:
+            raise LockValidationError("direct-bank locks require a zero build_identity_sha256 wildcard")
         if any(set(value) == {"0"} for value in compatibility_values):
             raise LockValidationError("nonempty locks require measured compatibility and provenance digests")
     prior_key: bytes | None = None

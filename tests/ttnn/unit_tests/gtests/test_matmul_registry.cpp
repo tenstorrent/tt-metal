@@ -1471,8 +1471,10 @@ TEST(MatmulConfigRegistry, DirectBankExactIgnoresUnbankablePhysicalSessionFields
     auto metadata = compact_metadata();
     metadata.program_config_only_evidence_schema_version = 2;
     metadata.online_program_config_model_evidence_schema_version = 0;
+    metadata.build_identity_sha256 = {};
     metadata.runtime_capability_sha256 = {};
     auto actual = compatible_digests();
+    actual.build_identity_sha256 = repeated_digest(0xd8);
     actual.runtime_capability_sha256 = repeated_digest(0xc7);
 
     const auto result = resolve_with_compact_table_for_testing(

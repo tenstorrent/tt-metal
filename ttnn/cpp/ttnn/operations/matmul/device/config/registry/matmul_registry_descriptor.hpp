@@ -156,6 +156,8 @@ struct TableMetadata {
     std::uint16_t online_program_config_model_evidence_schema_version{};
     Sha256 content_sha256{};
     Sha256 semantic_source_sha256{};
+    // Schema-2 direct-bank locks use zero: a checked source artifact cannot
+    // bind CMake's build-local facts without a circular lock rebuild.
     Sha256 build_identity_sha256{};
     Sha256 runtime_capability_sha256{};
     // Zero for exact-only locks. Active online models bind this independently

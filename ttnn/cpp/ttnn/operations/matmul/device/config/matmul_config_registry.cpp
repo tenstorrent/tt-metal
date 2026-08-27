@@ -408,14 +408,14 @@ CompatibilityStatus validate_registry_compatibility(
     if (expected.semantic_source_sha256 != actual.semantic_source_sha256) {
         return CompatibilityStatus::SemanticSourceMismatch;
     }
-    if (expected.build_identity_sha256 != actual.build_identity_sha256) {
+    const bool direct_bank_scope = expected.program_config_only_evidence_schema_version == 2 ||
+                                   expected.online_program_config_model_evidence_schema_version == 2;
+    if (!direct_bank_scope && expected.build_identity_sha256 != actual.build_identity_sha256) {
         return CompatibilityStatus::BuildIdentityMismatch;
     }
-    // Direct-bank evidence (schema 2) is build/semantic attestation. The bank
-    // has no truthful per-session runtime-capability digest to bind.
-    if (expected.program_config_only_evidence_schema_version != 2 &&
-        expected.online_program_config_model_evidence_schema_version != 2 &&
-        expected.runtime_capability_sha256 != actual.runtime_capability_sha256) {
+    // Direct-bank evidence (schema 2) binds source semantics. A checked lock
+    // has no truthful build-local or per-session capability digest to bind.
+    if (!direct_bank_scope && expected.runtime_capability_sha256 != actual.runtime_capability_sha256) {
         return CompatibilityStatus::RuntimeCapabilityMismatch;
     }
     return CompatibilityStatus::Compatible;

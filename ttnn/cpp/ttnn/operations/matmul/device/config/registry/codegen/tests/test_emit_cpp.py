@@ -118,6 +118,7 @@ def convert_to_direct_bank_lock(lock: dict, *, include_exact: bool = True) -> di
     entry = add_program_config_exact_entry(lock) if include_exact else None
     lock["entries"] = []
     lock["policy_version"] = emitter.POLICY_VERSION
+    lock["build_identity_sha256"] = "0" * 64
     lock["runtime_capability_sha256"] = "0" * 64
     bank_artifact_sha256 = "d" * 64
     if entry is not None:
@@ -460,6 +461,20 @@ def test_direct_bank_exact_entry_emits_without_session_certificate_and_rejects_t
             pass
         else:
             raise AssertionError("direct-bank evidence tamper must fail closed")
+
+    nonzero_build = copy.deepcopy(lock)
+    nonzero_build["build_identity_sha256"] = "e" * 64
+    nonzero_build["program_config_only_evidence"]["build_identity_sha256"] = "e" * 64
+    nonzero_build["program_config_only_evidence"]["proof_sha256"] = emitter.program_config_only_evidence_hash(
+        nonzero_build["program_config_only_evidence"]
+    )
+    resign(nonzero_build)
+    try:
+        emitter.validate_lock(nonzero_build)
+    except emitter.LockValidationError:
+        pass
+    else:
+        raise AssertionError("static direct-bank lock must use the explicit zero build wildcard")
 
 
 def test_direct_bank_exact_update_coexists_with_prior_online_model_fit_bank() -> None:
