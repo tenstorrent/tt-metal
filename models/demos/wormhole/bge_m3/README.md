@@ -302,21 +302,6 @@ Then run:
 python_env/bin/tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv --start-signpost start --end-signpost stop 2>&1 | tee bge_m3_tracy_report.log
 ```
 
-## Galaxy multi-chip measurement (data parallel)
-
-`dp_multiprocess.py` benchmarks BGE-M3 across many chips (e.g. a 32-chip
-Blackhole Galaxy) with one process per chip. Global batch is `--batch-size` (per
-chip) × `--num-devices`; the report shows the H2D / Forward / D2H breakdown plus
-throughput. Do not set `TT_VISIBLE_DEVICES` — the script assigns chips itself.
-
-```bash
-# Batch 1 per chip, 32 chips (global batch 32)
-python models/demos/wormhole/bge_m3/tests/perf/dp_multiprocess.py --batch-size 1 --num-devices 32
-
-# Batch 32 per chip, 32 chips (global batch 1024)
-python models/demos/wormhole/bge_m3/tests/perf/dp_multiprocess.py --batch-size 32 --num-devices 32
-```
-
 ## Embedding API
 
 For dense, sparse, and ColBERT-style embeddings, use `BgeM3ForEmbedding`.
