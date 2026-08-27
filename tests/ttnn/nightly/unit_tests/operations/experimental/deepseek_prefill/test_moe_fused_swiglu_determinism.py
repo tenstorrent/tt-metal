@@ -22,6 +22,8 @@ the complete output tensor is defined and can be compared without slicing or
 copying an undefined output suffix.
 """
 
+import os
+
 import pytest
 import torch
 import ttnn
@@ -37,7 +39,9 @@ HIDDEN = 2048
 GRID = ttnn.CoreCoord(11, 8)
 NUM_GLOBAL_EXPERTS = 256
 GLOBAL_EXPERT_ID = 137
-ITERATIONS = 25_000_000
+# Replays per schedule. The default finishes inside the 300 s pytest timeout so this is a gate;
+# the soak it was written as (25_000_000, ~9.6 h across the three schedules) is one env var away.
+ITERATIONS = int(os.environ.get("MOE_FUSED_SWIGLU_DETERMINISM_ITERS", "2000"))
 
 
 # (name, token count)
