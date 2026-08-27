@@ -4,73 +4,60 @@
 from dataclasses import dataclass, field, replace
 
 # ---------------------------------------------------------------------------
-# Checkpoint (checkpoint facts)
+# Checkpoint
 # ---------------------------------------------------------------------------
 HF_REPO_ID = "coqui/XTTS-v2"
 CHECKPOINT_FILE = "model.pth"
-VOCAB_FILE = "vocab.json"  # XTTS-v2 BPE tokenizer, alongside model.pth in the HF repo
-# Pinned so PCC/perf numbers stay reproducible: unpinned downloads follow the repo's default
-# branch, and an upstream re-upload would move them silently. Every download from HF_REPO_ID
-# (checkpoint, vocab.json, samples/*.wav) passes this.
+VOCAB_FILE = "vocab.json"
+# Pin so PCC/perf stay reproducible — unpinned downloads follow the repo default branch.
 HF_REVISION = "6c2b0d75eae4b7047358e3b6bd9325f857d43f77"
 
 # ---------------------------------------------------------------------------
-# GPT-2 backbone (checkpoint facts)
-# Read off coqui/XTTS-v2 config.json: model_args.gpt_layers /
-# gpt_n_model_channels / gpt_n_heads.
+# GPT-2 backbone (coqui/XTTS-v2 config.json)
 # ---------------------------------------------------------------------------
 NUM_LAYERS = 30
 HIDDEN_SIZE = 1024
 NUM_HEADS = 16
-HEAD_DIM = HIDDEN_SIZE // NUM_HEADS  # 64
-FFN_SIZE = 4 * HIDDEN_SIZE  # 4096 (GPT2 n_inner default)
+HEAD_DIM = HIDDEN_SIZE // NUM_HEADS
+FFN_SIZE = 4 * HIDDEN_SIZE
 LAYER_NORM_EPS = 1e-5
 
-# Sequence-length limits, read off the checkpoint's learned position embeddings
-# (gpt.text_pos_embedding=404, gpt.mel_pos_embedding=608). At inference the GPT
-# runs on the concatenated [text] + [mel] stream, so coqui sizes the GPT-2
-# causal backbone to n_positions = text + mel.
+# Learned position tables: gpt.text_pos_embedding=404, gpt.mel_pos_embedding=608.
 MAX_TEXT_POS = 404  # gpt_max_text_tokens (402) + 2
 MAX_MEL_POS = 608  # gpt_max_audio_tokens (605) + 3
-MAX_GPT_SEQ_LEN = MAX_TEXT_POS + MAX_MEL_POS  # 1012 — full GPT context
-MAX_POSITIONS = MAX_GPT_SEQ_LEN  # sizes the causal mask; must cover any tested seq_len
+MAX_GPT_SEQ_LEN = MAX_TEXT_POS + MAX_MEL_POS
+MAX_POSITIONS = MAX_GPT_SEQ_LEN
 
-# Vocab sizes, read off the checkpoint embedding/head tensors
-# (gpt.text_embedding=6681, gpt.mel_embedding=1026).
 NUM_TEXT_TOKENS = 6681
 NUM_AUDIO_TOKENS = 1026
 
 # ---------------------------------------------------------------------------
-# Special tokens (checkpoint facts)
-# Text is wrapped [START(261)] + ([lang] + tokens) + [STOP(0)]. config.json
-# carries gpt_start/stop_text_token=None; the coqui GPT constructor defaults are
-# 261/0, exactly the [START]/[STOP] ids in vocab.json.
+# Special tokens
+# Text is wrapped [START(261)] + ([lang] + tokens) + [STOP(0)].
 # ---------------------------------------------------------------------------
-START_TEXT_TOKEN = 261  # [START] in vocab.json
-STOP_TEXT_TOKEN = 0  # [STOP]
-START_AUDIO_TOKEN = 1024  # gpt_start_audio_token
-STOP_AUDIO_TOKEN = 1025  # gpt_stop_audio_token
-MAX_AUDIO_TOKENS = 605  # gpt_max_audio_tokens
+START_TEXT_TOKEN = 261
+STOP_TEXT_TOKEN = 0
+START_AUDIO_TOKEN = 1024
+STOP_AUDIO_TOKEN = 1025
+MAX_AUDIO_TOKENS = 605
 
 # ---------------------------------------------------------------------------
-# Conditioning encoder + perceiver resampler (checkpoint facts)
-# gpt.conditioning_encoder.* and gpt.conditioning_perceiver.*
+# Conditioning encoder + perceiver resampler
 # ---------------------------------------------------------------------------
-COND_N_MELS = 80  # conditioning mel bands (the GPT branch; NOT the speaker encoder's 64)
-NUM_ATTN_HEADS = 16  # GPT.__init__ passes heads (=16) to ConditioningEncoder
-NUM_LATENTS = 32  # perceiver latents = the GPT prompt length contributed by the audio
+COND_N_MELS = 80  # GPT branch; speaker encoder is 64-mel
+NUM_ATTN_HEADS = 16
+NUM_LATENTS = 32
 GROUP_NORM_GROUPS = 32
 GROUP_NORM_EPS = 1e-5
-ENC_HEAD_DIM = HIDDEN_SIZE // NUM_ATTN_HEADS  # 64
+ENC_HEAD_DIM = HIDDEN_SIZE // NUM_ATTN_HEADS
 PERCEIVER_HEADS = 8
 PERCEIVER_HEAD_DIM = 64
 PERCEIVER_DEPTH = 2
-PERCEIVER_FF_MULT = 4  # coqui PerceiverResampler feed-forward multiplier
-PERCEIVER_INNER = PERCEIVER_HEADS * PERCEIVER_HEAD_DIM  # 512
+PERCEIVER_FF_MULT = 4
+PERCEIVER_INNER = PERCEIVER_HEADS * PERCEIVER_HEAD_DIM
 
 # ---------------------------------------------------------------------------
-# Conditioning mel — 22.05 kHz branch (checkpoint facts)
-# coqui get_gpt_cond_latents' mel frontend.
+# Conditioning mel — 22.05 kHz
 # ---------------------------------------------------------------------------
 MEL_N_FFT = 2048
 MEL_HOP = 256
@@ -79,26 +66,21 @@ MEL_SR = 22050
 MEL_FMIN = 0
 MEL_FMAX = 8000
 
-# Conditioning windows (upstream defaults). coqui conditions on up to
-# gpt_cond_len=30 s of reference audio, split into gpt_cond_chunk_len=4 s
-# windows, running get_style_emb per chunk and AVERAGING the 32-latent style
-# embeddings.
-GPT_COND_LEN_SEC = 30  # gpt_cond_len / max_ref_len
-GPT_COND_CHUNK_SEC = 4  # gpt_cond_chunk_len
-COND_CHUNK_SEC = 6  # legacy single-window length (load_reference_audio default)
-COND_MIN_CHUNK_FRAMES = 32  # drop a tiny trailing chunk (also keeps lengths tile-sane)
-COND_CHUNK_FRAMES = int(round(GPT_COND_CHUNK_SEC * MEL_SR / MEL_HOP))  # ~344 mel frames / chunk
-COND_MAX_FRAMES = int(round(GPT_COND_LEN_SEC * MEL_SR / MEL_HOP))  # gpt_cond_len as mel frames
-COND_CHUNK_SAMPLES = int(round(GPT_COND_CHUNK_SEC * MEL_SR))  # 88200 samples / 4 s window
+# Style embeddings are averaged over gpt_cond_chunk_len windows up to gpt_cond_len.
+GPT_COND_LEN_SEC = 30
+GPT_COND_CHUNK_SEC = 4
+COND_CHUNK_SEC = 6  # legacy load_reference_audio default
+COND_MIN_CHUNK_FRAMES = 32  # drop a tiny trailing chunk
+COND_CHUNK_FRAMES = int(round(GPT_COND_CHUNK_SEC * MEL_SR / MEL_HOP))
+COND_MAX_FRAMES = int(round(GPT_COND_LEN_SEC * MEL_SR / MEL_HOP))
+COND_CHUNK_SAMPLES = int(round(GPT_COND_CHUNK_SEC * MEL_SR))
 COND_MIN_CHUNK_SAMPLES = COND_MIN_CHUNK_FRAMES * MEL_HOP
-COND_MAX_SAMPLES = int(round(GPT_COND_LEN_SEC * MEL_SR))  # gpt_cond_len: 30 s of reference audio
+COND_MAX_SAMPLES = int(round(GPT_COND_LEN_SEC * MEL_SR))
 
-# Single-speaker LJSpeech clips shipped as test data in the upstream coqui repo, already at MEL_SR.
 COQUI_TESTS_WAV_URL = "https://raw.githubusercontent.com/coqui-ai/TTS/dev/tests/data/ljspeech/wavs"
 
 # ---------------------------------------------------------------------------
-# Speaker-encoder mel frontend — 16 kHz branch (checkpoint facts)
-# coqui: nn.Sequential(PreEmphasis(0.97), torchaudio.MelSpectrogram(...)).
+# Speaker-encoder mel — 16 kHz
 # ---------------------------------------------------------------------------
 SPK_SAMPLE_RATE = 16000
 SPK_N_FFT = 512
@@ -109,144 +91,121 @@ SPK_POWER = 2.0
 SPK_PREEMPH = 0.97
 SPK_FRONTEND_PREFIX = "hifigan_decoder.speaker_encoder.torch_spec."
 
-# Speaker-encoder body — coqui ResNetSpeakerEncoder (SE-ResNet-34).
-SPK_INPUT_DIM = SPK_N_MELS  # 64
-SPK_PROJ_DIM = 512  # speaker embedding dim (== d_vector_dim)
+# SE-ResNet-34
+SPK_INPUT_DIM = SPK_N_MELS
+SPK_PROJ_DIM = 512
 SPK_LAYERS = [3, 4, 6, 3]
 SPK_NUM_FILTERS = [32, 64, 128, 256]
 SPK_REDUCTION = 8
 SPK_LOG_INPUT = True
-SPK_OUTMAP_SIZE = SPK_INPUT_DIM // 8  # freq dim after 3 stride-2 downsamples = 8
-SPK_ASP_DIM = SPK_OUTMAP_SIZE * SPK_NUM_FILTERS[3]  # 2048
+SPK_OUTMAP_SIZE = SPK_INPUT_DIM // 8
+SPK_ASP_DIM = SPK_OUTMAP_SIZE * SPK_NUM_FILTERS[3]
 SPK_BN_EPS = 1e-5
 SPK_INSTANCENORM_EPS = 1e-5
 SPK_ASP_EPS = 1e-5
 
 # ---------------------------------------------------------------------------
-# HiFi-GAN generator — waveform_decoder (checkpoint facts)
-# coqui/XTTS-v2 config, model_args.
+# HiFi-GAN generator
 # ---------------------------------------------------------------------------
-DECODER_INPUT_DIM = 1024  # GPT latent dim fed to conv_pre
+DECODER_INPUT_DIM = 1024
 UPSAMPLE_INITIAL_CHANNEL = 512
 UPSAMPLE_RATES = [8, 8, 2, 2]  # product = 256 = output_hop_length
 UPSAMPLE_KERNEL_SIZES = [16, 16, 4, 4]
 RESBLOCK_KERNEL_SIZES = [3, 7, 11]
 RESBLOCK_DILATION_SIZES = [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
-COND_CHANNELS = 512  # d_vector_dim (speaker embedding)
+COND_CHANNELS = 512
 OUT_CHANNELS = 1
 LRELU_SLOPE = 0.1
-FINAL_LRELU_SLOPE = 0.01  # coqui's pre-conv_post activation uses the F.leaky_relu default
+FINAL_LRELU_SLOPE = 0.01  # F.leaky_relu default, used before conv_post
 
-# HifiDecoder latent pre-upsampling rates.
 AR_MEL_LENGTH_COMPRESSION = 1024
 OUTPUT_HOP_LENGTH = 256
 INPUT_SAMPLE_RATE = 22050
 OUTPUT_SAMPLE_RATE = 24000
-LATENT_SCALE = AR_MEL_LENGTH_COMPRESSION / OUTPUT_HOP_LENGTH  # 4.0
-SR_SCALE = OUTPUT_SAMPLE_RATE / INPUT_SAMPLE_RATE  # 160/147 ≈ 1.08844
+LATENT_SCALE = AR_MEL_LENGTH_COMPRESSION / OUTPUT_HOP_LENGTH
+SR_SCALE = OUTPUT_SAMPLE_RATE / INPUT_SAMPLE_RATE
 
 # ---------------------------------------------------------------------------
 # Device / tiling
 # ---------------------------------------------------------------------------
-TILE = 32  # ttnn tile height/width; all padded lengths round up to this
-NEG_INF = -1e30  # additive attention-mask fill for masked-out positions
+TILE = 32
+NEG_INF = -1e30
 
-L1_SMALL_SIZE = 65536  # l1_small_size for ttnn.open_device on this model
-# A chunked take holds the setup + decode + vocoder traces LIVE at the same time (the one-shot
-# path releases each before capturing the next), so it needs a trace region for all three.
+L1_SMALL_SIZE = 65536
+# Chunked takes hold setup + decode + vocoder traces at once (one-shot releases each first).
 SESSION_TRACE_REGION = 157286400  # 150 MB
 
 # ---------------------------------------------------------------------------
 # Text / language
 # ---------------------------------------------------------------------------
 DEFAULT_LANGUAGE = "en"
-# Strips sentence-final punctuation: the final "." is its own token (id 9) and the model
-# tends to VERBALIZE it as "dot" at the tail. Internal commas (prosody) are kept.
+# Final "." is its own token (id 9) and the model tends to say "dot"; internal commas stay.
 SENTENCE_FINAL_PUNCT_RE = r"[.!?]+\s*$"
 SENTENCE_SPLIT_RE = r"(?<=[.!?])\s+"
-# Internal prosodic boundaries. A sentence too long for one pass is broken here first, so the
-# seam lands where a speaker would pause anyway (upstream coqui hard-wraps such sentences).
 CLAUSE_SPLIT_RE = r"(?<=[,;:])\s+"
-COQUI_CLIP_RE = r"^LJ\d{3}-\d{4}\.wav$"  # coqui-ai/TTS tests/data/ljspeech/wavs clip names
+COQUI_CLIP_RE = r"^LJ\d{3}-\d{4}\.wav$"
 
 
 # ---------------------------------------------------------------------------
-# Generation defaults (upstream defaults)
+# Generation
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class GenerationConfig:
     """Sampling knobs for the autoregressive GPT decode."""
 
-    temperature: float = 0.65  # 0 = greedy; 0.65 = cleanest single take
+    temperature: float = 0.65  # 0 = greedy
     top_k: int = 50
-    top_p: float = 0.85  # nucleus cutoff (XTTS uses 0.85)
-    repetition_penalty: float = 5.0  # XTTS uses 5.0
-    # Traced decode replays a fixed max_tokens steps and trims STOP afterwards. 240 sits above
-    # max_single_pass_codes (205) with sampler overshoot room.
+    top_p: float = 0.85
+    repetition_penalty: float = 5.0
+    # Traced decode replays a fixed step count and trims STOP afterwards.
     max_tokens: int = 240
-    # STOP-suppression floor in audio codes. 0 = disabled (HF default). Negative = auto
-    # (min_tokens_auto_factor × wrapped text length). Useful for long prompts; on short ones it
-    # can force an invented tail.
+    # 0 = disabled (HF default). Negative = auto (min_tokens_auto_factor × wrapped text length).
     min_tokens: int = 0
-    min_tokens_auto_factor: float = 2.0  # auto floor = factor x padded text length
-    num_outputs: int = 1  # takes to generate; >1 = best-of-N by CER (coqui num_gpt_outputs=1)
-    seed: int | None = None  # None = unseeded (ttnn sampling isn't bit-exact across runs anyway)
+    min_tokens_auto_factor: float = 2.0
+    num_outputs: int = 1  # >1 = best-of-N by CER
+    seed: int | None = None
 
 
 GENERATION = GenerationConfig()
 
 
 # ---------------------------------------------------------------------------
-# Chunking budgets (port budgets)
+# Chunking
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ChunkingConfig:
     """Text-split budgets for single-pass vs chunked synthesis."""
 
-    max_text_ids: int = 352  # keep the padded text under MAX_TEXT_POS (404) with headroom
+    max_text_ids: int = 352  # under MAX_TEXT_POS (404) with headroom
     max_single_pass_codes: int = 205  # above this, split into chunks
-    # Per chunk once splitting; lower than single-pass on purpose. codes_per_id is a linear fit,
-    # and a real take runs up to ~1.2x it (measured over a 37-chunk paragraph), so this must stay
-    # under chunk_max_tokens / 1.2 — a chunk that outgrows its budget never reaches STOP and its
-    # tail comes out as noise. Every chunk boundary costs a chunk_gap_seconds pause and a fresh
-    # utterance onset, so pack chunks as full as the budget allows: 155 -> 205 took a 493-word
-    # input from 39 chunks to 31, and the seams that land mid-sentence from 17 to 3, at no
-    # measured time cost. On the 463-char test_tt_eval_traced_long paragraph it is 6 chunks ->
-    # 4, CER unchanged at 0.0086 and SECS 0.684 -> 0.748, against UTMOS 4.273 -> 3.803.
+    # Must stay under chunk_max_tokens / ~1.2 so a chunk can still emit STOP.
     max_chunk_codes: int = 205
     codes_per_id: float = 156 / 71.0  # measured: 71 text ids -> 156 audio codes
-    # Chunked takes share one capture, so the vocoder always runs this many latent frames
-    # (zero-padded). Tile-aligned and above max_chunk_codes. The vocoder is only ~2% of replay,
-    # so the cap is nearly free in time, but it also sets max_seq and so the per-step decode
-    # cost: 288 runs clean yet costs ~11% RTF, while at 256 a chunk occasionally overruns and
-    # chunk_retries redraws it — the cheaper trade.
+    # Shared vocoder capture length (tile-aligned). 256 avoids most cap-overruns; 288 costs ~11% RTF.
     chunk_max_tokens: int = 256
-    # Redraws allowed for a chunk that reaches the code cap without emitting STOP (an unfinished,
-    # usually noisy tail). Sampling is stochastic, so a redraw is normally enough; each costs one
-    # trace replay.
-    chunk_retries: int = 2
+    chunk_retries: int = 2  # redraws if a chunk hits the cap without STOP
 
 
 CHUNKING = ChunkingConfig()
 
 
 # ---------------------------------------------------------------------------
-# Audio post-processing (upstream defaults)
+# Audio post-processing
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class AudioPostConfig:
     """Onset/offset fade and silence padding for vocoder output."""
 
-    fade_seconds: float = 0.015  # ~15 ms raised-cosine fade in/out
-    pad_seconds: float = 0.06  # ~60 ms of silence as lead-in/out
-    chunk_gap_seconds: float = 0.12  # ~120 ms of silence joining chunk waveforms
+    fade_seconds: float = 0.015
+    pad_seconds: float = 0.06
+    chunk_gap_seconds: float = 0.12
 
 
 AUDIO_POST = AudioPostConfig()
 
 
 # ---------------------------------------------------------------------------
-# Take scoring — best-of-N ranking (only used when num_outputs > 1)
+# Take scoring (num_outputs > 1)
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ScoringConfig:
@@ -259,13 +218,11 @@ class ScoringConfig:
 
 SCORING = ScoringConfig()
 
-# Heavier evaluation models used by ``eval/xtts_eval.py`` (not the demo's quick CER).
-# Revisions are pinned for the same reason as HF_REVISION: unpinned downloads follow the
-# default branch, so an upstream re-upload would move recorded metrics with no warning.
+# Used by eval/xtts_eval.py. Revisions pinned like HF_REVISION.
 EVAL_WHISPER_MODEL_ID = "openai/whisper-large-v3"
 EVAL_WHISPER_REVISION = "06f233fe06e710322aca913c1bc4249a0d71fce1"
 EVAL_WHISPER_SR = 16000
-EVAL_UTMOS_HUB_REPO = "tarepan/SpeechMOS:v1.2.0"  # torch.hub tag (not a commit)
+EVAL_UTMOS_HUB_REPO = "tarepan/SpeechMOS:v1.2.0"
 EVAL_UTMOS_SR = 16000
 EVAL_ECAPA2_REPO_ID = "Jenthe/ECAPA2"
 EVAL_ECAPA2_REVISION = "207cb6d137c671a12ba820ebec3b719549b06c0f"
@@ -279,26 +236,14 @@ EVAL_ECAPA2_SR = 16000
 class DemoConfig:
     """Defaults for the TTNN XTTS demo (demo/xtts_demo.py)."""
 
-    # text: str = (
-    #     "Voice synthesis has come a long way, and modern systems can already generate "
-    #     "natural sounding speech with remarkable accuracy. Hey how are you doing?."
-    # )
-
-    # text: str = "Reading books every day helps the mind grow. It builds a strong brain. When you open a book, you learn new words. You see new places. You meet new people through stories. A good book teaches you about life. It shows you how other people think. You feel happy when a story is fun. You feel sad when things go wrong for the hero. These feelings make us kind. They help us care for our friends and neighbors.You do not need to read a lot at one time. Just ten minutes a day is fine. Sit in a quiet place. Turn off your phone. Open the pages and let your eyes move across the lines. Soon, you will want to read more.Books are true friends. They wait for you on the shelf. They never get mad. They share their secrets whenever you want. Pick up a story today. Let your imagination fly high. Enjoy the magic of words on paper. Your brain will thank you for this good gift."
     text: str = "Voice synthesis has come a long way, and modern systems can already generate natural sounding speech with remarkable accuracy. Hey, how are you doing? "
-    # Four LJSpeech clips joined to ~32.6 s, clipped to gpt_cond_len (30 s) = 8 conditioning windows.
     ref_audio: str = "LJ001-0001.wav+LJ001-0003.wav+LJ001-0004.wav+LJ001-0005.wav"
     language: str = DEFAULT_LANGUAGE
     output: str = "generated/xtts_demo/xtts_demo.wav"
     write_torch_ref: bool = False
 
-    ref_seconds: int = GPT_COND_LEN_SEC  # conditioning window (coqui gpt_cond_len)
-    # Speaker-embedding window. Upstream uses the whole reference (up to 30 s). Co-resident with the
-    # rest of the traced model this one clashes L1 above ~20 s, so it keeps a margin below that.
-    # Longer is better but flattens out: ECAPA2 similarity to the reference measures 0.694 / 0.715 /
-    # 0.731 / 0.736 / 0.743 at 4 / 8 / 12 / 16 / 20 s, for +0.3 ms of setup replay per second of
-    # window. GPT conditioning uses the full 30 s regardless — this window only feeds the speaker
-    # vector, which conditions the HiFi-GAN and leaves the generated codes untouched.
+    ref_seconds: int = GPT_COND_LEN_SEC
+    # Co-resident with the traced model, L1 clashes above ~20 s. GPT conditioning still uses 30 s.
     spk_seconds: int = 16
 
     generation: GenerationConfig = field(default_factory=GenerationConfig)
@@ -323,29 +268,19 @@ class ReferenceDemoConfig:
     language: str = DEFAULT_LANGUAGE
     output: str = "generated/xtts_reference_demo/xtts_reference_demo.wav"
 
-    ref_seconds: int = GPT_COND_LEN_SEC  # conditioning window (gpt_cond_len)
-    # Speaker-embedding window. Defaults to the WHOLE reference (coqui max_ref_length) — unlike
-    # the device demo, which keeps a margin under the L1 ceiling.
+    ref_seconds: int = GPT_COND_LEN_SEC
     spk_seconds: int = GPT_COND_LEN_SEC
 
-    # Sampling mirrors the device demo, but the code cap is the CPU one: STOP genuinely ends the
-    # loop here (no fixed-length traced replay), so a generous cap costs nothing when unused.
+    # CPU path can stop at STOP, so a larger cap is free when unused.
     generation: GenerationConfig = field(default_factory=lambda: replace(GENERATION, max_tokens=400))
     audio_post: AudioPostConfig = field(default_factory=AudioPostConfig)
 
-    # Single-pass budgets. NOT L1 limits — on CPU the only walls are the checkpoint's learned
-    # position tables: text_pos_embedding (MAX_TEXT_POS rows) and mel_pos_embedding
-    # (MAX_MEL_POS rows, i.e. MAX_AUDIO_TOKENS codes). Both are left with headroom.
-    max_text_ids: int = MAX_TEXT_POS - 52  # 352 wrapped text ids
-    max_pass_codes: int = 560  # below the 605-code mel budget, with margin for sampler overshoot
+    max_text_ids: int = MAX_TEXT_POS - 52
+    max_pass_codes: int = 560  # under MAX_AUDIO_TOKENS, with overshoot margin
     codes_per_id: float = CHUNKING.codes_per_id
 
-    # torch CPU threads for the big-tensor stages. 0 = leave torch's default (one per core), which
-    # oversubscribes and thrashes on a shared host.
-    threads: int = 4
-    # Threads for the autoregressive loop only. A single-token step is many tiny GEMMs, so it is
-    # launch-bound: fewer threads is much faster. 0 = use ``threads``.
-    decode_threads: int = 2
+    threads: int = 4  # 0 = torch default (one per core); oversubscribes on a shared host
+    decode_threads: int = 2  # AR loop is launch-bound; 0 = use threads
 
 
 REFERENCE_DEMO = ReferenceDemoConfig()
