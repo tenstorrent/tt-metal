@@ -29,6 +29,7 @@
 // column still share a block, so their gather sums kCoreGridH copies of it.
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
@@ -46,21 +47,21 @@ namespace u = tt::unified;
 #endif
 
 void kernel_main() {
-    constexpr uint32_t num_blocks = get_named_compile_time_arg_val("num_blocks");
-    constexpr uint32_t in_ht = get_named_compile_time_arg_val("in_ht");
-    constexpr uint32_t in_wt = get_named_compile_time_arg_val("in_wt");
-    constexpr uint32_t num_cores_y = get_named_compile_time_arg_val("num_cores_y");
+    constexpr uint32_t num_blocks = get_arg(args::num_blocks);
+    constexpr uint32_t in_ht = get_arg(args::in_ht);
+    constexpr uint32_t in_wt = get_arg(args::in_wt);
+    constexpr uint32_t num_cores_y = get_arg(args::num_cores_y);
 
     // Both stages collapse the ROW axis, so each leaves one valid row per tile
     // column. Stage 1 folds this core's block; stage 2 folds the column's stack of
     // stage-1 results, which the gather has laid out as num_cores_y x in_wt.
     constexpr auto kAxis = u::ReduceAxis::Rows;
 
-    constexpr uint32_t kCbIn0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t kCbTmp0 = get_named_compile_time_arg_val("cb_tmp0");
-    constexpr uint32_t kCbTmp1 = get_named_compile_time_arg_val("cb_tmp1");
-    constexpr uint32_t kCbScaler = get_named_compile_time_arg_val("cb_scaler");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbIn0 = get_arg(args::cb_in0);
+    constexpr uint32_t kCbTmp0 = get_arg(args::cb_tmp0);
+    constexpr uint32_t kCbTmp1 = get_arg(args::cb_tmp1);
+    constexpr uint32_t kCbScaler = get_arg(args::cb_scaler);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
 
     u::compute_init(kCbIn0, kCbOut);
 

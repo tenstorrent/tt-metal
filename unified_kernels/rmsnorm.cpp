@@ -26,22 +26,22 @@
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t kCbX = get_named_compile_time_arg_val("cb_x");
-    constexpr uint32_t kCbW = get_named_compile_time_arg_val("cb_w");
-    constexpr uint32_t kCbEps = get_named_compile_time_arg_val("cb_eps");
-    constexpr uint32_t kCbInvN = get_named_compile_time_arg_val("cb_inv_n");
-    constexpr uint32_t kCbSq = get_named_compile_time_arg_val("cb_sq");
-    constexpr uint32_t kCbMean = get_named_compile_time_arg_val("cb_mean");
-    constexpr uint32_t kCbRsqrt = get_named_compile_time_arg_val("cb_rsqrt");
-    constexpr uint32_t kCbNormed = get_named_compile_time_arg_val("cb_normed");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbX = get_arg(args::cb_x);
+    constexpr uint32_t kCbW = get_arg(args::cb_w);
+    constexpr uint32_t kCbEps = get_arg(args::cb_eps);
+    constexpr uint32_t kCbInvN = get_arg(args::cb_inv_n);
+    constexpr uint32_t kCbSq = get_arg(args::cb_sq);
+    constexpr uint32_t kCbMean = get_arg(args::cb_mean);
+    constexpr uint32_t kCbRsqrt = get_arg(args::cb_rsqrt);
+    constexpr uint32_t kCbNormed = get_arg(args::cb_normed);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
     // ht is the ROW-CHUNK height, not the whole tensor's: rows are normalised
     // independently -- each one's RMS depends on that row alone -- so the tensor is walked
     // in chunks of ht rows and only ht*wt tiles are ever resident. Which chunks this core
     // owns comes from runtime args. Without this the whole [S, d_model] block had to fit
     // L1 at once, which is 1024 tiles at S=512 by d_model 2048.
-    constexpr uint32_t ht = get_named_compile_time_arg_val("ht");
-    constexpr uint32_t wt = get_named_compile_time_arg_val("wt");
+    constexpr uint32_t ht = get_arg(args::ht);
+    constexpr uint32_t wt = get_arg(args::wt);
     const uint32_t eps_bits = get_arg(args::eps_bits);
     const uint32_t chunk_begin = get_arg(args::chunk_begin);
     const uint32_t chunk_count = get_arg(args::chunk_count);

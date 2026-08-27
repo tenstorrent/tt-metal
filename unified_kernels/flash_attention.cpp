@@ -79,36 +79,36 @@
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t sq = get_named_compile_time_arg_val("sq");
-    constexpr uint32_t sk = get_named_compile_time_arg_val("sk");
-    constexpr uint32_t dt = get_named_compile_time_arg_val("dt");
-    constexpr uint32_t num_q_chunks = get_named_compile_time_arg_val("num_q_chunks");
+    constexpr uint32_t sq = get_arg(args::sq);
+    constexpr uint32_t sk = get_arg(args::sk);
+    constexpr uint32_t dt = get_arg(args::dt);
+    constexpr uint32_t num_q_chunks = get_arg(args::num_q_chunks);
 
-    constexpr uint32_t kCbQ = get_named_compile_time_arg_val("cb_q");
-    constexpr uint32_t kCbK = get_named_compile_time_arg_val("cb_k");
-    constexpr uint32_t kCbV = get_named_compile_time_arg_val("cb_v");
-    constexpr uint32_t kCbMask = get_named_compile_time_arg_val("cb_mask");
-    constexpr uint32_t kCbOne = get_named_compile_time_arg_val("cb_one");
-    constexpr uint32_t kCbColOnes = get_named_compile_time_arg_val("cb_col_ones");
-    constexpr uint32_t kCbMasked = get_named_compile_time_arg_val("cb_masked");
-    constexpr uint32_t kCbRowMax = get_named_compile_time_arg_val("cb_row_max");
-    constexpr uint32_t kCbProb = get_named_compile_time_arg_val("cb_prob");
-    constexpr uint32_t kCbRowSum = get_named_compile_time_arg_val("cb_row_sum");
-    constexpr uint32_t kCbPV = get_named_compile_time_arg_val("cb_p_v");
-    constexpr uint32_t kCbOScaled = get_named_compile_time_arg_val("cb_o_scaled");
-    constexpr uint32_t kCbCorrOld = get_named_compile_time_arg_val("cb_corr_old");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t kCbM = get_named_compile_time_arg_val("cb_m");
-    constexpr uint32_t kCbL = get_named_compile_time_arg_val("cb_l");
-    constexpr uint32_t kCbO = get_named_compile_time_arg_val("cb_o");
-    constexpr uint32_t kCbRecipL = get_named_compile_time_arg_val("cb_recip_l");
-    constexpr uint32_t kCbMNow = get_named_compile_time_arg_val("cb_m_now");
+    constexpr uint32_t kCbQ = get_arg(args::cb_q);
+    constexpr uint32_t kCbK = get_arg(args::cb_k);
+    constexpr uint32_t kCbV = get_arg(args::cb_v);
+    constexpr uint32_t kCbMask = get_arg(args::cb_mask);
+    constexpr uint32_t kCbOne = get_arg(args::cb_one);
+    constexpr uint32_t kCbColOnes = get_arg(args::cb_col_ones);
+    constexpr uint32_t kCbMasked = get_arg(args::cb_masked);
+    constexpr uint32_t kCbRowMax = get_arg(args::cb_row_max);
+    constexpr uint32_t kCbProb = get_arg(args::cb_prob);
+    constexpr uint32_t kCbRowSum = get_arg(args::cb_row_sum);
+    constexpr uint32_t kCbPV = get_arg(args::cb_p_v);
+    constexpr uint32_t kCbOScaled = get_arg(args::cb_o_scaled);
+    constexpr uint32_t kCbCorrOld = get_arg(args::cb_corr_old);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kCbM = get_arg(args::cb_m);
+    constexpr uint32_t kCbL = get_arg(args::cb_l);
+    constexpr uint32_t kCbO = get_arg(args::cb_o);
+    constexpr uint32_t kCbRecipL = get_arg(args::cb_recip_l);
+    constexpr uint32_t kCbMNow = get_arg(args::cb_m_now);
     // Key tiles already behind the first query chunk. Zero is a fresh prefill; a positive
     // value is prefill-with-history, where the queries see context they did not produce.
-    constexpr uint32_t k_offset = get_named_compile_time_arg_val("k_offset");
+    constexpr uint32_t k_offset = get_arg(args::k_offset);
     // The head's whole key range in tiles. The causal walk derives its per-chunk bound
     // from k_offset instead, but this is still what the head stride is measured in.
-    constexpr uint32_t k_tiles = get_named_compile_time_arg_val("k_tiles");
+    constexpr uint32_t k_tiles = get_arg(args::k_tiles);
     // GQA: n_heads query heads share n_kv_heads key/value heads, n_heads/n_kv_heads of
     // them per KV head. n_kv_heads == n_heads is ordinary multi-head attention and
     // n_kv_heads == 1 is multi-query; both fall out of the same mapping.
@@ -117,8 +117,8 @@ void kernel_main() {
     // size and so the mapping; which heads this core walks is head_begin/head_count
     // below. A core holding four of thirty-two heads still needs to know there are
     // thirty-two, or it would map its heads onto the wrong KV heads entirely.
-    constexpr uint32_t n_heads = get_named_compile_time_arg_val("n_heads");
-    constexpr uint32_t n_kv_heads = get_named_compile_time_arg_val("n_kv_heads");
+    constexpr uint32_t n_heads = get_arg(args::n_heads);
+    constexpr uint32_t n_kv_heads = get_arg(args::n_kv_heads);
     // This core's slice of the heads. Runtime rather than compile-time because it is the
     // one thing that differs per core, and RUNTIME ARGS rather than a coordinate because
     // every projection reads the same values from them: a head range derived from

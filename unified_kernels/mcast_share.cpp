@@ -36,19 +36,20 @@
 //                   so they hold live buffers while even cores run ahead.
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t tiles = get_named_compile_time_arg_val("tiles");
-    constexpr uint32_t rounds = get_named_compile_time_arg_val("rounds");
-    constexpr uint32_t grid_h = get_named_compile_time_arg_val("grid_h");
-    constexpr uint32_t grid_w = get_named_compile_time_arg_val("grid_w");
+    constexpr uint32_t tiles = get_arg(args::tiles);
+    constexpr uint32_t rounds = get_arg(args::rounds);
+    constexpr uint32_t grid_h = get_arg(args::grid_h);
+    constexpr uint32_t grid_w = get_arg(args::grid_w);
 
-    constexpr uint32_t kCbA = get_named_compile_time_arg_val("cb_a");
-    constexpr uint32_t kCbB = get_named_compile_time_arg_val("cb_b");
-    constexpr uint32_t kCbOut0 = get_named_compile_time_arg_val("cb_out0");
-    constexpr uint32_t kCbOut1 = get_named_compile_time_arg_val("cb_out1");
+    constexpr uint32_t kCbA = get_arg(args::cb_a);
+    constexpr uint32_t kCbB = get_arg(args::cb_b);
+    constexpr uint32_t kCbOut0 = get_arg(args::cb_out0);
+    constexpr uint32_t kCbOut1 = get_arg(args::cb_out1);
 
     const auto in = TensorAccessor(tensor::in));
     const auto out0 = TensorAccessor(tensor::out0));
