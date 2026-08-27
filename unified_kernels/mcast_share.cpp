@@ -45,10 +45,10 @@ void kernel_main() {
     constexpr uint32_t grid_h = get_named_compile_time_arg_val("grid_h");
     constexpr uint32_t grid_w = get_named_compile_time_arg_val("grid_w");
 
-    constexpr uint32_t kCbA = TT_U_CB(a);
-    constexpr uint32_t kCbB = TT_U_CB(b);
-    constexpr uint32_t kCbOut0 = TT_U_CB(out0);
-    constexpr uint32_t kCbOut1 = TT_U_CB(out1);
+    constexpr uint32_t kCbA = get_named_compile_time_arg_val("cb_a");
+    constexpr uint32_t kCbB = get_named_compile_time_arg_val("cb_b");
+    constexpr uint32_t kCbOut0 = get_named_compile_time_arg_val("cb_out0");
+    constexpr uint32_t kCbOut1 = get_named_compile_time_arg_val("cb_out1");
 
     const auto in = TensorAccessor(tensor::in));
     const auto out0 = TensorAccessor(tensor::out0));

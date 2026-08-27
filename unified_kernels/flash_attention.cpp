@@ -58,7 +58,7 @@
 // A rectangular score block cannot express the half-masked diagonal chunk, but it can skip
 // the wholly-masked ones, and that is what the loop bound does.
 //
-// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+// Compile-time args, all named, plus a cb_<name> per buffer:
 //   Sq per query CHUNK, in tiles
 //   Sk per key CHUNK, in tiles
 //   D in tiles
@@ -84,25 +84,25 @@ void kernel_main() {
     constexpr uint32_t dt = get_named_compile_time_arg_val("dt");
     constexpr uint32_t num_q_chunks = get_named_compile_time_arg_val("num_q_chunks");
 
-    constexpr uint32_t kCbQ = TT_U_CB(q);
-    constexpr uint32_t kCbK = TT_U_CB(k);
-    constexpr uint32_t kCbV = TT_U_CB(v);
-    constexpr uint32_t kCbMask = TT_U_CB(mask);
-    constexpr uint32_t kCbOne = TT_U_CB(one);
-    constexpr uint32_t kCbColOnes = TT_U_CB(col_ones);
-    constexpr uint32_t kCbMasked = TT_U_CB(masked);
-    constexpr uint32_t kCbRowMax = TT_U_CB(row_max);
-    constexpr uint32_t kCbProb = TT_U_CB(prob);
-    constexpr uint32_t kCbRowSum = TT_U_CB(row_sum);
-    constexpr uint32_t kCbPV = TT_U_CB(p_v);
-    constexpr uint32_t kCbOScaled = TT_U_CB(o_scaled);
-    constexpr uint32_t kCbCorrOld = TT_U_CB(corr_old);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
-    constexpr uint32_t kCbM = TT_U_CB(m);
-    constexpr uint32_t kCbL = TT_U_CB(l);
-    constexpr uint32_t kCbO = TT_U_CB(o);
-    constexpr uint32_t kCbRecipL = TT_U_CB(recip_l);
-    constexpr uint32_t kCbMNow = TT_U_CB(m_now);
+    constexpr uint32_t kCbQ = get_named_compile_time_arg_val("cb_q");
+    constexpr uint32_t kCbK = get_named_compile_time_arg_val("cb_k");
+    constexpr uint32_t kCbV = get_named_compile_time_arg_val("cb_v");
+    constexpr uint32_t kCbMask = get_named_compile_time_arg_val("cb_mask");
+    constexpr uint32_t kCbOne = get_named_compile_time_arg_val("cb_one");
+    constexpr uint32_t kCbColOnes = get_named_compile_time_arg_val("cb_col_ones");
+    constexpr uint32_t kCbMasked = get_named_compile_time_arg_val("cb_masked");
+    constexpr uint32_t kCbRowMax = get_named_compile_time_arg_val("cb_row_max");
+    constexpr uint32_t kCbProb = get_named_compile_time_arg_val("cb_prob");
+    constexpr uint32_t kCbRowSum = get_named_compile_time_arg_val("cb_row_sum");
+    constexpr uint32_t kCbPV = get_named_compile_time_arg_val("cb_p_v");
+    constexpr uint32_t kCbOScaled = get_named_compile_time_arg_val("cb_o_scaled");
+    constexpr uint32_t kCbCorrOld = get_named_compile_time_arg_val("cb_corr_old");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbM = get_named_compile_time_arg_val("cb_m");
+    constexpr uint32_t kCbL = get_named_compile_time_arg_val("cb_l");
+    constexpr uint32_t kCbO = get_named_compile_time_arg_val("cb_o");
+    constexpr uint32_t kCbRecipL = get_named_compile_time_arg_val("cb_recip_l");
+    constexpr uint32_t kCbMNow = get_named_compile_time_arg_val("cb_m_now");
     // Key tiles already behind the first query chunk. Zero is a fresh prefill; a positive
     // value is prefill-with-history, where the queries see context they did not produce.
     constexpr uint32_t k_offset = get_named_compile_time_arg_val("k_offset");

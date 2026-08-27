@@ -19,7 +19,7 @@
 // every row keeps at least its diagonal, so no row sums to zero and the reciprocal is
 // finite.
 //
-// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+// Compile-time args, all named, plus a cb_<name> per buffer:
 //   Sq in tiles
 //   Sk in tiles
 //   D  in tiles
@@ -38,20 +38,20 @@ void kernel_main() {
     constexpr uint32_t sk = get_named_compile_time_arg_val("sk");
     constexpr uint32_t dt = get_named_compile_time_arg_val("dt");
 
-    constexpr uint32_t kCbQ = TT_U_CB(q);
-    constexpr uint32_t kCbK = TT_U_CB(k);
-    constexpr uint32_t kCbV = TT_U_CB(v);
-    constexpr uint32_t kCbMask = TT_U_CB(mask);
-    constexpr uint32_t kCbOne = TT_U_CB(one);
-    constexpr uint32_t kCbScale = TT_U_CB(scale);
-    constexpr uint32_t kCbScores = TT_U_CB(scores);
-    constexpr uint32_t kCbScaled = TT_U_CB(scaled);
-    constexpr uint32_t kCbMasked = TT_U_CB(masked);
-    constexpr uint32_t kCbRowMax = TT_U_CB(row_max);
-    constexpr uint32_t kCbExp = TT_U_CB(exp);
-    constexpr uint32_t kCbRecip = TT_U_CB(recip);
-    constexpr uint32_t kCbProb = TT_U_CB(prob);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbQ = get_named_compile_time_arg_val("cb_q");
+    constexpr uint32_t kCbK = get_named_compile_time_arg_val("cb_k");
+    constexpr uint32_t kCbV = get_named_compile_time_arg_val("cb_v");
+    constexpr uint32_t kCbMask = get_named_compile_time_arg_val("cb_mask");
+    constexpr uint32_t kCbOne = get_named_compile_time_arg_val("cb_one");
+    constexpr uint32_t kCbScale = get_named_compile_time_arg_val("cb_scale");
+    constexpr uint32_t kCbScores = get_named_compile_time_arg_val("cb_scores");
+    constexpr uint32_t kCbScaled = get_named_compile_time_arg_val("cb_scaled");
+    constexpr uint32_t kCbMasked = get_named_compile_time_arg_val("cb_masked");
+    constexpr uint32_t kCbRowMax = get_named_compile_time_arg_val("cb_row_max");
+    constexpr uint32_t kCbExp = get_named_compile_time_arg_val("cb_exp");
+    constexpr uint32_t kCbRecip = get_named_compile_time_arg_val("cb_recip");
+    constexpr uint32_t kCbProb = get_named_compile_time_arg_val("cb_prob");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
     const uint32_t scale_bits = get_arg(args::scale_bits);
 
     using Q = u::Shape<sq, dt>;                          // Sq x D

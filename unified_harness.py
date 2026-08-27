@@ -362,8 +362,8 @@ def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_pages=2):
 # tt/unified/api.h's Storage declarations and data-movement calls, as patterns. The kernel is
 # the only place that knows which projection stands at which end of a buffer, so it is the
 # place to read it from.
-_RE_CB_CONST = re.compile(r"(\w+)\s*=\s*TT_U_CB\(\s*(\w+)\s*\)")
 _RE_STORAGE = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*(\w+)\s*\)")
+_RE_CB_NAMED = re.compile(r'(\w+)\s*=\s*get_named_compile_time_arg_val\(\s*"cb_(\w+)"\s*\)')
 _RE_PRODUCED = re.compile(
     r"(?:u::Block[\w<>: ]*|u::RetainedBlock[\w<>: ]*|auto)\s+(\w+)\s*=\s*(\w+)\.(?:store|accumulate)\("
 )
@@ -426,8 +426,8 @@ def derive_roles(kernel_source, defines):
     Returns {buffer name: (kind, thread)}. Raises on anything it cannot read.
     """
     src = open(os.path.join(TT_METAL_HOME, kernel_source)).read()
-    # kCbFoo -> "foo", then Storage variable -> "foo".
-    cb_const = dict(_RE_CB_CONST.findall(src))
+    # kCbFoo -> "foo" (from its cb_<name> compile-time arg), then Storage variable -> "foo".
+    cb_const = dict(_RE_CB_NAMED.findall(src))
     storages = {}
     for var, cb in _RE_STORAGE.findall(src):
         if cb in cb_const:
@@ -647,7 +647,8 @@ def unified_program_spec(
         if d.kind is None:
             if d.name not in derived:
                 raise ValueError(
-                    f"{kernel_source} declares no u::Storage on TT_U_CB({d.name}), so its endpoints "
+                    f"{kernel_source} declares no u::Storage on a cb_{d.name} compile-time arg, so its "
+                    f"endpoints "
                     f"cannot be read off the kernel. Name it as the kernel does, or state the role "
                     f"explicitly with dfb_input/dfb_output/dfb_intermed."
                 )

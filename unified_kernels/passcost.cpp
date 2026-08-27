@@ -41,7 +41,7 @@
 // `cols` prices one more OUTPUT tile, which is what puts a number on the one
 // tile_regs_acquire per output tile that Strategy<ReduceFusion> still does.
 //
-// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+// Compile-time args, all named, plus a cb_<name> per buffer:
 //   block height in tiles
 //   block width in tiles
 //
@@ -96,9 +96,9 @@ void kernel_main() {
     constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
     constexpr uint32_t cols = get_named_compile_time_arg_val("cols");
 
-    constexpr uint32_t kCbIn = TT_U_CB(in);
-    constexpr uint32_t kCbVec = TT_U_CB(vec);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbIn = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t kCbVec = get_named_compile_time_arg_val("cb_vec");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
 
 #if defined(PC_MATMUL)
     static_assert(rows == cols, "a chained matmul has to be square to preserve the shape");

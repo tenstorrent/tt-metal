@@ -9,8 +9,7 @@
 // output slice should be identical -- which is what makes a mis-addressed
 // semaphore or a skipped handshake visible.
 //
-// Compile-time args, all named: tiles_per_block, and a cb_<name> per buffer that TT_U_CB
-// reads.
+// Compile-time args, all named: tiles_per_block, and a cb_<name> per buffer.
 //
 // Runtime args, identical on all three kernels: out_block, this core's output slice, read by
 // NAME. That is hazard D17 closed -- a missing or misspelled name is an error from metal
@@ -42,8 +41,8 @@ namespace u = tt::unified;
 void kernel_main() {
     constexpr uint32_t tiles_per_block = get_named_compile_time_arg_val("tiles_per_block");
 
-    constexpr uint32_t kCbIn = TT_U_CB(in);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbIn = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
     const uint32_t out_block = get_arg(args::out_block);
 
     u::compute_init(kCbIn, kCbOut);

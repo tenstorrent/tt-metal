@@ -41,7 +41,7 @@
 // indexed c*K + k, and the output is R*C blocks of rt x ct in row-major core
 // order.
 //
-// Compile-time args: a cb_<name> per buffer, which TT_U_CB reads.
+// Compile-time args: a cb_<name> per buffer.
 //
 // Runtime args (identical on every core):
 //
@@ -63,10 +63,10 @@
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t kCbIn0 = TT_U_CB(in0);
-    constexpr uint32_t kCbIn1 = TT_U_CB(in1);
-    constexpr uint32_t kCbAcc = TT_U_CB(acc);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbIn0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t kCbIn1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t kCbAcc = get_named_compile_time_arg_val("cb_acc");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
 
     const u::LogicalCoord me = u::LogicalCoord::this_core();
     const uint32_t out_block = me.y * MM_GRID_W + me.x;
