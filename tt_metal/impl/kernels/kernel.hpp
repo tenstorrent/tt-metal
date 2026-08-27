@@ -138,6 +138,12 @@ struct ScratchpadBindingHandle {
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
 };
 
+// Metal 2.0: ordered TensorBinding tokens (KernelAdvancedOptions::tensor_binding_sequences).
+struct TensorBindingSequenceHandle {
+    std::string sequence_name;
+    std::vector<std::string> members;
+};
+
 class Kernel : public JitBuildSettings {
 public:
     using Config = std::variant<
@@ -240,6 +246,11 @@ public:
     void set_scratchpad_binding_handles(std::vector<ScratchpadBindingHandle> handles) {
         scratchpad_binding_handles_ = std::move(handles);
     }
+    void process_tensor_binding_sequences(
+        std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)>) const override;
+    void set_tensor_binding_sequences(std::vector<TensorBindingSequenceHandle> sequences) {
+        tensor_binding_sequences_ = std::move(sequences);
+    }
     // Metal 2.0: length of the CTA-vararg prefix in compile_time_args_.
     // Values live in compile_time_args_.
     uint32_t get_compile_time_vararg_count() const override { return compile_time_vararg_count_; }
@@ -256,6 +267,8 @@ public:
     void set_common_runtime_args(stl::Span<const uint32_t> runtime_args);
 
     int get_watcher_kernel_id() const { return watcher_kernel_id_; }
+
+    ContextId get_context_id() const { return context_id_; }
 
     // Get the corresponding core type, processor class, and processor type of the kernel as defined by HAL.
     // The processor type is per-binary, where 0 <= index < expected_num_binaries.
@@ -300,6 +313,7 @@ public:
 
 protected:
     Kernel(
+        ContextId context_id,
         HalProgrammableCoreType programmable_core_type,
         HalProcessorClassType processor_class,
         const KernelSource& kernel_src,
@@ -317,6 +331,7 @@ protected:
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
         const KernelCrtaLayout& crta_layout = {});
 
+    ContextId context_id_{DEFAULT_CONTEXT_ID};
     HalProgrammableCoreType programmable_core_type_;
     HalProcessorClassType processor_class_;
 
@@ -340,6 +355,8 @@ protected:
     // and allocate_scratchpads fills each handle's allocated_address after L1 allocation.
     // NOTE: Scratchpad allocated addresses can change between enqueues if DFB size overrides are used.
     std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
+    // Metal 2.0: tensor binding sequences (set post-construction, like scratchpads).
+    std::vector<TensorBindingSequenceHandle> tensor_binding_sequences_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.
     uint32_t compile_time_vararg_count_{0};
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
@@ -380,6 +397,7 @@ private:
 class DataMovementKernel : public Kernel {
 public:
     DataMovementKernel(
+        ContextId context_id,
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const DataMovementConfig& config,
@@ -392,6 +410,7 @@ public:
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
         const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
+            context_id,
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
             kernel_src,
@@ -408,7 +427,7 @@ public:
             crta_layout),
         config_(config) {
         TT_FATAL(
-            MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
+            MetalContext::instance(context_id_).get_cluster().arch() != ARCH::QUASAR,
             "DataMovementKernel is not supported on Quasar. Use QuasarDataMovementKernel instead.");
         this->set_compiler_include_paths(config_.compiler_include_paths);
     }
@@ -440,8 +459,13 @@ private:
 
 class EthernetKernel : public Kernel {
 public:
-    EthernetKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const EthernetConfig& config) :
+    EthernetKernel(
+        ContextId context_id,
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const EthernetConfig& config) :
         Kernel(
+            context_id,
             config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
             HalProcessorClassType::DM,
             kernel_src,
@@ -478,8 +502,10 @@ private:
 
 class DramKernel : public Kernel {
 public:
-    DramKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DramConfig& config) :
+    DramKernel(
+        ContextId context_id, const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DramConfig& config) :
         Kernel(
+            context_id,
             HalProgrammableCoreType::DRAM,
             HalProcessorClassType::DM,
             kernel_src,
@@ -519,11 +545,13 @@ namespace experimental::quasar {
 class DispatchEngineKernel : public Kernel {
 public:
     DispatchEngineKernel(
+        ContextId context_id,
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
         DataMovementProcessor dm_processor) :
         Kernel(
+            context_id,
             HalProgrammableCoreType::DISPATCH,
             HalProcessorClassType::DM,
             kernel_src,
@@ -534,7 +562,7 @@ public:
         config_(config),
         dm_processors_{dm_processor} {
         TT_FATAL(
-            MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
+            MetalContext::instance(context_id_).get_cluster().arch() == ARCH::QUASAR,
             "DispatchEngineKernel is only supported on Quasar");
         TT_FATAL(
             config.num_threads_per_cluster == 1,
@@ -575,6 +603,7 @@ private:
 class ComputeKernel : public Kernel {
 public:
     ComputeKernel(
+        ContextId context_id,
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const ComputeConfig& config,
@@ -587,6 +616,7 @@ public:
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
         const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
+            context_id,
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
             kernel_src,
@@ -603,7 +633,7 @@ public:
             crta_layout),
         config_(config) {
         TT_FATAL(
-            MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
+            MetalContext::instance(context_id_).get_cluster().arch() != ARCH::QUASAR,
             "ComputeKernel is not supported on Quasar. Use QuasarComputeKernel instead.");
         this->set_compiler_include_paths(config_.compiler_include_paths);
     }
@@ -625,6 +655,8 @@ public:
     std::string_view get_compiler_opt_level() const override;
 
     std::string_view get_linker_opt_level() const override;
+
+    bool get_trisc2_rvv_enabled() const override { return this->config_.enable_trisc2_rvv; }
 
 private:
     const ComputeConfig config_;
@@ -660,6 +692,7 @@ enum class QuasarComputeProcessor : uint8_t {
 class QuasarDataMovementKernel : public Kernel {
 public:
     QuasarDataMovementKernel(
+        ContextId context_id,
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
@@ -673,6 +706,7 @@ public:
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
         const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
+            context_id,
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
             kernel_src,
@@ -690,7 +724,7 @@ public:
         config_(config),
         dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
-            MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
+            MetalContext::instance(context_id_).get_cluster().arch() == ARCH::QUASAR,
             "QuasarDataMovementKernel is only supported on Quasar");
         TT_FATAL(
             config.num_threads_per_cluster == dm_processors.size(),
@@ -732,6 +766,7 @@ private:
 class QuasarComputeKernel : public Kernel {
 public:
     QuasarComputeKernel(
+        ContextId context_id,
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarComputeConfig& config,
@@ -745,6 +780,7 @@ public:
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
         const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
+            context_id,
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
             kernel_src,
@@ -762,7 +798,7 @@ public:
         config_(config),
         compute_processors_(compute_processors.begin(), compute_processors.end()) {
         TT_FATAL(
-            MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
+            MetalContext::instance(context_id_).get_cluster().arch() == ARCH::QUASAR,
             "QuasarComputeKernel is only supported on Quasar");
         TT_FATAL(
             config.num_threads_per_cluster * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE ==

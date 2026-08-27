@@ -70,6 +70,7 @@ def initialize_vllm_text_transformer(
             max_batch_size=max_batch_size // tt_data_parallel,
             optimizations=optimizations,
             max_seq_len=max_seq_len,
+            cache_hf=False,  # vLLM never builds a torch reference; keep the lighter weight loader.
         )
 
         if n_layers is not None:

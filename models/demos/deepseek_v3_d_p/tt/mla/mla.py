@@ -292,6 +292,7 @@ class ttMLA:
         has_indexer: bool | None = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         active_seq_len: Optional[int] = None,
+        first_layer_idx: Optional[int] = None,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -425,6 +426,7 @@ class ttMLA:
         # across serial MLA layers through TT_CCL; forward only reuses these stable addresses.
         self._q_a_latent_gather_output = None
         self._kv_stem_gather_output = None
+        self._output_gate_gather_output = None
         if self.tp_factor > 1:
             if not self.kv_only:
                 self._q_a_latent_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
@@ -439,6 +441,13 @@ class ttMLA:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
+            if self._use_gate and not self.kv_only:
+                self._output_gate_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+                    name="output_gate",
+                    shape=[1, 1, self.active_seq_len_local, self.hidden_size],
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                )
 
         # Per-axis CCL topology, named symmetrically by axis. The q/kv/wo collectives run on the TP
         # axis (cluster_axis=tp_axis) and use tp_ccl_topology; the ring-attention SDPA (ring_mla /
@@ -575,6 +584,7 @@ class ttMLA:
                     active_seq_len=self.active_seq_len,
                     slot_num=slot_num,
                     layer_num=self.layer_num,
+                    first_layer_idx=first_layer_idx,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
@@ -1193,15 +1203,29 @@ class ttMLA:
         12288-wide partial: less traffic, no wide intermediate, and g is complete per device so sigmoid
         can fuse into the matmul (measured ~292 us less collective at FABRIC_2D).
         """
-        h = self._all_gather(hidden_states, dim=3, cluster_axis=self.tp_axis)
+        if self.tp_factor > 1:
+            assert self._output_gate_gather_output is not None
+            assert seq_len_local == self.active_seq_len_local, (
+                f"output-gate gather was preallocated for {self.active_seq_len_local} local tokens, "
+                f"got {seq_len_local}"
+            )
+            h = ttnn.experimental.high_bw_all_gather(
+                hidden_states,
+                dim=3,
+                output_tensor=self._output_gate_gather_output,
+                cluster_axis=self.tp_axis,
+                num_links=self.ccl_num_links,
+            )
+        else:
+            h = hidden_states
         g = ttnn.linear(
             h,
             self.g_proj_weight,
             compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("g_proj", seq_len_local),
         )
-        if h is not hidden_states:
-            ttnn.deallocate(h)
+        # The TP gather aliases a construction-time persistent output buffer shared across serial MLA
+        # instances/layers. Keep it allocated; deallocating the returned wrapper invalidates later users.
         # Fused only when a tuned config supplied fused_activation; otherwise a standalone sigmoid.
         # Keyed off the resolved config so the two paths can't silently drift into double-sigmoid.
         if not self._gate_sigmoid_fused(seq_len_local):

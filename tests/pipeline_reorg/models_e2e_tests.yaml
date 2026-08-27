@@ -193,7 +193,7 @@
 # pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32"
 - name: Llama 3.3-70B e2e tests (Galaxy)
   cmd: |
-    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "ci-token-matching"
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "ci-eval-1"
   model: llama3.3-70b-galaxy
@@ -262,6 +262,7 @@
 - name: Qwen3-32B e2e tests (Galaxy)
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+    export QWEN_BH_PREFETCHER=1  # opt-in BH dram_prefetcher path (no-op on WH); vLLM runs stay on the default no-prefetcher path
     pytest --timeout 900 models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "ci-token-matching"
   model: qwen3-32b-galaxy
   model_family: Qwen
@@ -275,6 +276,42 @@
       tier: 1
       release_ready: false
   owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
+- name: Qwen3-0.6B e2e tests
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-0.6B HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-0.6B
+    pytest --timeout 720 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
+  model: qwen3-0.6b
+  model_family: Qwen
+  skus:
+    wh_n150:
+      timeout: 12
+      tier: 3
+      release_ready: false
+    bh_p150:
+      timeout: 12
+      tier: 3
+      release_ready: false
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Qwen3-1.7B e2e tests
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-1.7B HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-1.7B
+    pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
+  model: qwen3-1.7b
+  model_family: Qwen
+  skus:
+    wh_n150:
+      timeout: 14
+      tier: 3
+      release_ready: false
+    bh_p150:
+      timeout: 14
+      tier: 3
+      release_ready: false
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
 - name: Qwen2.5-32B e2e tests
@@ -306,6 +343,21 @@
   skus:
     wh_llmbox_perf:
       timeout: 18
+      tier: 2
+      release_ready: false
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Qwen2.5-Coder-32B e2e tests (Blackhole)
+  cmd: |
+    export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
+    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+  model: qwen2.5-coder-32b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 15
       tier: 2
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -509,10 +561,13 @@
     # AutoModelForCausalLM.from_pretrained, so they live in the e2e job
     # (HF_MODEL=hub-id resolves to the populated /mnt/MLPerf cache) rather
     # than the unit job (HF_MODEL=local config-only dir).
+    # Skip batch_perf microbench in e2e — correctness is covered by
+    # test_packed_verify_matches_sequential; the bench blows short SKU budgets.
     pytest -s --timeout 600 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
   model: gemma-4-e2b
   model_family: Gemma
   skus:
@@ -535,7 +590,8 @@
     pytest -s --timeout 600 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
   model: gemma-4-e4b
   model_family: Gemma
   skus:
@@ -543,6 +599,8 @@
     # wh_n300:
     #   timeout: 15
     #   tier: 3
+    # Note: do not add bh_p150 here — models e2e_tier3 bh_p150 budget is 7m
+    # and Gemma-4-E2B already uses 5m on that SKU (f562aa60493 over-budget).
     bh_p300:
       timeout: 5
       tier: 3
@@ -559,10 +617,13 @@
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
+    # 10m; demo+lm_head+matches_sequential+full_model already fill it.
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
   model: gemma-4-26b-a4b
   model_family: Gemma
   skus:
@@ -590,10 +651,13 @@
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
+    # 10m; demo+lm_head+matches_sequential+full_model already fill it.
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
   model: gemma-4-31b
   model_family: Gemma
   skus:
@@ -621,10 +685,18 @@
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
   model: gemma-4-12b
   model_family: Gemma
   skus:
+    # Single Blackhole P150: short demo + unit PCC. Cap at 6m so models
+    # e2e_tier2 bh_p150 stays within the 26m team budget (GPT-OSS 15 + UNet 5
+    # + this 6). f562aa60493's timeout:20 made requested=40 and failed
+    # load-test-matrix (see all-model-tests on arg/gemma4_1x8optiom).
+    bh_p150:
+      timeout: 6
+      tier: 2
     bh_quietbox_2:
       timeout: 22
       tier: 1
@@ -876,6 +948,21 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── Z-Image ────────────────────────────────────────────────────────
+
+- name: Z-Image-Turbo e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    pytest --timeout 600 models/demos/z_image_turbo/tests/test_pipeline.py
+  model: z-image-turbo
+  model_family: Z-Image
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ── Stable Diffusion XL ────────────────────────────────────────────
 
 - name: Stable Diffusion XL (base) e2e tests
@@ -982,6 +1069,62 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── Mochi (TT-DiT) ─────────────────────────────────────────────────
+# test_tt_mochi_pipeline is named explicitly to keep the CPU-only diffusers
+# reference test in the same file out of CI.
+- name: TT-DiT Mochi e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    pytest --timeout 1500 models/tt_dit/tests/models/mochi/test_pipeline_mochi.py::test_tt_mochi_pipeline
+    pytest --timeout 1800 models/tt_dit/tests/models/mochi/test_performance_mochi.py
+  model: mochi
+  model_family: Mochi
+  skus:
+    wh_llmbox_perf:
+      timeout: 105
+      tier: 3
+      release_ready: false
+    wh_galaxy_perf:
+      timeout: 55
+      tier: 3
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# ── Qwen-Image (TT-DiT) ────────────────────────────────────────────
+- name: TT-DiT Qwen-Image e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    pytest --timeout 1200 models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py
+    pytest --timeout 720 models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py
+  model: qwenimage
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 20
+      tier: 2
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Motif-Image-6B e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 1500 models/tt_dit/tests/models/motif/test_pipeline_motif.py
+    pytest --timeout 900 models/tt_dit/tests/models/motif/test_performance_motif.py
+  model: motif
+  model_family: Motif
+  skus:
+    wh_llmbox_perf:
+      timeout: 50
+      tier: 2
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ── Panoptic DeepLab ───────────────────────────────────────────────
 - name: panoptic-deeplab e2e tests
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1020
@@ -1019,18 +1162,174 @@
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
 
-- name: TT-DiT Wan2.2-T2V-A14B e2e tests (BH QuietBox 2)
+- name: VGGNet e2e tests
+  cmd: |
+    pytest --timeout 180 models/demos/vision/classification/vgg/demo/demo.py
+  model: vggnet
+  model_family: VGGNet
+  skus:
+    wh_n150:
+      timeout: 4
+      tier: 3
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+
+- name: BERT-Tiny e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 120 models/demos/wormhole/bert_tiny/demo/demo.py
+  model: bert-tiny
+  model_family: BERT
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U024A4EFV6U # Brian Liu
+  team: ttnn
+
+- name: BERT-Large e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 210 models/demos/metal_BERT_large_11/demo/demo.py -k batch_8
+  model: bert-large
+  model_family: BERT
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 3
+  owner_id: U024A4EFV6U # Brian Liu
+  team: ttnn
+
+- name: DistilBERT e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 120 models/demos/wormhole/distilbert/demo/demo.py
+  model: distilbert
+  model_family: DistilBERT
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U087S3K319A # Austin Ho (CODEOWNERS models/**/distilbert/ @tt-aho)
+  team: ttnn
+
+- name: SqueezeBERT e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 120 models/demos/squeezebert/demo/demo.py
+  model: squeezebert
+  model_family: SqueezeBERT
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U07D5N7QL4U # Joseph Chu
+  team: ttnn
+
+- name: MNIST MLP e2e tests
+  cmd: |
+    pytest --timeout 120 models/demos/vision/classification/mnist/demo/demo.py
+  model: mnist-mlp
+  model_family: MNIST MLP
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U088DBNUKGR # Evan Smal
+  team: models
+
+- name: EfficientDet-D0 e2e tests
+  cmd: |
+    pytest --timeout 660 models/experimental/efficientdetd0/tests/perf/test_e2e_performant.py
+  model: efficientdet-d0
+  model_family: EfficientDet
+  skus:
+    wh_n150:
+      timeout: 6
+      tier: 3
+  owner_id: U07J5E9NA9G # Dalar Vartanians
+  team: models
+
+- name: MobileNetV3 e2e tests
+  cmd: |
+    pytest --timeout 660 models/experimental/mobileNetV3/tests/perf/test_mobilenetv3_perf.py -k single_device
+  model: mobilenetv3
+  model_family: MobileNet
+  skus:
+    wh_n150:
+      timeout: 4
+      tier: 3
+  owner_id: U07J5E9NA9G # Dalar Vartanians
+  team: models
+
+- name: SSD512 e2e tests
+  cmd: |
+    pytest --timeout 660 models/experimental/SSD512/tests/perf/test_e2e_performant.py
+  model: ssd512
+  model_family: SSD
+  skus:
+    wh_n150:
+      timeout: 4
+      tier: 3
+  owner_id: U07J5E9NA9G # Dalar Vartanians
+  team: models
+
+- name: YuNet e2e tests
+  cmd: |
+    pytest --timeout 660 models/experimental/yunet/tests/perf/test_e2e_performant.py
+  model: yunet
+  model_family: YuNet
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U0978501V8B # CODEOWNERS @tvardhineniTT
+  team: models
+
+- name: ResNet-50 e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 300 models/demos/vision/classification/resnet50/wormhole/demo/demo.py
+    pytest --timeout 120 models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_stability.py -k "short"
+    pytest --timeout 300 models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py
+  model: resnet50
+  model_family: ResNet
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 1
+    wh_llmbox_perf:
+      timeout: 6
+      tier: 1
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+
+- name: TT-DiT Wan2.2-T2V-A14B e2e tests
   cmd: |
     unset HF_HUB_OFFLINE
-    export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
+    fail=0
+    # 2x2 and the 2x4 family skip on a Galaxy by device count; ring_bh_4x8 now skips on the
+    # fabric payload guard in conftest.py. wh_4x8 at 480p is still excluded: it misses its
+    # encoder tolerance (0.105-0.111 measured against 0.1), which is a separate question.
     pytest --timeout 2700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
-      -k "resolution_480p and t2v"
+      -k "resolution_480p and t2v and not wh_4x8" || fail=1
+    pytest --timeout 1500 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
+      -k "4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p" || fail=1
+    pytest --timeout 1200 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+      -k "wh_4x8_sp1tp0 and resolution_720p and t2v" || fail=1
+    exit $fail
   model: wan-2.2-t2v
   model_family: Wan
   skus:
     bh_quietbox_2:
       timeout: 50
       tier: 1
+      release_ready: true
+    wh_galaxy_perf:
+      timeout: 85
+      tier: 1
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -1073,7 +1372,7 @@
     bh_sc4:
       timeout: 40
       tier: 1
-      release_ready: false
+      release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -1115,7 +1414,7 @@
     bh_sc4:
       timeout: 80
       tier: 1
-      release_ready: false
+      release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -1212,3 +1511,347 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+
+# ── DeepSeek V3 (Wormhole Galaxy / TG) ──
+- name: DeepSeek-V3 decode stress e2e tests (Galaxy)
+  cmd: |
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG
+    pytest models/demos/deepseek_v3/demo/test_demo.py -k "tg_stress or tg_upr8" --timeout 900
+  model: deepseek-v3-tg
+  model_family: DeepSeek
+  skus:
+    wh_galaxy_perf:
+      timeout: 15
+      tier: 1
+      release_ready: false
+  owner_id: U08H32XUS9W # Yousef Al Rawwash
+  team: models
+
+# ── DeepSeek V3 B1 (Black Hole supercluster, bh_sc4 / bh_sc16) ──
+# Migrated from demo_sp_multihost_tests.yaml. Launch from empty NFS cwd
+# ($PIPELINE_DIR/ttrun-cwd) so Phase 1 writes generated/ttrun/ on shared
+# storage. Do NOT copy the full source tree onto NFS — that OOMs the 4Gi
+# Actions runner. ttrun.py + MGD use absolute paths under TT_METAL_HOME.
+# PIPELINE_DIR / TTRUN_CWD / TTRUN_PY come from models-e2e-tests-multihost-impl.yaml.
+#
+# Same automapper pattern as WAN SC4: --mesh-graph-descriptor + --hosts from
+# /etc/ttop/hostfile. SC4 uses the single-pod blitz MGD (not superpod).
+
+# todo)) proven to work by itself but mess up SC4 allocation; disabled until
+# issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
+# - name: Single Galaxy - Host I/O Loopback (DeepSeek V3 B1)
+#   cmd: |
+#     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+#     SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/one_galaxy"
+#     cp "${SCALEOUT_CONFIG_DIR}/rank_bindings_mapping.yaml" .
+#     cp "${SCALEOUT_CONFIG_DIR}/rank0_binding.yaml" .
+#     cp "${SCALEOUT_CONFIG_DIR}/rank1_binding.yaml" .
+#     cp "${SCALEOUT_CONFIG_DIR}/rank2_binding.yaml" .
+#     cp "${SCALEOUT_CONFIG_DIR}/rank3_binding.yaml" .
+#     cp "${SCALEOUT_CONFIG_DIR}/mesh_graph_descriptor.textproto" .
+#     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+#
+#     TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+#       --tcp-interface ens5f0np0 \
+#       --rank-bindings-mapping rank_bindings_mapping.yaml \
+#       --mpi-args "--host $PIPELINE_HOSTS --map-by slot --bind-to none --tag-output" \
+#       python3 -m pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io_decoder_sweep_chunked_trace.py::test_run_host_io_decoder_sweep_chunked_trace_world_size_4 \
+#       --timeout=1200
+#   model: deepseek-v3-b1
+#   model_family: DeepSeek
+#   skus:
+#     bh_sc1:
+#       timeout: 20
+#       tier: 1
+#       release_ready: false
+#   owner_id: U0ALAR9B78T # Brayden Zhang
+#   team: scaleout
+
+- name: Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)
+  cmd: |
+    MGD="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
+      python3 -m models.demos.deepseek_v3_b1.demo.cli \
+        --max-new-tokens 4096 \
+        --no-stop-at-eos \
+        --weights real \
+        --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+      > "${PIPELINE_DIR}/launch.log" 2>&1
+  model: deepseek-v3-b1
+  model_family: DeepSeek
+  skus:
+    bh_sc4:
+      timeout: 30
+      tier: 1
+      release_ready: true
+  owner_id: U08E1JCMAJF
+  team: scaleout
+
+# TODO: re-enable after SC4 Stress Test when it is fixed
+# - name: Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)
+#   cmd: |
+#     MGD="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto"
+#     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+#     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+#     test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+#     test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+#
+#     cd "${TTRUN_CWD}"
+#     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+#       --skip-executable-check \
+#       --tcp-interface ens5f0np0 \
+#       --mesh-graph-descriptor "${MGD}" \
+#       --hosts "${RESOLVED_HOSTS}" \
+#       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+#       -- \
+#       python3 -m models.demos.deepseek_v3_b1.demo.cli \
+#         --max-new-tokens 128000 \
+#         --repeat-generations 2 \
+#         --no-stop-at-eos \
+#         --weights real \
+#         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+#         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+#         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+#       > "${PIPELINE_DIR}/launch.log" 2>&1
+#   model: deepseek-v3-b1
+#   model_family: DeepSeek
+#   skus:
+#     bh_sc4:
+#       timeout: 60
+#       tier: 1
+#       release_ready: false
+#   owner_id: U08E1JCMAJF
+#   team: scaleout
+
+# TODO: re-enable after SC16 Teacher Forcing Test when it is fixed
+# - name: Teacher Forcing Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)
+#   cmd: |
+#     MGD="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
+#     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+#     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+#     test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+#     test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+#
+#     cd "${TTRUN_CWD}"
+#     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+#       --skip-executable-check \
+#       --tcp-interface ens5f0np0 \
+#       --mesh-graph-descriptor "${MGD}" \
+#       --hosts "${RESOLVED_HOSTS}" \
+#       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+#       -- \
+#       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
+#         --weights real \
+#         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+#         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+#         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+#         --reference-file /mnt/models/ref_data/output1_reference.txt \
+#         --output-file "${PIPELINE_DIR}/teacher_forcing_output.json" \
+#         --chunk-accuracy 256 \
+#       > "${PIPELINE_DIR}/launch.log" 2>&1
+#   model: deepseek-v3-b1
+#   model_family: DeepSeek
+#   skus:
+#     bh_sc16:
+#       timeout: 30
+#       tier: 1
+#       release_ready: false
+#   owner_id: U08E1JCMAJF
+#   team: scaleout
+
+- name: Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)
+  cmd: |
+    MGD="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
+      python3 -m models.demos.deepseek_v3_b1.demo.cli \
+        --max-new-tokens 4096 \
+        --no-stop-at-eos \
+        --weights real \
+        --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+        --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+      > "${PIPELINE_DIR}/launch.log" 2>&1
+  model: deepseek-v3-b1
+  model_family: DeepSeek
+  skus:
+    bh_sc16:
+      timeout: 60
+      tier: 1
+      release_ready: true
+  owner_id: U08E1JCMAJF
+  team: scaleout
+# TODO: re-enable after SC16 Stress Test when it is fixed
+# - name: Stress Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)
+#   cmd: |
+#     MGD="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto"
+#     mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+#     RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+#     test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+#     test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+#
+#     cd "${TTRUN_CWD}"
+#     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
+#       --skip-executable-check \
+#       --tcp-interface ens5f0np0 \
+#       --mesh-graph-descriptor "${MGD}" \
+#       --hosts "${RESOLVED_HOSTS}" \
+#       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+#       -- \
+#       python3 -m models.demos.deepseek_v3_b1.demo.cli \
+#         --max-new-tokens 128000 \
+#         --repeat-generations 2 \
+#         --no-stop-at-eos \
+#         --weights real \
+#         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+#         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+#         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+#       > "${PIPELINE_DIR}/launch.log" 2>&1
+#   model: deepseek-v3-b1
+#   model_family: DeepSeek
+#   skus:
+#     bh_sc16:
+#       timeout: 60
+#       tier: 1
+#       release_ready: false
+#   owner_id: U08E1JCMAJF
+#   team: scaleout
+
+- name: BGE-M3 e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    export HF_MODEL=BAAI/bge-m3
+    pytest --timeout 300 models/demos/wormhole/bge_m3/demo/demo.py
+  model: bge_m3
+  skus:
+    wh_n150:
+      timeout: 4
+      tier: 2
+  owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
+  team: models
+
+# ── TT-Train (Blackhole Galaxy) ───────────────────────────────────
+
+- name: Galaxy TinyLlama 1.1B DDP=32 train e2e tests
+  cmd: |
+    export HF_HOME=/mnt/models/huggingface
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
+      ./tt-train/scripts/setup_pth.sh
+      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tinyllama_1_1b_ddp32_shakespeare"
+    '
+  model: "[tt-train] tinyllama_1_1b_ddp32"
+  skus:
+    bh_sc1:
+      timeout: 45
+      tier: 3
+      release_ready: false
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+# Hanging on bh_sc1, disable until issue is resolved. Maybe related to: https://github.com/tenstorrent/tt-metal/issues/49557
+# - name: Galaxy Llama 8B TP=8 DDP=4 train e2e tests
+#   cmd: |
+#     export HF_HOME=/mnt/models/huggingface
+#     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
+#       ./tt-train/scripts/setup_pth.sh
+#       python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp8_ddp4_shakespeare"
+#     '
+#   model: "[tt-train] llama_8b_tp8_ddp4"
+#   skus:
+#     bh_sc1:
+#       timeout: 20
+#       tier: 3
+#       release_ready: false
+#   owner_id: U07K00A281X # Kevin Wu
+#   team: train
+
+- name: Galaxy Qwen 3 1.7B DDP=32 train e2e tests
+  cmd: |
+    export HF_HOME=/mnt/models/huggingface
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
+      ./tt-train/scripts/setup_pth.sh
+      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "qwen3_1_7b_ddp32_shakespeare"
+    '
+  model: "[tt-train] qwen3_1_7b_ddp32_shakespeare"
+  skus:
+    bh_sc1:
+      timeout: 20
+      tier: 3
+      release_ready: false
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+- name: Galaxy Tiny Deepseek v3 DDP=32 train e2e tests
+  cmd: |
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
+      ./tt-train/scripts/setup_pth.sh
+      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tiny_deepseek_v3_ddp32_char_shakespeare"
+    '
+  model: "[tt-train] tiny_deepseek_v3_ddp32_char"
+  skus:
+    bh_sc1:
+      timeout: 75
+      tier: 3
+      release_ready: false
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+# Unstable on bh_sc1, disable until issue is resolved. Maybe related to: https://github.com/tenstorrent/tt-metal/issues/49557
+# - name: Galaxy Llama 70B TP=8 FSDP=4 train e2e tests
+#   cmd: |
+#     export HF_HUB_OFFLINE=1
+#     export HF_HOME=/mnt/models/huggingface
+#     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
+#       ./tt-train/scripts/setup_pth.sh
+#       python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_70b_tp8_fsdp4_shakespeare"
+#     '
+#   model: "[tt-train] llama_70b_tp8_fsdp4"
+#   skus:
+#     bh_sc1:
+#       timeout: 120
+#       tier: 3
+#       release_ready: false
+#   owner_id: U07K00A281X # Kevin Wu
+#   team: train
+
+# Hanging on g13blx01, disable until issue is resolved: https://github.com/tenstorrent/tt-metal/issues/49557
+# - name: Galaxy Llama 8B TP=4 DDP=8 train e2e tests
+#   cmd: |
+#     export HF_HOME=/mnt/models/huggingface
+#     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
+#       ./tt-train/scripts/setup_pth.sh
+#       python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
+#     '
+#   model: "[tt-train] llama_8b_tp4_ddp8"
+#   skus:
+#     bh_sc1:
+#       timeout: 25
+#       tier: 3
+#       release_ready: false
+#   owner_id: U07K00A281X # Kevin Wu
+#   team: train

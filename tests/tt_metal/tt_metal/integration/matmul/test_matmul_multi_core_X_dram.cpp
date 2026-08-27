@@ -262,6 +262,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
             int dram_src1_channel_id = 1;
             uint32_t dram_buffer_dst_addr =
                 (core_index * per_core_M * per_core_N * single_tile_size) + dram_unreserved_base;
+            int dram_dst_channel_id = 2;
 
             uint32_t dram_buffer_size_act =
                 single_tile_size * per_core_M * K;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -303,9 +304,9 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
 
             const std::array mm_reader_args = {
                 (std::uint32_t)dram_buffer_src0_addr,
-                (std::uint32_t)0,
+                (std::uint32_t)dram_src0_channel_id,
                 (std::uint32_t)dram_buffer_src1_addr,
-                (std::uint32_t)0,
+                (std::uint32_t)dram_src1_channel_id,
                 (std::uint32_t)(K / in0_block_w),                            // num_blocks
                 (std::uint32_t)per_core_M * in0_block_w,                     // input 0 block num tiles
                 (std::uint32_t)per_core_N * in0_block_w,                     // input 1 block num tiles
@@ -314,7 +315,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
 
             const std::array writer_args = {
                 (std::uint32_t)dram_buffer_dst_addr,
-                (std::uint32_t)0,
+                (std::uint32_t)dram_dst_channel_id,
                 (std::uint32_t)out_subblock_h,               // num tiles per sub block m
                 (std::uint32_t)out_subblock_w,               // num tiles per sub block n
                 (std::uint32_t)per_core_M / out_subblock_h,  // num sub blocks m
@@ -334,7 +335,9 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
 
     log_debug(LogTest, "Running Matmul {} core test", num_cores_c * num_cores_r);
 
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
     log_debug(LogTest, "Matmul test done");
     log_debug(LogTest, "Gathering data back from dram and checking against golden");
     for (int i = 0; i < num_cores_r; i++) {

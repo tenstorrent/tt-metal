@@ -138,9 +138,9 @@ struct FiberSchedulerImpl {
     bool persistent_ = false;  // run_persistent/pump in flight: a host-fed socket wait quiescing is
                                // a resumable HostWait, not a tier-1 deadlock. See run_persistent().
     bool host_wait_ = false;   // set by inner_loop when it broke out for host I/O (vs Done/deadlock)
-    unsigned socket_poll_waiters_ = 0;  // fibers TAGGED spin-polling (under mu_). Sticky gate; freshness decides
+    unsigned socket_poll_waiters_ = 0;   // fibers TAGGED spin-polling (under mu_). Sticky gate; freshness decides
     uint64_t poll_wait_staleness_ = 64;  // resumes a tag stays credible unrefreshed; per-fiber, so peers can't age it
-    unsigned cb_poll_waiters_ = 0;  // as socket_poll_waiters_, but for CB probes (peer-fed)
+    unsigned cb_poll_waiters_ = 0;       // as socket_poll_waiters_, but for CB probes (peer-fed)
     std::exception_ptr first_eptr_;
 
     std::atomic<uint64_t> progress_{0};      // fiber completions + published pages (tier 2)

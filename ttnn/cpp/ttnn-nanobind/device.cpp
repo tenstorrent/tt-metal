@@ -606,7 +606,17 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "synchronize_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            tt::tt_metal::distributed::Synchronize(device, raw_optional(cq_id), sub_device_ids);
+            // Guard before touching mesh_command_queue(): the queues are torn down on close, so looking one up on
+            // an uninitialized device would assert. Synchronize() is a no-op there anyway.
+            if (!device->is_initialized()) {
+                return;
+            }
+            if (cq_id.has_value()) {
+                tt::tt_metal::distributed::Synchronize(
+                    *device, device->mesh_command_queue(cq_id->get()), sub_device_ids);
+            } else {
+                tt::tt_metal::distributed::Synchronize(*device, std::nullopt, sub_device_ids);
+            }
         },
         synchronize_device_doc.data(),
         nb::arg("device"),

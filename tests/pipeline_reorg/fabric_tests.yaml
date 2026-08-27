@@ -1,0 +1,226 @@
+# Fabric hardware test matrix — consumed by .github/workflows/tm-fabric-tests-impl.yaml.
+#
+# Each entry:
+#   name: GitHub Actions job display name (SKU is appended by prepare_test_matrix).
+#   cmd: Shell command(s) to run from TT_METAL_HOME (/work).
+#   skus: SKU -> { timeout } (minutes). Multi-SKU entries fan out one leg per SKU.
+#   team: Required for time_budget verification (scaleout for all fabric tests).
+#   owner_id: Slack user ID to notify on failure.
+# `arch` is derived from the SKU inline in the impl workflow's ARCH_NAME
+# expression (bh_* -> blackhole, wh_* -> wormhole_b0), not authored per entry.
+#   upload_benchmarks: (optional) When true and github.ref_name==main, impl runs
+#     check-latency-bw-results + SFTP uploads (fabric BW / latency).
+#   auto_triage: (optional, default true) Set false for multi-process legs where
+#     MPI coordination causes triage false positives.
+#
+# For max allowed timeout refer to .github/time_budget.yaml (scaleout -> unit).
+# CPU-only fabric tests live in tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml
+# and are invoked by fabric-cpu-only-tests-impl.yaml from the same parent workflow.
+
+# ============================================================================
+# WH N300 — same cmd as merge-gate `scaleout unit tests` (fabric_merge_gate_tests.yaml).
+# Kept in both lists so merge-gate keeps its budget-scoped entry.
+# ============================================================================
+- name: WH N300 scaleout unit tests
+  cmd: ./tests/scripts/run_cpp_fabric_tests.sh
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  team: scaleout
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+# ============================================================================
+# WH T3K (llmbox) — port of run_t3000_ttfabric_tests + wh-t3k-udm-tests inline block.
+# The `t3k fabric tests` entry below is also mirrored in
+# tests/pipeline_reorg/fabric_sanity_tests.yaml so the sanity pipeline retains
+# T3K fabric coverage (deliberate duplication — sanity smoke gate vs. deeper
+# tm-fabric-tests pipeline).
+# ============================================================================
+- name: t3k fabric tests
+  cmd: |
+    source tests/scripts/t3000/run_t3000_unit_tests.sh
+    run_t3000_ttfabric_tests
+  skus:
+    wh_llmbox_civ2:
+      timeout: 30
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+  upload_benchmarks: true
+
+- name: t3k UDM tests
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DUDMModeFixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric2DUDMModeFixture.*"
+    ./build/test/ttnn/unit_tests_ttnn_udm
+  skus:
+    wh_llmbox_civ2:
+      timeout: 30
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+
+# ============================================================================
+# WH Galaxy 6U — port of wh-6u-fabric-tests inline block.
+# Each entry prepends run_cluster_validation so a broken cluster fails fast
+# without running the heavy fabric matrix (was gated via step outcome before).
+# ============================================================================
+- name: 6U fabric quick
+  cmd: |
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2*Fixture.*"
+    TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_deadlock_stability.yaml
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_6U_galaxy_quick.yaml
+  skus:
+    wh_galaxy:
+      timeout: 25
+  team: scaleout
+  owner_id: U0845EV7A5U # Umair Cheema
+  upload_benchmarks: true
+
+- name: 6U multi-process
+  cmd: |
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
+    # Multi-process legs: MPI coordination makes hang-detection unreliable, so
+    # setup-job runs with auto_triage=false (via the per-entry field below) and
+    # we mirror the pre-refactor step ordering by re-clearing the timeout here.
+    export TT_METAL_OPERATION_TIMEOUT_SECONDS=0
+    python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+    tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" python3 tests/ttnn/distributed/test_multi_mesh.py
+    tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_mesh_rank_binding.yaml ./build/test/tt_metal/multi_host_socket_tests
+    tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml  ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="*Socket*"
+    tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_wh_6u_quad_2x4_acyclic.yaml
+    tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_wh_6u_quad_2x4_cyclic.yaml
+    tt-run --rank-binding 4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+  skus:
+    wh_galaxy:
+      timeout: 25
+  team: scaleout
+  owner_id: U0845EV7A5U # Umair Cheema
+  auto_triage: false
+
+# ============================================================================
+# BH multi-card — port of bh-multi-card-unit-tests matrix (9 groups × 3 SKUs).
+# Same cmd across all 3 SKUs; prepare_test_matrix fans out one leg per SKU.
+# ============================================================================
+- name: BH fabric 1D unit tests
+  cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  skus:
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+
+- name: BH fabric 2D fixture unit tests
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricTrafficGeneratorKernelIntegrationTest.*"
+  skus:
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+
+- name: BH fabric mux v2 unit tests
+  cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2*Fixture.*"
+  skus:
+    bh_loudbox:
+      timeout: 5
+    bh_p300:
+      timeout: 5
+    bh_quietbox_2:
+      timeout: 5
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+
+- name: BH fabric UDM mode unit tests
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DUDMModeFixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric2DUDMModeFixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*ChannelTrimming*"
+  skus:
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+
+- name: BH ttnn UDM unit tests
+  cmd: ./build/test/ttnn/unit_tests_ttnn_udm
+  skus:
+    bh_loudbox:
+      timeout: 10
+    bh_p300:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+
+- name: BH fabric system health tests
+  cmd: ./build/test/tt_metal/tt_fabric/test_system_health
+  skus:
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+
+- name: BH fabric stability nightly tests
+  # TT_METAL_OPERATION_TIMEOUT_SECONDS=0 disables hang detection for the long-running stability suite.
+  cmd: TT_METAL_OPERATION_TIMEOUT_SECONDS=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability.yaml --filter 'name.*_short'
+  skus:
+    bh_loudbox:
+      timeout: 30
+    bh_p300:
+      timeout: 30
+    bh_quietbox_2:
+      timeout: 30
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+
+- name: BH ccl nightly tests
+  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
+  skus:
+    bh_loudbox:
+      timeout: 60
+    bh_p300:
+      timeout: 60
+    bh_quietbox_2:
+      timeout: 60
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+
+- name: BH fabric infra unit tests
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_at_least_2x2_mesh.yaml
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_vc2_at_least_2x2_mesh.yaml
+    TT_FABRIC_PROFILE_RX_CH_FWD=1 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_code_profiling.yaml
+  skus:
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar

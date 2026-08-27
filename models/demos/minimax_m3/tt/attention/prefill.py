@@ -5,6 +5,7 @@
 import ttnn
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
+from ..residual import use_sharded_residual
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention, dense_sp_attention_nocache
 from .kv_cache import write_index_k_chunk, write_kv_chunk
@@ -16,7 +17,9 @@ from .operations import (
     apply_output_projection_fused_rs,
     apply_qk_norm_per_head,
     apply_qkv_projection,
+    apply_reduce_scatter,
     apply_rope,
+    assert_sharded_residual_unpadded,
     concat_heads,
     is_shape_fused_mm_rs_supported,
     split_qkv_heads_prefill,
@@ -343,12 +346,16 @@ def attention_forward(
     if batch_size > 1:
         tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
 
-    # Output projection + tensor-parallel allreduce.
+    # Output projection + the closing TP collective. Under a SHARDED residual the collective is a
+    # reduce-scatter only (o_proj is row-parallel, so the RS both completes the partial sums and lands
+    # the result already in the residual's emb/tp layout); under the replicated residual it must be a
+    # full all-reduce.
     # When TP > 1 we use the fused matmul + reduce-scatter op; the trailing
     # all-gather + padding slice stay as separate ops. See
     # apply_output_projection_fused_rs for the per-shape tuned configs.
     # The fused MM+RS op (minimal_matmul_strided_reduce_scatter_async) ONLY supports Ring topology, so
     # fall back to the plain o_proj + all-reduce under Linear (e.g. the single-galaxy FABRIC_1D mesh).
+    sharded_residual = use_sharded_residual() and mesh_config.tp > 1
     use_fused_rs = (
         mesh_config.tp > 1
         and is_shape_fused_mm_rs_supported(tt_sdpa_out)
@@ -358,12 +365,20 @@ def attention_forward(
         with zone("o_proj_fused_rs"):
             rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
         tt_sdpa_out.deallocate(True)
+        if sharded_residual:
+            # The fused op already reduce-scattered: that IS the sharded-residual output. Only the
+            # padding trim would remain, and a sharded residual admits no padding, so nothing is left.
+            assert_sharded_residual_unpadded(mesh_config, hidden_size)
+            return rs_out
         with zone("ccl_out_allgather"):
             tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
     else:
         with zone("o_proj"):
             tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
         tt_sdpa_out.deallocate(True)
+        if sharded_residual:
+            with zone("ccl_out_reduce_scatter"):
+                return apply_reduce_scatter(tt_out, mesh_config, ccl_manager, hidden_size)
         with zone("ccl_out_allreduce"):
             tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
     return tt_out_result

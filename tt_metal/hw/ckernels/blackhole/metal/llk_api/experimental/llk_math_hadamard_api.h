@@ -14,7 +14,7 @@ inline void llk_math_hadamard_h128_init() {
 
 template <MathFidelity math_fidelity = MathFidelity::HiFi4, bool normalize = true>
 inline void llk_math_hadamard_h128(uint32_t dst_index) {
-    LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
+    LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
     _llk_math_hadamard_h128_<math_fidelity, normalize>(dst_index);
 }
 

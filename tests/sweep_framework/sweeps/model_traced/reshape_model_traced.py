@@ -345,7 +345,11 @@ def run(
             output_tensor = ttnn.reshape(input_tensor, shape=tgt_shape, **op_kwargs)
         else:
             output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        output_tensor,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     if is_mesh_device:

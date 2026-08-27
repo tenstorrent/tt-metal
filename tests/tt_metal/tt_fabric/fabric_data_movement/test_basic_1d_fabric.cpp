@@ -302,21 +302,21 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     // Launch sender and receiver programs and wait for them to finish
     // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, recv_program] : recv_programs) {
-        log_info(tt::LogTest, "Run receiver on: {}", dev->get_devices()[0]->id());
-        fixture->RunProgramNonblocking(dev, *recv_program);
+        log_info(tt::LogTest, "Run receiver on: {}", dev->get_device_ids()[0]);
+        fixture->RunProgramNonblocking(dev, std::move(*recv_program));
     }
-    log_info(tt::LogTest, "Run Sender on: {}", sender_device->get_devices()[0]->id());
-    fixture->RunProgramNonblocking(sender_device, sender_program);
+    log_info(tt::LogTest, "Run Sender on: {}", sender_device->get_device_ids()[0]);
+    fixture->RunProgramNonblocking(sender_device, std::move(sender_program));
 
     // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, recv_program] : recv_programs) {
-        fixture->WaitForSingleProgramDone(dev, *recv_program);
+        fixture->WaitForSingleProgramDone(dev);
     }
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+    fixture->WaitForSingleProgramDone(sender_device);
 
     std::vector<uint32_t> sender_status;
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -330,8 +330,8 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, _] : recv_programs) {
         std::vector<uint32_t> receiver_status;
-        tt_metal::detail::ReadFromDeviceL1(
-            dev->get_devices()[0],
+        tt_metal::slow_dispatch::ReadFromL1(
+            *dev,
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,
@@ -397,8 +397,8 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         auto random_dev_list = get_random_numbers_from_range(0, devices.size() - 1, devices.size());
 
         // pick the first two in the list to be src and dst devices for the test.
-        src_physical_device_id = devices[random_dev_list[0]]->get_devices()[0]->id();
-        dst_physical_device_id = devices[random_dev_list[1]]->get_devices()[0]->id();
+        src_physical_device_id = devices[random_dev_list[0]]->get_device_ids()[0];
+        dst_physical_device_id = devices[random_dev_list[1]]->get_device_ids()[0];
         src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
         dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
         mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
@@ -501,25 +501,24 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
     // Launch sender and receiver programs and wait for them to finish
-    fixture->RunProgramNonblocking(receiver_device, receiver_program);
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
+    fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    fixture->WaitForSingleProgramDone(receiver_device);
 
     // Validate the status and packets processed by sender and receiver
     std::vector<uint32_t> sender_status;
     std::vector<uint32_t> receiver_status;
 
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         sender_status,
         CoreType::WORKER);
 
-    tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *receiver_device,
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -632,13 +631,13 @@ void run_unicast_test_bw_chips(
     // Simple notification mailbox with flushing atomic increment is used instead of 2-way handshake for simple testing
     if (use_dram_dst) {
         std::vector<uint32_t> zeros(tt::tt_metal::hal::get_l1_alignment() / sizeof(uint32_t), 0);  // zero out mailbox
-        tt_metal::detail::WriteToDeviceL1(
-            receiver_device->get_devices()[0],
+        tt_metal::slow_dispatch::WriteToL1(
+            *receiver_device,
             receiver_logical_core,
             worker_mem_map.notification_mailbox_address,
             zeros,
             CoreType::WORKER);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(receiver_device->get_devices()[0]->id());
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(receiver_device->get_device_ids()[0]);
     }
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
@@ -664,25 +663,24 @@ void run_unicast_test_bw_chips(
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
     // Launch sender and receiver programs and wait for them to finish
-    fixture->RunProgramNonblocking(receiver_device, receiver_program);
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
+    fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    fixture->WaitForSingleProgramDone(receiver_device);
 
     // Validate the status and packets processed by sender and receiver
     std::vector<uint32_t> sender_status;
     std::vector<uint32_t> receiver_status;
 
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         sender_status,
         CoreType::WORKER);
 
-    tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *receiver_device,
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -738,8 +736,8 @@ void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture) {
     // In 2D routing the source and desitnation devices can be anywhere on the mesh.
     auto random_dev_list = get_random_numbers_from_range(0, devices.size() - 1, 2);
 
-    const auto src_physical_device_id = devices[random_dev_list[0]]->get_devices()[0]->id();
-    const auto dst_physical_device_id = devices[random_dev_list[1]]->get_devices()[0]->id();
+    const auto src_physical_device_id = devices[random_dev_list[0]]->get_device_ids()[0];
+    const auto dst_physical_device_id = devices[random_dev_list[1]]->get_device_ids()[0];
 
     log_info(tt::LogTest, "Src Phys ChipId {}", src_physical_device_id);
     log_info(tt::LogTest, "Dst Phys ChipId {}", dst_physical_device_id);
@@ -863,7 +861,6 @@ void RunTestMCastConnAPI(
     uint32_t bwd_hops) {
     tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
     tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
-    std::vector<tt_metal::Program> receiver_programs;
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -1050,21 +1047,18 @@ void RunTestMCastConnAPI(
                     .compile_args = compile_time_args});
 
             tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
-            fixture->RunProgramNonblocking(receiver_device, receiver_program);
-            receiver_programs.push_back(std::move(receiver_program));
-            log_info(tt::LogTest, "{} Rx Launched on physical device {}", routing_direction, physical_end_device_id);
+            fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+            log_debug(tt::LogTest, "{} Rx Launched on physical device {}", routing_direction, physical_end_device_id);
         }
     }
 
     // Launch sender program and wait for sender to finish
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
 
     // Wait for receivers to finish
     for (const auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            auto receiver_device = fixture->get_device(physical_end_device_ids[i]);
-            fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
+        for (auto physical_end_device_id : physical_end_device_ids) {
+            fixture->WaitForSingleProgramDone(fixture->get_device(physical_end_device_id));
         }
     }
     log_info(tt::LogTest, "All Receivers Finished");
@@ -1074,8 +1068,8 @@ void RunTestMCastConnAPI(
     std::vector<uint32_t> left_recv_status;
     std::vector<uint32_t> right_recv_status;
 
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1094,8 +1088,8 @@ void RunTestMCastConnAPI(
             const auto& receiver_device = fixture->get_device(device_id);
             std::vector<uint32_t> recv_status;
 
-            tt_metal::detail::ReadFromDeviceL1(
-                receiver_device->get_devices()[0],
+            tt_metal::slow_dispatch::ReadFromL1(
+                *receiver_device,
                 receiver_logical_core,
                 worker_mem_map.test_results_address,
                 worker_mem_map.test_results_size_bytes,
@@ -1119,7 +1113,6 @@ void RunTest2DMCastConnAPI(
 
     tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
     tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
-    std::vector<tt_metal::Program> receiver_programs;
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -1595,18 +1588,15 @@ void RunTest2DMCastConnAPI(
                 .compile_args = compile_time_args});
 
         tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
-        fixture->RunProgramNonblocking(receiver_device, receiver_program);
-        receiver_programs.push_back(std::move(receiver_program));
-        log_info(tt::LogTest, "Rx Launched on physical device {}", physical_end_device_id);
+        fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+        log_debug(tt::LogTest, "Rx Launched on physical device {}", physical_end_device_id);
     }
     // Launch sender program and wait for sender to finish
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
 
     // Wait for receivers to finish
-    for (uint32_t i = 0; i < rx_physical_device_ids.size(); i++) {
-        auto receiver_device = fixture->get_device(rx_physical_device_ids[i]);
-        fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
+    for (auto rx_physical_device_id : rx_physical_device_ids) {
+        fixture->WaitForSingleProgramDone(fixture->get_device(rx_physical_device_id));
     }
     log_info(tt::LogTest, "All Receivers Finished");
 
@@ -1615,8 +1605,8 @@ void RunTest2DMCastConnAPI(
     std::vector<uint32_t> left_recv_status;
     std::vector<uint32_t> right_recv_status;
 
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1629,13 +1619,13 @@ void RunTest2DMCastConnAPI(
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
 
     for (unsigned int rx_physical_device_id : rx_physical_device_ids) {
-        log_info(tt::LogTest, "Checking Status of Rx on physical device {}", rx_physical_device_id);
+        log_debug(tt::LogTest, "Checking Status of Rx on physical device {}", rx_physical_device_id);
 
         const auto& receiver_device = fixture->get_device(rx_physical_device_id);
         std::vector<uint32_t> recv_status;
 
-        tt_metal::detail::ReadFromDeviceL1(
-            receiver_device->get_devices()[0],
+        tt_metal::slow_dispatch::ReadFromL1(
+            *receiver_device,
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,
@@ -1652,7 +1642,6 @@ void RunTest2DMCastConnAPI(
 void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32_t start_distance, uint32_t range) {
     tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
     tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
-    std::vector<tt_metal::Program> receiver_programs;
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -1809,24 +1798,20 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
 
             tt_metal::SetRuntimeArgs(
                 receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
-            fixture->RunProgramNonblocking(receiver_device, receiver_program);
-            receiver_programs.push_back(std::move(receiver_program));
-            log_info(tt::LogTest, "{} Rx Launched on physical device {}", routing_direction, physical_end_device_id);
+            fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+            log_debug(tt::LogTest, "{} Rx Launched on physical device {}", routing_direction, physical_end_device_id);
         }
     }
 
     // Launch sender program and wait for sender to finish
-    fixture->RunProgramNonblocking(sender_device, sender_program);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
     log_info(tt::LogTest, "Sender Launched on physical device {}", src_phys_chip_id);
-
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
     log_info(tt::LogTest, "Sender Finished");
 
     // Wait for receivers to finish
     for (const auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            auto receiver_device = fixture->get_device(physical_end_device_ids[i]);
-            fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
+        for (auto physical_end_device_id : physical_end_device_ids) {
+            fixture->WaitForSingleProgramDone(fixture->get_device(physical_end_device_id));
         }
     }
     log_info(tt::LogTest, "All Receivers Finished");
@@ -1836,8 +1821,8 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
     std::vector<uint32_t> left_recv_status;
     std::vector<uint32_t> right_recv_status;
 
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1863,8 +1848,8 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
 
             std::vector<uint32_t> recv_status;
 
-            tt_metal::detail::ReadFromDeviceL1(
-                receiver_device->get_devices()[0],
+            tt_metal::slow_dispatch::ReadFromL1(
+                *receiver_device,
                 receiver_logical_core,
                 worker_mem_map.test_results_address,
                 worker_mem_map.test_results_size_bytes,
@@ -1935,8 +1920,8 @@ void RunEDMConnectionStressTest(
     auto dst_physical_device_id =
         control_plane.get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh_id.value(), 1));
 
-    auto sender_device = fixture->get_device(src_physical_device_id);
-    auto receiver_device = fixture->get_device(dst_physical_device_id);
+    const auto& sender_device = fixture->get_device(src_physical_device_id);
+    const auto& receiver_device = fixture->get_device(dst_physical_device_id);
 
     // Set the destination address for fabric writes (constant for all workers)
     uint32_t fabric_write_dest_bank_addr = 0x50000;
@@ -2043,9 +2028,9 @@ void RunEDMConnectionStressTest(
                 worker_args.push_back(i % message_counts.size());
 
                 const auto sender_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->get_devices()[0]->id());
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->get_device_ids()[0]);
                 const auto receiver_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(receiver_device->get_devices()[0]->id());
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(receiver_device->get_device_ids()[0]);
                 append_fabric_connection_rt_args(
                     sender_fabric_node_id,
                     receiver_fabric_node_id,
@@ -2069,8 +2054,7 @@ void RunEDMConnectionStressTest(
             // Launch program and wait for completion
             auto start_time = std::chrono::high_resolution_clock::now();
             log_debug(tt::LogTest, "Launching program");
-            fixture->RunProgramNonblocking(sender_device, program);
-            fixture->WaitForSingleProgramDone(sender_device, program);
+            tt_metal::LaunchProgram(*sender_device, std::move(program), /*wait_until_cores_done=*/true);
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
@@ -2250,17 +2234,16 @@ void FabricUnicastCommon(
             receiver_programs[recv_dev], receiver_kernel, receiver_logical_core, receiver_runtime_args);
     }
     for (auto& [recv_dev, receiver_program] : receiver_programs) {
-        fixture->RunProgramNonblocking(recv_dev, receiver_program);
+        fixture->RunProgramNonblocking(recv_dev, std::move(receiver_program));
     }
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
     for (auto& [recv_dev, receiver_program] : receiver_programs) {
-        fixture->WaitForSingleProgramDone(recv_dev, receiver_program);
+        fixture->WaitForSingleProgramDone(recv_dev);
     }
 
     std::vector<uint32_t> sender_status;
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -2270,8 +2253,8 @@ void FabricUnicastCommon(
 
     std::vector<uint32_t> receiver_status;
     for (const auto& recv_dev : receiver_devices) {
-        tt_metal::detail::ReadFromDeviceL1(
-            recv_dev->get_devices()[0],
+        tt_metal::slow_dispatch::ReadFromL1(
+            *recv_dev,
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,
@@ -2569,16 +2552,12 @@ void UDMFabricUnicastCommon(
         if (noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC) {
             uint32_t total_size_to_clear = num_packets * worker_mem_map.packet_payload_size_bytes;
             std::vector<uint32_t> zeros(total_size_to_clear / sizeof(uint32_t), 0);
-            tt_metal::detail::WriteToDeviceL1(
-                receiver_device->get_devices()[0],
-                receiver_logical_core,
-                worker_mem_map.target_address,
-                zeros,
-                CoreType::WORKER);
+            tt_metal::slow_dispatch::WriteToL1(
+                *receiver_device, receiver_logical_core, worker_mem_map.target_address, zeros, CoreType::WORKER);
             // Clear RISC1 target memory as well
             if (dual_risc) {
-                tt_metal::detail::WriteToDeviceL1(
-                    receiver_device->get_devices()[0],
+                tt_metal::slow_dispatch::WriteToL1(
+                    *receiver_device,
                     receiver_logical_core,
                     worker_mem_map_risc1.target_address,
                     zeros,
@@ -2588,10 +2567,9 @@ void UDMFabricUnicastCommon(
     }
 
     // Run programs
-    fixture->RunProgramNonblocking(receiver_device, receiver_program);
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
+    fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    fixture->WaitForSingleProgramDone(receiver_device);
 
     // Helper lambda to check test results for a given RISC
     auto check_risc_results = [&](const tt::tt_metal::CoreCoord& sender_core,
@@ -2599,8 +2577,8 @@ void UDMFabricUnicastCommon(
                                   const WorkerMemMap& mem_map,
                                   const std::string& risc_name) {
         std::vector<uint32_t> sender_status;
-        tt_metal::detail::ReadFromDeviceL1(
-            sender_device->get_devices()[0],
+        tt_metal::slow_dispatch::ReadFromL1(
+            *sender_device,
             sender_core,
             mem_map.test_results_address,
             mem_map.test_results_size_bytes,
@@ -2610,8 +2588,8 @@ void UDMFabricUnicastCommon(
             << "Sender " << risc_name << " failed at core (" << sender_core.x << ", " << sender_core.y << ")";
 
         std::vector<uint32_t> receiver_status;
-        tt_metal::detail::ReadFromDeviceL1(
-            receiver_device->get_devices()[0],
+        tt_metal::slow_dispatch::ReadFromL1(
+            *receiver_device,
             receiver_core,
             mem_map.test_results_address,
             mem_map.test_results_size_bytes,
@@ -2684,7 +2662,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
 
     // Calculate number of sender/receiver cores per device (all cores in top/bottom half)
     // Split grid into top half (senders) and bottom half (receivers)
-    auto grid_size = devices[0]->get_devices()[0]->compute_with_storage_grid_size();
+    auto grid_size = devices[0]->compute_with_storage_grid_size();
     uint32_t receiver_y_start = grid_size.y / 2;
     uint32_t receiver_y_end = grid_size.y;
     uint32_t sender_rows = receiver_y_start;                  // Number of rows in top half
@@ -2983,15 +2961,11 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
             for (uint32_t core_idx = 0; core_idx < num_core_pairs; core_idx++) {
                 tt::tt_metal::CoreCoord receiver_logical_core = receiver_logical_cores[core_idx];
                 std::vector<uint32_t> zeros(total_l1_to_clear / sizeof(uint32_t), 0);
-                tt_metal::detail::WriteToDeviceL1(
-                    device_ptr->get_devices()[0],
-                    receiver_logical_core,
-                    worker_mem_map.target_address,
-                    zeros,
-                    CoreType::WORKER);
+                tt_metal::slow_dispatch::WriteToL1(
+                    *device_ptr, receiver_logical_core, worker_mem_map.target_address, zeros, CoreType::WORKER);
                 if (dual_risc) {
-                    tt_metal::detail::WriteToDeviceL1(
-                        device_ptr->get_devices()[0],
+                    tt_metal::slow_dispatch::WriteToL1(
+                        *device_ptr,
                         receiver_logical_core,
                         worker_mem_map_risc1.target_address,
                         zeros,
@@ -3003,12 +2977,12 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
 
     log_info(tt::LogTest, "All-to-all test starting");
     for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
-        fixture->RunProgramNonblocking(device_ptrs[dev_idx], programs[dev_idx]);
+        fixture->RunProgramNonblocking(device_ptrs[dev_idx], std::move(programs[dev_idx]));
     }
     log_info(tt::LogTest, "All-to-all test waiting for finish");
     // Wait for all devices to complete
     for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
-        fixture->WaitForSingleProgramDone(device_ptrs[dev_idx], programs[dev_idx]);
+        fixture->WaitForSingleProgramDone(device_ptrs[dev_idx]);
     }
     log_info(tt::LogTest, "All-to-all test done");
 
@@ -3030,8 +3004,8 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
 
                 // Check sender status
                 std::vector<uint32_t> sender_status;
-                tt_metal::detail::ReadFromDeviceL1(
-                    device_ptr->get_devices()[0],
+                tt_metal::slow_dispatch::ReadFromL1(
+                    *device_ptr,
                     sender_logical_core,
                     mem_map.test_results_address,
                     mem_map.test_results_size_bytes,
@@ -3047,8 +3021,8 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
 
                 // Check receiver status
                 std::vector<uint32_t> receiver_status;
-                tt_metal::detail::ReadFromDeviceL1(
-                    device_ptr->get_devices()[0],
+                tt_metal::slow_dispatch::ReadFromL1(
+                    *device_ptr,
                     receiver_logical_core,
                     mem_map.test_results_address,
                     mem_map.test_results_size_bytes,
@@ -3329,7 +3303,7 @@ void Fabric2DMulticastCommon(
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Build and launch receiver programs for all destination devices in the rectangular multicast region
-    std::vector<std::pair<std::shared_ptr<tt_metal::distributed::MeshDevice>, tt_metal::Program>> receiver_programs;
+    std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>> receiver_devices;
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
     for (auto physical_end_device_id : receiver_device_ids) {
         // auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_end_device_id);
@@ -3348,20 +3322,19 @@ void Fabric2DMulticastCommon(
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = compile_time_args});
         tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
-        fixture->RunProgramNonblocking(receiver_device, receiver_program);
-        receiver_programs.emplace_back(receiver_device, std::move(receiver_program));
+        fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+        receiver_devices.emplace_back(receiver_device);
     }
 
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
 
-    for (auto& [dev, prog] : receiver_programs) {
-        fixture->WaitForSingleProgramDone(dev, prog);
+    for (auto& dev : receiver_devices) {
+        fixture->WaitForSingleProgramDone(dev);
     }
 
     std::vector<uint32_t> sender_status;
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -3371,10 +3344,10 @@ void Fabric2DMulticastCommon(
     uint64_t sender_words =
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
 
-    for (auto& [dev, _] : receiver_programs) {
+    for (auto& dev : receiver_devices) {
         std::vector<uint32_t> recv_status;
-        tt_metal::detail::ReadFromDeviceL1(
-            dev->get_devices()[0],
+        tt_metal::slow_dispatch::ReadFromL1(
+            *dev,
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,
@@ -3510,7 +3483,7 @@ void FabricMulticastCommon(
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Build and launch receiver programs for all destination devices in all configured directions
-    std::vector<std::pair<std::shared_ptr<tt_metal::distributed::MeshDevice>, tt_metal::Program>> receiver_programs;
+    std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>> receiver_devices;
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
     for (auto& [dir, start_distance, range] : dir_configs) {
         for (auto physical_end_device_id : physical_end_device_ids_by_dir[dir]) {
@@ -3529,21 +3502,20 @@ void FabricMulticastCommon(
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = compile_time_args});
             tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
-            fixture->RunProgramNonblocking(receiver_device, receiver_program);
-            receiver_programs.emplace_back(receiver_device, std::move(receiver_program));
+            fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+            receiver_devices.emplace_back(receiver_device);
         }
     }
 
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
 
-    for (auto& [dev, prog] : receiver_programs) {
-        fixture->WaitForSingleProgramDone(dev, prog);
+    for (auto& dev : receiver_devices) {
+        fixture->WaitForSingleProgramDone(dev);
     }
 
     std::vector<uint32_t> sender_status;
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -3553,10 +3525,10 @@ void FabricMulticastCommon(
     uint64_t sender_words =
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
 
-    for (auto& [dev, _] : receiver_programs) {
+    for (auto& dev : receiver_devices) {
         std::vector<uint32_t> recv_status;
-        tt_metal::detail::ReadFromDeviceL1(
-            dev->get_devices()[0],
+        tt_metal::slow_dispatch::ReadFromL1(
+            *dev,
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,
@@ -3800,7 +3772,7 @@ void FabricSparseMulticastCommon(
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Build and launch receiver programs for all destination devices in all configured directions
-    std::vector<std::pair<std::shared_ptr<tt_metal::distributed::MeshDevice>, tt_metal::Program>> receiver_programs;
+    std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>> receiver_devices;
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
     for (auto& [dir, hops] : dir_configs) {
         for (auto physical_end_device_id : physical_end_device_ids_by_dir[dir]) {
@@ -3816,21 +3788,20 @@ void FabricSparseMulticastCommon(
                     .compile_args = compile_time_args});
 
             tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
-            fixture->RunProgramNonblocking(receiver_device, receiver_program);
-            receiver_programs.emplace_back(receiver_device, std::move(receiver_program));
+            fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+            receiver_devices.emplace_back(receiver_device);
         }
     }
 
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
 
-    for (auto& [dev, prog] : receiver_programs) {
-        fixture->WaitForSingleProgramDone(dev, prog);
+    for (auto& dev : receiver_devices) {
+        fixture->WaitForSingleProgramDone(dev);
     }
 
     std::vector<uint32_t> sender_status;
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -3838,10 +3809,10 @@ void FabricSparseMulticastCommon(
         CoreType::WORKER);
     EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
 
-    for (auto& [dev, _] : receiver_programs) {
+    for (auto& dev : receiver_devices) {
         std::vector<uint32_t> recv_status;
-        tt_metal::detail::ReadFromDeviceL1(
-            dev->get_devices()[0],
+        tt_metal::slow_dispatch::ReadFromL1(
+            *dev,
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,

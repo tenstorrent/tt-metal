@@ -5,6 +5,7 @@
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
@@ -69,6 +70,10 @@ def to_torch(tt_tensor: ttnn.Tensor, expected_shape: tuple[int, ...]) -> torch.T
 
 
 def assert_pcc(reference: torch.Tensor, candidate: torch.Tensor, threshold: float) -> None:
-    passing, pcc_message = comp_pcc(reference, candidate, threshold)
+    # comp_pcc returns (passing, numeric_pcc). The value used to be surfaced only in the
+    # assertion message, so a passing test reported nothing and margin erosion was invisible
+    # until the day it went red. Log it on every call, pass or fail.
+    passing, pcc_value = comp_pcc(reference, candidate, threshold)
     allclose, allclose_message = comp_allclose(reference, candidate)
-    assert passing, f"PCC check failed: {pcc_message}; {allclose_message}; allclose={allclose}"
+    logger.info(f"PCC {pcc_value} (threshold {threshold}, margin {pcc_value - threshold:+.6f}) | {allclose_message}")
+    assert passing, f"PCC check failed: {pcc_value}; {allclose_message}; allclose={allclose}"

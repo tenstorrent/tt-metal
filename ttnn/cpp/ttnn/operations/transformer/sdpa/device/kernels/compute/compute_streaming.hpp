@@ -254,7 +254,7 @@ ALWI void recip_tile_first_column_wh_idst0_direct() {
 
 #pragma GCC unroll 0
     for (int face = 0; face < 2; face++) {
-        ckernel::sfpu::calculate_recip_first_column();
+        ckernel::sfpu::calculate_recip_first_column</*legacy_compat=*/true, DST_ACCUM_MODE>();
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
@@ -734,7 +734,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 sub_tiles_bcast_scalar(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, 0, 1);
                 // The custom first-column exp needs generic unary SFPU addrmod state, but not the
                 // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
-                MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>()));
+                MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, DST_ACCUM_MODE>()));
                 constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
                 constexpr uint16_t negated_scale_bf16 = scale_bf16 ^ 0x8000;
                 MATH((exp_tile_first_column<EXP_APPROX_MODE, negated_scale_bf16>(1)));
@@ -1919,7 +1919,9 @@ template <
     bool is_causal_sdpa = false,
     bool use_attention_sink = false,
     uint32_t cb_attention_sink = INVALID_CB,
-    bool use_provided_mask = false>
+    bool use_provided_mask = false,
+    bool use_windowed_narrowing = false,
+    uint32_t cb_windowed_k_range = INVALID_CB>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -2014,6 +2016,16 @@ void sdpa_standard_v2(
                     k_loop_end = limit < k_num_chunks ? limit : k_num_chunks;
                 }
             }
+        }
+        // Windowed K-range narrowing: this Q chunk's [k_lo, k_hi) comes from the reader's ctrl CB —
+        // read via the UNPACK mailbox so all three TRISCs agree. The reader streams exactly this many
+        // K/V chunks and the writer produces exactly this many mask chunks; disagreement deadlocks.
+        if constexpr (use_windowed_narrowing) {
+            CircularBuffer cb_k_range_obj(cb_windowed_k_range);
+            cb_k_range_obj.wait_front(1);
+            k_loop_start = ckernel::read_tile_value(cb_windowed_k_range, 0, 0);
+            k_loop_end = ckernel::read_tile_value(cb_windowed_k_range, 0, 1);
+            cb_k_range_obj.pop_front(1);
         }
 
         auto call_step = [&](auto profiling_tag,

@@ -75,7 +75,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
         0 /*DST_IN0*/,
         1 /*DST_IN1*/,
         0 /*DST_OUT*/,
@@ -84,7 +84,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
         2 /*DST_IN0*/,
         3 /*DST_IN1*/,
         2 /*DST_OUT*/,
@@ -124,7 +124,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
         0 /*DST_IN0*/,
         1 /*DST_IN1*/,
         0 /*DST_OUT*/,
@@ -133,7 +133,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/, DST_ACCUM_MODE),
         2 /*DST_IN0*/,
         3 /*DST_IN1*/,
         2 /*DST_OUT*/,
@@ -361,6 +361,12 @@ void kernel_main() {
                                 continue;  // skip padding K slots after bias
                             }
                         }
+                        if constexpr (!has_bias) {
+                            if (k_tracker >= num_w0_w1_tiles_h) {
+                                k_tracker++;
+                                continue;  // skip padding K slots
+                            }
+                        }
                         matmul_block(
                             cb_s2c_in_id,
                             cb_r2c_w0_w1_id,
@@ -371,9 +377,7 @@ void kernel_main() {
                             /*ct_dim=*/4,
                             /*rt_dim=*/1,
                             /*kt_dim=*/1);
-                        if constexpr (has_bias) {
-                            k_tracker++;
-                        }
+                        k_tracker++;
                     }
                     cb_r2c_w0_w1.pop_front(w0_w1_tiles_per_block);
                 }

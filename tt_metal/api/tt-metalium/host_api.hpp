@@ -323,12 +323,36 @@ uint32_t CreateSemaphore(
  *
  * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
  * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
+ * | device         | The mesh device to create the semaphore on             | distributed::MeshDevice&                                  |              | Yes      |
+ * | cores          | Range of the Tensix coordinates using the semaphore    | CoreRangeSet &&                                           |              | Yes      |
+ * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
+ * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
+ */
+// clang-format on
+GlobalSemaphore CreateGlobalSemaphore(
+    distributed::MeshDevice& device,
+    CoreRangeSet cores,
+    uint32_t initial_value,
+    BufferType buffer_type = BufferType::L1);
+
+// clang-format off
+/**
+ * Initializes a global semaphore on all cores within the specified CoreRangeSet.
+ * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
+ *
+ * Return value: GlobalSemaphore
+ *
+ * | Argument       | Description                                            | Type                                                      | Valid Range  | Required |
+ * |----------------|--------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
  * | device         | The device to create the semaphore on                  | IDevice*                                                  |              | Yes      |
  * | cores          | Range of the Tensix coordinates using the semaphore    | const CoreRangeSet &                                      |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  */
 // clang-format on
+[[deprecated(
+    "Use CreateGlobalSemaphore(distributed::MeshDevice&, ...) instead. "
+    "CreateGlobalSemaphore(IDevice*, ...) will be removed after 2026-09-20.")]]
 GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
@@ -347,6 +371,9 @@ GlobalSemaphore CreateGlobalSemaphore(
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  */
 // clang-format on
+[[deprecated(
+    "Use CreateGlobalSemaphore(distributed::MeshDevice&, ...) instead. "
+    "CreateGlobalSemaphore(IDevice*, ...) will be removed after 2026-09-20.")]]
 GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 

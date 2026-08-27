@@ -13,6 +13,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "tt_metal/llrt/tlb_config.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 #ifdef TT_METAL_USE_EMULE
 #include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
 #endif
@@ -21,6 +22,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <sys/mman.h>
@@ -218,6 +220,19 @@ void D2HSocket::write_socket_metadata(
     config_data[host_addr_offset + 1] = data_info.addr_hi;
     config_data[host_addr_offset + 2] = data_info.pcie_xy_enc;
 
+    if (is_l2cpu_) {
+        // L2CPU has no MeshBuffer-backed config and no fast-dispatch path; write the
+        // blob directly to the caller-provided LIM address.
+        const auto& cluster = MetalContext::instance().get_cluster();
+        const uint32_t device_id = mesh_device->get_device(sender_core_.device_coord)->id();
+        cluster.write_core(
+            config_data.data(),
+            total_config_bytes,
+            tt_cxy_pair(device_id, sender_core_.core_coord),
+            config_buffer_address_);
+        return;
+    }
+
     // External-config ctor skips MeshBuffer allocation; use direct L1 write. Standard
     // ctor owns config_buffer_; use fast-dispatch WriteShard like pre-RT-profiler path.
     if (config_buffer_) {
@@ -244,7 +259,20 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     // MockChip never invokes pcie_writer_ at runtime (only socket construction / JIT), so the
     // installed writer is harmless there.
 
-    if (mesh_device) {
+    if (is_l2cpu_) {
+        // sender_core_.core_coord is already a TRANSLATED L2CPU NOC coord, so no
+        // logical->virtual translation is applied. The window is the static TLB
+        // configure_static_tlbs() anchors at the LIM base.
+        TT_FATAL(mesh_device, "L2CPU D2H sockets require a mesh_device for TLB setup.");
+        sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
+        sender_virtual_core = sender_core_.core_coord;
+        if (!cluster.is_mock_or_emulated()) {
+            sender_core_tlb_ = cluster.get_driver()
+                                   ->get_chip(sender_device_id)
+                                   ->get_tlb_manager()
+                                   ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+        }
+    } else if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
         if (!cluster.is_mock_or_emulated()) {
@@ -260,7 +288,15 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     }
 
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device && !cluster.is_mock_or_emulated()) {
+    if (is_l2cpu_ && !cluster.is_mock_or_emulated()) {
+        // The L2CPU window is anchored at the LIM base, so absolute addresses are
+        // converted to window-relative offsets before write_block(). Mock/emule
+        // have no TLB manager and fall through to the write_core() path below.
+        const uint64_t l2cpu_tlb_base = sender_core_tlb_->get_base_address();
+        pcie_writer_ = [this, l2cpu_tlb_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
+            sender_core_tlb_->write_block(device_addr - l2cpu_tlb_base, data, num_bytes);
+        };
+    } else if (arch == tt::ARCH::BLACKHOLE && mesh_device && !cluster.is_mock_or_emulated()) {
         // This process owns a mesh_device and hence has statically initialized TLBs.
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
@@ -285,7 +321,10 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
-    bool can_use_pinned_memory = !d2h_uses_hugepage_fallback(MetalContext::instance());
+    // The hugepage fallback segfaults on mock (sysmem is stubbed); force the pinned path.
+    auto& ctx = MetalContext::instance(extract_context_id(mesh_device.get()));
+    bool can_use_pinned_memory =
+        !d2h_uses_hugepage_fallback(ctx) || ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
     PinnedBufferInfo data_info;
     PinnedBufferInfo bytes_sent_info;
@@ -329,6 +368,8 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
 
     const SocketSenderSize sender_size;
     bytes_acked_device_offset_ = sender_size.md_size_bytes;
+
+    enable_mock_flow_control(*mesh_device);
 }
 
 D2HSocket::D2HSocket(
@@ -365,6 +406,68 @@ D2HSocket::D2HSocket(
         l1_alignment);
     config_buffer_address_ = external_config.address;
     init_common(mesh_device);
+}
+
+D2HSocket::D2HSocket(
+    MeshDevice& mesh_device, const MeshCoreCoord& sender_l2cpu, uint32_t fifo_size, uint32_t config_buffer_address) :
+    sender_core_(sender_l2cpu),
+    fifo_size_(fifo_size),
+    pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    mesh_device_(&mesh_device),
+    is_l2cpu_(true) {
+    // Helpers below still take a shared_ptr; the socket itself stores only a raw
+    // MeshDevice* and does not extend the device's lifetime.
+    const auto mesh_device_ptr = mesh_device.shared_from_this();
+    TT_FATAL(
+        MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE,
+        "L2CPU D2H sockets are only supported on Blackhole architectures.");
+    TT_FATAL(config_buffer_address != 0, "L2CPU config buffer LIM address must be non-zero.");
+
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    TT_FATAL(
+        config_buffer_address % l1_alignment == 0,
+        "L2CPU config buffer LIM address 0x{:x} must be L1-aligned ({} B).",
+        config_buffer_address,
+        l1_alignment);
+
+    // The caller-supplied coordinate is taken as an already-TRANSLATED L2CPU NOC
+    // coord, so a wrong value would silently write the socket blob to another
+    // core and pick up that core's TLB base. Check membership rather than trust it.
+    {
+        const auto& cluster = MetalContext::instance().get_cluster();
+        const uint32_t device_id = mesh_device_ptr->get_device(sender_core_.device_coord)->id();
+        const auto l2cpu_cores =
+            cluster.get_soc_desc(device_id).get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED);
+        const bool is_l2cpu_core = std::any_of(l2cpu_cores.begin(), l2cpu_cores.end(), [this](const auto& c) {
+            return c.x == sender_core_.core_coord.x && c.y == sender_core_.core_coord.y;
+        });
+        TT_FATAL(
+            is_l2cpu_core,
+            "({}, {}) is not an L2CPU tile on device {}. sender_l2cpu.core_coord must be the TRANSLATED NOC coord of "
+            "an L2CPU tile.",
+            sender_core_.core_coord.x,
+            sender_core_.core_coord.y,
+            device_id);
+    }
+
+    // The sender_socket_md blob is written through the L2CPU static TLB, and
+    // notify_sender() later routes config_buffer_address_ + bytes_acked_device_offset_
+    // through the same window (subtracting its base). An address outside the window
+    // passes the alignment check above but then underflows or trips
+    // TlbWindow::validate() on the first acknowledgement, so reject it up front.
+    const uint64_t config_end = static_cast<uint64_t>(config_buffer_address) + required_config_buffer_size();
+    TT_FATAL(
+        config_buffer_address >= ll_api::kL2cpuLimBase && config_end <= ll_api::kL2cpuLimTlbEnd,
+        "L2CPU D2H config buffer [0x{:x}, 0x{:x}) must lie inside the LIM window [0x{:x}, 0x{:x}) covered by the "
+        "static TLB.",
+        config_buffer_address,
+        config_end,
+        ll_api::kL2cpuLimBase,
+        ll_api::kL2cpuLimTlbEnd);
+    TT_FATAL(fifo_size_ > 0 && fifo_size_ % pcie_alignment_ == 0, "FIFO size must be non-zero and PCIe-aligned.");
+
+    config_buffer_address_ = config_buffer_address;
+    init_common(mesh_device_ptr);
 }
 
 uint32_t D2HSocket::required_config_buffer_size() {
@@ -433,6 +536,10 @@ void D2HSocket::set_page_size(uint32_t page_size) {
         uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
 
         while (bytes_recv < bytes_adjustment) {
+            // On mock, synthesize the wrap padding that bytes_acked_ consumes below.
+            if (mock_flow_control_enabled_) {
+                simulate_device_sent(bytes_adjustment);
+            }
             volatile uint32_t bytes_sent_value = using_hugepage_ ? *hugepage_bytes_sent_host_ptr_ : bytes_sent_ptr_[0];
             bytes_recv = bytes_sent_value - bytes_acked_;
             bytes_sent_ = bytes_sent_value;
@@ -470,6 +577,10 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     }
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
     while (bytes_recv < num_bytes) {
+        // On mock, synthesize exactly the wrap-adjusted bytes this read needs.
+        if (mock_flow_control_enabled_) {
+            simulate_device_sent(num_bytes);
+        }
         advance_d2h_simulator_socket_device(mesh_device_, sender_core_.device_coord);
         if (using_hugepage_) {
             _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
@@ -484,6 +595,22 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
             bytes_sent_ = bytes_sent_value;
         }
     }
+}
+
+void D2HSocket::enable_mock_flow_control(const MeshDevice& mesh_device) {
+    // Emule executes the sender, so only Mock needs simulated sends.
+    if (MetalContext::instance(extract_context_id(&mesh_device)).get_cluster().get_target_device_type() !=
+        tt::TargetDevice::Mock) {
+        return;
+    }
+    // Simulated sends are observed through bytes_sent_ptr_, so mock must stay on the pinned path.
+    TT_FATAL(!using_hugepage_, "Mock D2H sockets must use the pinned path, not the hugepage fallback.");
+
+    // Simulate sends only for blocking waits. Consuming one restores sent == acked, so reads
+    // complete while non-blocking checks and drain APIs continue to report an empty socket.
+    mock_flow_control_enabled_ = true;
+    bytes_sent_ptr_ = &mock_bytes_sent_;
+    mock_bytes_sent_ = bytes_acked_;
 }
 
 void D2HSocket::pop_bytes(uint32_t num_bytes) {
@@ -642,6 +769,10 @@ std::string D2HSocket::export_descriptor(const std::string& socket_id) {
 
 HDSocketDescriptor D2HSocket::populate_descriptor() const {
     TT_FATAL(is_owner_, "Only the owner process can populate a socket descriptor.");
+    // The descriptor schema has no fields for the L2CPU LIM address, so a connector
+    // could not rebuild the device side. Checked here rather than in export_descriptor()
+    // so the D2HSocketService aggregation path is covered too.
+    TT_FATAL(!is_l2cpu_, "Descriptor export is not supported for L2CPU D2H sockets.");
     TT_FATAL(shm_ && shm_->is_open(), "Cannot populate descriptor: shared memory is not initialized.");
 
     HDSocketDescriptor desc;

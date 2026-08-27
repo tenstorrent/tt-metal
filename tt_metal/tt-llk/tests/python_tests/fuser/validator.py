@@ -357,6 +357,7 @@ class FpuMathSchemaBase(BaseModel):
     operation: str
     unpacker: Optional[str] = None
     broadcast_type: BroadcastType = BroadcastType.None_
+    broadcast_tile: Optional[Annotated[int, Field(ge=0)]] = None
     reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE
     reduce_pool: Optional[ReducePool] = None
     reduce_dim: Optional[ReduceDimension] = None
@@ -383,6 +384,15 @@ class FpuMathSchemaBase(BaseModel):
         if v not in cls._fpu_map:
             raise ValueError(f"Unknown FPU operation: {v}")
         return v
+
+    @model_validator(mode="after")
+    def validate_broadcast_tile(self) -> "FpuMathSchemaBase":
+        if (
+            self.broadcast_tile is not None
+            and self.broadcast_type == BroadcastType.None_
+        ):
+            raise ValueError("broadcast_tile requires a broadcast_type")
+        return self
 
     @field_validator("unpacker", mode="after")
     @classmethod
@@ -436,6 +446,7 @@ class FpuMathSchemaBase(BaseModel):
             "transpose_within_face": self.transpose_within_face,
             "transpose_faces": self.transpose_faces,
             "broadcast_type": self.broadcast_type,
+            "broadcast_tile": self.broadcast_tile,
             "reuse_dest": self.reuse_dest,
             "math_fidelity": self.math_fidelity,
             "enforce_fp32_accumulation": self.enforce_fp32_accumulation,

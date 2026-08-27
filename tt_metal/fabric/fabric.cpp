@@ -8,7 +8,7 @@
 #include "erisc_datamover_builder.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/internal/fabric.hpp>
+#include <internal/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt_stl/assert.hpp>
@@ -568,35 +568,44 @@ namespace experimental {
 
 size_t get_number_of_available_routing_planes(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col) {
+    TT_FATAL(cluster_axis < 2, "Invalid cluster axis {}. Must be 0 or 1", cluster_axis);
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_view = mesh_device.get_view();
 
-    // Get any device from the cluster to determine fabric node
-    // For now, use chip 0 as a representative device
+    // Axis 0 runs down a column, axis 1 along a row.
+    const auto nodes = cluster_axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
+                                         : mesh_view.get_fabric_node_ids_on_row(row_or_col);
 
-    size_t row_idx = cluster_axis == 0 ? 0 : row_or_col;
-    size_t col_idx = cluster_axis == 0 ? row_or_col : 0;
-    auto* first_chip = mesh_device.impl().get_device(row_idx, col_idx);
-    ChipId first_chip_id = first_chip->id();
-    auto fabric_node_in_row_or_col = control_plane.get_fabric_node_id_from_physical_chip_id(first_chip_id);
+    auto usable_planes = [&](const FabricNodeId& src, const FabricNodeId& dst) -> size_t {
+        const auto directions = get_neighbor_eth_directions(src, dst);
+        if (directions.empty()) {
+            return 0;  // the two chips are not wired together
+        }
+        return control_plane.get_num_usable_routing_planes(
+            src, control_plane.eth_direction_to_routing_direction(directions.front()));
+    };
 
-    // Map cluster axis to routing directions
-    constexpr std::array<std::array<RoutingDirection, 2>, 2> cluster_axis_directions_to_check = {
-        std::array<RoutingDirection, 2>{RoutingDirection::N, RoutingDirection::S},
-        std::array<RoutingDirection, 2>{RoutingDirection::E, RoutingDirection::W}};
+    std::optional<size_t> num_planes;
+    // Both ends describe the same link, so take the lower count. Never report more links than one
+    // side can open.
+    auto measure_link = [&](const FabricNodeId& a, const FabricNodeId& b) {
+        for (const size_t planes : {usable_planes(a, b), usable_planes(b, a)}) {
+            // Zero means the pair is not wired, or every plane is reserved for dispatch, or the
+            // chip belongs to another host. None of those say anything about what this row or
+            // column can open, so skip it instead of pulling the min down to zero.
+            if (planes > 0) {
+                num_planes = num_planes.has_value() ? std::min(*num_planes, planes) : planes;
+            }
+        }
+    };
 
-    TT_FATAL(
-        cluster_axis < cluster_axis_directions_to_check.size(),
-        "Invalid cluster axis {}. Must be less than {}",
-        cluster_axis,
-        cluster_axis_directions_to_check.size());
-    const auto& directions_to_check = cluster_axis_directions_to_check[cluster_axis];
-
-    size_t planes_dir0 = control_plane.get_num_usable_routing_planes(fabric_node_in_row_or_col, directions_to_check[0]);
-    size_t planes_dir1 = control_plane.get_num_usable_routing_planes(fabric_node_in_row_or_col, directions_to_check[1]);
-    // Take the min: dispatch-reserved planes can legitimately reduce the count in only one of the two
-    // opposing directions on an MMIO chip (e.g., the tunnel descends only southward), making the two
-    // values asymmetric while both remain valid. Conservatively take what both directions can support.
-    return std::min(planes_dir0, planes_dir1);
+    for (size_t i = 1; i < nodes.size(); i++) {
+        measure_link(nodes[i - 1], nodes[i]);
+    }
+    if (nodes.size() > 2) {
+        measure_link(nodes.back(), nodes.front());  // the closing link of a ring, if it is wired
+    }
+    return num_planes.value_or(0);
 }
 
 }  // namespace experimental

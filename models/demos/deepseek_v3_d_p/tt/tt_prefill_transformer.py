@@ -55,6 +55,7 @@ class TtPrefillTransformer(LightweightModule):
         is_first_rank: bool = True,
         is_last_rank: bool = True,
         kv_only_last_layer: bool = False,
+        model_cfg: type | None = None,
     ) -> bool:
         """
         Top-level cache completeness check for the full transformer.
@@ -74,6 +75,10 @@ class TtPrefillTransformer(LightweightModule):
                 embedding only on the first rank and the final norm + LM head only
                 on the last, so check only the weights it actually loads. Both True
                 for single-rank.
+            model_cfg: Variant static-constants class, forwarded to the per-block check. Optional
+                so existing callers are unaffected, but MUST be passed for a LatentMoE model
+                (Kimi-K3): without it the block check cannot know to look for the
+                latent-projection cache files and reports a cache missing them as complete.
 
         Returns:
             True if all expected cache files exist, False otherwise
@@ -93,7 +98,9 @@ class TtPrefillTransformer(LightweightModule):
         for local_idx in range(num_layers):
             layer_idx = first_layer_idx + local_idx
             is_dense = layer_idx < first_k_dense
-            if not TtPrefillBlock.check_cache_complete(cache_path, layer_idx, is_dense, experts_per_chip):
+            if not TtPrefillBlock.check_cache_complete(
+                cache_path, layer_idx, is_dense, experts_per_chip, model_cfg=model_cfg
+            ):
                 return False
 
         # Final norm + LM head: only the last rank that emits a token loads these
@@ -191,8 +198,10 @@ class TtPrefillTransformer(LightweightModule):
         # layer_idx is the GLOBAL index (drives weight cache keys + dense/MoE selection);
         # cache_layer_idx in forward is the LOCAL slot. layer_num is this instance's slice
         # length so the block's flat KV slot (cache_user_id * layer_num + cache_layer_idx)
-        # matches the per-rank cache sized to num_layers. With kv_only_last_layer, the last block is
-        # built kv_only=True (only attn_norm + the KV branch of MLA).
+        # matches the per-rank cache sized to num_layers. first_layer_idx additionally tells the
+        # sparse indexer which stage it is, so its (separately numbered) key cache is rank-local too.
+        # With kv_only_last_layer, the last block is built kv_only=True (only attn_norm + the KV
+        # branch of MLA).
         self.layers = []
         for local_idx in range(num_layers):
             layer_idx = first_layer_idx + local_idx
@@ -228,6 +237,7 @@ class TtPrefillTransformer(LightweightModule):
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 sparse_kv_cache_format=sparse_kv_cache_format,
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+                first_layer_idx=first_layer_idx,
             )
             self.layers.append(layer)
 

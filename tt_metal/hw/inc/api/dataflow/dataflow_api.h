@@ -1017,7 +1017,14 @@ FORCE_INLINE void noc_async_write_one_packet_set_state(
 template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_state(
     uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, src_local_l1_addr, 0ull, 0, -1, posted, noc);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::WRITE_WITH_STATE,
+        src_local_l1_addr,
+        static_cast<uint64_t>(dst_local_l1_addr),
+        0,
+        -1,
+        posted,
+        noc);
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_local_l1_addr, src_local_l1_addr);
@@ -1827,6 +1834,7 @@ void noc_async_writes_flushed(uint8_t noc = noc_index) {
  */
 FORCE_INLINE
 void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH, /*posted=*/true, noc);
     WAYPOINT("NPWW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         do {
@@ -2034,6 +2042,8 @@ FORCE_INLINE void noc_inline_dw_write(
     uint8_t vc = NOC_UNICAST_WRITE_VC,
     uint32_t customized_src_addr = 0) {
     WAYPOINT("NWIW");
+    // Inline dword write: 4-byte immediate value.
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_INLINE, 0, addr, 4, vc, posted, noc);
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
     DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
 #if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
@@ -2348,7 +2358,8 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
 template <bool skip_ptr_update = false, bool skip_cmdbuf_chk = false>
 FORCE_INLINE void noc_async_read_one_packet_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::READ_WITH_STATE_AND_TRID, false, noc);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::READ_WITH_STATE_AND_TRID, dest_addr, static_cast<uint64_t>(src_addr), 0, -1, false, noc);
 
     WAYPOINT("NRDW");
     ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update, skip_cmdbuf_chk>(
@@ -2546,7 +2557,13 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::WRITE_WITH_TRID_WITH_STATE, src_local_l1_addr, 0ull, size, -1, posted, noc);
+        NocEventType::WRITE_WITH_TRID_WITH_STATE,
+        src_local_l1_addr,
+        static_cast<uint64_t>(dst_local_l1_addr),
+        size,
+        -1,
+        posted,
+        noc);
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_local_l1_addr, src_local_l1_addr, size);
@@ -2585,6 +2602,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
 FORCE_INLINE
 void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NWTW");
+    RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_WITH_TRID, false, noc);
     while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid)) {
         continue;
     }

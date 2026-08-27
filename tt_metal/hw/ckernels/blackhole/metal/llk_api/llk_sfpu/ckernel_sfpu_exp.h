@@ -722,9 +722,9 @@ constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(
 
 template <
     bool APPROXIMATION_MODE,
-    uint32_t scale = 0x3F800000,
-    bool CLAMP_NEGATIVE = true,
-    bool is_fp32_dest_acc_en = false>
+    uint32_t scale,
+    bool CLAMP_NEGATIVE,
+    bool is_fp32_dest_acc_en>
 void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as

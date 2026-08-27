@@ -53,11 +53,11 @@
 #define MEM_DM_FIRMWARE_SIZE (1024 * 12)
 #define MEM_TRISC_FIRMWARE_SIZE (1024 * 5)
 #define MEM_DM_KERNEL_SIZE (1024 * 48)
-#define MEM_TRISC_KERNEL_SIZE (1024 * 24)
 #define MEM_DM_GLOBAL_SIZE (1024 * 2)
 #define MEM_TRISC_GLOBAL_SIZE (1024 * 2)
 #define MEM_DM_LOCAL_SIZE (1024 * 8)
 #define MEM_TRISC_LOCAL_SIZE (1024 * 4)
+#define MEM_TRISC_KERNEL_SIZE (1024 * 24)
 #define MEM_TRISC_LOCAL_OFFSET (0x2000)
 
 #define NUM_DM_CORES 8
@@ -91,9 +91,12 @@
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 16
 #define UNCACHED_MEM_MAILBOX_BASE (0x400010)  // workaround for https://github.com/tenstorrent/tt-metal/issues/19265
-// Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 58752
+// Magic sizes must be big enough to hold mailboxes_t.  static_asserts will fire if either is too small.
+// The dispatch engine mailbox is DM-only (8 processors).
+#define MEM_MAILBOX_SIZE 59632
+#define MEM_DISPATCH_MAILBOX_SIZE 23616
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
+#define MEM_DISPATCH_MAILBOX_END (MEM_MAILBOX_BASE + MEM_DISPATCH_MAILBOX_SIZE)
 
 #define MEM_LLK_DEBUG_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -214,10 +217,40 @@
 #define MEM_LOGICAL_TO_VIRTUAL_SCRATCH (MEM_BANK_TO_NOC_SCRATCH + MEM_BANK_TO_NOC_SIZE)
 #define MEM_LOGICAL_TO_VIRTUAL_SIZE ((20 + 12) * sizeof(uint8_t))
 
-// Dispatch-engine tile: per-DM cq kernel text (DRAM-parity direct load; not config-ring binary packing).
-// RTA/semaphore ring remains at MEM_MAP_END (MEM_DISPATCH_KERNEL_CONFIG_SIZE); see create_dispatch_mem_map().
+// Dispatch-engine tile: DM-only reserved prefix. Dispatch engines have no TRISCs, so this chain omits the Tensix LLK
+// debug, TRISC firmware/global, and TRISC init-local regions. The MEM_LLK_DEBUG_* and MEM_TRISC_* names describe the
+// Tensix layout only and carry no meaning on a dispatch engine.
+//
+// Both layouts are always defined, and neither one overrides the other: the host builds the Tensix and the dispatch
+// HAL map in a single process, so every name here has exactly one value. Code that runs on, or describes, a dispatch
+// engine names the MEM_DISPATCH_* address it wants. Shared device code that has to work on both core types chooses
+// between the two names at the point of use, keyed on COMPILE_FOR_DISPATCH_ENGINE.
+#define MEM_DISPATCH_INTERRUPT_TABLE_BASE ((MEM_DISPATCH_MAILBOX_END + 255) & ~255)
+#define MEM_DISPATCH_DM_FIRMWARE_BASE (MEM_DISPATCH_INTERRUPT_TABLE_BASE + MEM_INTERRUPT_TABLE_SIZE)
+#define MEM_DISPATCH_DM_GLOBAL_BASE (MEM_DISPATCH_DM_FIRMWARE_BASE + MEM_DM_FIRMWARE_SIZE)
+#define MEM_DISPATCH_DM_LOCAL_BASE (MEM_DISPATCH_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE * (NUM_DM_CORES + 1))
+
+#define MEM_DISPATCH_NOC_COUNTER_BASE (MEM_DISPATCH_DM_LOCAL_BASE + MEM_DM_LOCAL_SIZE * NUM_DM_CORES)
+#define MEM_DISPATCH_FABRIC_COUNTER_BASE (MEM_DISPATCH_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
+#define MEM_DISPATCH_FABRIC_CONNECTION_LOCK_BASE (MEM_DISPATCH_FABRIC_COUNTER_BASE + MEM_FABRIC_COUNTER_L1_SIZE)
+#define MEM_DISPATCH_TENSIX_ROUTING_TABLE_BASE \
+    (MEM_DISPATCH_FABRIC_CONNECTION_LOCK_BASE + MEM_FABRIC_CONNECTION_LOCK_SIZE)
+#define MEM_DISPATCH_TENSIX_ROUTING_PATH_BASE (MEM_DISPATCH_TENSIX_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
+#define MEM_DISPATCH_TENSIX_EXIT_NODE_TABLE_BASE (MEM_DISPATCH_TENSIX_ROUTING_PATH_BASE + MEM_TENSIX_ROUTING_PATH_SIZE)
+#define MEM_DISPATCH_TENSIX_FABRIC_CONNECTIONS_BASE \
+    (MEM_DISPATCH_TENSIX_EXIT_NODE_TABLE_BASE + MEM_EXIT_NODE_TABLE_SIZE + MEM_ROUTING_TABLE_PADDING)
+#define MEM_DISPATCH_PACKET_HEADER_POOL_BASE \
+    (MEM_DISPATCH_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
+#define MEM_DISPATCH_MAP_END (MEM_DISPATCH_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
+
+// Only DM0 needs an init-local staging area on a dispatch engine. RTA/semaphore kernel config overlays its start.
 #define MEM_DISPATCH_KERNEL_CONFIG_SIZE (2 * 1024)
-#define MEM_DISPATCH_DM0_KERNEL_BASE (((MEM_LOGICAL_TO_VIRTUAL_SCRATCH + MEM_LOGICAL_TO_VIRTUAL_SIZE) + 15) & ~15)
+#define MEM_DISPATCH_DM0_INIT_LOCAL_L1_BASE_SCRATCH MEM_DISPATCH_MAP_END
+#define MEM_DISPATCH_BANK_TO_NOC_SCRATCH (MEM_DISPATCH_DM0_INIT_LOCAL_L1_BASE_SCRATCH + MEM_DM_LOCAL_SIZE)
+#define MEM_DISPATCH_LOGICAL_TO_VIRTUAL_SCRATCH (MEM_DISPATCH_BANK_TO_NOC_SCRATCH + MEM_BANK_TO_NOC_SIZE)
+
+#define MEM_DISPATCH_DM0_KERNEL_BASE \
+    (((MEM_DISPATCH_LOGICAL_TO_VIRTUAL_SCRATCH + MEM_LOGICAL_TO_VIRTUAL_SIZE) + 15) & ~15)
 #define MEM_DISPATCH_DM1_KERNEL_BASE (MEM_DISPATCH_DM0_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
 #define MEM_DISPATCH_DM2_KERNEL_BASE (MEM_DISPATCH_DM1_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
 #define MEM_DISPATCH_DM3_KERNEL_BASE (MEM_DISPATCH_DM2_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
@@ -226,12 +259,6 @@
 #define MEM_DISPATCH_DM6_KERNEL_BASE (MEM_DISPATCH_DM5_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
 #define MEM_DISPATCH_DM7_KERNEL_BASE (MEM_DISPATCH_DM6_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
 #define DISPATCH_MEM_MAP_END (MEM_DISPATCH_DM7_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
-
-// Dispatch-engine firmware/kernels use an extended reserved L1 layout; protect it in watcher NOC sanitize.
-#if defined(COMPILE_FOR_DISPATCH_ENGINE)
-#undef MEM_MAP_READ_ONLY_END
-#define MEM_MAP_READ_ONLY_END DISPATCH_MEM_MAP_END
-#endif
 
 /////////////
 // Stack info

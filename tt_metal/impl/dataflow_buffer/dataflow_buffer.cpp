@@ -42,11 +42,10 @@ NarrowT dfb_narrow_field(WideT value, uint32_t dfb_id, const char* field_name) {
     return static_cast<NarrowT>(value);
 }
 
-uint32_t align_dfb_config_transfer_size(uint32_t payload_bytes) {
+uint32_t align_dfb_config_transfer_size(const Hal& hal, uint32_t payload_bytes) {
     if (payload_bytes == 0) {
         return 0;
     }
-    const auto& hal = MetalContext::instance().hal();
     // RTL sim and DMA paths move L1 in uint32_t chunks; also honor HAL L1 alignment for the region.
     const uint32_t min_align = hal.has_tile_counter_registers() ? static_cast<uint32_t>(sizeof(uint32_t)) : 1u;
     const uint32_t align_bytes = std::max(min_align, hal.get_alignment(HalMemType::L1));
@@ -207,7 +206,10 @@ uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBuff
 }
 
 uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+    // Callers (compute_dfb_config_serialized_size / serialize_dfb_config_for_core) guarantee non-empty.
+    TT_ASSERT(!dfbs_on_core.empty());
+    const ContextId context_id = dfbs_on_core.front()->get_context_id();
+    if (!MetalContext::instance(context_id).hal().has_tile_counter_registers()) {
         return 0;
     }
     uint32_t num_slots = 0;
@@ -220,7 +222,10 @@ uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowB
 
 std::vector<uint8_t> serialize_dm1_remapper_core_blob(
     const CoreCoord& core, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+    // Callers (serialize_dfb_config_for_core) guarantee non-empty.
+    TT_ASSERT(!dfbs_on_core.empty());
+    const ContextId context_id = dfbs_on_core.front()->get_context_id();
+    if (!MetalContext::instance(context_id).hal().has_tile_counter_registers()) {
         return {};
     }
 
@@ -274,7 +279,8 @@ static uint32_t hart_blob_byte_size(
 uint32_t compute_dfb_config_serialized_size(
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
     if (dfbs_on_core.empty()) { return 0; }
-    const auto& hal = MetalContext::instance().hal();
+    const ContextId context_id = dfbs_on_core.front()->get_context_id();
+    const auto& hal = MetalContext::instance(context_id).hal();
     TT_FATAL(hal.has_tile_counter_registers(), "compute_dfb_config_serialized_size requires Quasar");
 
     uint32_t payload = dfb_config_header_size();
@@ -286,7 +292,7 @@ uint32_t compute_dfb_config_serialized_size(
     // Signal region: per-producer byte slots (NUM_DFBS * MAX_PRODUCERS_PER_DFB) + uint32_t expected per DFB.
     payload += static_cast<uint32_t>(::dfb::NUM_DFBS) * static_cast<uint32_t>(::dfb::MAX_PRODUCERS_PER_DFB) +
                static_cast<uint32_t>(::dfb::NUM_DFBS) * static_cast<uint32_t>(sizeof(uint32_t));
-    return align_dfb_config_transfer_size(payload);
+    return align_dfb_config_transfer_size(hal, payload);
 }
 
 void populate_dfb_global_header_participation(
@@ -425,7 +431,8 @@ size_t serialize_dfb_config_for_core(
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
     std::span<uint8_t> out) {
     if (dfbs_on_core.empty()) { return 0; }
-    const auto& hal = MetalContext::instance().hal();
+    const ContextId context_id = dfbs_on_core.front()->get_context_id();
+    const auto& hal = MetalContext::instance(context_id).hal();
     TT_FATAL(hal.has_tile_counter_registers(), "serialize_dfb_config_for_core requires Quasar");
 
     // ---------------------------------------------------------------------------
@@ -753,7 +760,7 @@ size_t serialize_dfb_config_for_core(
     // ---------------------------------------------------------------------------
     verify_dfb_hart_blobs(std::span<const uint8_t>(out.data(), offset), dfbs_on_core);
 
-    const uint32_t aligned_size = align_dfb_config_transfer_size(offset);
+    const uint32_t aligned_size = align_dfb_config_transfer_size(hal, offset);
     TT_FATAL(out.size() >= aligned_size, "DFB config buffer too small for aligned payload");
     if (aligned_size > offset) { std::memset(out.data() + offset, 0, aligned_size - offset); }
     return aligned_size;
@@ -1161,7 +1168,7 @@ static void validate_ring_extent(const DataflowBufferImpl& dfb) {
     const uint16_t capacity = dfb.capacity;
     const uint32_t stride_in_entries = dfb.stride_in_entries;
     const uint32_t id = dfb.id;
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+    if (!MetalContext::instance(dfb.get_context_id()).hal().has_tile_counter_registers()) {
         return;
     }
     const bool tensix_on_dfb = has_tensix_risc(config.producer_risc_mask) || has_tensix_risc(config.consumer_risc_mask);
@@ -1169,7 +1176,7 @@ static void validate_ring_extent(const DataflowBufferImpl& dfb) {
         return;
     }
     const uint64_t ring_bytes = static_cast<uint64_t>(config.entry_size) * (stride_in_entries * (capacity - 1U) + 1U);
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(dfb.get_context_id()).hal();
     const uint32_t l1_align = hal.get_alignment(HalMemType::L1);
     const uint32_t unreserved_l1_size =
         hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -1293,7 +1300,7 @@ struct TileCounterGroup {
 static uint32_t dfb_wh_bh_serialized_size() { return 4u * sizeof(uint32_t); }
 
 uint16_t DataflowBufferImpl::dm1_remapper_slot_count() const {
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+    if (!MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
         return 0;
     }
     // Intra-tensix pairs are programmed by each Neo's packer, so they contribute no DM1 slots.
@@ -1302,7 +1309,7 @@ uint16_t DataflowBufferImpl::dm1_remapper_slot_count() const {
 
 void DataflowBufferImpl::append_dm1_remapper_slots_for_core(const CoreCoord& core, std::vector<uint8_t>& data) const {
     TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+    if (!MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
         return;
     }
 
@@ -1364,7 +1371,7 @@ void DataflowBufferImpl::append_dm1_remapper_slots_for_core(const CoreCoord& cor
 std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& core) const {
     TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
     TT_FATAL(
-        !MetalContext::instance().hal().has_tile_counter_registers(),
+        !MetalContext::instance(context_id_).hal().has_tile_counter_registers(),
         "serialize_for_core is only used on WH/BH; Quasar uses serialize_dfb_config_for_core");
 
     auto it = this->core_lookup_.find(core);
@@ -1389,7 +1396,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
 }
 
 uint32_t DataflowBufferImpl::serialized_size() const {
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+    if (!MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
         return dfb_wh_bh_serialized_size();
     }
     // Quasar: per-hart init entry sizes are fixed for a finalized TC assignment.
@@ -1420,7 +1427,7 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
     std::tie(capacity, stride_in_entries) = compute_capacity_and_stride(*this);
     validate_ring_extent(*this);
 
-    if (configs_finalized && MetalContext::instance().hal().has_tile_counter_registers()) {
+    if (configs_finalized && MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
         const bool producer_is_tensix_only =
             !has_dm_risc(config.producer_risc_mask) && has_tensix_risc(config.producer_risc_mask);
         const bool consumer_is_tensix_only =
@@ -1471,7 +1478,7 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
             num_consumer_tcs);
     }
 
-    if (configs_finalized && MetalContext::instance().hal().has_tile_counter_registers()) {
+    if (configs_finalized && MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
         log_debug(
             tt::LogMetal,
             "DFB {} size override applied: entry_size={} num_entries={} prod_threshold={} prod_per_tc={} "
@@ -1643,7 +1650,8 @@ uint32_t finalize_dfbs(
         return base_offset;
     }
 
-    const auto& hal = MetalContext::instance().hal();
+    const ContextId context_id = dataflow_buffers.front()->get_context_id();
+    const auto& hal = MetalContext::instance(context_id).hal();
 
     // WH/BH addresses a DFB's config by its device slot (slot N starts at N * serialized_size), so the
     // region has to span the highest slot in use on the kernel group, not just hold one entry per DFB.
@@ -1682,7 +1690,7 @@ uint32_t finalize_dfbs(
         }
 
         if (hal.has_tile_counter_registers() && kg_dfb_size > 0) {
-            kg_dfb_size = align_dfb_config_transfer_size(kg_dfb_size);
+            kg_dfb_size = align_dfb_config_transfer_size(hal, kg_dfb_size);
         }
         dfb_size = std::max(dfb_size, kg_dfb_size);
     }
@@ -1714,7 +1722,7 @@ using namespace tt::tt_metal::experimental::dfb::detail;
 // DFBs on disjoint cores reuse low slots, so a core's config table stays as small as its own
 // DFB count rather than growing with the number of DFBs elsewhere in the program.
 uint32_t ProgramImpl::assign_dfb_device_slot(const DataflowBufferImpl& dfb) const {
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(context_id_).hal();
     const uint32_t max_slots = hal.has_tile_counter_registers() ? ::dfb::NUM_DFBS : hal.get_arch_num_circular_buffers();
 
     uint64_t used_slots = 0;
@@ -1774,6 +1782,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     auto dfb = std::make_shared<DataflowBufferImpl>();
 
     dfb->id = static_cast<uint32_t>(this->dataflow_buffers_.size());
+    dfb->context_id_ = this->context_id_;
 
     dfb->core_ranges = core_range_set.merge_ranges();
     dfb->config = config;
@@ -1844,6 +1853,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     }
 
     this->local_dataflow_buffer_allocation_needed_ = true;
+    this->compile_and_allocate_needed_ = true;
 
     return dfb->id;
 }
@@ -1857,7 +1867,7 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
     // On WH/BH there are no tile counters or remapper hardware.
     // Mark configs finalized and create a single dummy group per DFB so allocate_dataflow_buffers() can fill in the L1
     // address.
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+    if (!MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
         for (auto& dfb : this->dataflow_buffers_) {
             if (dfb->configs_finalized) {
                 continue;
@@ -2481,6 +2491,7 @@ void ProgramImpl::invalidate_dataflow_buffer_allocation() {
     // Scratchpads stack on the DFB allocators, so a DFB re-layout invalidates their addresses too.
     // Clear the guard unconditionally (even on the early-return path) so allocate_scratchpads re-runs.
     this->scratchpads_allocated_ = false;
+    this->compile_and_allocate_needed_ = true;
     if (this->local_dataflow_buffer_allocation_needed_) {
         return;
     }

@@ -347,7 +347,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     return desc;
 }
 
-void SparseSDPAOperation::override_runtime_arguments(
+void SparseSDPAOperation::SparseSDPAProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const SparseSDPAParams& operation_attributes,
     const SparseSDPAInputs& tensor_args,

@@ -11,7 +11,6 @@
 
 #include <fmt/format.h>
 
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
 #include <tt-metalium/mesh_coord.hpp>

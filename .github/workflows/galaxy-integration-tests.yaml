@@ -10,12 +10,7 @@ on:
         type: choice
         options:
           - all
-          - resnet50
           - unit
-          - wan22
-          - mochi
-          - motif
-          - qwenimage
       platform:
         required: false
         type: choice
@@ -48,6 +43,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -61,6 +57,7 @@ jobs:
       build-inplace-wheel: true
   galaxy-integration-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     uses: ./.github/workflows/galaxy-integration-tests-impl.yaml
     secrets: inherit
     with:

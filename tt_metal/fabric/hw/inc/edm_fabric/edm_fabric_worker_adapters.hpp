@@ -115,7 +115,7 @@ struct WorkerToFabricEdmSenderBase {
             // VC0: connection info is populated into the L1 conn table by device-init;
             // read it by eth channel index.
             tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
-                reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+                reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(FABRIC_CONNECTIONS_BASE);
             uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
             const auto conn = &connection_info->read_only[eth_channel];
             const auto aligned_conn = &connection_info->read_write[eth_channel];

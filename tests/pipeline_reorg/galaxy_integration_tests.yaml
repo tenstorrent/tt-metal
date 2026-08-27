@@ -10,15 +10,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: Galaxy resnet50 integration tests
-  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model resnet50
-  model: resnet50
-  skus:
-    wh_galaxy:
-      timeout: 50
-  owner_id: U085GDCAZTN # Pavle Josipovic
-  team: ttnn
-
 - name: Galaxy unit/distributed integration tests
   cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model unit
   model: unit
@@ -26,40 +17,4 @@
     wh_galaxy:
       timeout: 50
   owner_id: U07D5N7QL4U # Joseph Chu
-  team: ttnn
-
-- name: Galaxy Wan2.2 integration tests
-  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model wan22
-  model: wan22
-  skus:
-    wh_galaxy:
-      timeout: 40
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: ttnn
-
-- name: Galaxy mochi integration tests
-  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model mochi
-  model: mochi
-  skus:
-    wh_galaxy:
-      timeout: 80
-  owner_id: U09ELB03XRU # Stephen Osborne
-  team: ttnn
-
-- name: Galaxy Motif integration tests
-  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model motif
-  model: motif
-  skus:
-    wh_galaxy:
-      timeout: 10
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: ttnn
-
-- name: Galaxy Qwen-Image integration tests
-  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model qwenimage
-  model: qwenimage
-  skus:
-    wh_galaxy:
-      timeout: 10
-  owner_id: U08TED0JM9D # Samuel Adesoye
   team: ttnn

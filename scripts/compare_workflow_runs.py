@@ -445,24 +445,19 @@ def main():
         # Core post-commit
         "sanity-tests.yaml",
         # Single-card
-        "single-card-demo-tests.yaml",
         "perf-device-models.yaml",
         # T3000 (T3K)
-        "t3000-demo-tests.yaml",
         "t3000-e2e-tests.yaml",
         "t3000-fast-tests.yaml",
         "t3000-integration-tests.yaml",
-        "t3000-perf-tests.yaml",
         "t3000-profiler-tests.yaml",
         "t3000-unit-tests.yaml",
         # Galaxy
         "galaxy-deepseek-tests.yaml",
         "blaze-models-prefill-tests.yaml",
-        "galaxy-demo-tests.yaml",
         "galaxy-e2e-tests.yaml",
         "galaxy-health.yaml",
         "galaxy-integration-tests.yaml",
-        "galaxy-perf-tests.yaml",
         "galaxy-multi-user-isolation-tests.yaml",
         "galaxy-profiler-tests.yaml",
         "galaxy-sanity.yaml",
@@ -471,7 +466,6 @@ def main():
         # Blackhole
         "blackhole-demo-tests.yaml",
         "blackhole-e2e-tests.yaml",
-        "blackhole-sanity-tests.yaml",
     ]
 
     # Filter by category if specified
