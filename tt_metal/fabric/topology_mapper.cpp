@@ -456,11 +456,86 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         // Build TopologyMappingConfig pinnings before physical-graph enrichment so PGD<->MGD matching sees them.
         ::tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
 
-        config.pinnings = pinning_groups_;
+        // ESCAPE HATCH for the galaxy corner-pinning heuristic.
+        //
+        // pinning_groups_ comes from get_galaxy_fixed_asic_position_pinnings_for_mesh(), which pins a
+        // mesh's four logical corners to the four tray-corner ASICs (asic_location == 1) under the
+        // labelling tray 1 = top-left, 2 = top-right, 3 = bottom-left, 4 = bottom-right. That
+        // labelling is not universal. On the quad4 Blackhole galaxies trays 1 and 2 share ONE end
+        // column and trays 3 and 4 share the other -- so tray 2 is bottom-LEFT -- and the
+        // heuristic's south-west corner (corner_fabric_node_ids[2], chip_id = cols * (rows - 1))
+        // becomes unsatisfiable. Measured: exactly one node per mesh, always that south-west
+        // corner, came back "overconstrained" (M3D24 = 8*3 on a [4,8] mesh; M0D96 = 32*3 on
+        // [4,32]) while the physical graph was a strict SUPERSET of the logical one.
+        //
+        // MGD `pinnings` cannot work around it on a multi-host layout: PhysicalAsicPosition carries
+        // only tray_id + asic_location and has NO host component, so per-mesh pinnings for four
+        // galaxies with identical internal tray numbering are identical, and 128 logical nodes end
+        // up claiming 32 distinct positions ("32 target node(s) are not mapped ... failed to add
+        // forbidden constraint" for the last mesh).
+        //
+        // It is a heuristic, so an opt-out is the appropriate remedy until the labelling is made
+        // cluster-aware. Set TT_METAL_SKIP_GALAXY_CORNER_PINNING=1 to drop it.
+        const bool skip_galaxy_corner_pinning = std::getenv("TT_METAL_SKIP_GALAXY_CORNER_PINNING") != nullptr;
+        if (skip_galaxy_corner_pinning) {
+            log_info(
+                tt::LogFabric,
+                "TT_METAL_SKIP_GALAXY_CORNER_PINNING set: dropping {} galaxy corner-pinning "
+                "heuristic group(s)",
+                pinning_groups_.size());
+        } else {
+            config.pinnings = pinning_groups_;
+        }
 
         // Append MGD pinnings when available (same many-to-many group shape).
         if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
             const auto& mgd_pinnings = mesh_graph_.get_mesh_graph_descriptor().get_pinnings();
+
+            // EXPLICIT PINNINGS DISPLACE THE HEURISTIC ONES for the meshes they cover.
+            //
+            // pinning_groups_ holds the galaxy corner heuristic from
+            // get_galaxy_fixed_asic_position_pinnings_for_mesh(): it constrains a mesh's four
+            // logical corners to the four tray-corner ASICs (asic_location == 1), labelled
+            // tray 1 = top-left, 2 = top-right, 3 = bottom-left, 4 = bottom-right. That labelling
+            // does not hold on every cabling variant. On the quad4 Blackhole galaxies trays 1 and 2
+            // share ONE end column and trays 3 and 4 share the other, so tray 2 is bottom-LEFT,
+            // and the heuristic's south-west corner (corner_fabric_node_ids[2],
+            // chip_id = cols * (rows - 1)) becomes unsatisfiable.
+            //
+            // Concatenating the two sets means both must hold, so a correct explicit pinning
+            // cannot rescue a wrong heuristic one. Measured on a quad galaxy: exactly one node per
+            // mesh -- always the south-west corner -- came back "overconstrained", 31 of 32 for a
+            // [4,8] mesh (M3D24 = 8*3) and 127 of 128 for a [4,32] mesh (M0D96 = 32*3), while the
+            // physical graph was a strict superset of the logical one and the supplied embedding
+            // had been verified edge-by-edge against the factory system descriptor.
+            //
+            // A heuristic exists to guess when nothing better is known. When the MGD states the
+            // placement outright, the guess is redundant at best, so drop it for those meshes and
+            // keep it for any mesh the MGD does not mention.
+            if (!mgd_pinnings.empty()) {
+                std::set<MeshId> explicitly_pinned_meshes;
+                for (const auto& group : mgd_pinnings) {
+                    for (const auto& node : group.fabric_nodes) {
+                        explicitly_pinned_meshes.insert(node.mesh_id);
+                    }
+                }
+                const auto dropped = std::remove_if(
+                    config.pinnings.begin(), config.pinnings.end(), [&explicitly_pinned_meshes](const auto& group) {
+                        return !group.fabric_nodes.empty() &&
+                               explicitly_pinned_meshes.count(group.fabric_nodes.front().mesh_id) > 0;
+                    });
+                const auto num_dropped = std::distance(dropped, config.pinnings.end());
+                config.pinnings.erase(dropped, config.pinnings.end());
+                if (num_dropped > 0) {
+                    log_info(
+                        tt::LogFabric,
+                        "Dropped {} heuristic pinning group(s) superseded by explicit MGD pinnings "
+                        "for {} mesh(es)",
+                        num_dropped,
+                        explicitly_pinned_meshes.size());
+                }
+            }
+
             config.pinnings.insert(config.pinnings.end(), mgd_pinnings.begin(), mgd_pinnings.end());
         }
 
