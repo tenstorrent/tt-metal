@@ -34,6 +34,12 @@ template <uint32_t dfb_id>
 constexpr uint32_t dfb_l1_format();
 
 template <uint32_t dfb_id>
+constexpr uint32_t get_tile_r_dim();
+
+template <uint32_t dfb_id>
+constexpr uint32_t get_tile_c_dim();
+
+template <uint32_t dfb_id>
 constexpr bool dfb_has_32x32_tiles();
 
 }  // namespace compute_kernel_lib

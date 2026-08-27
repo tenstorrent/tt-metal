@@ -7,14 +7,17 @@
 #include <type_traits>
 #include <cstdint>
 
+#include <tt-metalium/constants.hpp>
+
 #include "api/compute/reduce.h"
 #include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+
 /**
  * @file reduce_helpers_compute.hpp
- * @brief Single unified reduce function with automatic dispatch
+ * @brief Unified reduction with automatic dispatch and optional compute-owned scaler tiles
  *
- * Provides ONE function that handles all reduce operations:
+ * Provides one function that handles all reduce operations:
  * - Row reduction (REDUCE_ROW): Reduces W dimension, outputs Ht tiles per batch
  * - Column reduction (REDUCE_COL): Reduces H dimension, outputs Wt tiles per batch
  * - Scalar reduction (REDUCE_SCALAR): Reduces both H and W, outputs 1 tile per batch
@@ -34,8 +37,6 @@
  * a loop) — re-running mid-kernel can race the compute pipeline and produce
  * undefined behavior.
  *
- * IMPORTANT: The scaler CB must contain the scaling factor tile BEFORE calling reduce().
- *
  * Basic Usage:
  *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
  *
@@ -43,15 +44,27 @@
  *
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
+ *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
+ *       compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+ *       compute_kernel_lib::NoAccumulation{},
+ *       compute_kernel_lib::NoOp{},
+ *       compute_kernel_lib::ReduceScaler::compute_managed());
  *
  *   // Reduce each column (H dimension) - output has Wt tiles per batch
  *   compute_kernel_lib::reduce<SUM, REDUCE_COL, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
+ *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
+ *       compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+ *       compute_kernel_lib::NoAccumulation{},
+ *       compute_kernel_lib::NoOp{},
+ *       compute_kernel_lib::ReduceScaler::compute_managed());
  *
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
  *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
+ *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
+ *       compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+ *       compute_kernel_lib::NoAccumulation{},
+ *       compute_kernel_lib::NoOp{},
+ *       compute_kernel_lib::ReduceScaler::compute_managed());
  *
  * See reduce() function documentation for advanced usage examples including:
  * - Different input policies (BulkWaitBulkPop, NoWaitNoPop, WaitUpfrontNoPop)
@@ -301,29 +314,32 @@ struct ReduceInputBlockShape {
 };
 
 /**
- * @brief Partial-scaler descriptor for non-tile-aligned reduce dimensions
+ * @brief Scaler ownership and partial-lane descriptor
  *
- * ReduceTile and AccumulateViaAdd mask padding differently:
+ * There are two ownership modes:
  *
- * - ReduceTile: the reader emits a full scaler followed by a partial scaler.
- *   `with_partial()` selects the second scaler for the last tile along the
- *   reduce dimension.
- * - AccumulateViaAdd: the reader emits only a 0/1 mask tile at scaler-CB index 0.
- *   `only_partial()` selects that tile for the last input tile.
+ * - Compute-owned: `ReduceScaler::compute_managed(n)` tells reduce() that the final tile has n valid lanes
+ *   along the reduced dimension; n == 0 means there is no partial tile. The `reduce_factor` template argument
+ *   to reduce() is the total number of elements reduced into each output and defaults to 1. reduce() creates,
+ *   reuses, replaces, and synchronizes the required scaler tiles. A full reduction needs one tile; a ragged
+ *   reduction uses a [full, partial] pair, with the partial scaler at index 1.
+ *   The scaler DFB therefore needs two entries if a ragged reduction is possible, and one otherwise.
  *
- * In both cases the padding lanes multiply by zero and contribute nothing.
- * The default (`none()`) is the tile-aligned path.
+ * - Reader-owned compatibility: `none()`, `with_partial()`, and `only_partial()` retain the
+ *   existing contracts for kernels whose dataflow thread prepares scaler or mask tiles. These
+ *   modes do not participate in compute-side lifecycle tracking.
  *
- * Pair `with_partial()` with dataflow_kernel_lib::prepare_partial_reduce_scalers
- * (or calculate_and_prepare_partial_reduce_scalers). Pair `only_partial()` with
- * dataflow_kernel_lib::prepare_reduce_mask.
+ * Reader-owned ReduceTile uses `with_partial()` for a [full, partial] pair. Reader-owned
+ * AccumulateViaAdd uses `only_partial()` for a mask at index 0. In both cases padding lanes
+ * multiply by zero and contribute nothing.
  *
  * REDUCE_SCALAR does not support either partial representation: ReduceTile
  * applies its scaler twice (row then col), while one AccumulateViaAdd row/column
  * mask cannot encode a 2-D partial corner.
  *
- * The ReduceTile SFPU path (see is_sfpu_reduce_path) folds tiles without reading
- * the scaler CB, so it cannot honor `with_partial()` either.
+ * The ReduceTile SFPU path (see is_sfpu_reduce_path) folds tiles without reading the scaler DFB,
+ * so partial lanes are unsupported there. Aligned SFPU and AccumulateViaAdd calls do not create or
+ * wait for scaler tiles.
  *
  * IMPORTANT: `with_partial()` describes the last tile of this reduce() call. If
  * the caller collapses several tiles into one before calling ReduceTile, masking
@@ -331,21 +347,27 @@ struct ReduceInputBlockShape {
  * ragged tile before accumulating instead; AccumulateViaAdd's `only_partial()`
  * path does exactly that.
  *
- * Usage:
- *   constexpr auto partial = has_partial
- *       ? ReducePartialScaler::with_partial()
- *       : ReducePartialScaler::none();
- *   reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, shape, ..., partial);
+ * Compute-owned usage:
+ *   reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, shape, ...,
+ *                           ReduceScaler::compute_managed(partial_cols));
  */
-struct ReducePartialScaler {
-    // Whether the last reduce-dim tile needs a partial scaler or mask.
+struct ReduceScaler {
+    // Reader-owned compatibility metadata.
     bool use_partial = false;
-    // Index of that tile: 0 for a mask-only CB, 1 for a [full, partial] scaler pair.
     std::uint32_t partial_tile_idx = 0;
 
-    static constexpr ReducePartialScaler none() { return {false, 0}; }
-    static constexpr ReducePartialScaler with_partial() { return {true, 1}; }
-    static constexpr ReducePartialScaler only_partial() { return {true, 0}; }
+    // Compute-owned metadata. Zero means use the scaler DFB's full reduced-axis tile extent.
+    bool manage_scaler = false;
+    std::uint32_t partial_elements = 0;
+
+    static constexpr ReduceScaler none() { return {false, 0, false, 0}; }
+    static constexpr ReduceScaler with_partial() { return {true, 1, false, 0}; }
+    static constexpr ReduceScaler only_partial() { return {true, 0, false, 0}; }
+    static constexpr ReduceScaler compute_managed(std::uint32_t partial_elements = 0) {
+        return {partial_elements != 0, partial_elements != 0 ? 1u : 0u, true, partial_elements};
+    }
+
+    constexpr bool is_compute_owned() const { return manage_scaler; }
 
     constexpr std::uint32_t scaler_tile_count() const { return partial_tile_idx + 1; }
     constexpr std::uint32_t partial_scaler_idx() const { return partial_tile_idx; }
@@ -382,10 +404,10 @@ struct AccumulationConfig {
  * - MAX + REDUCE_ROW on Quasar: the reload needs a within-16x16-face transpose that
  *   copy_tile_to_dst_init_short asserts against on Quasar.
  *
- * NOTE on ReducePartialScaler: partial metadata applies to the last reduce-dim tile of
- * EACH reduce() call, not of the whole accumulated reduction. When only the final chunk
- * is short, pass with_partial() (ReduceTile) or only_partial() (AccumulateViaAdd) on that
- * call only and none() on the others.
+ * NOTE on ReduceScaler: partial metadata applies to the last reduce-dim tile of
+ * EACH reduce() call, not of the whole accumulated reduction. For compute-owned scalers,
+ * pass compute_managed() on every call; reduce() reuses or replaces the resident tiles.
+ * Reader-owned kernels retain the with_partial()/only_partial()/none() convention.
  *
  * Usage:
  *   const auto cfg = AccumulationConfig::with_cb(cb_accum);
@@ -502,9 +524,11 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  * Do NOT re-call it later (and never inside a loop) — re-running mid-kernel can
  * race the compute pipeline and produce undefined behavior.
  *
- * IMPORTANT - SCALER CB REQUIREMENT:
- * The scaler CB (scaler_cb) must contain the scaling factor tile BEFORE calling
- * this function. The function will wait for it automatically.
+ * SCALER OWNERSHIP:
+ * Pass ReduceScaler::compute_managed() to let reduce() own the scaler DFB. It will
+ * calculate, create, reuse, replace, and synchronize scaler tiles as needed. Reader-owned legacy
+ * modes still require the scaler DFB to be populated before reduce() is called. A compute-owned
+ * scaler DFB needs two entries if a ragged reduction is possible, and one otherwise.
  *
  * INPUT POLICIES: See ReduceInputPolicy enum for detailed mode descriptions.
  * - Use BulkWaitBulkPop for optimal performance when wait/pop are symmetric with ReduceInputBlockShape.
@@ -539,11 +563,10 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  * is NoWaitNoPop or WaitUpfrontNoPop.
  * @param accumulate Accumulation configuration (default: NoAccumulation)
  * @param post_reduce_op Callback after each reduction (default: NoOp)
- * @param partial_scaler Partial-scaler descriptor for non-tile-aligned reduce
- *        dimensions (default: ReducePartialScaler::none()). Use with_partial()
- *        with ReduceTile when the reader emits [full, partial], or only_partial()
- *        with AccumulateViaAdd when the reader emits a 0/1 mask tile.
- *        Not supported for REDUCE_SCALAR or the Int32 SFPU reduce path.
+ * @param partial_scaler Scaler ownership and partial-lane descriptor. Use
+ *        ReduceScaler::compute_managed() for compute-owned scaler lifecycle. The default none(),
+ *        with_partial(), and only_partial() preserve reader-owned compatibility.
+ *        Partial lanes are not supported for REDUCE_SCALAR or the SFPU reduce path.
  *
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
@@ -627,6 +650,7 @@ template <
     // lambda, whose type cannot be named at the call site, so a trailing within_tile would be unreachable for
     // every caller that passes a post_reduce_op — i.e. exactly the callers Skip is documented for.
     ReduceWithinTile within_tile = ReduceWithinTile::Collapse,
+    std::uint32_t reduce_factor = 1,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
@@ -634,7 +658,7 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     AccumulateT accumulate = AccumulateT{},
     PostReduceOp post_reduce_op = PostReduceOp{},
-    ReducePartialScaler partial_scaler = ReducePartialScaler::none());
+    ReduceScaler partial_scaler = ReduceScaler::none());
 
 /**
  * @brief Mean reduction = reduce<SUM> + an explicit, caller-supplied 1/N normalization.
@@ -688,7 +712,7 @@ ALWI void reduce_mean(
     std::uint32_t n_reduced,
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     AccumulateT accumulate = AccumulateT{},
-    ReducePartialScaler partial_scaler = ReducePartialScaler::none());
+    ReduceScaler partial_scaler = ReduceScaler::none());
 
 }  // namespace compute_kernel_lib
 
