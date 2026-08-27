@@ -1247,11 +1247,19 @@ def _stage_items_observed(stage, profile) -> int:
             # decode step retiring one row per user reads 32 for a batch of 8, and the stage would
             # look like it retires 32 items and stop being a per-user rate. `rows` is the count the
             # model asked for. Falling back to the fingerprint keeps profiles written before it.
-            _m = int((_o or {}).get("rows") or 0)
-            if _m <= 0:
-                _parsed = parse_matmul_shape(str((_o or {}).get("shape") or ""))
-                if not _parsed:
-                    continue
+            # MATMULS ONLY, AND THE SHAPE PARSE IS THAT TEST -- it is the one thing that says this op
+            # is a matmul rather than a LayerNorm or a datamove. `rows` is recorded for EVERY op, so
+            # preferring it before this check counted every elementwise and movement op in the stage,
+            # and those outnumber the matmuls: their row counts could carry the mode away from the
+            # arithmetic the ceiling is about.
+            _parsed = parse_matmul_shape(str((_o or {}).get("shape") or ""))
+            if not _parsed:
+                continue
+            # The parse gives the PADDED M; `rows` is what the stage asked for. Prefer the latter,
+            # fall back to the former for a profile written before the field existed.
+            try:
+                _m = int((_o or {}).get("rows") or 0) or _parsed[0]
+            except (TypeError, ValueError):  # a field this did not write: the fingerprint still holds
                 _m = _parsed[0]
             if _m > 0:
                 _rows[_m] = _rows.get(_m, 0) + max(1, int((_o or {}).get("count") or 1))
@@ -1262,7 +1270,12 @@ def _stage_items_observed(stage, profile) -> int:
     # a TILE-PADDED 32 rows for a batch of 8. The stage would then have read as retiring 32 items and
     # been labelled a request-rate stage instead of one token per user. Every other matmul in the
     # step runs at the true row count, so the mode carries it and the padded outlier does not.
-    return int(max(_rows.items(), key=lambda kv: (kv[1], -kv[0]))[0])
+    # TIES GO TO THE LARGER COUNT. A tie is genuinely ambiguous -- equal numbers of matmuls at two
+    # row counts -- and the two directions are not equally bad. Under-counting is the failure this
+    # whole path exists to fix: it shrinks the compute roof and reports a compute-bound stage as
+    # memory-bound, sending the reader after bandwidth. Over-counting overstates the roof, which
+    # reads as headroom rather than as the wrong wall.
+    return int(max(_rows.items(), key=lambda kv: (kv[1], kv[0]))[0])
 
 
 def _stage_units(stage, prompt_tokens, profile=None) -> int:

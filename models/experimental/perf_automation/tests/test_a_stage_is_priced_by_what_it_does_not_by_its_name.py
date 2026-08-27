@@ -634,3 +634,118 @@ def test_the_logical_dim_is_carried_out_of_the_raw_row():
     assert (_pad("32[8]"), _logical("32[8]")) == ("32", "8")
     assert (_pad("4096"), _logical("4096")) == ("4096", "4096")
     assert _logical("") == "?" and _logical(None) == "?"
+
+
+def test_the_logical_rows_survive_the_whole_chain_from_a_raw_row(tmp_path):
+    """CSV -> build_buckets -> top_ops -> item count, on the shape tracy actually records.
+
+    The unit tests above hand _stage_items_observed a dict someone typed. This builds the buckets the
+    way a capture does, from a raw row whose left input reads '32[8]' -- 8 rows padded to a 32-row
+    tile, which is what a step retiring one row per user looks like on device. Nothing but the real
+    path would have caught that the fingerprint carries the padded half.
+    """
+    import csv
+
+    from agent.tracy_tool import build_buckets
+    from cc_optimize.summary import _stage_items_observed as obs
+
+    ops = [(i, "MatmulDeviceOperation", 100.0, "3072", "8192") for i in range(1, 6)]
+    ops.append((6, "MatmulDeviceOperation", 900.0, "3072", "131072"))  # the wide, padded head
+    rep, raw = tmp_path / "report.csv", tmp_path / "raw.csv"
+    with open(rep, "w", newline="") as f:
+        w = csv.DictWriter(
+            f, fieldnames=["OP Code", "Global Call Count", "Device Time", "Cores", "Bound", "Op-to-Op Gap"]
+        )
+        w.writeheader()
+        for gcc, op, us, _k, _n in ops:
+            w.writerow(
+                {
+                    "OP Code": op,
+                    "Global Call Count": gcc,
+                    "Device Time": us,
+                    "Cores": 64,
+                    "Bound": "",
+                    "Op-to-Op Gap": "",
+                }
+            )
+    with open(raw, "w", newline="") as f:
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "OP CODE",
+                "GLOBAL CALL COUNT",
+                "INPUT_0_Y_PAD[LOGICAL]",
+                "INPUT_0_X_PAD[LOGICAL]",
+                "INPUT_1_Y_PAD[LOGICAL]",
+                "INPUT_1_X_PAD[LOGICAL]",
+                "MATH FIDELITY",
+                "INPUT_0_MEMORY",
+                "ATTRIBUTES",
+                "INPUT_0_LAYOUT",
+                "OUTPUT_0_LAYOUT",
+            ],
+        )
+        w.writeheader()
+        for gcc, op, _us, k, n in ops:
+            w.writerow(
+                {
+                    "OP CODE": op,
+                    "GLOBAL CALL COUNT": gcc,
+                    "INPUT_0_Y_PAD[LOGICAL]": "32[8]",  # the tile, and what was asked for
+                    "INPUT_0_X_PAD[LOGICAL]": k,
+                    "INPUT_1_Y_PAD[LOGICAL]": k,
+                    "INPUT_1_X_PAD[LOGICAL]": n,
+                    "MATH FIDELITY": "HiFi4",
+                    "INPUT_0_MEMORY": "DRAM",
+                    "ATTRIBUTES": "",
+                    "INPUT_0_LAYOUT": "TILE",
+                    "OUTPUT_0_LAYOUT": "TILE",
+                }
+            )
+    bk = build_buckets(rep, raw, 130)
+    tops = [t for b in bk for t in (b.get("top_ops") or [])]
+    assert tops, "no ops survived bucketing"
+    assert all(t.get("shape", "").startswith("32x") for t in tops), "the fingerprint lost the padded dim"
+    assert all(int(t.get("rows") or 0) == 8 for t in tops), [t.get("rows") for t in tops]
+    assert obs("zzz", {"stage_buckets": {"zzz": bk}}) == 8, "the padded tile reached the item count"
+
+
+def test_only_matmuls_set_the_item_count():
+    """`rows` is recorded for EVERY op, matmul or not, so preferring it before the matmul test counted
+    every elementwise and movement op in the stage -- and those outnumber the matmuls many times over.
+    The shape parse IS the matmul test, so it has to come first; `rows` only supplies the value."""
+    from cc_optimize.summary import _stage_items_observed as obs
+
+    p = _prof(
+        zzz=[
+            {"shape": "1504x1280 @ 1280x5120", "rows": 1500, "count": 32},  # the arithmetic
+            {"shape": "(1, 375, 5120)", "rows": 375, "count": 400},  # datamove: no matmul fingerprint
+            {"shape": "?", "rows": 64, "count": 900},  # eltwise: no shape at all
+        ]
+    )
+    assert obs("zzz", p) == 1500, "a non-matmul carried the mode"
+
+
+def test_a_tie_errs_toward_the_larger_count():
+    """The two directions are not equally bad. Under-counting shrinks the compute roof and reports a
+    compute-bound stage as memory-bound -- the failure this path exists to fix."""
+    from cc_optimize.summary import _stage_items_observed as obs
+
+    p = _prof(
+        zzz=[
+            {"shape": "1504x1280 @ 1280x5120", "rows": 1500, "count": 10},
+            {"shape": "32x1280 @ 1280x5120", "rows": 8, "count": 10},
+        ]
+    )
+    assert obs("zzz", p) == 1500
+
+
+def test_a_field_this_did_not_write_cannot_break_the_roofline():
+    """_stage_units feeds the compute roof; an int() on a foreign profile's value must not raise
+    through it."""
+    from cc_optimize.summary import _stage_items_observed as obs
+
+    for _v in ("abc", None, -3, 8.0):
+        p = _prof(zzz=[{"shape": "1504x8 @ 8x8", "rows": _v, "count": 5}])
+        obs("zzz", p)  # must not raise
+    assert obs("zzz", _prof(zzz=[{"shape": "1504x8 @ 8x8", "rows": "abc", "count": 5}])) == 1504
