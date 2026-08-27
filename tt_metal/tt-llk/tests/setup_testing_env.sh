@@ -71,6 +71,17 @@ main() {
         exit 0
     fi
 
+    # A CI image can carry the toolchain already, which is the only way a runner
+    # with no route to the sfpi source gets one.
+    local prebuilt=/opt/tenstorrent/sfpi
+    if [[ -f "$prebuilt/sfpi.version" ]] &&
+       [[ "$sfpi_version" == "$(cat "$prebuilt/sfpi.version")" ]] ; then
+        echo "Using the SFPI built into the image: $sfpi_version"
+        rm -rf "${SCRIPT_DIR}/sfpi"
+        ln -s "$prebuilt" "${SCRIPT_DIR}/sfpi"
+        exit 0
+    fi
+
     local TEMP_DIR=$(mktemp -d)
     if [[ -z $sfpi_hash ]] ; then
 	# A development toolchain publishes no package, so build the branch that

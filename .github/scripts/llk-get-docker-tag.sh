@@ -16,6 +16,7 @@ LLK_FILES=(
     "${LLK_PATH}/.github/Dockerfile.ird"
     "${LLK_PATH}/.github/Dockerfile.ird.slim"
     "${LLK_PATH}/tests/requirements.txt"
+    "${LLK_PATH}/tests/sfpi-version"
     "${LLK_PATH}/.github/scripts/install-tests-dependencies.sh"
 )
 

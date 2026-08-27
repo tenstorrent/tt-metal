@@ -1,1 +1,11 @@
-../../sfpi-version
+# sfpi branch tensix-intrinsics
+
+# Not a release: no tarball is published for this toolchain, so leaving the
+# package hashes out is what selects the build-from-source path in
+# tt_metal/hw/CMakeLists.txt and in tt-llk's setup_testing_env.sh.
+
+sfpi_repo='https://git.beeblebrox.me/ivan/sfpi'
+sfpi_version='tensix-intrinsics'
+sfpi_base=''
+sfpi_build=''
+sfpi_hashtype='sha256'

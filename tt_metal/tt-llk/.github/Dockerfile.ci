@@ -1,6 +1,28 @@
 ARG FROM_TAG=latest
+
+# The toolchain is built here rather than by setup_testing_env.sh in each test
+# job, because the card runners reach neither the sfpi source nor anything else
+# outside the CI network, and because eleven perf jobs would otherwise each
+# build the same compiler.  A release pin leaves this stage empty and the tests
+# download the package as before.
+FROM ghcr.io/tenstorrent/tt-llk/tt-llk-base-ubuntu-22-04:${FROM_TAG} AS sfpi-build
+SHELL ["/bin/bash", "-c"]
+COPY tests/sfpi-version /tmp/sfpi/sfpi-version
+COPY tests/sfpi-info.sh /tmp/sfpi/sfpi-info.sh
+RUN set -e \
+    && mkdir -p /opt/tenstorrent \
+    && chmod +x /tmp/sfpi/sfpi-info.sh \
+    && eval $(/tmp/sfpi/sfpi-info.sh SHELL txz) \
+    && if [[ -z "$sfpi_hash" ]]; then \
+           /tmp/sfpi/sfpi-info.sh BUILD /tmp/sfpi/src \
+           && tar -xJf "/tmp/sfpi/$sfpi_filename" -C /opt/tenstorrent \
+           && echo "$sfpi_version" > /opt/tenstorrent/sfpi/sfpi.version; \
+       fi \
+    && rm -rf /tmp/sfpi
+
 FROM ghcr.io/tenstorrent/tt-llk/tt-llk-base-ubuntu-22-04:${FROM_TAG} AS ci-build
 SHELL ["/bin/bash", "-c"]
+COPY --from=sfpi-build /opt/tenstorrent /opt/tenstorrent
 
 ENV GITHUB_ACTIONS="true" \
     PYTEST_RUN_PATH="tests/python_tests"
