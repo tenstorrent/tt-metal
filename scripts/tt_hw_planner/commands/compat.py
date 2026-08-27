@@ -19,13 +19,9 @@ def cmd_compat(args) -> int:
         )
         return 0
     if not probe.raw_config:
-        print(
-            f"ERROR: could not load config.json for {args.model_id}. "
-            "Compatibility analysis needs the HuggingFace config; check that "
-            "the repo is public (or HF_TOKEN is set) and that model_type is "
-            "exposed in config.json.",
-            file=sys.stderr,
-        )
+        from ..probe import missing_config_reason
+
+        print(f"ERROR: {missing_config_reason(probe, args.model_id)}", file=sys.stderr)
         return 1
 
     report = check_compatibility(args.model_id, probe.raw_config)

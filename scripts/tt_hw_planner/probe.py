@@ -808,6 +808,98 @@ def fetch_repo_json(model_id: str, filename: str) -> Optional[dict]:
         return None
 
 
+def _repo_access_status(model_id: str, filename: str) -> str:
+    """Why fetching ``filename`` from ``model_id`` fails: ``"ok"``, ``"denied"``
+    (gated / private / missing repo -- an access problem), ``"absent"`` (repo is
+    readable, that file simply is not in it), or ``"unknown"``.
+
+    Classified from the hub client's own exception types, not from message text,
+    so the two cases that need OPPOSITE advice are never confused: a gated repo
+    needs credentials, a readable repo missing a config needs a different model.
+    """
+    try:
+        from huggingface_hub import hf_hub_download
+    except Exception:
+        return "unknown"
+    try:
+        hf_hub_download(_validate_hf_id(model_id), filename)
+        return "ok"
+    except Exception as exc:
+        try:
+            from huggingface_hub import errors as _hf_errors
+        except Exception:
+            return "unknown"
+        denied = tuple(
+            c
+            for c in (
+                getattr(_hf_errors, "GatedRepoError", None),
+                getattr(_hf_errors, "RepositoryNotFoundError", None),
+                getattr(_hf_errors, "LocalTokenNotFoundError", None),
+            )
+            if isinstance(c, type)
+        )
+        absent = tuple(
+            c
+            for c in (
+                getattr(_hf_errors, "EntryNotFoundError", None),
+                getattr(_hf_errors, "RemoteEntryNotFoundError", None),
+            )
+            if isinstance(c, type)
+        )
+        if denied and isinstance(exc, denied):
+            return "denied"
+        if absent and isinstance(exc, absent):
+            return "absent"
+        return "unknown"
+
+
+def missing_config_reason(probe: "ModelProbe", model_id: str) -> str:
+    """Why this repo has no usable root config, phrased from evidence.
+
+    Three different situations produce an empty ``raw_config`` and they need
+    different answers:
+
+    * the repo could not be READ at all (gated / private / typo) -> an access
+      problem, and the only case where credentials are the answer;
+    * the repo was read and is a COMPOSITE -> it has no root config by design,
+      its architecture lives in the per-component subfolders;
+    * the repo was read but exposes no architecture identity at all (no root
+      config, no composite index, no component configs) -> it is not a standalone
+      model: an adapter/LoRA, a single-file checkpoint, or a weights-only repo.
+
+    Blaming credentials for the last two is what sent a user chasing HF_TOKEN for
+    a public repo. Readability is inferred from whether the file listing produced
+    anything, never assumed."""
+    if getattr(probe, "is_composite", False):
+        subs = ", ".join(getattr(probe, "submodels", []) or []) or COMPOSITE_INDEX_FILE
+        return (
+            f"{model_id} is a composite / multi-component repo [{subs}] -- it has no root "
+            f"{ROOT_CONFIG_FILE} by design; each component carries its own. Bring up per component."
+        )
+    # Metadata is published for gated repos, so a populated probe proves nothing
+    # about whether the FILES can be read. Ask the hub directly and let its own
+    # error type decide, because "denied" and "absent" need opposite advice.
+    status = _repo_access_status(model_id, ROOT_CONFIG_FILE)
+    if status == "denied":
+        return (
+            f"{model_id} cannot be read: access to its files is denied (gated, private, or the repo "
+            f"does not exist). Accept the model's terms on its HuggingFace page, then set HF_TOKEN or "
+            f"run `huggingface-cli login`."
+        )
+    if status == "absent":
+        return (
+            f"{model_id} is readable but exposes no architecture identity: no root {ROOT_CONFIG_FILE}, "
+            f"no {COMPOSITE_INDEX_FILE}, and no per-component configs. It is most likely not a standalone "
+            f"model (an adapter/LoRA, a single-file checkpoint, or a weights-only repo) -- point the tool "
+            f"at the base model it adapts."
+        )
+    return (
+        f"no usable {ROOT_CONFIG_FILE} could be loaded for {model_id}, and the reason could not be "
+        f"determined (network or hub error). Re-run; if it persists, check access and that the repo "
+        f"publishes a {ROOT_CONFIG_FILE} or {COMPOSITE_INDEX_FILE}."
+    )
+
+
 def _maybe_fetch_pipeline_class(model_id: str) -> Optional[str]:
     """Read ``model_index.json["_class_name"]`` -- the pipeline class (e.g.
     ``Flux2KleinPipeline``). For a composite repo this is the only architecture

@@ -180,7 +180,9 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
         raise CompositeScaffoldError(new_model_id, getattr(probe, "submodels", []))
 
     if not probe.raw_config:
-        raise ScaffoldError(f"could not load config.json for {new_model_id} — set HF_TOKEN for gated repos")
+        from .probe import missing_config_reason
+
+        raise ScaffoldError(missing_config_reason(probe, new_model_id))
 
     if probe.category not in {"LLM", "VLM"}:
         return _plan_demo_folder_scaffold(new_model_id=new_model_id, probe=probe)

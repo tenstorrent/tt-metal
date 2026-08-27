@@ -550,10 +550,9 @@ def prepare_bringup(
             mesh_override=mesh_override,
         )
     if not probe.raw_config:
-        raise BringupError(
-            f"could not load config.json for {model_id}. "
-            "If it's a gated repo, set HF_TOKEN or `huggingface-cli login`."
-        )
+        from .probe import missing_config_reason
+
+        raise BringupError(missing_config_reason(probe, model_id))
     if probe.memory_model is None:
         return _prepare_non_text_family(
             probe=probe,
