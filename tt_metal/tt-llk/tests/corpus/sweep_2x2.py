@@ -980,7 +980,14 @@ KNOBS = {
     # (ln2*2^-23), L13 reclaims 0x3f000000 (both 16128 loadis), L14
     # reclaims the 2-word fp32 ln2 -> row 79 -> 76 words, 13 -> 11
     # in-loop loadi (hand 77/12: word parity flipped).  Hand arm and
-    # flag-off bytes identical; measured note follows the silicon legs.
+    # flag-off bytes identical.
+    # MEASURED (laneID-evidence-20260827, BH, 3 reps ALL cycle-identical,
+    # corr-first 2/2 PASS every session, paired CRAQ 2/2+2/2 at pinned
+    # sim 1d162f0adf67): anchors reproduce EXACT (sem 406712 / hand
+    # 385199; same-session off 421946), knob sem 395704 -> vs_hand
+    # +5.58 -> +2.73, causal -6.22; hand arm byte- AND cycle-inert.
+    # Residual = chain execution (word parity flipped 76 vs 77 yet
+    # +2.73 remains; HW's FULL-FLIP-NOT-MODELED caveat, FI envelope).
     "loop-prgm-reclaim": "-mtt-tensix-optimize-loop-prgm-reclaim",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
