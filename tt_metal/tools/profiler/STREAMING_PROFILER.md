@@ -11,7 +11,23 @@ contract described here.)
 export TT_METAL_STREAMING_PROFILER=1
 ```
 
-One switch — it also arms the device-side markers.
+One switch — it also arms the device-side markers, and it is the only thing that reserves any
+device memory: without it a Tracy-enabled build costs nothing.
+
+### The defaults, and when to change them
+
+Out of the box you get the configuration every number in
+[STREAMING_PROFILER_ZONES.md](STREAMING_PROFILER_ZONES.md) was measured with — no other variable
+needs setting.
+
+| knob | default | change it when |
+|---|---|---|
+| `TT_METAL_PERF_DEBUG_FILLERS` | `6` — 6 fillers + 1 mover, tuned to keep producers unstalled at high offered rates | `4` (4 fillers + 2 movers) for long max-rate captures: the second mover is worth ~2.3x on sustained evacuation |
+| `TT_METAL_PERF_DEBUG_ROLE_RING_MB` | `448` per filler | runway scales with capture *length* (~19 MB per 1k iterations per filler), so lower it to hand DRAM back on short captures, raise it for very long ones |
+| `TT_METAL_PERF_DEBUG_STAGE_MIN_FILL_PCT` | `0` — ship every core's words immediately | `50` when host cost dominates: frames ship fuller, ~2x fewer frames per zone, paid for out of producer headroom |
+
+The rings live in the DRAM profiler region, reserved per bank while this profiler is enabled —
+at the default, 448 MiB per bank.
 
 ## Register a callback
 
