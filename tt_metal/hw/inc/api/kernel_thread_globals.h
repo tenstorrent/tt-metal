@@ -59,6 +59,7 @@ inline void tensix_global_sem_init(uint32_t idx, uint32_t value) { *tensix_globa
 
 inline uint32_t tensix_global_sem_read(uint32_t idx) { return *tensix_global_sem(idx); }
 
+// A read at +4*(inc+8) posts `inc` and returns the pre-increment value (same alias as the watcher ring buffer).
 inline uint32_t tensix_global_sem_fetch_add(uint32_t idx, uint32_t inc) {
     return *reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(tensix_global_sem(idx)) + 4 * (inc + 8));
 }
@@ -126,6 +127,9 @@ inline void tensix_global_sem_barrier(uint32_t arrived_idx, uint32_t generation_
     uint32_t arrived = tensix_global_sem_fetch_add(arrived_idx, 1) + 1;
     if (arrived == participants) {
         tensix_global_sem_init(arrived_idx, 0);
+        // Arrival reset must be visible before we bump generation, or a waiter can
+        // leave, re-enter, and increment a stale count.
+        asm volatile("fence w, w" ::: "memory");
         tensix_global_sem_init(generation_idx, next_generation);
     } else {
         while ((tensix_global_sem_read(generation_idx) & TENSIX_GLOBAL_SEM_VALUE_MASK) != next_generation) {
@@ -148,7 +152,7 @@ inline void wait_threads(uint32_t participants, uint32_t barrier_idx = 0) {
 
 #if defined(ARCH_QUASAR)
 #if defined(COMPILE_FOR_TRISC)
-    (void)barrier_idx;
+    (void)barrier_idx;  // compute has one semaphore pair; barrier_idx is DM-only
     tensix_global_sem_barrier(COMPUTE_BARRIER_ARRIVED_SEM_IDX, COMPUTE_BARRIER_GENERATION_SEM_IDX, participants);
 #else
     volatile KernelBarrier& barrier = g_kernel_barrier[barrier_idx];
