@@ -906,6 +906,14 @@ NocAsyncReadTx<thread, S> noc_load(
         "multicast needs its handshake semaphores reserved by the host: build the program through "
         "unified_program(), which reserves them and defines TT_UNIFIED_MCAST_SEM_BASE -- or pass your own pair "
         "to the six-argument noc_load()");
+    // The reservation is six slots -- [ready0, sent0, ready1, sent1, copy0, copy1] -- so the
+    // index stops at 2. Pair 2 would compute base + 4, which IS kCopyArrivedSem<0>, the flag
+    // a multicast noc_core_write raises on its receivers: the two would share semaphores and
+    // hang. Nothing said so until now.
+    static_assert(
+        pair < 2,
+        "there are only two multicast handshake pairs (the host reserves two per thread plus the "
+        "copy flags); pair 2 would alias the noc_core_write arrival semaphore");
     Semaphore<thread> receivers_ready(kMcastReadySem<pair>);
     Semaphore<thread> data_sent(kMcastSentSem<pair>);
     return noc_load<thread>(storage, mcast, receivers_ready, data_sent, acc, block_idx);
@@ -924,6 +932,14 @@ NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcas
         "multicast needs its handshake semaphores reserved by the host: build the program through "
         "unified_program(), which reserves them and defines TT_UNIFIED_MCAST_SEM_BASE -- or pass your own pair "
         "to the five-argument noc_load()");
+    // The reservation is six slots -- [ready0, sent0, ready1, sent1, copy0, copy1] -- so the
+    // index stops at 2. Pair 2 would compute base + 4, which IS kCopyArrivedSem<0>, the flag
+    // a multicast noc_core_write raises on its receivers: the two would share semaphores and
+    // hang. Nothing said so until now.
+    static_assert(
+        pair < 2,
+        "there are only two multicast handshake pairs (the host reserves two per thread plus the "
+        "copy flags); pair 2 would alias the noc_core_write arrival semaphore");
     Semaphore<thread> receivers_ready(kMcastReadySem<pair>);
     Semaphore<thread> data_sent(kMcastSentSem<pair>);
     return noc_load<thread>(storage, mcast, receivers_ready, data_sent, fn);
