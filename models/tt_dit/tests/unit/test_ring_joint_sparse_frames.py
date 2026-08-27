@@ -816,15 +816,16 @@ class TestSparseFramesRing:
     @pytest.mark.parametrize(
         ("nf", "tpf", "q_chunk", "k_chunk", "nh", "sparse_frames_enabled"),
         [
-            # All keep num_q_chunks=11 and (nh=40 -> 10 rows) so grid packing is held constant; each
-            # case varies one axis to bisect the hang. frames/shard = (nf*tpf/sp) / tpf.
+            # nh=40 -> 10 grid rows throughout. Coverage spans frames/shard (sub-frame 0.5 .. super-frame
+            # 2.75) and num_q_chunks (3..11); the exp op sizes its grid to num_q_chunks+1 columns so the
+            # fabric-gather mux writers always land on assigned columns. frames/shard = (nf*tpf/sp) / tpf.
             pytest.param(22, 2560, 640, 128, 40, True, id="sparse"),  # our config: 2.75 frames/shard
             pytest.param(22, 2560, 640, 128, 40, False, id="dense"),  # same shapes, no sparsity
             pytest.param(22, 1024, 256, 256, 40, True, id="frac_small_chunks"),  # 2.75 frames/shard, 256/256
             pytest.param(8, 7040, 640, 128, 40, True, id="whole_our_chunks"),  # 1.0 frame/shard, 640/128
             pytest.param(16, 1024, 256, 256, 40, True, id="whole_two_frames"),  # 2.0 frames/shard (aligned)
-            # Baseline check: same narrow grid (num_q_chunks=8) as whole_two_frames but NON-sparse. If this
-            # also hangs, the narrow grid is unsupported by the baseline exp op, not our sparse changes.
+            # Dense (non-sparse) at a narrower grid (num_q_chunks=8): exercises the grid-fill sizing on the
+            # baseline exp-op path, not just the sparse one.
             pytest.param(16, 1024, 256, 256, 40, False, id="whole_two_frames_dense"),  # 2.0, num_q_chunks=8, dense
             pytest.param(
                 8, 2816, 256, 256, 40, True, id="whole_small_chunks"

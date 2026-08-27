@@ -11,7 +11,6 @@
 #include "api/core_local_mem.h"
 #include "dataflow_common.hpp"
 #include "exp_fused_op_indexer.hpp"
-#include "api/debug/dprint.h"
 void kernel_main() {
     Noc noc;
     noc.async_write_barrier();
@@ -264,18 +263,7 @@ void kernel_main() {
                 if (is_injector && ring_iter > 0 && !kv_chunk_is_joint) {
                     chunks_signaled_by_remote++;
                     for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
-                        uint32_t dbg_spin = 0;
                         while (*per_link_sem_ptrs[lnk] < chunks_signaled_by_remote) {
-                            if (nq == 1 && ++dbg_spin == 4000000) {
-                                DPRINT(
-                                    "injh1 rit{} kc{} lnk{} want{} have{}\n",
-                                    (uint32_t)ring_iter,
-                                    (uint32_t)k_chunk,
-                                    (uint32_t)lnk,
-                                    (uint32_t)chunks_signaled_by_remote,
-                                    (uint32_t)(*per_link_sem_ptrs[lnk]));
-                                dbg_spin = 0;
-                            }
                         }
                     }
                 }
@@ -283,9 +271,8 @@ void kernel_main() {
                 // K: get data into CB buffer
                 CircularBuffer cb_k(cb_k_in);
                 if constexpr (sparse_frames_enabled) {
-                    // Gather-ready signal relay (monotonic, one-way, no data, no back-pressure) followed by
-                    // an own-dram fetch. The chain no longer carries K data and the fabric writer sources
-                    // its own copy, so nothing here waits on a compute-lagged neighbour.
+                    // Signal-only relay (monotonic, no data, no back-pressure) then an own-dram fetch:
+                    // the chain carries no K data, so nothing here waits on a compute-lagged neighbour.
                     if (should_receive) {
                         Semaphore<> receiver_sem(receiver_semaphore_id);
                         receiver_sem.wait_min(++recv_expected);

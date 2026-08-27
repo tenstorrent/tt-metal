@@ -10,7 +10,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "exp_fused_op_indexer.hpp"
-#include "api/debug/dprint.h"
 
 #ifdef USE_MUX
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
@@ -91,9 +90,9 @@ void kernel_main() {
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(19);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(20);
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
-    // Sparse frame-block attention: when enabled, the writer must drain the normalized output at each
-    // q_chunk's LAST WORK iter (compute normalizes cb_out there), NOT at the geometric last ring iter.
-    // cb_out is a 2-slot row-group ping-pong, so a mismatch strands compute's row drain -> deadlock.
+    // Sparse frame-block attention: the writer drains the normalized output at each q_chunk's last work
+    // iter (compute normalizes cb_out there), not the geometric last ring iter. cb_out is a 2-slot
+    // row-group ping-pong, so a mismatch strands compute's row drain -> deadlock.
     constexpr bool sparse_frames_enabled = get_compile_time_arg_val(23) == 1;
 
     constexpr auto out_args = TensorAccessorArgs<24>();
@@ -330,28 +329,21 @@ void kernel_main() {
         find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
 
 #ifdef USE_MUX
-    // Sparse own-fetch gather-ready. The per-link out-ready semaphore is incremented by the previous
-    // device's writer onto THIS device's INJECTOR core (injector_noc_x/y), not this writer core — so the
-    // writer must poll the injector's copy over the local noc. It is compute-independent (the previous
-    // writer's send drives it), which is exactly why it can gate the fabric feed without re-coupling to
-    // compute. The read lands in a PRIVATE scratch semaphore — never per_link_sem: if this writer core is
-    // also the head's (reselected) injector, reading into per_link_sem would race the remote atomic +1.
+    // Sparse own-fetch gather-ready. The previous device's writer increments the per-link out-ready
+    // semaphore onto this device's injector core (injector_noc_x/y), not this writer, so poll the
+    // injector's copy over the local noc. Read into a private scratch, never per_link_sem: if this
+    // writer is also the head's reselected injector, reading into per_link_sem races the remote +1.
     const uint64_t injector_gather_sem_noc_addr = get_noc_addr(injector_noc_x, injector_noc_y, out_ready_sem_addr);
     volatile tt_l1_ptr uint32_t* writer_gather_scratch =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll_scratch_addr);
     uint32_t writer_gather_ready_count = 0;
 #endif
 
-    // This core's normalized output is drained AFTER the ring loop, not at the iter that produced it.
-    // Under sparse each core's producing iter differs, so an in-loop drain (which waits on this core's
-    // compute) would stall this core's later fabric forwards and deadlock the cross-device gather.
-    // Captured here at the producing iter, drained post-loop. Dense produces on the last iter, so its
-    // timing is unchanged.
+    // Output drained after the ring loop, not at the producing iter: under sparse the producing iter
+    // differs per core, so an in-loop drain would stall this core's later fabric forwards. Dense
+    // produces on the last iter, so its timing is unchanged.
     QChunkInfo pending_qi{};
     bool output_pending = false;
-
-    uint32_t dbg_incs = 0;
-    uint32_t dbg_nq = 999;
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
@@ -375,25 +367,24 @@ void kernel_main() {
             for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
-                dbg_nq = nq;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
                 const auto qi = get_q_chunk_info(
                     q_chunk, nb, nq, ring_id, num_local_q_chunks, Sq_chunk_t, DHt, Lt, local_padded_Nt);
 
                 // When is the normalized output ready to drain? Compute pushes cb_out (row-by-row)
-                // when it finishes this q_chunk's last WORK iter. Dense: that is the geometric last
-                // active iter. Sparse: it is the highest set bit of the q_chunk's work bitmap, which
-                // can be earlier (edge frames whose window doesn't reach the last-processed frame).
-                // The writer MUST read cb_out on exactly that iter or the 2-slot cb_out ping-pong
-                // deadlocks. Gather forwarding below still keys off is_last_ring_iter (geometric).
+                // when it finishes this q_chunk's last work iter. Dense: the geometric last active iter.
+                // Sparse: the highest set bit of the q_chunk's work bitmap, which can be earlier (edge
+                // frames whose window doesn't reach the last-processed frame). The writer must read
+                // cb_out on exactly that iter or the 2-slot ping-pong deadlocks. Gather forwarding below
+                // still keys off is_last_ring_iter (geometric).
                 bool write_output_now = is_last_ring_iter;
                 if constexpr (sparse_frames_enabled) {
                     const uint32_t qb = writer_q_work_bitmap[q_chunk];
                     // qb != 0: compute normalizes on this q_chunk's last work iter (highest set bit).
                     // qb == 0: the q_chunk attends no K on any iter (a padded q frame — a real frame
                     // always attends its own), so compute takes the zero-work drain path every iter and
-                    // never pushes cb_out. Do NOT drain here, or the deferred output write blocks forever.
+                    // never pushes cb_out. Don't drain here, or the deferred output write blocks forever.
                     write_output_now = (qb != 0u) && (ring_iter == (31u - __builtin_clz(qb)));
                 }
 
@@ -433,10 +424,8 @@ void kernel_main() {
                             if (!is_last_ring_iter && !kv_chunk_is_joint) {
                                 if (ring_iter > 0) {
                                     writer_gather_ready_count++;
-                                    // Poll the injector's copy of the per-link semaphore (cross-core, local
-                                    // noc) until our row slice for this chunk has arrived from the previous
-                                    // device. wait_min can't be used — the incremented copy is not local. The
-                                    // read lands in poll_scratch_addr (private), never per_link_sem.
+                                    // Poll the injector's semaphore copy (cross-core, local noc) until this
+                                    // chunk's row slice has arrived; wait_min can't reach the non-local copy.
                                     while (true) {
                                         noc_async_read(
                                             injector_gather_sem_noc_addr, poll_scratch_addr, sizeof(uint32_t));
@@ -610,16 +599,6 @@ void kernel_main() {
                         if (!is_last_ring_iter) {
                             fabric_unicast_noc_unicast_atomic_inc_with_state(&mux_conn, pkt_hdr_sem_inc);
                             noc.async_writes_flushed();
-                            dbg_incs++;
-                            if (nq == 1 && my_mux_index == 0 && ring_iter <= 1) {
-                                DPRINT(
-                                    "wrinc rit{} kc{} incs{} tgt{} {}\n",
-                                    (uint32_t)ring_iter,
-                                    (uint32_t)k_chunk,
-                                    (uint32_t)dbg_incs,
-                                    (uint32_t)injector_noc_x,
-                                    (uint32_t)injector_noc_y);
-                            }
                         }
                     }
 
@@ -636,8 +615,7 @@ void kernel_main() {
                 }
 #endif
 
-                // Capture the output-drain descriptor on the iter compute produced it; the actual drain
-                // is deferred to after the ring loop (see pending_qi declaration).
+                // Capture the drain descriptor; deferred to after the ring loop (see pending_qi).
                 if (write_output_now) {
                     pending_qi = qi;
                     output_pending = true;
@@ -646,17 +624,8 @@ void kernel_main() {
         }
     }
 
-#ifdef USE_MUX
-    if (mux_connection_valid && dbg_nq == 1) {
-        DPRINT("wrh1 link{} incs{}\n", (uint32_t)my_mux_index, (uint32_t)dbg_incs);
-    }
-#endif
-
-    // Deferred output drain (all writers), BEFORE the fabric teardown. cb_out holds compute's output
-    // until here; draining it (rather than mid-loop) kept every ring iter's fabric forward off this
-    // core's compute critical path. Draining before the teardown barrier means each writer releases its
-    // compute (via cb_out) independently — a writer cannot be trapped at the barrier while its compute
-    // waits on this drain.
+    // Deferred output drain, before the fabric teardown so each writer releases its compute (via
+    // cb_out) independently and cannot be trapped at the teardown barrier waiting on this drain.
     if (output_pending) {
         write_block_row_grouped_trid(
             noc,
