@@ -1,16 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Live reference builders for the on-device PCC tests — no stored golden tensors.
+"""Live reference builders and shared helpers for the on-device tests.
 
-The fp32 PyTorch `reference/` package is the oracle; these helpers just feed it the same inputs
-the pipeline would. Everything here is cached at module scope because the backbone state is ~13 GB
-and every device test needs the same copy.
+The fp32 `reference/` package is the oracle; these helpers feed it the same inputs the pipeline
+would. Everything is cached at module scope because the backbone state is ~13 GB and every device
+test needs the same copy.
 
-REAL PROMPTS ARE NOT OPTIONAL for a Block 1 accuracy number (BUG-9 / STATUS 5.12): random
-embeddings are off-manifold and read PCC 0.892 where these give 0.9994 on the same weights. This
-is why there is no `synthetic_speech()`-style generator for Block 1 -- the sibling xtts_v2 suite
-can synthesise its inputs, and this one deliberately cannot.
+Block 1 accuracy must be judged on real tokenized prompts: random embeddings are off-manifold and
+read far worse than real text on the same weights, so there is no synthetic-input builder here.
 """
 
 import functools
@@ -32,9 +30,8 @@ def fixture_cases():
 
 
 def case_ids():
-    """-> [0, 1, ... n-1], for parametrize. All of them, deliberately: a 2-prompt default let a
-    regression through once, because per-case mean worst-sample ranges ~0.45 pp, so an aggregate
-    over a different prompt set is not comparable to a recorded one (STATUS 6.8/6.15)."""
+    """-> [0, 1, ... n-1], for parametrize. All of them: per-case accuracy varies enough that an
+    aggregate over a different subset is not comparable to a recorded one."""
     return list(range(len(fixture_cases())))
 
 
@@ -47,9 +44,7 @@ def backbone_state():
 
 
 def fixture_embeds(case_idx, w=None):
-    """Fixture case -> (real prompt embeds [1,P,3072], case dict), exactly as the pipeline builds
-    them. Moved here from `gates.py` (formerly `tt_gates.py`) so the CLI, the tests and the quality report
-    cannot drift to two different notions of "the real prompt"."""
+    """Fixture case -> (prompt embeds [1,P,3072], case dict), as the pipeline builds them."""
     from models.experimental.voxtral_tts.reference import voxtral_pipeline_ref as pref
 
     w = backbone_state() if w is None else w
@@ -60,29 +55,21 @@ def fixture_embeds(case_idx, w=None):
 
 @functools.lru_cache(maxsize=1)
 def real_frames():
-    """-> genuine Block 1+2 output frames [T,37], for teacher-forced decode.
+    """-> real Block 1+2 output frames [T,37], for teacher-forced decode.
 
-    Teacher forcing matters: both sides must advance on the SAME embedding every step, so each
-    step is an independent measurement. Feeding each side its own codes compares two diverging
-    trajectories and measures nothing."""
+    Both sides must advance on the same embedding each step, or later frames compare diverging
+    trajectories rather than measuring error."""
     return torch.load(FRAMES).long()
 
 
 def worst_sample_pct(got, exp):
-    """Max absolute deviation as a percentage of the reference's scale.
-
-    Always report this next to a PCC. PCC is a correlation: it sits at 0.9998 while individual
-    samples are badly wrong, and for audio the outliers are what you hear (STATUS 5.9)."""
+    """Max absolute deviation as a percentage of the reference's scale. Always report it next to
+    a PCC: a correlation can sit high while individual samples are badly wrong."""
     return (got - exp).abs().max().item() / exp.abs().max().item() * 100
 
 
 def corpus_embeds(text, voice, w=None):
-    """(text, voice) -> prompt embeds [1,P,3072], tokenized by the IN-REPO tokenizer.
-
-    `fixture_embeds` is limited to the 15 cases whose mistral_common ids are stored. This one takes
-    any text, so breadth costs nothing -- `TekkenTokenizer.build_prompt` is pure torch and
-    `test_tokenizer_ref.py` pins it against those stored ids, so it is trustworthy for new text.
-    """
+    """(text, voice) -> prompt embeds [1,P,3072], tokenized by the in-repo tokenizer."""
     from models.experimental.voxtral_tts.reference import voxtral_pipeline_ref as pref
     from models.experimental.voxtral_tts.reference.voxtral_tokenizer_ref import TekkenTokenizer
 
@@ -95,18 +82,14 @@ def corpus_embeds(text, voice, w=None):
 
 @functools.lru_cache(maxsize=1)
 def all_voices():
-    """-> every voice preset the checkpoint ships, sorted. 20 of them; the fixture uses 13."""
+    """-> every voice preset the checkpoint ships, sorted."""
     from models.experimental.voxtral_tts.reference.voxtral_tokenizer_ref import TekkenTokenizer
 
     return tuple(sorted(TekkenTokenizer().voices))
 
 
-# The device caches a rotated head INTERLEAVED (pairs adjacent); the fp32 reference lays it out
-# HALF-SPLIT (first half, then second). RoPE applies the same permutation to Q, so Q.K is unchanged
-# and attention is identical -- but raw cached K differs, reading PCC ~0.02 in all 26 layers on a
-# perfectly healthy model (measured -0.0035 as-is vs 0.999975 permuted at layer 0). V is never
-# rotated and needs no permutation, and that asymmetry is the tell. Shared because two test files
-# compare caches and a second copy of this is exactly the drift this suite keeps removing.
+# The device caches a rotated head interleaved (pairs adjacent); the reference lays it out
+# half-split. RoPE applies the same permutation to Q, so attention is identical either way.
 _HALF_TO_INTERLEAVED = None
 
 
@@ -130,16 +113,10 @@ def _fixture_text(reps):
 
 
 def long_prompt_embeds(S, w=None, voice="ar_male"):
-    """-> (embeds [1,S,3072], repeated: bool) built from the FIXTURE's own texts.
+    """-> (embeds [1,S,3072], repeated: bool) from the fixture's own texts joined into one prompt.
 
-    Provenance matters more than length here. The fixture texts are the same corpus every accuracy
-    gate in this suite uses, joined into ONE well-formed prompt with a single header -- so up to the
-    length they naturally reach, a long-shape test is running real text.
-
-    Measured: the 15 texts joined are 1920 chars -> 540 tokens with `ar_male` (fewest placeholder
-    rows, 67, leaving the most room for text), which covers Sp 128/256/384/512. Beyond that the text
-    has to be repeated, and `repeated=True` says so, so the caller can gate accordingly instead of
-    quoting a tight number on text that no request looks like.
+    `repeated` is True once the texts had to be repeated to reach S, so the caller can gate loosely:
+    unrelated texts run together are not one natural prompt, whatever their provenance.
     """
     from models.experimental.voxtral_tts.reference.voxtral_tokenizer_ref import TekkenTokenizer
 

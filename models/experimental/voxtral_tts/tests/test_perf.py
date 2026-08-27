@@ -3,28 +3,12 @@
 
 """Where a request spends its time, per stage, across utterance lengths.
 
-Warm figures: `warmup()` is one-time and excluded, so this is what a caller waits for from the
-second request onward. The stages do not sum to the total -- the gap is prompt assembly and the
-host-side work between traced frames -- and seeing that gap is half the point of splitting the
-columns.
+Warm figures: warmup is one-time and excluded, so this is what a caller waits for from the second
+request onward. `decode_ms_per_frame` includes the one-time trace capture, so short utterances read
+higher; the per-frame ceiling is therefore asserted on the long case.
 
-`decode_ms_per_frame` is the one to watch: it should barely move with utterance length, since each
-frame does the same work over a slightly longer cache. RTF rises with length because the codec and
-prefill are fixed costs amortised over more audio.
-
-CEILINGS ARE DELIBERATELY LOOSE, and they are smoke checks rather than a regression gate. Two
-reasons, both measured on this branch:
-
-  - This runs on a shared card. An identical-code re-run has read +0.75 ms/frame at 4.6 sigma
-    purely from box state (27.06 -> 27.81), so anything tight enough to catch a few percent fails
-    on load instead of on a regression.
-  - The branch's own method is a paired same-session A/B: `scripts/quality_report.py --compare
-    before after`, against measured noise floors. That is the regression detector. This test only
-    catches something falling off a cliff.
-
-Do NOT poll `tt-smi` while this runs: telemetry reads contend for the ARC/PCIe path the frame loop
-blocks on, and sampling every 5 s inflated ms/frame from 27.8 to 44.0 -- a 58% penalty on
-unchanged code.
+Ceilings are loose smoke checks. This runs on a shared card, and the regression detector is the
+paired comparison `scripts/quality_report.py --compare` performs against measured noise floors.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_perf.py
@@ -42,12 +26,6 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import (  # noqa: 
     open_device,
 )
 
-# WHAT decode_s CONTAINS, because it changes how these numbers read: `generate()` starts its decode
-# clock before the eager frame 0 and before `_trace_capture`, so the one-time trace capture lands
-# inside decode_s. That is the historical definition of `gen_ms_per_frame` and is left alone -- but
-# it means SHORT utterances read much higher ms/frame, since they amortise the capture over few
-# frames. Measured here: ~45 ms/frame at 64 frames against ~28 at 460. So the per-frame ceiling is
-# asserted on the LONG case, where the capture is amortised and the number means what it says.
 CASES = ((14, "short"), (2, "long"))
 REPEATS = 2  # best of, so one noisy run on a shared card does not decide the result
 MAX_FRAMES = 520
@@ -118,16 +96,9 @@ def test_perf(pipe):
 
 @pytest.mark.slow
 def test_warmup_compiles_every_prefill_shape_and_codec_bucket():
-    """Warmup must leave nothing for a request to compile.
+    """Warmup must leave nothing for a request to compile: every prefill shape and codec bucket.
 
-    Before this, `warmup()` ran ONE 32-token prompt, so it compiled 1 of the 16 reachable prefill
-    shapes and a single codec bucket -- every request at a new prompt length paid a JIT compile
-    mid-request. The sibling xtts_v2 model warms every prefill shape and every vocoder bucket, and
-    its README makes that a promise ("no request pays a compile at request time"); this asserts the
-    same promise here instead of trusting it.
-
-    Uses its own device so the timing is a cold-cache figure worth reporting, not one inherited from
-    another test's warm program cache.
+    Opens its own device so the reported time is not inherited from another test's warm cache.
     """
     from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt
 

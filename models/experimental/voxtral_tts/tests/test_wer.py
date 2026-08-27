@@ -1,20 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The WER scorer itself. Nothing tested it before, which is the gap that matters here: a broken
-scorer reports a broken model, and STATUS trap 14 records three harness bugs that each faked a bad
-TTS result on perfect audio.
+"""The WER scorer itself: the metric, the normaliser and language detection.
 
-Host only -- no device, no checkpoint. The three trap regressions are the reason this file exists:
-
-  - a naive `[^a-z0-9' ]` normaliser ERASES Hindi and Arabic and scores them 100% WER on perfect
-    audio. `norm()` is category-based instead, and `test_norm_preserves_non_latin_scripts` pins it.
-  - a voice-name prefix is not a language. Fixture case 4 is English "Hello." spoken by `ar_male`,
-    and forcing Arabic decoding made Whisper hallucinate a filler and report 100% WER on one word.
-    `detect_lang()` reads TEXT only, and `test_detect_lang_reads_text_not_the_voice_name` pins it.
-  - Whisper's encoder is a fixed 30 s window, so a plain `generate` on a 37 s clip transcribes the
-    first 30 s and charges the rest as deletions (~20% phantom WER). Chunking lives in
-    `transcribe_one`, which needs the model; covered by the corpus run, not here.
+Host only -- no device, no checkpoint. A broken scorer reports a broken model, so the normaliser is
+checked against non-Latin scripts and language detection is checked to read text rather than a
+voice name.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_wer.py
@@ -31,9 +22,7 @@ SCORER = os.path.join(HERE, "scripts", "score_quality_set_scipy.py")
 
 @pytest.fixture(scope="module")
 def sc():
-    """The scoring script, imported by path -- it is a script, not a package module, and it is the
-    thing the quality report actually runs. Importing the real one is the point: a copy of `wer()`
-    in the test would pass while the script's own diverged."""
+    """The scoring script, imported by path: it is a script, and it is the one the report runs."""
     spec = importlib.util.spec_from_file_location("_scorer", SCORER)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -41,8 +30,7 @@ def sc():
 
 
 def test_wer_returns_errors_and_reference_length(sc):
-    """`wer()` returns a COUNT and a denominator, not a rate. Folds across utterances sum both --
-    averaging per-utterance rates would weight a 3-word prompt like a 300-word one."""
+    """wer() returns a count and a denominator, not a rate, so folds can sum both."""
     errs, n = sc.wer("the quick brown fox", "the quick brown fox")
     assert (errs, n) == (0, 4)
 
@@ -65,9 +53,7 @@ def test_norm_strips_punctuation_and_collapses_whitespace(sc):
 
 
 def test_norm_preserves_non_latin_scripts(sc):
-    """TRAP 14. A `[^a-z0-9' ]` normaliser erases these entirely, and a scorer comparing two empty
-    strings reports 0 errors of 0 words -- or, folded against a non-empty reference, 100% WER on
-    perfect audio."""
+    """The normaliser must preserve non-Latin scripts; erasing them scores perfect audio as 100%."""
     hindi = "नमस्ते दुनिया"
     arabic = "مرحبا بالعالم"
     for label, text in (("hindi", hindi), ("arabic", arabic)):
@@ -85,9 +71,7 @@ def test_detect_lang_identifies_non_latin_scripts(sc):
 
 
 def test_detect_lang_reads_text_not_the_voice_name(sc):
-    """TRAP 14. Fixture case 4 is English "Hello." spoken by `ar_male`. Forcing Arabic decoding on
-    it made Whisper hallucinate a filler and report 100% WER on one word. `detect_lang` takes text
-    and nothing else, so the voice name structurally cannot reach it -- this pins that."""
+    """detect_lang reads text only, so a voice name cannot force the wrong language."""
     assert sc.detect_lang("Hello.") != "arabic"
     assert sc.detect_lang("ar_male says hello") != "arabic"
 
@@ -98,6 +82,5 @@ def test_detect_lang_uses_word_markers_for_latin_languages(sc):
 
 
 def test_detect_lang_returns_none_for_unmarked_english(sc):
-    """None means "let Whisper decide", which is the safe default -- forcing a language is what
-    trap 14's third case punished."""
+    """None means let the recogniser decide, which is the safe default."""
     assert sc.detect_lang("the quick brown fox") is None

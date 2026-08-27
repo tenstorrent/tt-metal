@@ -1,20 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sentences per language, as data.
+"""Sentences per language, as data, tokenized at test time by the in-repo tokenizer.
 
-Why this exists separately from `prompt_fixture.json`: the fixture stores text **with the token ids
-mistral_common produced for it**, so it is the bit-exactness oracle and adding a sentence to it
-means regenerating ids in a throwaway venv. This module is plain text, tokenized at test time by
-the in-repo `TekkenTokenizer`, so breadth costs nothing. The two have different jobs -- the fixture
-proves the tokenizer is right, this proves the model runs on more than 15 utterances.
+`prompt_fixture.json` stores text WITH the token ids it produced and is the bit-exactness oracle;
+this module is plain text, so breadth costs nothing.
 
-Conventions borrowed from the sibling xtts_v2 corpus, for the same reasons:
-  - **No digits, in either form.** The cleaner expands them and an ASR writes spelled-out numbers
-    back as numerals, so a number guarantees a WER mismatch that is not the model's fault.
-  - **Ordinary prose, nothing an ASR respells.**
-  - **Arabic undiacritized**, matching what recognisers emit.
-  - Sentences long enough to gate on: short utterances swing too widely between seeds.
+Conventions: no digits in either form (the cleaner expands them and a recogniser writes them back as
+numerals), ordinary prose, Arabic undiacritized, and sentences long enough to gate on.
 """
 
 # Keyed by the language prefix of a voice name; "en" covers the unprefixed voices
