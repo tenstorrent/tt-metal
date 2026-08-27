@@ -649,12 +649,16 @@ but a total absence of validation.
 
 ## Two housekeeping notes
 
+Commit produced: **`1cd451cd965`**.
+
 **Pre-commit reformatted four test files.** `black` and `isort` rewrote
 `test_step7_{long_context,paged_kv,sampling,concat32,prefix_cache,repeat_and_cleanup}.py`
 and the Llama device file on the first commit attempt. The host suites were
-re-run afterwards — `162 passed`,
+re-run afterwards in **three more fresh processes** — `162 passed` each time,
 `logs/17_step7_after_precommit_format_*.log` — and both device files re-collected
-at 17 and 16 node ids. The committed content is the post-format content.
+at 17 and 16 node ids. The committed content is the post-format content, and the
+three-fresh-processes rule is satisfied against *it*, not only against the
+pre-format text.
 
 **Pre-commit's `trailing-whitespace` hook also rewrote eleven of the raw logs.**
 It strips trailing spaces from line ends; no line was removed and no content

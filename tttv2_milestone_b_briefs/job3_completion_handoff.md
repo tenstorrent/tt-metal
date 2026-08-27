@@ -113,11 +113,15 @@ Put it in front of whoever owns that contract rather than filing it as a defect.
 
 ## What you inherit in the tree
 
-One commit, tests and evidence only:
+Two commits, tests and evidence only:
 
 ```text
-Add Milestone B step-7 coverage: 162 host tests, and the device tests we cannot run
+1cd451cd965  Add Milestone B step-7 coverage, and record what a dead mesh let us measure
+<tip>       Record the mb-coverage commit hash and the three post-format verification runs
 ```
+
+The second commit is documentation only; `1cd451cd965` is the one that carries
+every test.
 
 ```text
 models/common/tests/models/galaxy/step7_harness.py                     helper, not collected
