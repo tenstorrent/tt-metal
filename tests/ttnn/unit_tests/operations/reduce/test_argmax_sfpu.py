@@ -267,3 +267,27 @@ def test_argmax_sfpu_rejects_ragged_last_dim(device, expect_error):
     t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "multiple of the tile width"):
         ttnn.argmax(t_tile, dim=3, keepdim=True, use_sfpu=True)
+
+
+def test_argmax_sfpu_rejects_sub_core_grid_outside_device(device, expect_error):
+    """SFPU core placement must stay inside the device compute grid."""
+    grid = device.compute_with_storage_grid_size()
+    outside = ttnn.CoreCoord(grid.x, 0)
+    invalid_grid = ttnn.CoreRangeSet([ttnn.CoreRange(outside, outside)])
+    x = torch.randn(1, 1, 32, 2048).bfloat16()
+    t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must be contained in device compute grid"):
+        ttnn.argmax(t_tile, dim=3, keepdim=True, use_sfpu=True, sub_core_grids=invalid_grid)
+
+
+def test_argmax_sfpu_runs_on_explicit_nonzero_core(device):
+    """A valid explicit grid may place the single-core SFPU path away from (0, 0)."""
+    grid = device.compute_with_storage_grid_size()
+    core = ttnn.CoreCoord(grid.x - 1, grid.y - 1)
+    sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+    x = torch.randn(1, 1, 8, 2048).bfloat16()
+    t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    got = ttnn.to_torch(ttnn.argmax(t_tile, dim=3, keepdim=True, use_sfpu=True, sub_core_grids=sub_core_grids))
+    expected = ttnn.to_torch(ttnn.argmax(t_tile, dim=3, keepdim=True))
+    assert torch.equal(got.to(torch.int64), expected.to(torch.int64))

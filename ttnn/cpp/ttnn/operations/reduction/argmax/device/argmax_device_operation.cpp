@@ -142,18 +142,23 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
 
     const auto& optional_output_tensor = tensor_args.optional_output_tensor;
     if (optional_output_tensor.has_value()) {
+        const auto& output_tensor = optional_output_tensor.value();
+        TT_FATAL(is_device_tensor(output_tensor), "Argmax preallocated output tensor must be allocated on device");
         TT_FATAL(
-            optional_output_tensor.value().dtype() == DataType::UINT32,
+            output_tensor.device() == input_tensor_a.device(),
+            "Argmax preallocated output tensor must be on the same device/mesh as the input tensor");
+        TT_FATAL(
+            output_tensor.dtype() == DataType::UINT32,
             "Only UINT32 is supported for outputs, got {}",
-            optional_output_tensor.value().dtype());
+            output_tensor.dtype());
         TT_FATAL(
-            optional_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only INTERLEAVED memory layout is supported for outputs, got {}",
-            optional_output_tensor.value().memory_config().memory_layout());
+            output_tensor.memory_config().memory_layout());
         TT_FATAL(
-            optional_output_tensor.value().layout() == Layout::ROW_MAJOR,
+            output_tensor.layout() == Layout::ROW_MAJOR,
             "Output tensor must have ROW_MAJOR layout, got {}",
-            optional_output_tensor.value().layout());
+            output_tensor.layout());
     }
 
     if (args.dim.has_value()) {
@@ -196,10 +201,10 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.layout());
     }
 
-    if (uses_multicore_path(args, tensor_args) && args.sub_core_grids.has_value()) {
+    if (args.sub_core_grids.has_value()) {
         ReduceOpDeviceGridValidationOptions grid_opts;
         grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
-        grid_opts.sub_grid_label = "Multicore argmax sub_core_grids";
+        grid_opts.sub_grid_label = "sub_core_grids";
         validate_reduce_op_tensor(tensor_args.input, "Argmax", "input", &grid_opts);
     }
 
