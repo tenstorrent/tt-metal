@@ -52,15 +52,11 @@ MODEL_PARAMS = [
 # are worked on. These get dedicated param lists (rather than reusing MODEL_PARAMS) because the
 # same models pass the other tests that share MODEL_PARAMS. gptoss_120b's emb_dim (2880) is not a
 # multiple of the hardcoded 1024 tile_width used by the structured patterns, so its reshape is
-# invalid; dsv4_flash just lands slightly under the structured PCC threshold. strict=True keeps CI
-# green either way. Remove a model from the per-test xfail dict once its issue is resolved.
+# invalid. strict=True keeps CI green either way. Remove a model from the per-test xfail dict once
+# its issue is resolved.
 _GPTOSS_STRUCTURED_XFAIL = (
     "GPT-OSS 120B post-combine reduce: structured reshape invalid (tile_width hardcoded 1024) — "
     "https://github.com/tenstorrent/tt-metal/issues/46731"
-)
-_DSV4_FLASH_STRUCTURED_XFAIL = (
-    "DeepSeek V4 Flash post-combine reduce: structured PCC below threshold — "
-    "https://github.com/tenstorrent/tt-metal/issues/46609"
 )
 
 
@@ -77,9 +73,7 @@ def _model_params_with_xfail(xfails):
     return params
 
 
-STRUCTURED_DATA_MODEL_PARAMS = _model_params_with_xfail(
-    {"gptoss_120b": _GPTOSS_STRUCTURED_XFAIL, "dsv4_flash": _DSV4_FLASH_STRUCTURED_XFAIL}
-)
+STRUCTURED_DATA_MODEL_PARAMS = _model_params_with_xfail({"gptoss_120b": _GPTOSS_STRUCTURED_XFAIL})
 
 # test_multi_chunk_structured crosses config with num_tokens, so its failures are keyed per
 # (model, num_tokens) and applied by _xfail_multi_chunk_structured. gptoss_120b's emb_dim makes the
