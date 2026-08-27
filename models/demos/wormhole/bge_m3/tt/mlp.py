@@ -128,62 +128,37 @@ class BgeM3MLP(LightweightModule):
 
 
 class BgeM3MLPJit(BgeM3MLP):
-    """JiT MLP: minimal_matmul Wi/Wo with fused GELU for the S8192 shape."""
+    """MLP for the B12/S8192 data-parallel serving shape.
+
+    ModelArgs sets use_jit only for that shape. Optimizations always resolves a
+    minimal_matmul config for Wi and Wo there, so this path runs both matmuls
+    with minimal_matmul and fuses GELU into Wi.
+    """
 
     def forward(self, hidden_states: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
         self.load_device_weights()
         hidden_states = _load_input_device_tensor(hidden_states, self.config)
 
-        wi_core_grid = None if self.config.wi_prg_config is not None else self.config.core_grid
-        wi_activation = None if self.config.wi_prg_config is not None else "gelu"
-
-        if self.config.wi_minimal_config is not None and self.config.wi_prg_config is None:
-            activated = ttnn.experimental.minimal_matmul(
-                input_tensor=hidden_states,
-                weight_tensor=self.wi_weight,
-                bias_tensor=self.wi_bias,
-                fused_activation=(ttnn.UnaryOpType.GELU, True),
-                config=self.config.wi_minimal_config,
-                memory_config=self.config.wi_memcfg,
-                dtype=self.config.wi_output_dtype,
-                compute_kernel_config=self.config.wi_compute_kernel_cfg,
-            )
-        else:
-            activated = ttnn.linear(
-                hidden_states,
-                self.wi_weight,
-                memory_config=self.config.wi_memcfg,
-                dtype=self.config.wi_output_dtype,
-                bias=self.wi_bias,
-                program_config=self.config.wi_prg_config,
-                compute_kernel_config=self.config.wi_compute_kernel_cfg,
-                activation=wi_activation,
-                core_grid=wi_core_grid,
-            )
-
-        wo_core_grid = None if self.config.wo_prg_config is not None else self.config.core_grid
-        if self.config.wo_minimal_config is not None and self.config.wo_prg_config is None:
-            output = ttnn.experimental.minimal_matmul(
-                input_tensor=activated,
-                weight_tensor=self.wo_weight,
-                bias_tensor=self.wo_bias,
-                fused_activation=None,
-                config=self.config.wo_minimal_config,
-                memory_config=self.config.wo_memcfg,
-                dtype=self.config.wo_dtype,
-                compute_kernel_config=self.config.wo_compute_kernel_cfg,
-            )
-        else:
-            output = ttnn.linear(
-                activated,
-                self.wo_weight,
-                memory_config=self.config.wo_memcfg,
-                dtype=self.config.wo_dtype,
-                bias=self.wo_bias,
-                program_config=self.config.wo_prg_config,
-                compute_kernel_config=self.config.wo_compute_kernel_cfg,
-                core_grid=wo_core_grid,
-            )
+        activated = ttnn.experimental.minimal_matmul(
+            input_tensor=hidden_states,
+            weight_tensor=self.wi_weight,
+            bias_tensor=self.wi_bias,
+            fused_activation=(ttnn.UnaryOpType.GELU, True),
+            config=self.config.wi_minimal_config,
+            memory_config=self.config.wi_memcfg,
+            dtype=self.config.wi_output_dtype,
+            compute_kernel_config=self.config.wi_compute_kernel_cfg,
+        )
+        output = ttnn.experimental.minimal_matmul(
+            input_tensor=activated,
+            weight_tensor=self.wo_weight,
+            bias_tensor=self.wo_bias,
+            fused_activation=None,
+            config=self.config.wo_minimal_config,
+            memory_config=self.config.wo_memcfg,
+            dtype=self.config.wo_dtype,
+            compute_kernel_config=self.config.wo_compute_kernel_cfg,
+        )
         ttnn.deallocate(activated)
         return output
 
