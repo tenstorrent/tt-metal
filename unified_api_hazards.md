@@ -217,6 +217,13 @@ without a marker are mechanisms the headers document as the caller's responsibil
     The shape complaints above all still stand. The parameter has to exist; it does not
     have to be two adjacent ints at a call site far from its partner.
 
+    **Do not expect the in-flight assert to catch this one.** A per-semaphore "an operation
+    is live" bool -- specced in `unified_mcast_handle_spec.md` -- catches two multicast
+    operations live on ONE pair, which is a real and different failure. 13b has no core with
+    two live operations: each runs its two collectives strictly sequentially, fully waited,
+    and the damage lands on another core. The rectangle claim is the check for 13b. Two
+    checks, two failures, neither subsuming the other.
+
 14. **Mismatched multicast rectangle** computed differently on sender and receiver.
 
 15. **`noc_core_write` reused across rounds without an intervening barrier.** The documented
