@@ -71,6 +71,16 @@ PCC_DECODE = 0.999
 # What IS gated is the worst-sample bound on the last position: "that worst-sample bound is the gate
 # that matters" (STATUS trap 9, PCC hides outliers). Loose -- case 0 measures 0.70%.
 MAX_WORST_SAMPLE_PCT = 5.0
+# The POOLED worst-sample: the largest single-element error anywhere in the whole [1, S, 3072]
+# output, as a percentage of the reference's scale. Gated because "PCC HIDES OUTLIERS -- the single
+# most expensive lesson" (STATUS trap 9: sdpa passed at PCC 0.9998 per slab and still failed 11
+# tests). It is LARGER than the last-position figure because pooling takes the max over every
+# position, so it picks up the weak late ones.
+#
+# Measured over all 15 real prompts, 2026-08-27: 0.74% (case 8) .. 5.17% (case 10), with case 12 at
+# 3.86%. Gate at 8% -- clear of the measured band, and an order of magnitude below the kind of
+# misplacement that matters (a dropped head reads 47%).
+MAX_POOLED_WORST_SAMPLE_PCT = 8.0
 DECODE_STEPS = 8
 
 
@@ -121,20 +131,36 @@ def test_prefill_pcc(gen, w, ci):
     P = embeds.shape[1]
     exp = bref.reference_forward(embeds, w, n_layers=N_LAYERS)
     got = gen.prefill(embeds)
-    all_pcc = compare_hidden(got, exp)["pcc"]
+    m_all = compare_hidden(got, exp)
+    all_pcc = m_all["pcc"]
     m_last = compare_hidden(got[:, -1:], exp[:, -1:])
     last_pcc = m_last["pcc"]
+    # The call the PIPELINE makes is prefill_last -> prefill(last_only=True), which is a different
+    # op sequence: slice to one row on device THEN rms_norm it, versus rms_norm all Sp rows then
+    # index on the host. Mathematically the same (RMSNorm is per-row) but a different invocation at
+    # a different shape, and norm configs are shape-sensitive in this port -- 6.39/6.40 deleted both
+    # width-sharded norms, and the sharded norm is decode-only because its shard spec fixes the
+    # height at one tile. Measured bit-identical on all 15 prompts; asserted so it stays that way.
+    gen.reset()
+    shipped = gen.prefill(embeds, last_only=True).reshape(1, -1)
     per = [pcc(got[:, i], exp[:, i]) for i in range(P)]
     wi = min(range(P), key=lambda i: per[i])
     print(
         f"\n  case {ci} ({case['voice']}, P={P}): PCC all {all_pcc:.6f}  last {last_pcc:.6f}  "
-        f"worst-sample(last) {m_last['worst_pct']:.2f}%  "
+        f"worst-sample last {m_last['worst_pct']:.2f}% pooled {m_all['worst_pct']:.2f}%  "
         f"min per-pos {per[wi]:.6f} (@{wi})"
     )
     assert last_pcc > PCC_PREFILL, f"case {ci} prefill last-position PCC {last_pcc:.6f}"
     assert all_pcc > PCC_PREFILL, f"case {ci} prefill all-positions PCC {all_pcc:.6f}"
     ws = m_last["worst_pct"]
     assert ws < MAX_WORST_SAMPLE_PCT, f"case {ci} last-position worst sample {ws:.2f}% of reference scale"
+    assert m_all["worst_pct"] < MAX_POOLED_WORST_SAMPLE_PCT, (
+        f"case {ci} pooled worst sample {m_all['worst_pct']:.2f}% over all {P} positions -- one "
+        f"element is far off even though pooled PCC is {all_pcc:.6f}")
+    assert torch.equal(shipped, got[:, -1]), (
+        f"case {ci}: prefill_last (the call the pipeline makes) differs from prefill(last_only="
+        f"False)[:, -1] by max {(shipped - got[:, -1]).abs().max():.3e} -- the two paths have "
+        f"diverged, and only the last_only=False one is covered by the gates above")
 
 
 @pytest.mark.parametrize("ci", case_ids(), ids=lambda c: f"case{c}")

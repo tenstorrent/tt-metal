@@ -76,6 +76,10 @@ SHAPE_PCC_POOLED = 0.99    # a COLLAPSE floor, not an accuracy gate. XTTS's vers
                            # leaving the 0.9948 measured minimum alone.
 SHAPE_SPREAD = 0.008       # the shape-sensitive assertion. Measured 0.004486; 0.008 leaves headroom
                            # so it flags a real outlier rather than flaking on the existing band.
+# Pooled worst-sample, gated for the same reason as in test_backbone_pcc (trap 9: PCC hides
+# outliers). Measured 1.57%..3.89% across the 16 shapes on the synthetic long prompt; 8% matches
+# the real-prompt gate so the two files cannot drift apart.
+SHAPE_WORST_SAMPLE_PCT = 8.0
 
 
 @pytest.fixture(scope="module")
@@ -181,6 +185,9 @@ def test_every_padded_prefill_shape_is_correct(big, w, sp):
     assert m["pcc"] > SHAPE_PCC_POOLED, (
         f"Sp={sp}: pooled PCC {m['pcc']:.6f} over all {S} positions -- this shape computes the "
         f"wrong values, not merely a missing tile")
+    assert m["worst_pct"] < SHAPE_WORST_SAMPLE_PCT, (
+        f"Sp={sp}: pooled worst sample {m['worst_pct']:.2f}% -- one element is far off even though "
+        f"pooled PCC is {m['pcc']:.6f}")
 
 
 def test_no_shape_computes_differently_from_its_neighbours():
