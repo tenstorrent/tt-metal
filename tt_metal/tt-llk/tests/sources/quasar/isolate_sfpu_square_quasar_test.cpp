@@ -51,7 +51,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const volatile FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t num_tiles = params.TILE_CNT;
 
     // -------------------------------------------------------------------------
     // Data format inference and dimensions
@@ -72,36 +71,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t buf_desc_id_pack   = 8;
 
     buffer_descriptor_u bd_unpack = {0};
-    tdma_descriptor_t td_unpack;
-    buffer_descriptor_u bd_pack = {0};
-    tdma_descriptor_t td_pack;
+    buffer_descriptor_u bd_pack   = {0};
 
     // Unpack BD: L1 input -> SrcS
-    bd_unpack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_A[0]);
-    bd_unpack.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
-    bd_unpack.f.x_dim         = PARAM_SRCS_XDIM;
-    bd_unpack.f.y_dim         = PARAM_SRCS_YDIM;
-    bd_unpack.f.z_dim         = PARAM_SRCS_ZDIM;
-    td_unpack.buf_desc        = bd_unpack;
-    td_unpack.buf_desc_id     = buf_desc_id_unpack;
-    td_unpack.reg_data_format = static_cast<DataFormat>(formats.unpack_S_dst);
-    _configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
-    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack.reg_data_format);
+    bd_unpack.f.l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
+    bd_unpack.f.format      = static_cast<std::uint8_t>(formats.unpack_S_src);
+    bd_unpack.f.x_dim       = PARAM_SRCS_XDIM;
+    bd_unpack.f.y_dim       = PARAM_SRCS_YDIM;
+    bd_unpack.f.z_dim       = PARAM_SRCS_ZDIM;
+    _configure_buf_desc_table_(buf_desc_id_unpack, bd_unpack);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(static_cast<DataFormat>(formats.unpack_S_dst));
 
     // Pack BD: SrcS -> L1 output
-    bd_pack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_Res[0]);
-    bd_pack.f.format        = static_cast<std::uint8_t>(formats.pack_S_dst);
-    bd_pack.f.x_dim         = PARAM_SRCS_XDIM;
-    bd_pack.f.y_dim         = PARAM_SRCS_YDIM;
-    bd_pack.f.z_dim         = PARAM_SRCS_ZDIM;
-    td_pack.buf_desc        = bd_pack;
-    td_pack.buf_desc_id     = buf_desc_id_pack;
-    td_pack.reg_data_format = static_cast<DataFormat>(formats.pack_S_src);
-    _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack.reg_data_format, ckernel::ReluConfig::none());
+    bd_pack.f.l1_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
+    bd_pack.f.format      = static_cast<std::uint8_t>(formats.pack_S_dst);
+    bd_pack.f.x_dim       = PARAM_SRCS_XDIM;
+    bd_pack.f.y_dim       = PARAM_SRCS_YDIM;
+    bd_pack.f.z_dim       = PARAM_SRCS_ZDIM;
+    _configure_buf_desc_table_(buf_desc_id_pack, bd_pack);
+    _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
-    // Implied math format disable for SrcS and sfpmem mod selection
+    // Implied math format disable for SrcS (unpacker). Load/store decode uses explicit sfpmem.
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
+
+    // SFPU load reads what UNP_S wrote; store writes what PACK1 will read.
+    const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
+    const std::uint32_t store_sfpmem = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.pack_S_src));
 
     // -------------------------------------------------------------------------
     // SFPU configuration and execution
@@ -113,10 +108,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_sfpu_init_();
 
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1; // SFP_ROWS == 2
-    for (std::uint32_t i = 0; i < num_tiles; ++i)
+    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         // Unpack/Pack calls can be moved outside the loop by incorporating the loop into the auto-loop registers
-        // Keeping them here for now since num_tiles is not a compile-time constant
+        // Keeping them here for now since params.TILE_CNT is not a compile-time constant
         _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT); // Sets dvalid for SFPU to read
 
         // Pack is placed before SFPU because SFPU loop fills up and clogs the instruction buffer leading to hangs
@@ -125,20 +120,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
         {
             // Passing addresses into calculate_* will land in a follow-up PR handled in https://github.com/tenstorrent/tt-llk/issues/1353.
-            const int load_base_addr  = ckernel::math::SFPU_SRCS_BASE_ADDR;                       // First slice of SrcS
             const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM; // Third slice of SrcS
 
 #pragma GCC unroll 8
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
-                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, load_base_addr + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG0, load_sfpmem, ADDR_MOD_7, 0, ckernel::math::SFPU_SRCS_BASE_ADDR + (d << 1));
                 // Multiply LREG0 * LREG0, store result in LREG0
                 TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
                 // Store result back to destination
-                TT_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_base_addr + (d << 1));
+                TT_SFPSTORE(p_sfpu::LREG0, store_sfpmem, ADDR_MOD_7, 0, store_base_addr + (d << 1));
             }
 
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>(); // Clears dvalid for SFPU read and write
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true /*SRCS_RD_DONE*/, true /*SRCS_WR_DONE*/>(); // Clears dvalid for SFPU read and write
         }
     }
 

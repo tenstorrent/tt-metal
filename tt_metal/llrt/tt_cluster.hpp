@@ -368,8 +368,6 @@ public:
 
     // Returns whether IOMMU is enabled on the system (cached at init time)
     bool is_iommu_enabled() const;
-    // Returns whether NOC mapping is enabled on the system (cached at init time)
-    bool is_noc_mapping_enabled() const;
 
     tt::tt_metal::ClusterType get_cluster_type() const;
 
@@ -436,6 +434,9 @@ private:
     void start_driver(umd::DeviceParams& device_params) const;
     void validate_harvesting_masks() const;
 
+    // Apply the TT_METAL_TDP_LIMIT_WATTS override to every local ASIC. No-op when it is unset.
+    void apply_tdp_limit_override();
+
     void get_metal_desc_from_tt_desc();
     void generate_virtual_to_umd_coord_mapping();
     void generate_virtual_to_profiler_flat_id_mapping();
@@ -462,8 +463,6 @@ private:
 
     // Cached system IOMMU status to avoid slow queries at MeshDevice construction
     bool iommu_enabled_ = false;
-    // Cached system NOC mapping status to avoid slow queries at MeshDevice construction
-    bool noc_mapping_enabled_ = false;
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<ChipId, metal_SocDescriptor> sdesc_per_chip_;

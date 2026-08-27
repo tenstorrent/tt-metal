@@ -118,7 +118,8 @@ def main():
     # all-gather fallback. Both use ring collectives and therefore need the cyclic torus route
     # -> FABRIC_1D_RING + the torus mesh descriptor
     # (TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_torus_xy_graph_descriptor.textproto).
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
+    _linear = os.getenv("PREFILL_TOPOLOGY", "ring") == "linear"
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D if _linear else ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(ROWS, COLS))
     print(f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
     try:
@@ -157,6 +158,7 @@ def main():
             cache_dtype=kv_cache_dtype,
             weight_cache_path=cache_path,
             owns_kv_cache=True,  # standalone harness owns its cache (runtime.kv_cache)
+            topology=ttnn.Topology.Linear if _linear else ttnn.Topology.Ring,
         )
         runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
         del state_dict

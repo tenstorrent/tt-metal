@@ -426,6 +426,11 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     const auto& jit_build_query = hal.get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
+    this->is_compute_pack_ = build_config.core_type == HalProgrammableCoreType::TENSIX &&
+                             build_config.processor_class == HalProcessorClassType::COMPUTE &&
+                             build_config.processor_id == 2;
+    // Per-kernel opt-in flags (applied in export_target_recipe); empty when unsupported.
+    this->rvv_cflags_ = jit_build_query.rvv_compile_flags(params);
     // Includes
     {
         auto it = std::back_inserter(this->includes_);
@@ -520,6 +525,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         }
         hasher.update(default_compile_opt_level_);
         hasher.update(default_linker_opt_level_);
+        // Not part of default recipes, but a change to the HAL's RVV flag string must still
+        // invalidate cached opted-in kernels.
+        hasher.update(rvv_cflags_);
         build_state_hash_ = hasher.digest();
     }
 }
@@ -934,6 +942,17 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     tt::jit_build::TargetRecipe target;
     target.target_name = target_name_;
     target.cflags = cflags_;
+    // Per-kernel RVV opt-in: only the pack (TRISC2) compile of a kernel that set
+    // ComputeConfig::enable_trisc2_rvv gets the vector flags. Compile-only: lflags_ is
+    // untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
+    if (settings != nullptr && this->is_compute_pack_ && settings->get_trisc2_rvv_enabled()) {
+        TT_FATAL(
+            !this->rvv_cflags_.empty(),
+            "Kernel {} sets enable_trisc2_rvv, but this architecture does not support RVV code "
+            "generation on the pack processor",
+            settings->get_full_kernel_name());
+        target.cflags += this->rvv_cflags_;
+    }
     target.lflags = lflags_;
     target.linker_script = linker_script_;
     target.extra_link_objs = extra_link_objs_;

@@ -141,6 +141,13 @@ jobs:
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
+      # The retired galaxy-perf impl pinned the host governor around its perf jobs.
+      # Galaxy SKUs only: those runners are bare-metal with cpupower available, unlike
+      # the container SKUs this pipeline otherwise targets.
+      - name: Enable performance mode
+        if: ${{ contains(matrix.test-group.sku, 'galaxy') }}
+        run: |
+          sudo cpupower frequency-set -g performance
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-with-log
@@ -228,13 +235,20 @@ jobs:
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
           job-name: ${{ matrix.test-group.name }}
+      - name: Disable performance mode
+        if: ${{ always() && contains(matrix.test-group.sku, 'galaxy') }}
+        run: |
+          sudo cpupower frequency-set -g ondemand
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
   ai-run-summary:
     name: "AI Run Summary"
     needs: [load-test-matrix, models-device-perf-tests]
-    if: always()
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

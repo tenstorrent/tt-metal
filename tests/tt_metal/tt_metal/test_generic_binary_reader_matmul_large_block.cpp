@@ -40,6 +40,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -296,7 +297,7 @@ TEST_F(UnitMeshFixture, GenericBinaryReaderMatmulLargeBlock) {
 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_rt_args);
 
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
         std::vector<uint32_t> result_vec;
         slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);

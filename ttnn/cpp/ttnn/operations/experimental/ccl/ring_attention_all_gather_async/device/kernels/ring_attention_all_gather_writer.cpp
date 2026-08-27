@@ -48,9 +48,10 @@ constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(15);
 // metadata accessor is emitted.
 constexpr bool has_metadata = get_compile_time_arg_val(16);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(17);
+constexpr uint32_t num_links = get_compile_time_arg_val(18);
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 18;
+    constexpr uint32_t page_size_base_idx = 19;
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     // Metadata accessor follows the output accessors (metadata path only); fall back to a valid (unused)
     // accessor offset when absent so TensorAccessorArgs<> never names a non-accessor compile arg.
@@ -76,6 +77,8 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_batch_head_count;
     std::array<uint32_t, num_inputs> input_tile_id_start;
     std::array<uint32_t, num_inputs> input_tile_id_end;
+    std::array<uint32_t, num_inputs> input_valid_pages;
+    std::array<uint32_t, num_inputs> worker_link;
 
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         input_tensor_Wt[input_idx] = get_arg_val<uint32_t>(arg_idx++);
@@ -83,8 +86,8 @@ void kernel_main() {
         output_tensor_Wt[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         output_tensor_Ht[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        (void)get_arg_val<uint32_t>(arg_idx++);  // structural tile_id_start placeholder
+        (void)get_arg_val<uint32_t>(arg_idx++);  // structural tile_id_end placeholder
         // input_batch_base: reader-only (phase-1 input offset). The writer always targets output
         // slot 0, so it reads the arg here only for alignment.
         (void)get_arg_val<uint32_t>(arg_idx++);
@@ -92,9 +95,12 @@ void kernel_main() {
         // match the reader's clamp so cb_output producer/consumer page counts stay aligned). Default
         // (full input) leaves the range unchanged.
         const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
-        if (valid_pages < input_tile_id_end[input_idx]) {
-            input_tile_id_end[input_idx] = valid_pages;
-        }
+        worker_link[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_valid_pages[input_idx] = valid_pages;
+        const auto link_page_range =
+            ring_attention_all_gather::compute_link_page_range(valid_pages, num_links, worker_link[input_idx]);
+        input_tile_id_start[input_idx] = link_page_range.start;
+        input_tile_id_end[input_idx] = link_page_range.end;
     }
 
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
@@ -122,8 +128,14 @@ void kernel_main() {
         // producer/consumer page counts drift (see the header's KEEP IN SYNC note).
         const uint32_t gather_valid_Ht =
             ring_attention_all_gather::compute_gather_valid_Ht(kv_actual, chunk_local_tiles, ring_size);
-        ring_attention_all_gather::clamp_input_ranges_to_gather_extent(
-            gather_valid_Ht, input_tensor_Ht, input_tensor_Wt, input_tile_id_end);
+        ring_attention_all_gather::update_link_page_ranges_for_gather_extent(
+            gather_valid_Ht,
+            num_links,
+            input_tensor_Wt,
+            input_valid_pages,
+            worker_link,
+            input_tile_id_start,
+            input_tile_id_end);
     }
 
     size_t arg_for_fab = arg_idx;

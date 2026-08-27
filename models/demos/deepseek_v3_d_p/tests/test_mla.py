@@ -18,6 +18,7 @@ from ttnn.device import is_blackhole
 import ttnn
 from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
@@ -30,19 +31,24 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reverse_reorder_tensor_chunks,
     rotated_chip_positions,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     cpu_mla_reference,
-    discover_traces,
     load_trace,
     partition_iters,
-    single_trace,
+    resolve_traces,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+_WORKER_L1_SIZE = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+
+
+def _local_fabric2d_params():
+    return fabric2d_device_params(worker_l1_size=_WORKER_L1_SIZE)
 
 
 def run_mla_inference(
@@ -198,13 +204,11 @@ def run_model(
 
     # Conditionally load fixtures - only load what we need!
     if use_pretrained:
-        config, sd = request.getfixturevalue("pretrained_transformer_weights")
-        weights = sd["layers"][0]["mla_weights"]
+        config, weights = request.getfixturevalue("pretrained_mla_layer_weights")
     else:
         config, weights = request.getfixturevalue("random_weights")
 
-    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
-    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+    topology = per_axis_topology(device_params["fabric_config"])
 
     production_mesh = [32, 4]
     sp_axis = 0
@@ -397,33 +401,30 @@ def run_model(
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    is_balanced = params["is_balanced"]
+
+    if not on_ci:
+        return False
+
+    if not is_balanced:
+        return True
+    return False
+
+
 # sp x tp
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(32, 4), (8, 4), (2, 4)],
-    ids=["32x4", "8x4", "2x4"],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
+    "mesh_device,device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
+        # Multi-host 32x4 is a four-Galaxy scale-out diagnostic. There is no certified descriptor
+        # that closes this entire logical mesh into one XY torus, so it remains unwrapped Fabric2D.
+        pytest.param((32, 4), _local_fabric2d_params(), id="fabric2d-32x4"),
+        pytest.param((8, 4), torus_xy_device_params(worker_l1_size=_WORKER_L1_SIZE), id="torus-xy-8x4"),
+        pytest.param((2, 4), _local_fabric2d_params(), id="fabric2d-2x4"),
     ],
-    ids=["line", "ring", "fabric2d"],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
@@ -460,80 +461,13 @@ def test_ds_mla(
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4), (2, 4)], ids=["8x4", "2x4"], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-    ],
-    ids=["line", "ring", "fabric2d"],
-    indirect=True,
-)
-@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
-@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize(
-    "seq_len",
-    [5 * 1024, 25 * 1024],
-    ids=["seq5k", "seq25k"],
-)
-@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.timeout(0)
-def test_kimi_mla(
-    use_pretrained,
-    request,
-    mesh_device,
-    seq_len,
-    skip_host_comparison,
-    scale_down_sl,
-    is_balanced,
-    is_ci_env,
-    is_ci_v2_env,
-    device_params,
-    variant,
-):
-    run_model(
-        variant,
-        use_pretrained,
-        request,
-        mesh_device,
-        seq_len,
-        skip_host_comparison,
-        scale_down_sl,
-        is_balanced,
-        is_ci_env,
-        is_ci_v2_env,
-        device_params,
-    )
-
-
 # ---------------------------------------------------------------------------------------------------
 # Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
 # ---------------------------------------------------------------------------------------------------
-# Set MLA_CHUNKED_TRACE_DIR to the ROOT dir holding one subdir per layer-0 GPU trace (each with
-# mla_io/ + kv_cache/). It enables the prefill>0 scenarios (load the prior KV + reference from the
-# real GPU run); multi-user pulls one trace per user, cycling if there are fewer traces than users.
-# The root may mix kimi and deepseek traces as siblings; discover_traces filters by variant name.
-MLA_CHUNKED_TRACE_DIR = os.environ.get("MLA_CHUNKED_TRACE_DIR")
-# MLA_CHUNKED_TRACE_PATH points straight at ONE specific trace dir (the leaf holding mla_io/ +
-# kv_cache/, not the root). It takes precedence over MLA_CHUNKED_TRACE_DIR and skips the root
-# scan/variant-filter entirely; the single trace is shared (cycled) across all users.
+# reference='trace' takes its trace dirs from variant.mla_trace_defaults. MLA_CHUNKED_TRACE_PATH
+# overrides that with ONE specific trace dir (the leaf holding mla_io/ + kv_cache/), shared across all
+# users -- for a trace that is not the variant's registered one.
 MLA_CHUNKED_TRACE_PATH = os.environ.get("MLA_CHUNKED_TRACE_PATH")
 
 # Per-iteration VALID token counts for the rotation/padding edge cases, tuned for the TARGET 8x4 mesh
@@ -587,7 +521,7 @@ def _run_chunked_prefill(
     prefill_len=0,
     num_users=1,
     use_pretrained=False,
-    topology=ttnn.Topology.Linear,
+    topology=None,
     use_metadata_tensor=False,
     determinism_check=False,
     profile=False,
@@ -597,8 +531,9 @@ def _run_chunked_prefill(
     `reference` selects how inputs + ground truth are produced -- independent of prefill_len / env:
       * "cpu"   -> synthetic inputs + torch MLA reference (k_pe in Meta basis). Partial-chunk iters
                    (rotation) allowed; any prefix is preloaded from the CPU reference KV.
-      * "trace" -> GPU-trace inputs + reference (k_pe in HF basis, re-interleaved to compare). TRACE
-                    ONLY: requires MLA_CHUNKED_TRACE_DIR or MLA_CHUNKED_TRACE_PATH (skips if both unset); supports partial iters.
+      * "trace" -> GPU-trace inputs + reference (k_pe re-interleaved for a roped trace, compared
+                    directly under NoPE). TRACE ONLY: dirs come from variant.mla_trace_defaults (or
+                    MLA_CHUNKED_TRACE_PATH); supports partial iters.
       * None    -> no reference (functional/perf): random inputs + random prefix, finite-output check.
     Multi-user partitions iters_isl across users (last gets the remainder); each user is independent in
     its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
@@ -614,6 +549,8 @@ def _run_chunked_prefill(
     if profile and not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("realtime profiler inactive (needs Blackhole, WORKER dispatch, fabric-tensix DM off)")
     sp_axis, tp_axis = 0, 1
+    if topology is None:
+        topology = per_axis_topology()
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
     tile = ttnn.TILE_SIZE
@@ -625,22 +562,16 @@ def _run_chunked_prefill(
     assert prefill_len % tile == 0, f"prefill_len {prefill_len} must be tile-aligned"
 
     use_trace = reference == "trace"
+    traces = None
     if use_trace:
-        if MLA_CHUNKED_TRACE_DIR is None and MLA_CHUNKED_TRACE_PATH is None:
-            pytest.skip(
-                "reference='trace' requires MLA_CHUNKED_TRACE_DIR (root) or "
-                "MLA_CHUNKED_TRACE_PATH (single trace) -- trace-only scenario"
-            )
-        # Must ASSERT, not skip: discover_traces filters siblings on a "kimi" substring, so Kimi-K3
-        # would be handed Kimi-K2.6's traces silently. Checked here -- the one point both the
-        # TRACE_DIR and TRACE_PATH routes cross.
         trace_variant = request.getfixturevalue("variant")
-        assert getattr(trace_variant, "supports_pretrained", True), (
-            f"reference='trace' is not supported for variant '{trace_variant.name}': it has no "
-            "reachable pretrained checkpoint, so no GPU trace was ever recorded for it, and trace "
-            "resolution would silently substitute another variant's traces. Use reference='cpu' "
-            "(CPU torch reference, random or real weights) or reference='func' (no reference)."
+        trace_paths = [MLA_CHUNKED_TRACE_PATH] if MLA_CHUNKED_TRACE_PATH else trace_variant.mla_trace_defaults
+        assert trace_paths, (
+            f"reference='trace' is not supported for variant '{trace_variant.name}': no golden MLA "
+            "trace was ever recorded for it (mla_trace_defaults is empty). Use reference='cpu' or "
+            "reference='func', or point MLA_CHUNKED_TRACE_PATH at a trace."
         )
+        traces = resolve_traces(trace_paths, num_users)
         # The trace is a DENSE token sequence; iters_isl just chunks it variably. Partial iters pad
         # the device's fixed-width chunk (masked by causality) -- they are not pad in the sequence --
         # so any iters_isl / prefill works exactly like the CPU ref. The only trace constraint is
@@ -648,15 +579,6 @@ def _run_chunked_prefill(
         use_pretrained = True  # the GPU trace was generated with the real checkpoint
 
     groups = partition_iters(iters_isl, num_users)
-    # Resolve trace dirs: a single explicit trace (MLA_CHUNKED_TRACE_PATH) wins; otherwise scan the
-    # root (MLA_CHUNKED_TRACE_DIR) and filter the kimi/deepseek siblings by variant name.
-    if not use_trace:
-        traces = None
-    elif MLA_CHUNKED_TRACE_PATH is not None:
-        traces = single_trace(MLA_CHUNKED_TRACE_PATH, num_users)
-    else:
-        variant_name = request.getfixturevalue("variant").name
-        traces = discover_traces(MLA_CHUNKED_TRACE_DIR, num_users, variant_name)
 
     # Cache holds the max (kv_actual + chunk) window across all users/iters, slab-aligned, >= 2 slabs.
     max_window = chunk_size_global * 2
@@ -668,13 +590,17 @@ def _run_chunked_prefill(
     seq_len_cache = ((max_window + chunk_size_global - 1) // chunk_size_global) * chunk_size_global
 
     if use_pretrained:
-        config, sd = request.getfixturevalue("pretrained_transformer_weights")
-        weights = sd["layers"][0]["mla_weights"]
+        # MLA-only fixture: this driver uses nothing but the attention weights, and the full-layer one
+        # cannot load Kimi-K3's MXFP4 MoE side.
+        config, weights = request.getfixturevalue("pretrained_mla_layer_weights")
     else:
         config, weights = request.getfixturevalue("random_weights")
     config.max_seq_len = seq_len_cache
     kvpe_dim = config.kv_lora_rank + config.qk_rope_head_dim
     hidden_size = config.hidden_size
+    # A roped GPU trace stores k_pe HF half-split while the device cache is Meta interleaved; under NoPE
+    # (Kimi-K3) neither side rotates, so there is no basis difference to correct.
+    trace_pe_interleave = use_trace and not getattr(config, "mla_use_nope", False)
 
     logger.info(
         f"chunked prefill: mesh={tuple(mesh_device.shape)} chunk={chunk_size_global} prefill={prefill_len} "
@@ -757,12 +683,9 @@ def _run_chunked_prefill(
         cache_host = torch.zeros(num_users, 1, seq_len_cache, kvpe_dim, dtype=torch.bfloat16)
         for u in range(num_users):
             kv_prior = users[u]["kv_prior"]
-            if use_trace:
-                # The GPU trace stores k_pe in the HF half-split basis; the device cache is the Meta
-                # interleaved basis. Re-interleave the k_pe block before preload (k_nope is basis-
-                # agnostic) -- same transform the post-run cache comparison applies. Without this the
-                # 50k preloaded prefix attends in the wrong basis and only the output PCC (not the
-                # cache PCC, which checks just the new region) shows the ~0.92 drop.
+            if trace_pe_interleave:
+                # Same transform the post-run cache comparison applies (k_nope is basis-agnostic);
+                # without it the preloaded prefix attends in the wrong basis.
                 kv_prior = kv_prior.clone()
                 d = kvpe_dim - config.kv_lora_rank
                 pe = kv_prior[:, config.kv_lora_rank :]
@@ -926,7 +849,7 @@ def _run_chunked_prefill(
     # ---- check the measured KV cache vs the reference. The rotation accumulates into the canonical
     #      block-cyclic layout, so blockcyclic_positions un-rotates the final cache (incl. partial
     #      chunks). k_nope is compared directly; k_pe is direct for the CPU ref (mla_reference is
-    #      Meta-style) but re-interleaved for the GPU trace (HF half-split -> device Meta basis). ----
+    #      Meta-style) and for NoPE, re-interleaved for a roped GPU trace -- see trace_pe_interleave. ----
     if any(users[u]["kv_post"] is not None for u in range(num_users)):
         cache_sr = ttnn.to_torch(
             tt_kvpe_cache.storage,
@@ -945,11 +868,11 @@ def _run_chunked_prefill(
             dev = nat[prefill_len : users[u]["total_len"]]
             ref = users[u]["kv_post"][prefill_len:].to(torch.float32)
             ref_pe = ref[:, kv_lora:]
-            if use_trace:  # GPU trace stores k_pe HF half-split -> re-interleave to the device Meta basis
+            if trace_pe_interleave:  # HF half-split -> device Meta basis
                 ref_pe = torch.stack([ref_pe[:, : d // 2], ref_pe[:, d // 2 :]], dim=-1).reshape(-1, d)
             _, nope_msg = assert_with_pcc(ref[:, :kv_lora], dev[:, :kv_lora], 0.98)
             _, pe_msg = assert_with_pcc(ref_pe, dev[:, kv_lora:], 0.98)
-            basis = "Meta-aligned" if use_trace else "direct"
+            basis = "Meta-aligned" if trace_pe_interleave else "direct"
             logger.info(f"  user {u} KV cache PCC -- k_nope: {nope_msg}  k_pe[{basis}]: {pe_msg}")
 
     logger.success(f"✓ Chunked prefill passed ({'trace' if use_trace else 'cpu'} ref, {num_users} user(s))")
@@ -982,39 +905,26 @@ _CHUNKED_SCENARIOS = (
 
 
 @pytest.mark.parametrize(
-    "device_params",
+    "mesh_device,device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            # high_bw_all_gather parks its readiness/completion semaphores in L1_SMALL when the device
-            # reserves one, and falls back to general L1 otherwise. On the 8x4 grid the fallback
-            # fragments L1 enough that a later op's static circular buffers collide with it.
-            "l1_small_size": 1152,
-        },
+        pytest.param((2, 2), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x2"),
+        pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x4"),
+        # high_bw_all_gather parks readiness/completion semaphores in L1_SMALL. On 8x4 the
+        # fallback fragments general L1 enough that a later op's static circular buffers collide.
+        pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4"),
     ],
-    ids=["line", "ring", "fabric2d"],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize("reference", ["cpu", "trace", None], ids=["cpu", "trace", "func"])
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
     "variant",
-    ["deepseek_v3_d_p", "kimi_k2_6", "kimi_k3"],
+    ["kimi_k2_6", "kimi_k3"],
     indirect=True,
-    # "k3", not "kimi_k3": pytest -k is substring-based, so a "kimi_k3" id would silently widen every
-    # existing `-k kimi` selector (CI yaml, tests/perf/test_mla_perf.py) to include K3.
-    ids=["dsv3", "kimi", "k3"],
+    # Name the Kimi generation explicitly. pytest -k is substring-based, so the ids must stay
+    # disjoint: "k2_6" and "k3" cannot cross-match, whereas a bare "kimi" id would match both
+    # generations and silently widen every `-k` selector (CI yaml, tests/perf/test_mla_perf.py).
+    ids=["k2_6", "k3"],
 )
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
@@ -1024,25 +934,24 @@ def test_mla_chunked_prefill(
 ):
     """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
     functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
-    and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', skips without
-    MLA_CHUNKED_TRACE_DIR/PATH), or run with no reference ('func'). Select with e.g.
+    and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', asserts if the
+    variant has no registered trace), or run with no reference ('func'). Select with e.g.
     -k 'maxedge-1u and trace and 8x4'. See _run_chunked_prefill.
 
-    Real weights on the CPU-reference path: point the variant's HF env var (DEEPSEEK_V3_HF_MODEL /
-    KIMI_K2_6_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
+    Real weights on the CPU-reference path: point the variant's HF env var (KIMI_K2_6_HF_MODEL /
+    KIMI_K3_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
     with pretrained weights instead of random. create_mla_reference is config-driven and
     architecture-agnostic (Kimi's YaRN/theta flow through, absorbed-MLA math matches the variant's own
-    reference), so this works for both variants. It complements the deepseek GPU-trace path, which only
+    reference), so this works for both variants. It complements the GPU-trace path, which only
     replays full-chunk iters and so never exercises real weights across the rotation/partial-chunk edge
-    scenarios that the cpu path covers. Without the env var, fall back to random (mirroring
-    test_kimi_mla). kimi_k2_6 also runs the trace path (loader + k_pe re-interleave are arch-agnostic; needs kimi
-    GPU traces in MLA_CHUNKED_TRACE_DIR). It otherwise runs the same
-    config-driven driver on any arch/mesh.
+    scenarios that the cpu path covers. Without the env var, fall back to random. kimi_k2_6 runs the
+    trace path (loader + k_pe re-interleave are arch-agnostic) against its own registered traces. It
+    otherwise runs the same config-driven driver on any arch/mesh.
 
-    kimi_k3 (NoPE + output gate, 96 heads) runs 'cpu' and 'func' only, and 'scalar' only -- 'trace'
-    and 'metadata' are both skipped explicitly below. Random weights only (supports_pretrained=False).
-    Its rotation scenarios still matter: rotation comes from the block-cyclic cache write and the
-    causal offset, not from RoPE."""
+    kimi_k3 (NoPE + output gate, 96 heads) runs 'scalar' only -- 'metadata' is skipped explicitly
+    below. It runs 'trace' like kimi_k2_6, taking real weights from layer 3 via
+    variant.pretrained_mla_layer. Its rotation scenarios still matter: rotation comes from the
+    block-cyclic cache write and the causal offset, not from RoPE."""
     # Per-variant, not module-level: two CI selectors for this test are variant-unqualified, so
     # without this a kimi_k3 case would run on Wormhole T3K where it has never been validated.
     if variant.name == "kimi_k3" and not is_blackhole():
@@ -1053,23 +962,12 @@ def test_mla_chunked_prefill(
     # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
     if variant.name == "kimi_k3" and use_metadata_tensor:
         pytest.skip("kimi_k3 has no runtime, so the metadata (device-scalar) path is unreachable for it")
-    # No K3 checkpoint is reachable, so no GPU trace was ever recorded for it. _run_chunked_prefill
-    # already asserts on supports_pretrained, but only once a trace root is configured -- so on a box
-    # with MLA_CHUNKED_TRACE_DIR set these cases would hard-fail instead of being cleanly out of
-    # scope. Skip up front; the assert stays as the backstop for any future supports_pretrained=False
-    # variant and for the silent K2.6-trace-substitution it was written to catch.
-    if variant.name == "kimi_k3" and reference == "trace":
-        pytest.skip("kimi_k3 has no reachable checkpoint, so no GPU trace exists for it")
     # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
     # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
     # fixture skips the test if the env var is set but the checkpoint is incomplete.
     if reference == "cpu" and os.environ.get(variant.env_var) and not kwargs.get("use_pretrained"):
         kwargs = {**kwargs, "use_pretrained": True}
-    topology = (
-        ttnn.Topology.Ring
-        if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_1D_RING
-        else ttnn.Topology.Linear
-    )
+    topology = per_axis_topology(device_params["fabric_config"])
     _run_chunked_prefill(
         request,
         mesh_device,
@@ -1082,19 +980,17 @@ def test_mla_chunked_prefill(
 
 
 @pytest.mark.parametrize(
-    "device_params",
+    "mesh_device,device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "l1_small_size": 1152,
-        }
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=1152),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        )
     ],
-    ids=["fabric2d"],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["k3"])
 @pytest.mark.skipif(not is_blackhole(), reason="kimi_k3 and the realtime profiler are Blackhole-only")
 @pytest.mark.skipif(
@@ -1109,11 +1005,12 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's 11_562_468: that number comes from the
     Tracy merge path, which averages collectives across chips, while this takes the max for every
     program. K3's forward is ~7% CCL, so the two disagree by construction."""
+    topology = per_axis_topology(device_params["fabric_config"])
     total_ns = _run_chunked_prefill(
         request,
         mesh_device,
         reference=None,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
         profile=True,
         iters_isl=[5120],
         prefill_len=50 * 1024,

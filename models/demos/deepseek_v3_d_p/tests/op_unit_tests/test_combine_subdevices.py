@@ -12,11 +12,12 @@ first/last COLUMN (varies in y).  This test confines combine to each of the four
 lines (plus the None default) and checks the output still matches the torch reference,
 exercising both the row-oriented and the new column-oriented core layouts.
 
-This file MUST NOT run in CI.  It is collected by every *DeepSeek_PREFILL_OP_TESTS job
-(some of which run the op_unit_tests/ folder unfiltered, e.g. bh_p150 / bh_p300), so a
-``-k`` filter cannot exclude it.  Instead it skips itself in CI via the is_ci_env /
-is_ci_v2_env fixtures (same mechanism as test_sub_device_load_clear_timing.py): all CI
-jobs collect it but report it as skipped, while it still runs locally with no env var.
+This file MUST NOT run in CI.  It is collected by every "Disaggregated prefill op tests"
+job (some of which run the op_unit_tests/ folder unfiltered, e.g. [bh_p150b_civ2] /
+[bh_p300]), so a ``-k`` filter cannot exclude it.  Instead it skips itself in CI via
+the is_ci_env / is_ci_v2_env fixtures (same mechanism as
+test_sub_device_load_clear_timing.py): all CI jobs collect it but report it as skipped,
+while it still runs locally with no env var.
 
 Run locally (needs an 8-chip box for the mesh-4x2 config):
 
@@ -48,11 +49,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_combine_output,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 # A single representative 2-D mesh config (8 chips). The subdevice placement under test is
 # a property of the per-chip worker grid, independent of the mesh topology, so one config
 # is enough to exercise all four edge lines.
-MESH_CONFIGS = [p for p in ALL_MESH_CONFIGS if p.id == "mesh-4x2"]
+MESH_CONFIGS = [p for p in ALL_MESH_CONFIGS if p.id == "fabric2d-mesh-4x2"]
 
 # Small PCC-checked data case (same shape as test_prefill_combine.py's "pcc" case).
 SEQ_LEN_PER_CHIP = 128
@@ -138,22 +140,24 @@ def _assert_edge_geometry(edge, core_range_set, grid_x, grid_y):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("subdevice_edge", SUBDEVICE_EDGES)
 def test_combine_subdevice_placement(
-    mesh_device, device_params, num_links, topology, subdevice_edge, is_ci_env, is_ci_v2_env
+    mesh_device, device_params, num_links, subdevice_edge, is_ci_env, is_ci_v2_env, expect_error
 ):
     """Run combine confined to an edge-row/column worker subdevice and validate vs torch.
 
     The four edge subdevices overlap at the grid corners, so they cannot share one
     sub-device manager; each placement gets its own manager, created and torn down here.
     """
-    # Local-only: this file is collected by every DeepSeek_PREFILL_OP_TESTS job (some
-    # unfiltered, e.g. bh_p150/bh_p300), so a -k filter cannot exclude it. Skip in CI the
-    # same way test_sub_device_load_clear_timing.py does; runs locally with no env var.
+    topology = per_axis_topology(device_params["fabric_config"])[0]
+    # Local-only: this file is collected by every "Disaggregated prefill op tests" job
+    # (some unfiltered, e.g. [bh_p150b_civ2]/[bh_p300]), so a -k filter cannot exclude
+    # it. Skip in CI the same way test_sub_device_load_clear_timing.py does; runs
+    # locally with no env var.
     if is_ci_env or is_ci_v2_env:
         pytest.skip("Local-only combine subdevice test; skipped in CI")
 
@@ -292,7 +296,7 @@ def test_combine_subdevice_placement(
         sd_manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([edge_cores])], 0)
         mesh_device.load_sub_device_manager(sd_manager)
         try:
-            with pytest.raises(RuntimeError, match="2-D subdevice core grid"):
+            with expect_error(RuntimeError, "2-D subdevice core grid"):
                 ttnn.experimental.deepseek_prefill.combine(
                     tt_dispatched_buffer,
                     tt_dispatched_metadata,

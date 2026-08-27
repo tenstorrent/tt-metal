@@ -53,7 +53,7 @@ protected:
 // Basic Operations Tests
 // ============================================================================
 
-TEST_F(FilesystemUtilsTest, SafeCreateDirectories_CreatesNewDirectory) {
+TEST_F(FilesystemUtilsTest, CPU_SafeCreateDirectories_CreatesNewDirectory) {
     std::filesystem::path new_dir = temp_dir_ / "new_directory";
     EXPECT_FALSE(std::filesystem::exists(new_dir));
 
@@ -63,7 +63,7 @@ TEST_F(FilesystemUtilsTest, SafeCreateDirectories_CreatesNewDirectory) {
     EXPECT_TRUE(std::filesystem::is_directory(new_dir));
 }
 
-TEST_F(FilesystemUtilsTest, SafeCreateDirectories_CreatesNestedDirectories) {
+TEST_F(FilesystemUtilsTest, CPU_SafeCreateDirectories_CreatesNestedDirectories) {
     std::filesystem::path nested_dir = temp_dir_ / "a" / "b" / "c" / "d";
     EXPECT_FALSE(std::filesystem::exists(nested_dir));
 
@@ -73,7 +73,7 @@ TEST_F(FilesystemUtilsTest, SafeCreateDirectories_CreatesNestedDirectories) {
     EXPECT_TRUE(std::filesystem::is_directory(nested_dir));
 }
 
-TEST_F(FilesystemUtilsTest, SafeCreateDirectories_IdempotentOnExistingDirectory) {
+TEST_F(FilesystemUtilsTest, CPU_SafeCreateDirectories_IdempotentOnExistingDirectory) {
     std::filesystem::path existing_dir = create_test_directory("existing");
     EXPECT_TRUE(std::filesystem::exists(existing_dir));
 
@@ -82,7 +82,7 @@ TEST_F(FilesystemUtilsTest, SafeCreateDirectories_IdempotentOnExistingDirectory)
     EXPECT_TRUE(std::filesystem::exists(existing_dir));
 }
 
-TEST_F(FilesystemUtilsTest, SafeExists_ReturnsTrueForExistingPath) {
+TEST_F(FilesystemUtilsTest, CPU_SafeExists_ReturnsTrueForExistingPath) {
     std::filesystem::path file = create_test_file("exists_test.txt");
 
     auto result = safe_exists(file);
@@ -90,7 +90,7 @@ TEST_F(FilesystemUtilsTest, SafeExists_ReturnsTrueForExistingPath) {
     EXPECT_TRUE(result.value());
 }
 
-TEST_F(FilesystemUtilsTest, SafeExists_ReturnsFalseForNonExistentPath) {
+TEST_F(FilesystemUtilsTest, CPU_SafeExists_ReturnsFalseForNonExistentPath) {
     std::filesystem::path non_existent = temp_dir_ / "does_not_exist.txt";
 
     auto result = safe_exists(non_existent);
@@ -98,7 +98,7 @@ TEST_F(FilesystemUtilsTest, SafeExists_ReturnsFalseForNonExistentPath) {
     EXPECT_FALSE(result.value());
 }
 
-TEST_F(FilesystemUtilsTest, SafeIsDirectory_ReturnsTrueForDirectory) {
+TEST_F(FilesystemUtilsTest, CPU_SafeIsDirectory_ReturnsTrueForDirectory) {
     std::filesystem::path dir = create_test_directory("test_dir");
 
     auto result = safe_is_directory(dir);
@@ -106,7 +106,7 @@ TEST_F(FilesystemUtilsTest, SafeIsDirectory_ReturnsTrueForDirectory) {
     EXPECT_TRUE(result.value());
 }
 
-TEST_F(FilesystemUtilsTest, SafeIsDirectory_ReturnsFalseForFile) {
+TEST_F(FilesystemUtilsTest, CPU_SafeIsDirectory_ReturnsFalseForFile) {
     std::filesystem::path file = create_test_file("test_file.txt");
 
     auto result = safe_is_directory(file);
@@ -114,7 +114,7 @@ TEST_F(FilesystemUtilsTest, SafeIsDirectory_ReturnsFalseForFile) {
     EXPECT_FALSE(result.value());
 }
 
-TEST_F(FilesystemUtilsTest, SafeIsDirectory_ReturnsFalseForNonExistentPath) {
+TEST_F(FilesystemUtilsTest, CPU_SafeIsDirectory_ReturnsFalseForNonExistentPath) {
     std::filesystem::path non_existent = temp_dir_ / "does_not_exist";
 
     auto result = safe_is_directory(non_existent);
@@ -122,7 +122,7 @@ TEST_F(FilesystemUtilsTest, SafeIsDirectory_ReturnsFalseForNonExistentPath) {
     EXPECT_FALSE(result.value());
 }
 
-TEST_F(FilesystemUtilsTest, SafeIsRegularFile_ReturnsTrueForFile) {
+TEST_F(FilesystemUtilsTest, CPU_SafeIsRegularFile_ReturnsTrueForFile) {
     std::filesystem::path file = create_test_file("regular_file.txt");
 
     auto result = safe_is_regular_file(file);
@@ -130,7 +130,7 @@ TEST_F(FilesystemUtilsTest, SafeIsRegularFile_ReturnsTrueForFile) {
     EXPECT_TRUE(result.value());
 }
 
-TEST_F(FilesystemUtilsTest, SafeIsRegularFile_ReturnsFalseForDirectory) {
+TEST_F(FilesystemUtilsTest, CPU_SafeIsRegularFile_ReturnsFalseForDirectory) {
     std::filesystem::path dir = create_test_directory("test_dir");
 
     auto result = safe_is_regular_file(dir);
@@ -138,7 +138,7 @@ TEST_F(FilesystemUtilsTest, SafeIsRegularFile_ReturnsFalseForDirectory) {
     EXPECT_FALSE(result.value());
 }
 
-TEST_F(FilesystemUtilsTest, SafeIsRegularFile_ReturnsFalseForNonExistentPath) {
+TEST_F(FilesystemUtilsTest, CPU_SafeIsRegularFile_ReturnsFalseForNonExistentPath) {
     std::filesystem::path non_existent = temp_dir_ / "does_not_exist.txt";
 
     auto result = safe_is_regular_file(non_existent);
@@ -146,7 +146,7 @@ TEST_F(FilesystemUtilsTest, SafeIsRegularFile_ReturnsFalseForNonExistentPath) {
     EXPECT_FALSE(result.value());
 }
 
-TEST_F(FilesystemUtilsTest, SafeFileSize_ReturnsCorrectSize) {
+TEST_F(FilesystemUtilsTest, CPU_SafeFileSize_ReturnsCorrectSize) {
     std::string content = "Hello, World!";
     std::filesystem::path file = create_test_file("size_test.txt", content);
 
@@ -155,14 +155,14 @@ TEST_F(FilesystemUtilsTest, SafeFileSize_ReturnsCorrectSize) {
     EXPECT_EQ(result.value(), content.size());
 }
 
-TEST_F(FilesystemUtilsTest, SafeFileSize_ReturnsNulloptForNonExistentFile) {
+TEST_F(FilesystemUtilsTest, CPU_SafeFileSize_ReturnsNulloptForNonExistentFile) {
     std::filesystem::path non_existent = temp_dir_ / "does_not_exist.txt";
 
     auto result = safe_file_size(non_existent);
     EXPECT_FALSE(result.has_value());
 }
 
-TEST_F(FilesystemUtilsTest, SafeLastWriteTime_ReturnsValidTime) {
+TEST_F(FilesystemUtilsTest, CPU_SafeLastWriteTime_ReturnsValidTime) {
     std::filesystem::path file = create_test_file("time_test.txt");
 
     auto result = safe_last_write_time(file);
@@ -192,14 +192,14 @@ TEST_F(FilesystemUtilsTest, SafeLastWriteTime_ReturnsValidTime) {
     EXPECT_LE(diff_ms, 1000);  // 1000ms = 1 second
 }
 
-TEST_F(FilesystemUtilsTest, SafeLastWriteTime_ReturnsNulloptForNonExistentFile) {
+TEST_F(FilesystemUtilsTest, CPU_SafeLastWriteTime_ReturnsNulloptForNonExistentFile) {
     std::filesystem::path non_existent = temp_dir_ / "does_not_exist.txt";
 
     auto result = safe_last_write_time(non_existent);
     EXPECT_FALSE(result.has_value());
 }
 
-TEST_F(FilesystemUtilsTest, SafeRemove_RemovesExistingFile) {
+TEST_F(FilesystemUtilsTest, CPU_SafeRemove_RemovesExistingFile) {
     std::filesystem::path file = create_test_file("to_remove.txt");
     EXPECT_TRUE(std::filesystem::exists(file));
 
@@ -208,7 +208,7 @@ TEST_F(FilesystemUtilsTest, SafeRemove_RemovesExistingFile) {
     EXPECT_FALSE(std::filesystem::exists(file));
 }
 
-TEST_F(FilesystemUtilsTest, SafeRemove_IdempotentOnNonExistentFile) {
+TEST_F(FilesystemUtilsTest, CPU_SafeRemove_IdempotentOnNonExistentFile) {
     std::filesystem::path non_existent = temp_dir_ / "does_not_exist.txt";
     EXPECT_FALSE(std::filesystem::exists(non_existent));
 
@@ -216,7 +216,7 @@ TEST_F(FilesystemUtilsTest, SafeRemove_IdempotentOnNonExistentFile) {
     EXPECT_TRUE(safe_remove(non_existent));
 }
 
-TEST_F(FilesystemUtilsTest, SafeRemoveAll_RemovesDirectoryWithContents) {
+TEST_F(FilesystemUtilsTest, CPU_SafeRemoveAll_RemovesDirectoryWithContents) {
     std::filesystem::path dir = create_test_directory("to_remove_all");
     create_test_file("to_remove_all/file1.txt");
     create_test_file("to_remove_all/file2.txt");
@@ -230,7 +230,7 @@ TEST_F(FilesystemUtilsTest, SafeRemoveAll_RemovesDirectoryWithContents) {
     EXPECT_FALSE(std::filesystem::exists(dir));
 }
 
-TEST_F(FilesystemUtilsTest, SafeRemoveAll_IdempotentOnNonExistentPath) {
+TEST_F(FilesystemUtilsTest, CPU_SafeRemoveAll_IdempotentOnNonExistentPath) {
     std::filesystem::path non_existent = temp_dir_ / "does_not_exist";
     EXPECT_FALSE(std::filesystem::exists(non_existent));
 
@@ -242,7 +242,7 @@ TEST_F(FilesystemUtilsTest, SafeRemoveAll_IdempotentOnNonExistentPath) {
 // Hard Link or Copy Tests
 // ============================================================================
 
-TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_CreatesHardLink) {
+TEST_F(FilesystemUtilsTest, CPU_SafeHardLinkOrCopy_CreatesHardLink) {
     std::filesystem::path target = create_test_file("target.txt", "hard link target");
     std::filesystem::path link = temp_dir_ / "hard_link.txt";
 
@@ -266,7 +266,7 @@ TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_CreatesHardLink) {
     }
 }
 
-TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_WorksWithDirectoryInPath) {
+TEST_F(FilesystemUtilsTest, CPU_SafeHardLinkOrCopy_WorksWithDirectoryInPath) {
     // Creating a hard link to a file inside a directory should work
     std::filesystem::path target = create_test_file("source.txt", "source content");
     std::filesystem::path link = create_test_directory("dest_dir") / "linked.txt";
@@ -284,7 +284,7 @@ TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_WorksWithDirectoryInPath) {
     }
 }
 
-TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_OverwritesExisting) {
+TEST_F(FilesystemUtilsTest, CPU_SafeHardLinkOrCopy_OverwritesExisting) {
     std::filesystem::path target = create_test_file("target.txt", "new content here");
     std::filesystem::path existing = create_test_file("existing.txt", "old");
 
@@ -301,7 +301,7 @@ TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_OverwritesExisting) {
 // Directory Entries Tests
 // ============================================================================
 
-TEST_F(FilesystemUtilsTest, SafeDirectoryEntries_ReturnsAllEntries) {
+TEST_F(FilesystemUtilsTest, CPU_SafeDirectoryEntries_ReturnsAllEntries) {
     std::filesystem::path dir = create_test_directory("list_dir");
     create_test_file("list_dir/file1.txt");
     create_test_file("list_dir/file2.txt");
@@ -325,7 +325,7 @@ TEST_F(FilesystemUtilsTest, SafeDirectoryEntries_ReturnsAllEntries) {
     EXPECT_EQ(dir_count, 1);
 }
 
-TEST_F(FilesystemUtilsTest, SafeDirectoryEntries_ReturnsEmptyForNonExistentDirectory) {
+TEST_F(FilesystemUtilsTest, CPU_SafeDirectoryEntries_ReturnsEmptyForNonExistentDirectory) {
     std::filesystem::path non_existent = temp_dir_ / "does_not_exist";
 
     auto entries = safe_directory_entries(non_existent);
@@ -333,7 +333,7 @@ TEST_F(FilesystemUtilsTest, SafeDirectoryEntries_ReturnsEmptyForNonExistentDirec
     EXPECT_TRUE(entries.empty());
 }
 
-TEST_F(FilesystemUtilsTest, SafeDirectoryEntries_ReturnsEmptyForEmptyDirectory) {
+TEST_F(FilesystemUtilsTest, CPU_SafeDirectoryEntries_ReturnsEmptyForEmptyDirectory) {
     std::filesystem::path empty_dir = create_test_directory("empty");
 
     auto entries = safe_directory_entries(empty_dir);
@@ -341,7 +341,7 @@ TEST_F(FilesystemUtilsTest, SafeDirectoryEntries_ReturnsEmptyForEmptyDirectory) 
     EXPECT_TRUE(entries.empty());
 }
 
-TEST_F(FilesystemUtilsTest, SafeDirectoryEntries_HandlesNestedDirectories) {
+TEST_F(FilesystemUtilsTest, CPU_SafeDirectoryEntries_HandlesNestedDirectories) {
     std::filesystem::path dir = create_test_directory("nested");
     create_test_directory("nested/level1");
     create_test_directory("nested/level1/level2");
@@ -358,7 +358,7 @@ TEST_F(FilesystemUtilsTest, SafeDirectoryEntries_HandlesNestedDirectories) {
 // Rename Tests
 // ============================================================================
 
-TEST_F(FilesystemUtilsTest, SafeRename_RenamesFile) {
+TEST_F(FilesystemUtilsTest, CPU_SafeRename_RenamesFile) {
     std::filesystem::path source = create_test_file("original.txt", "content");
     std::filesystem::path dest = temp_dir_ / "renamed.txt";
 
@@ -369,7 +369,7 @@ TEST_F(FilesystemUtilsTest, SafeRename_RenamesFile) {
     EXPECT_EQ(std::filesystem::file_size(dest), 7);  // "content"
 }
 
-TEST_F(FilesystemUtilsTest, SafeRename_OverwritesExisting) {
+TEST_F(FilesystemUtilsTest, CPU_SafeRename_OverwritesExisting) {
     std::filesystem::path source = create_test_file("source.txt", "new content");
     std::filesystem::path dest = create_test_file("dest.txt", "old content");
 
@@ -380,14 +380,14 @@ TEST_F(FilesystemUtilsTest, SafeRename_OverwritesExisting) {
     EXPECT_EQ(std::filesystem::file_size(dest), 11);  // "new content"
 }
 
-TEST_F(FilesystemUtilsTest, SafeRename_ReturnsFalseForNonExistentSource) {
+TEST_F(FilesystemUtilsTest, CPU_SafeRename_ReturnsFalseForNonExistentSource) {
     std::filesystem::path source = temp_dir_ / "does_not_exist.txt";
     std::filesystem::path dest = temp_dir_ / "dest.txt";
 
     EXPECT_FALSE(safe_rename(source, dest));
 }
 
-TEST_F(FilesystemUtilsTest, SafeRename_IgnoreMissingReturnsTrueForNonExistentSource) {
+TEST_F(FilesystemUtilsTest, CPU_SafeRename_IgnoreMissingReturnsTrueForNonExistentSource) {
     std::filesystem::path source = temp_dir_ / "does_not_exist.txt";
     std::filesystem::path dest = temp_dir_ / "dest.txt";
 
@@ -399,19 +399,19 @@ TEST_F(FilesystemUtilsTest, SafeRename_IgnoreMissingReturnsTrueForNonExistentSou
 // Retry Constants Tests
 // ============================================================================
 
-TEST(FilesystemUtilsConstants, MaxRetriesIsReasonable) {
+TEST(FilesystemUtilsConstants, CPU_MaxRetriesIsReasonable) {
     // kMaxFsRetries should be a positive, reasonable number
     EXPECT_GT(kMaxFsRetries, 0);
     EXPECT_LE(kMaxFsRetries, 100);  // Should not be excessively high
 }
 
-TEST(FilesystemUtilsConstants, RetryDelayIsReasonable) {
+TEST(FilesystemUtilsConstants, CPU_RetryDelayIsReasonable) {
     // kFsRetryDelayMs should be a positive, reasonable number
     EXPECT_GT(kFsRetryDelayMs, 0);
     EXPECT_LE(kFsRetryDelayMs, 10000);  // Should not be excessively high (10 seconds)
 }
 
-TEST(FilesystemUtilsConstants, TotalMaxDelayIsReasonable) {
+TEST(FilesystemUtilsConstants, CPU_TotalMaxDelayIsReasonable) {
     // Calculate total maximum delay across all retries
     // Formula: sum of (kFsRetryDelayMs * attempt + random(0-100)) for each attempt
     // This is an upper bound calculation
@@ -428,12 +428,12 @@ TEST(FilesystemUtilsConstants, TotalMaxDelayIsReasonable) {
 // Error Detection Tests
 // ============================================================================
 
-TEST(FilesystemUtilsErrors, IsEstaleError_DetectsEstale) {
+TEST(FilesystemUtilsErrors, CPU_IsEstaleError_DetectsEstale) {
     std::error_code ec(ESTALE, std::system_category());
     EXPECT_TRUE(is_estale_error(ec));
 }
 
-TEST(FilesystemUtilsErrors, IsEstaleError_ReturnsFalseForOtherErrors) {
+TEST(FilesystemUtilsErrors, CPU_IsEstaleError_ReturnsFalseForOtherErrors) {
     std::error_code ecENOENT = std::make_error_code(std::errc::no_such_file_or_directory);
     EXPECT_FALSE(is_estale_error(ecENOENT));
 
@@ -441,12 +441,12 @@ TEST(FilesystemUtilsErrors, IsEstaleError_ReturnsFalseForOtherErrors) {
     EXPECT_FALSE(is_estale_error(ecACCES));
 }
 
-TEST(FilesystemUtilsErrors, IsNotFoundError_DetectsNoSuchFile) {
+TEST(FilesystemUtilsErrors, CPU_IsNotFoundError_DetectsNoSuchFile) {
     std::error_code ec = std::make_error_code(std::errc::no_such_file_or_directory);
     EXPECT_TRUE(is_not_found_error(ec));
 }
 
-TEST(FilesystemUtilsErrors, IsNotFoundError_ReturnsFalseForOtherErrors) {
+TEST(FilesystemUtilsErrors, CPU_IsNotFoundError_ReturnsFalseForOtherErrors) {
     std::error_code ecESTALE(ESTALE, std::system_category());
     EXPECT_FALSE(is_not_found_error(ecESTALE));
 
@@ -458,7 +458,7 @@ TEST(FilesystemUtilsErrors, IsNotFoundError_ReturnsFalseForOtherErrors) {
 // Retry Helper Tests
 // ============================================================================
 
-TEST(FilesystemUtilsRetry, RetryOnEstale_SucceedsOnFirstAttempt) {
+TEST(FilesystemUtilsRetry, CPU_RetryOnEstale_SucceedsOnFirstAttempt) {
     // Test that retry_on_estale succeeds when the operation succeeds immediately
     int call_count = 0;
     auto operation = [&call_count]() -> bool {
@@ -473,7 +473,7 @@ TEST(FilesystemUtilsRetry, RetryOnEstale_SucceedsOnFirstAttempt) {
     EXPECT_EQ(call_count, 1);
 }
 
-TEST(FilesystemUtilsRetry, RetryOnEstale_FailsOnNonEstaleError) {
+TEST(FilesystemUtilsRetry, CPU_RetryOnEstale_FailsOnNonEstaleError) {
     // Test that retry_on_estale fails immediately on non-ESTALE errors
     int call_count = 0;
     auto operation = [&call_count]() -> bool {
@@ -488,7 +488,7 @@ TEST(FilesystemUtilsRetry, RetryOnEstale_FailsOnNonEstaleError) {
     set_nfs_safety(false);
 }
 
-TEST(FilesystemUtilsRetry, RetryOnEstaleEc_SucceedsOnFirstAttempt) {
+TEST(FilesystemUtilsRetry, CPU_RetryOnEstaleEc_SucceedsOnFirstAttempt) {
     // Test that retry_on_estale_ec succeeds when the operation succeeds immediately
     int call_count = 0;
     auto operation = [&call_count](std::error_code& ec) -> bool {
@@ -503,7 +503,7 @@ TEST(FilesystemUtilsRetry, RetryOnEstaleEc_SucceedsOnFirstAttempt) {
     EXPECT_EQ(call_count, 1);
 }
 
-TEST(FilesystemUtilsRetry, RetryOnEstaleEc_FailsOnNonEstaleError) {
+TEST(FilesystemUtilsRetry, CPU_RetryOnEstaleEc_FailsOnNonEstaleError) {
     // Test that retry_on_estale_ec fails immediately on non-ESTALE errors
     int call_count = 0;
     auto operation = [&call_count](std::error_code& ec) -> bool {
@@ -523,7 +523,7 @@ TEST(FilesystemUtilsRetry, RetryOnEstaleEc_FailsOnNonEstaleError) {
 // Edge Cases and Error Handling
 // ============================================================================
 
-TEST_F(FilesystemUtilsTest, SafeRemove_ReturnsTrueForEmptyDirectory) {
+TEST_F(FilesystemUtilsTest, CPU_SafeRemove_ReturnsTrueForEmptyDirectory) {
     std::filesystem::path dir = create_test_directory("empty_dir");
     EXPECT_TRUE(std::filesystem::exists(dir));
 
@@ -532,7 +532,7 @@ TEST_F(FilesystemUtilsTest, SafeRemove_ReturnsTrueForEmptyDirectory) {
     EXPECT_FALSE(std::filesystem::exists(dir));
 }
 
-TEST_F(FilesystemUtilsTest, SafeRemove_ReturnsFalseForNonEmptyDirectory) {
+TEST_F(FilesystemUtilsTest, CPU_SafeRemove_ReturnsFalseForNonEmptyDirectory) {
     std::filesystem::path dir = create_test_directory("non_empty_dir");
     create_test_file("non_empty_dir/file.txt", "content");
 
@@ -541,7 +541,7 @@ TEST_F(FilesystemUtilsTest, SafeRemove_ReturnsFalseForNonEmptyDirectory) {
     EXPECT_TRUE(std::filesystem::exists(dir));
 }
 
-TEST_F(FilesystemUtilsTest, SafeFileSize_WorksOnDirectory) {
+TEST_F(FilesystemUtilsTest, CPU_SafeFileSize_WorksOnDirectory) {
     std::filesystem::path dir = create_test_directory("dir_for_size");
 
     auto result = safe_file_size(dir);
@@ -549,7 +549,7 @@ TEST_F(FilesystemUtilsTest, SafeFileSize_WorksOnDirectory) {
     EXPECT_FALSE(result.has_value());
 }
 
-TEST_F(FilesystemUtilsTest, SafeLastWriteTime_WorksOnDirectory) {
+TEST_F(FilesystemUtilsTest, CPU_SafeLastWriteTime_WorksOnDirectory) {
     std::filesystem::path dir = create_test_directory("dir_for_time");
 
     auto result = safe_last_write_time(dir);
@@ -558,7 +558,7 @@ TEST_F(FilesystemUtilsTest, SafeLastWriteTime_WorksOnDirectory) {
     EXPECT_NE(result.value(), std::filesystem::file_time_type::min());
 }
 
-TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_ReturnsFalseForNonExistentSource) {
+TEST_F(FilesystemUtilsTest, CPU_SafeHardLinkOrCopy_ReturnsFalseForNonExistentSource) {
     std::filesystem::path source = temp_dir_ / "does_not_exist.txt";
     std::filesystem::path dest = temp_dir_ / "dest.txt";
 
@@ -566,14 +566,14 @@ TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_ReturnsFalseForNonExistentSource)
     EXPECT_FALSE(std::filesystem::exists(dest));
 }
 
-TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_ReturnsFalseForNonExistentDestParent) {
+TEST_F(FilesystemUtilsTest, CPU_SafeHardLinkOrCopy_ReturnsFalseForNonExistentDestParent) {
     std::filesystem::path source = create_test_file("source.txt");
     std::filesystem::path dest = temp_dir_ / "non_existent_parent" / "dest.txt";
 
     EXPECT_FALSE(safe_hard_link_or_copy(source, dest));
 }
 
-TEST_F(FilesystemUtilsTest, SafeRename_ReturnsFalseWhenDestParentDoesNotExist) {
+TEST_F(FilesystemUtilsTest, CPU_SafeRename_ReturnsFalseWhenDestParentDoesNotExist) {
     std::filesystem::path source = create_test_file("source.txt");
     std::filesystem::path dest = temp_dir_ / "non_existent_parent" / "dest.txt";
 
@@ -583,7 +583,7 @@ TEST_F(FilesystemUtilsTest, SafeRename_ReturnsFalseWhenDestParentDoesNotExist) {
 }
 
 // Test that verifies operations work on symlinks (if supported)
-TEST_F(FilesystemUtilsTest, SafeOperations_HandleSymlinks) {
+TEST_F(FilesystemUtilsTest, CPU_SafeOperations_HandleSymlinks) {
     std::filesystem::path target = create_test_file("symlink_target.txt", "symlinked content");
     std::filesystem::path link = temp_dir_ / "symlink";
 
@@ -611,7 +611,7 @@ TEST_F(FilesystemUtilsTest, SafeOperations_HandleSymlinks) {
 // sync_filesystem Tests
 // ============================================================================
 
-TEST_F(FilesystemUtilsTest, SyncFilesystem_SyncsDirectory) {
+TEST_F(FilesystemUtilsTest, CPU_SyncFilesystem_SyncsDirectory) {
     // Create a directory and a file within it
     std::filesystem::path test_dir = create_test_directory("sync_test_dir");
     std::filesystem::path test_file = test_dir / "sync_test_file.txt";
@@ -630,7 +630,7 @@ TEST_F(FilesystemUtilsTest, SyncFilesystem_SyncsDirectory) {
     EXPECT_TRUE(std::filesystem::exists(test_file));
 }
 
-TEST_F(FilesystemUtilsTest, SyncFilesystem_SyncsFile) {
+TEST_F(FilesystemUtilsTest, CPU_SyncFilesystem_SyncsFile) {
     // Create a test file
     std::filesystem::path test_file = create_test_file("sync_test.txt", "content to sync");
 
@@ -641,7 +641,7 @@ TEST_F(FilesystemUtilsTest, SyncFilesystem_SyncsFile) {
     EXPECT_TRUE(std::filesystem::exists(test_file));
 }
 
-TEST_F(FilesystemUtilsTest, SyncFilesystem_HandlesEmptyParentPath) {
+TEST_F(FilesystemUtilsTest, CPU_SyncFilesystem_HandlesEmptyParentPath) {
     // Test with a relative path that has no directory component
     // This should not crash when trying to get parent_path()
     std::filesystem::path relative_file = "relative_test_file.txt";
@@ -660,7 +660,7 @@ TEST_F(FilesystemUtilsTest, SyncFilesystem_HandlesEmptyParentPath) {
     std::filesystem::remove(relative_file);
 }
 
-TEST_F(FilesystemUtilsTest, SyncFilesystem_HandlesNonExistentPath) {
+TEST_F(FilesystemUtilsTest, CPU_SyncFilesystem_HandlesNonExistentPath) {
     // Test with a non-existent path - on Linux, tries to open parent directory
     // and falls back to sync() if that also fails. This is best-effort sync.
     std::filesystem::path non_existent = temp_dir_ / "definitely_does_not_exist" / "subdir";
@@ -673,7 +673,7 @@ TEST_F(FilesystemUtilsTest, SyncFilesystem_HandlesNonExistentPath) {
 // remove_empty_parent_directories Tests
 // ============================================================================
 
-TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_RemovesEmptyDirs) {
+TEST_F(FilesystemUtilsTest, CPU_RemoveEmptyParentDirectories_RemovesEmptyDirs) {
     // Create a guard file in temp_dir_ to prevent it from becoming empty
     // (which would cause the function to try removing temp_dir_ itself)
     create_test_file("guard.txt", "prevents temp_dir_ removal");
@@ -718,7 +718,7 @@ TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_RemovesEmptyDirs) {
     }
 }
 
-TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_StopsAtNonEmpty) {
+TEST_F(FilesystemUtilsTest, CPU_RemoveEmptyParentDirectories_StopsAtNonEmpty) {
     // Create a nested structure with a file at level b
     std::filesystem::path dir_a = create_test_directory("cleanup_b");
     std::filesystem::path dir_b = dir_a / "b";
@@ -740,7 +740,7 @@ TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_StopsAtNonEmpty) {
     EXPECT_FALSE(std::filesystem::exists(dir_d));
 }
 
-TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_HandlesNonExistentPath) {
+TEST_F(FilesystemUtilsTest, CPU_RemoveEmptyParentDirectories_HandlesNonExistentPath) {
     // Test with a non-existent path - should not crash
     std::filesystem::path non_existent = temp_dir_ / "does_not_exist" / "subdir";
 
@@ -750,7 +750,7 @@ TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_HandlesNonExistentPath)
     EXPECT_EQ(removed, 0);
 }
 
-TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_HandlesSingleEmptyDir) {
+TEST_F(FilesystemUtilsTest, CPU_RemoveEmptyParentDirectories_HandlesSingleEmptyDir) {
     // Test with a single empty directory
     std::filesystem::path single_dir = create_test_directory("single_cleanup");
 
@@ -768,7 +768,7 @@ TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_HandlesSingleEmptyDir) 
     }
 }
 
-TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_HandlesDirWithFiles) {
+TEST_F(FilesystemUtilsTest, CPU_RemoveEmptyParentDirectories_HandlesDirWithFiles) {
     // Test with a directory that has files - should not remove anything
     std::filesystem::path dir_with_file = create_test_directory("with_file");
     create_test_file("with_file/test.txt", "content");
@@ -796,7 +796,7 @@ protected:
     }
 };
 
-TEST_F(FilesystemUtilsNfsSafetyTest, SafeCreateDirectories) {
+TEST_F(FilesystemUtilsNfsSafetyTest, CPU_SafeCreateDirectories) {
     auto dir = temp_dir_ / "nfs_test" / "nested" / "dir";
     EXPECT_TRUE(safe_create_directories(dir));
     EXPECT_TRUE(std::filesystem::is_directory(dir));
@@ -804,7 +804,7 @@ TEST_F(FilesystemUtilsNfsSafetyTest, SafeCreateDirectories) {
     EXPECT_TRUE(safe_create_directories(dir));
 }
 
-TEST_F(FilesystemUtilsNfsSafetyTest, SafeRemoveFile) {
+TEST_F(FilesystemUtilsNfsSafetyTest, CPU_SafeRemoveFile) {
     auto file = create_test_file("nfs_remove_me.txt");
     EXPECT_TRUE(safe_remove(file));
     EXPECT_FALSE(std::filesystem::exists(file));
@@ -812,13 +812,13 @@ TEST_F(FilesystemUtilsNfsSafetyTest, SafeRemoveFile) {
     EXPECT_TRUE(safe_remove(file));
 }
 
-TEST_F(FilesystemUtilsNfsSafetyTest, SafeRemoveEmptyDirectory) {
+TEST_F(FilesystemUtilsNfsSafetyTest, CPU_SafeRemoveEmptyDirectory) {
     auto dir = create_test_directory("nfs_empty_dir");
     EXPECT_TRUE(safe_remove(dir));
     EXPECT_FALSE(std::filesystem::exists(dir));
 }
 
-TEST_F(FilesystemUtilsNfsSafetyTest, SafeRename) {
+TEST_F(FilesystemUtilsNfsSafetyTest, CPU_SafeRename) {
     auto src = create_test_file("nfs_src.txt", "data");
     auto dst = temp_dir_ / "nfs_dst.txt";
     EXPECT_TRUE(safe_rename(src, dst));
@@ -826,7 +826,7 @@ TEST_F(FilesystemUtilsNfsSafetyTest, SafeRename) {
     EXPECT_TRUE(std::filesystem::exists(dst));
 }
 
-TEST_F(FilesystemUtilsNfsSafetyTest, SafeExistsAndQueries) {
+TEST_F(FilesystemUtilsNfsSafetyTest, CPU_SafeExistsAndQueries) {
     auto file = create_test_file("nfs_query.txt", "hello");
     auto dir = create_test_directory("nfs_query_dir");
 
@@ -843,21 +843,21 @@ TEST_F(FilesystemUtilsNfsSafetyTest, SafeExistsAndQueries) {
     EXPECT_TRUE(mtime.has_value());
 }
 
-TEST_F(FilesystemUtilsNfsSafetyTest, SafeDirectoryEntries) {
+TEST_F(FilesystemUtilsNfsSafetyTest, CPU_SafeDirectoryEntries) {
     create_test_file("nfs_dir_a.txt");
     create_test_file("nfs_dir_b.txt");
     auto entries = safe_directory_entries(temp_dir_);
     EXPECT_GE(entries.size(), 2u);
 }
 
-TEST_F(FilesystemUtilsNfsSafetyTest, SafeHardLinkOrCopy) {
+TEST_F(FilesystemUtilsNfsSafetyTest, CPU_SafeHardLinkOrCopy) {
     auto target = create_test_file("nfs_link_target.txt", "link content");
     auto link = temp_dir_ / "nfs_link.txt";
     EXPECT_TRUE(safe_hard_link_or_copy(target, link));
     EXPECT_TRUE(std::filesystem::exists(link));
 }
 
-TEST_F(FilesystemUtilsNfsSafetyTest, RemoveEmptyParentDirectories) {
+TEST_F(FilesystemUtilsNfsSafetyTest, CPU_RemoveEmptyParentDirectories) {
     // Create a guard file in temp_dir_ to prevent it from becoming empty
     // (which would cause the function to try removing temp_dir_ itself)
     create_test_file("nfs_guard.txt", "prevents temp_dir_ removal");
@@ -895,7 +895,7 @@ TEST_F(FilesystemUtilsNfsSafetyTest, RemoveEmptyParentDirectories) {
 // NFS Safety Mode Toggle Tests
 // ============================================================================
 
-TEST(FilesystemUtilsNfsSafetyToggle, NfsSafetyCanBeEnabled) {
+TEST(FilesystemUtilsNfsSafetyToggle, CPU_NfsSafetyCanBeEnabled) {
     // Save original state
     bool original = nfs_safety_enabled();
 
@@ -907,7 +907,7 @@ TEST(FilesystemUtilsNfsSafetyToggle, NfsSafetyCanBeEnabled) {
     set_nfs_safety(original);
 }
 
-TEST(FilesystemUtilsNfsSafetyToggle, NfsSafetyCanBeDisabled) {
+TEST(FilesystemUtilsNfsSafetyToggle, CPU_NfsSafetyCanBeDisabled) {
     // Save original state
     bool original = nfs_safety_enabled();
 
@@ -919,7 +919,7 @@ TEST(FilesystemUtilsNfsSafetyToggle, NfsSafetyCanBeDisabled) {
     set_nfs_safety(original);
 }
 
-TEST(FilesystemUtilsNfsSafetyToggle, NfsSafetyDefaultsToDisabled) {
+TEST(FilesystemUtilsNfsSafetyToggle, CPU_NfsSafetyDefaultsToDisabled) {
     // NFS safety should be disabled by default for performance
     // (This test assumes a fresh process - may not work if other tests ran first)
     // We mainly want to verify the getter/setter work correctly
@@ -938,7 +938,7 @@ TEST(FilesystemUtilsNfsSafetyToggle, NfsSafetyDefaultsToDisabled) {
 // fsync_file Tests
 // ============================================================================
 
-TEST_F(FilesystemUtilsTest, FsyncFile_SyncsExistingFile) {
+TEST_F(FilesystemUtilsTest, CPU_FsyncFile_SyncsExistingFile) {
     // Create a test file
     std::filesystem::path test_file = create_test_file("fsync_test.txt", "content to fsync");
 
@@ -949,7 +949,7 @@ TEST_F(FilesystemUtilsTest, FsyncFile_SyncsExistingFile) {
     EXPECT_TRUE(std::filesystem::exists(test_file));
 }
 
-TEST_F(FilesystemUtilsTest, FsyncFile_HandlesNonExistentFile) {
+TEST_F(FilesystemUtilsTest, CPU_FsyncFile_HandlesNonExistentFile) {
     // Test with a non-existent file - should not crash
     std::filesystem::path non_existent = temp_dir_ / "does_not_exist.txt";
 
@@ -960,7 +960,7 @@ TEST_F(FilesystemUtilsTest, FsyncFile_HandlesNonExistentFile) {
 // Jitter Tests
 // ============================================================================
 
-TEST(FilesystemUtilsConstants, RetryJitterIsWithinBounds) {
+TEST(FilesystemUtilsConstants, CPU_RetryJitterIsWithinBounds) {
     // Test that get_retry_jitter_ms returns values within expected bounds
     for (int i = 0; i < 100; ++i) {
         int jitter = get_retry_jitter_ms();

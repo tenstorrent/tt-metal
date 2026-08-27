@@ -11,12 +11,30 @@ bundled reference return `None` and the comparison is skipped at the call
 site.
 """
 
-from copy import deepcopy
+from copy import copy, deepcopy
 from typing import Optional
 
 import torch
+from transformers.activations import ACT2FN
 
 from models.demos.common.prefill.adapter import PrefillModelAdapter as TestVariant
+
+
+def _build_act_fn(cfg):
+    """The activation an upstream MLP would build for this config.
+
+    Mirrors KimiMLP/KimiBlockSparseMLP rather than going straight to ACT2FN, which has no "situ"
+    entry -- so the override below can name either activation for either half.
+    """
+    if getattr(cfg, "hidden_act", None) == "situ":
+        from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_moe import (
+            SituAndMul,
+            _get_situ_activation_params,
+        )
+
+        beta, linear_beta = _get_situ_activation_params(cfg)
+        return SituAndMul(beta=beta, linear_beta=linear_beta)
+    return ACT2FN[cfg.hidden_act]
 
 
 def run_reference_moe(
@@ -28,8 +46,17 @@ def run_reference_moe(
     shared_expert_weights,
     x,
     latent_weights=None,
+    hidden_act: Optional[str] = None,
+    shared_hidden_act: Optional[str] = None,
 ) -> Optional[torch.Tensor]:
-    """Forward the variant's upstream MoE reference on CPU."""
+    """Forward the variant's upstream MoE reference on CPU.
+
+    ``hidden_act`` overrides the config's GLU activation; ``shared_hidden_act`` overrides it for the
+    shared expert alone. The upstream block picks one activation for routed and shared alike, but the
+    device configures the two halves independently, and this reference is only a fair cross-check if
+    it splits the same way. Every variant passes the same value twice today; the parameter exists so
+    that a device-side split does not silently go unmirrored here.
+    """
     if variant.reference_moe_cls is None:
         return None
     # Test params can override the variant's default MoE dims (expert count, hidden/intermediate size —
@@ -47,7 +74,18 @@ def run_reference_moe(
         # Kimi-K3's routed experts read the latent width, not hidden_size.
         if getattr(cfg, "routed_expert_hidden_size", None) is not None:
             cfg.routed_expert_hidden_size = routed_expert_weights[0]["gate_proj"].shape[1]
+    if hidden_act is not None:
+        cfg.hidden_act = hidden_act
     moe = variant.reference_moe_cls(cfg)
+    # The shared expert reads hidden_act off the config object it was handed, so giving it a copy
+    # with a different activation retargets that half only.
+    if shared_hidden_act is not None and shared_hidden_act != cfg.hidden_act:
+        shared = getattr(moe, "shared_experts", None)
+        assert shared is not None, "shared_hidden_act was given but the reference has no shared expert"
+        shared_cfg = copy(cfg)
+        shared_cfg.hidden_act = shared_hidden_act
+        shared.config = shared_cfg
+        shared.act_fn = _build_act_fn(shared_cfg)
     moe.load_state_dict(
         _pack_reference_moe_state_dict(moe, gate_weights, routed_expert_weights, shared_expert_weights, latent_weights),
         strict=True,

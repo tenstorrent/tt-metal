@@ -673,4 +673,9 @@ private:
 };
 
 }  // namespace detail
+
+// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload.
+// Takes ownership of `program`. When `wait_until_cores_done` is true, enqueue is blocking.
+void LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program, bool wait_until_cores_done);
+
 }  // namespace tt::tt_metal

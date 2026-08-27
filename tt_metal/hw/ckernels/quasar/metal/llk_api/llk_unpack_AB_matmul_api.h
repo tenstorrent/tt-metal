@@ -62,6 +62,31 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
 }
 
 /**
+ * @brief Runtime-transpose overload, signature-compatible with the Wormhole/Blackhole llk_api.
+ *
+ * Quasar takes transpose as a template argument, but the shared Compute API passes it as a runtime
+ * value. This overload absorbs that difference here rather than forcing an arch branch into the
+ * Compute API. Every parameter is required: the template overload above covers the shorter argument lists.
+ *
+ * @param operandA: The input0 operand circular buffer
+ * @param operandB: The input1 operand circular buffer
+ * @param transpose: Transpose flag; only 0 is supported on Quasar (transpose of SrcA is not implemented)
+ * @param ct_dim: number of tiles in the column dimension for input1 of matrix multiply
+ * @param rt_dim: number of tiles in the row dimension for input0 of matrix multiply
+ * @param kt_dim: number of tiles in the common dimension between input0 & input1 of matrix multiply
+ */
+__attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
+    llk_unpack_AB_matmul_init<false /*TRANSPOSE_EN*/>(operandA, operandB, ct_dim, rt_dim, kt_dim);
+}
+
+/**
  *
  * @brief Performs unpack operation for matrix multiply such that:
  *

@@ -19,6 +19,10 @@
     # Offline-compile hit tests: AllSupportedProducts artifacts must load under the
     # live ETH fast-dispatch build key without JIT (#53160).
     ./build/test/tt_metal/unit_tests_api --gtest_filter='*Precompiled*'
+    if [ "$ARCH_NAME" = "wormhole_b0" ]; then
+      TT_METAL_TRACE_ALLOC_TRACKING=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshCQSingleCardFixture.TraceAllocationTracker*'
+      TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshCQSingleCardFixture.TraceAllocationTracker*'
+    fi
   skus:
     wh_n150_civ2:
       timeout: 10

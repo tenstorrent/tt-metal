@@ -159,13 +159,13 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 }
 
 
-def resolve_mesh_preset(mesh_device: ttnn.MeshDevice, *, required: bool = True) -> dict:
+def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -> dict:
     """The measured defaults for this mesh shape, or `{}` when unlisted and `required` is False.
 
     An unlisted shape is only an error when something is left to the preset to fill in; a caller that
     passes every parallel setting explicitly is running an untuned shape deliberately.
     """
-    shape = tuple(mesh_device.shape)
+    shape = tuple(mesh_shape)
     preset = _PRESETS_BH.get(shape)
     if preset is None:
         if not required:
@@ -264,7 +264,7 @@ class MiniMaxH3Pipeline:
         # documents. `coresident` is residency rather than parallelism and has a safe default, so it
         # does not hold the hatch shut for callers that cannot pass it.
         supplied = (tp_axis, sp_axis, num_links, topology)
-        preset = resolve_mesh_preset(mesh_device, required=any(v is None for v in supplied))
+        preset = resolve_mesh_preset(tuple(mesh_device.shape), required=any(v is None for v in supplied))
         tp_axis = preset["tp_axis"] if tp_axis is None else tp_axis
         sp_axis = preset["sp_axis"] if sp_axis is None else sp_axis
         num_links = preset["num_links"] if num_links is None else num_links

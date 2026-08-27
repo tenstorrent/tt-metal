@@ -97,7 +97,9 @@ download_logs_for_all_jobs() {
         # https://github.com/tenstorrent/tt-metal/issues/12966
         # We bypass any log download that returned a non-zero exit code so the downloader doesn't crash midway.
         # williamly: We may want to check http status code for robustness in the future again but it may be costly in terms of api calls used.
-        gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || true
+        # We output escape sequences, gh cli >= 2.97.0 requires --allow-escape-sequences else it fails. Fall back to regular call for older images.
+        gh api --allow-escape-sequences /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || \
+            gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || true
 
         # Download annotations for failed jobs (failure reason) and for CIv2 runner jobs.
         # CIv2 runners emit node-name and card-serial notice annotations at job start

@@ -302,13 +302,11 @@ void kernel_main() {
             // Start Local Reduce
             dfb_input_mask.wait_front(mask_tiles_per_group);
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                uint32_t out_block_h_actual, out_block_hw_actual;
+                uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
                 } else {
                     out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
                 }
 #ifdef TILIZE_IN
                 // Append this out-block; no pop, so the whole group stays available.
@@ -421,13 +419,11 @@ void kernel_main() {
             // Start Variance Calc
             // Start Local Reduce
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                uint32_t out_block_h_actual, out_block_hw_actual;
+                uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
                 } else {
                     out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
                 }
                 uint32_t row_tile_base = out_block_index * out_block_h_normal;
 
@@ -436,12 +432,15 @@ void kernel_main() {
                 dfb_in0.wait_front(out_block_hw_normal);
 #endif
                 // x - E[x]
-                sub_bcast_scalar_init(dfb_input_id, dfb_ex_global_id);
                 // fp32: reset both srcs so fp32 input/mean aren't read through the stale bf16 scaler format.
+                // The reconfig has to precede the init: the init's LLK assert checks that the unpack config
+                // registers already describe these operands. (The MOP is built from the init's static
+                // arguments; the registers themselves are consumed later, by UNPACR.)
                 if constexpr (enable_fp32_reconfig) {
                     reconfig_data_format_srca(dfb_input_id);
                     reconfig_data_format_srcb(dfb_ex_global_id);
                 }
+                sub_bcast_scalar_init(dfb_input_id, dfb_ex_global_id);
 
                 dfb_xmm.reserve_back(out_block_hw_normal);
                 dfb_ex_global.wait_front(1);
@@ -588,12 +587,12 @@ void kernel_main() {
             // the real rows; no back-correction needed.
             // (Var + eps)
             tile_regs_acquire();
-            add_init(dfb_ex2_global_id, dfb_eps_id);
             // fp32: reset both srcs so fp32 variance / bf16 eps aren't read through the stale square/reduce format.
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_ex2_global_id);
                 reconfig_data_format_srcb(dfb_eps_id);
             }
+            add_init(dfb_ex2_global_id, dfb_eps_id);
             add_tiles(dfb_ex2_global_id, dfb_eps_id, 0, 0, dst0);
             tile_regs_wait();
             // 1/[sqrt(Var + eps)]
@@ -614,25 +613,23 @@ void kernel_main() {
             uint32_t out_block_h_offset = 0;
             // Start Final Val Calc
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                uint32_t out_block_h_actual, out_block_hw_actual;
+                uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
                 } else {
                     out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
                 }
 
 #ifndef TILIZE_IN
                 dfb_in0.wait_front(out_block_hw_normal);
 #endif
                 // x - E[x]
-                sub_bcast_scalar_init(dfb_input_id, dfb_ex_global_id);
                 // fp32: reset both srcs so fp32 input/mean aren't read through the stale rsqrt/eps format.
                 if constexpr (enable_fp32_reconfig) {
                     reconfig_data_format_srca(dfb_input_id);
                     reconfig_data_format_srcb(dfb_ex_global_id);
                 }
+                sub_bcast_scalar_init(dfb_input_id, dfb_ex_global_id);
                 dfb_xmm.reserve_back(out_block_hw_normal);
                 dfb_ex_global.wait_front(1);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
@@ -699,12 +696,12 @@ void kernel_main() {
 
                 // (x - Ex) * 1/[sqrt(Var + eps)]
                 index_h_offset = 0;
-                mul_bcast_scalar_init(dfb_x_id, dfb_ex2pe_id);
                 // fp32: reset both srcs so fp32 x/rstd aren't read through the stale mask/eps format.
                 if constexpr (enable_fp32_reconfig) {
                     reconfig_data_format_srca(dfb_x_id);
                     reconfig_data_format_srcb(dfb_ex2pe_id);
                 }
+                mul_bcast_scalar_init(dfb_x_id, dfb_ex2pe_id);
                 dfb_xmm.reserve_back(out_block_hw_normal);
                 dfb_ex2pe.wait_front(1);
                 dfb_x.wait_front(out_block_hw_normal);
@@ -815,13 +812,13 @@ void kernel_main() {
                     for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
                             if (apply_gamma_beta[j]) {
-                                mul_bcast_rows_init(dfb_reread_write_out_id, dfb_gamma_id);
                                 // fp32: reset both srcs so bf16 gamma isn't read through the reread stage's fp32
                                 // format.
                                 if constexpr (enable_fp32_reconfig) {
                                     reconfig_data_format_srca(dfb_reread_write_out_id);
                                     reconfig_data_format_srcb(dfb_gamma_id);
                                 }
+                                mul_bcast_rows_init(dfb_reread_write_out_id, dfb_gamma_id);
                             } else {
                                 copy_tile_init(dfb_reread_write_out_id);
                             }
@@ -854,12 +851,12 @@ void kernel_main() {
                     for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
                             if (apply_gamma_beta[j]) {
-                                add_bcast_rows_init(dfb_inbeta_id, dfb_beta_id);
                                 // fp32: reset both srcs so bf16 beta isn't read through the fp32 dfb_inbeta format.
                                 if constexpr (enable_fp32_reconfig) {
                                     reconfig_data_format_srca(dfb_inbeta_id);
                                     reconfig_data_format_srcb(dfb_beta_id);
                                 }
+                                add_bcast_rows_init(dfb_inbeta_id, dfb_beta_id);
                             } else {
                                 copy_tile_init(dfb_inbeta_id);
                             }

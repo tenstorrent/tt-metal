@@ -113,8 +113,18 @@ struct BfdAllocatorState
     bool initialized;                                                    // lazy init: globals are bss zero-init only, no dynamic init on device
 };
 
-// One instance per TRISC binary (each TRISC compiles its own image with COMPILE_FOR_TRISC).
-inline BfdAllocatorState bfd_state; // zero-init; next initialized lazily to the partition base
+// One instance per hardware TRISC thread (one per Neo and TRISC role). thread_local gives each Neo's
+// TRISC its own allocator, matching the per-TRISC partitioning of each Neo's BFD table. A
+// single shared instance races the id allocator two ways when num_threads > 1 (see tt-llk#1678):
+// an unfenced read-modify-write on next hands the same id to two threads, and the unfenced lazy
+// init lets one role hand out ids from another role's partition. Mirrors trisc::dest_register_offset:
+// ENV_LLK_INFRA (standalone LLK infra, no firmware TU) uses a plain static; the metal build
+// declares it extern thread_local and defines it in firmware (tt_metal/hw/firmware/src/tt-2xx/trisc.cc).
+#ifdef ENV_LLK_INFRA
+static BfdAllocatorState bfd_state; // zero-init; next initialized lazily to the partition base
+#else
+extern thread_local BfdAllocatorState bfd_state; // defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc
+#endif
 
 /**
  * @brief Allocate the next buffer descriptor id for this thread's partition and record it as the

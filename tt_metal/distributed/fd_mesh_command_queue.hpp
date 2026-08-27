@@ -51,6 +51,14 @@ private:
         ttsl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+    // Workload dispatch utility functions
+    // Write dispatch commands associated with running a program on a Virtual Mesh subgrid
+    void write_program_cmds_to_subgrid(
+        const MeshCoordinateRange& sub_grid,
+        ProgramCommandSequence& program_cmd_seq,
+        bool stall_first,
+        bool stall_before_program,
+        std::unordered_set<uint32_t>& chip_ids_in_workload);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
     // must be sent to this subgrid to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signal sequences to
