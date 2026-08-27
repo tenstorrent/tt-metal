@@ -176,13 +176,13 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, dtype, error_
     ttnn_errored = False
     ttnn_error_msg = ""
     if error_msg:
-        with expect_error(RuntimeError, error_msg) as exc_info:
+        with expect_error(RuntimeError, error_msg):
             if dim is not None:
                 ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
             else:
                 ttnn_result = ttnn_op(ttnn_tensor)
         ttnn_errored = True
-        ttnn_error_msg = str(exc_info.value)
+        ttnn_error_msg = error_msg
     else:
         try:
             if dim is not None:
