@@ -10,12 +10,11 @@ namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu {
 
 ttnn::Tensor moe_fused_swiglu(
     const ttnn::Tensor& activations,
-    const ttnn::Tensor& w_gate,
-    const ttnn::Tensor& w_up,
-    const ttnn::Tensor& w_down,
+    const std::vector<ttnn::Tensor>& w_gates,
+    const std::vector<ttnn::Tensor>& w_ups,
+    const std::vector<ttnn::Tensor>& w_downs,
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
-    uint32_t local_expert_id,
     const std::optional<uint32_t>& input_m_tiles,
     const std::optional<tt::tt_metal::DataType>& dtype,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
@@ -26,6 +25,14 @@ ttnn::Tensor moe_fused_swiglu(
     bool read_x_at_offset,
     RoutedExpertActivation activation) {
     constexpr uint32_t TILE = 32;
+    TT_FATAL(!w_gates.empty(), "moe_fused_swiglu: at least one local expert is required");
+    TT_FATAL(
+        w_gates.size() == w_ups.size() && w_gates.size() == w_downs.size(),
+        "moe_fused_swiglu: gate/up/down lists must have one entry per local expert ({}, {}, {})",
+        w_gates.size(),
+        w_ups.size(),
+        w_downs.size());
+    const uint32_t experts_per_chip = static_cast<uint32_t>(w_gates.size());
     const uint32_t capacity_tiles = activations.padded_shape()[-2] / TILE;
     const uint32_t m_tiles = input_m_tiles.value_or(capacity_tiles);
     const auto device_grid = activations.device()->compute_with_storage_grid_size();
@@ -64,12 +71,12 @@ ttnn::Tensor moe_fused_swiglu(
 
     return ttnn::prim::moe_fused_swiglu(
         activations,
-        w_gate,
-        w_up,
-        w_down,
+        w_gates,
+        w_ups,
+        w_downs,
         counts,
         global_expert_idx_table,
-        local_expert_id,
+        experts_per_chip,
         m_tiles,
         grid_x,
         grid_y,

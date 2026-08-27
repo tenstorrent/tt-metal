@@ -122,12 +122,11 @@ def _run_case(device, weights, counts, expert_ids, compute_config, count):
     op = ttnn.experimental.deepseek_prefill.moe_fused_swiglu
     common_args = (
         activations,
-        weights[0],
-        weights[1],
-        weights[2],
+        [weights[0]],
+        [weights[1]],
+        [weights[2]],
         counts,
         expert_ids,
-        0,
     )
     common_kwargs = {
         "input_m_tiles": count // TILE,

@@ -131,10 +131,11 @@ def test_fused_placement_and_unified_scale_sweep(device, emb, hidden, expect_err
         for placement, weights in (("interleaved", interleaved_weights), ("nd", nd_weights)):
             output = ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
                 x,
-                *weights,
+                [weights[0]],
+                [weights[1]],
+                [weights[2]],
                 counts,
                 expert_ids,
-                0,
                 input_m_tiles=COUNT // TILE,
                 compute_kernel_config=config,
                 core_grid=GRID,

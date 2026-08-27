@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 
@@ -15,18 +16,23 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu {
 
-// Fused routed-expert SwiGLU using a rectangular reduce-scatter and resident-or-streamed W_down
-// schedule. By default the complete compute-with-storage grid is used; core_grid selects an
-// explicit rectangular prefix. The actual token count remains device-resident:
-// counts[global_expert_idx_table[local_expert_id]].
+// Fused routed-expert SwiGLU over ALL local experts in ONE device program: the reader, writer and
+// compute kernels loop the experts_per_chip local experts, resolving each one's global id, token
+// count and region offset device-side. Uses a rectangular reduce-scatter and a resident-or-streamed
+// W_down schedule. By default the complete compute-with-storage grid is used; core_grid selects an
+// explicit rectangular prefix. Every token count stays device-resident:
+// counts[global_expert_idx_table[e]] — no host sync, no per-expert dispatch.
+//
+// An expert whose count is zero costs no CB traffic, no collective round and no semaphore: the
+// skip is uniform across the grid, so a masked counts vector is a valid way to route a subset of
+// experts to this op and the rest elsewhere.
 ttnn::Tensor moe_fused_swiglu(
     const ttnn::Tensor& activations,
-    const ttnn::Tensor& w_gate,
-    const ttnn::Tensor& w_up,
-    const ttnn::Tensor& w_down,
+    const std::vector<ttnn::Tensor>& w_gates,
+    const std::vector<ttnn::Tensor>& w_ups,
+    const std::vector<ttnn::Tensor>& w_downs,
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
-    uint32_t local_expert_id,
     const std::optional<uint32_t>& input_m_tiles = std::nullopt,
     const std::optional<tt::tt_metal::DataType>& dtype = std::nullopt,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,

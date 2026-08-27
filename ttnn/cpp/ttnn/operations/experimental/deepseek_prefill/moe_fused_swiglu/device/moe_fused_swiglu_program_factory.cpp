@@ -123,7 +123,7 @@ std::vector<uint32_t> make_reader_ct(
     return {
         activations_are_row_major ? 0u : 1u,
         operation_arguments.m_tiles,
-        operation_arguments.local_expert_id,
+        operation_arguments.experts_per_chip,
         blocking.emb_t,
         blocking.hid_t,
         blocking.kr_pad,
@@ -193,6 +193,7 @@ std::vector<uint32_t> make_reader_ct(
 
 std::vector<uint32_t> make_writer_ct(
     const geo::Blocking& blocking,
+    uint32_t experts_per_chip,
     bool phase_alias,
     bool direct_write,
     uint32_t output_m_tiles,
@@ -202,6 +203,7 @@ std::vector<uint32_t> make_writer_ct(
     uint32_t wg_shard_w,
     uint32_t wd_shard_w) {
     return {
+        experts_per_chip,
         blocking.emb_t,
         blocking.hid_t,
         blocking.kr_pad,
@@ -260,8 +262,10 @@ std::vector<uint32_t> make_writer_ct(
     };
 }
 
-std::vector<uint32_t> make_compute_ct(const geo::Blocking& blocking, bool activations_are_row_major) {
+std::vector<uint32_t> make_compute_ct(
+    const geo::Blocking& blocking, uint32_t experts_per_chip, bool activations_are_row_major) {
     return {
+        experts_per_chip,
         geo::M_BLOCK,
         blocking.kr_pad,
         blocking.hn_pad,
@@ -288,6 +292,7 @@ std::vector<uint32_t> make_compute_ct(const geo::Blocking& blocking, bool activa
         geo::ELTWISE_BLK,
         geo::DEST_LIMIT,
         blocking.gather_pages,
+        blocking.depth_h,
         geo::CB_X_IN,
         geo::CB_X_TILES,
         geo::CB_X_STAGE,
@@ -322,9 +327,9 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     const CoreRangeSet all_cores{CoreRange({0, 0}, {hgroups - 1, kgroups - 1})};
 
     const uint32_t emb = tensor_arguments.activations.logical_shape()[-1];
-    const uint32_t hidden = tensor_arguments.w_gate.logical_shape()[-1];
+    const uint32_t hidden = tensor_arguments.w_gates[0].logical_shape()[-1];
     const bool activations_are_row_major = tensor_arguments.activations.layout() == Layout::ROW_MAJOR;
-    const DataFormat weight_format = datatype_to_dataformat_converter(tensor_arguments.w_gate.dtype());
+    const DataFormat weight_format = datatype_to_dataformat_converter(tensor_arguments.w_gates[0].dtype());
     const DataFormat output_format = datatype_to_dataformat_converter(output.dtype());
     const DataFormat activation_format = datatype_to_dataformat_converter(tensor_arguments.activations.dtype());
     const uint32_t weight_tile = tile_size(weight_format);
@@ -412,12 +417,15 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         }
     }
 
+    // Every expert shares expert 0's layout (the device operation validates it), so ONE accessor
+    // layout descriptor per role serves the whole loop and only the base address varies.
     const uint32_t wg = [&]() {
-        const uint32_t gate_width = geo::nd_shard_n_tiles(tensor_arguments.w_gate);
-        const uint32_t up_width = geo::nd_shard_n_tiles(tensor_arguments.w_up);
+        const uint32_t gate_width = geo::nd_shard_n_tiles(tensor_arguments.w_gates[0]);
+        const uint32_t up_width = geo::nd_shard_n_tiles(tensor_arguments.w_ups[0]);
         return gate_width == up_width ? gate_width : 0u;
     }();
-    const uint32_t wd = geo::nd_shard_n_tiles(tensor_arguments.w_down);
+    const uint32_t wd = geo::nd_shard_n_tiles(tensor_arguments.w_downs[0]);
+    const uint32_t experts_per_chip = operation_arguments.experts_per_chip;
 
     auto reader_ct = make_reader_ct(
         blocking,
@@ -438,8 +446,8 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     append(reader_ct, h_mcast_ct);
     for (auto* buffer :
          {tensor_arguments.activations.buffer(),
-          tensor_arguments.w_gate.buffer(),
-          tensor_arguments.w_down.buffer(),
+          tensor_arguments.w_gates[0].buffer(),
+          tensor_arguments.w_downs[0].buffer(),
           tensor_arguments.counts.buffer(),
           tensor_arguments.global_expert_idx_table.buffer(),
           start_tensor.buffer()}) {
@@ -448,6 +456,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
 
     auto writer_ct = make_writer_ct(
         blocking,
+        experts_per_chip,
         phase_alias,
         direct_write,
         output.padded_shape()[-2] / geo::TILE,
@@ -456,10 +465,10 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         output_tile,
         wg,
         wd);
-    for (auto* buffer : {tensor_arguments.w_up.buffer(), output.buffer(), tensor_arguments.w_down.buffer()}) {
+    for (auto* buffer : {tensor_arguments.w_ups[0].buffer(), output.buffer(), tensor_arguments.w_downs[0].buffer()}) {
         TensorAccessorArgs(buffer).append_to(writer_ct);
     }
-    auto compute_ct = make_compute_ct(blocking, activations_are_row_major);
+    auto compute_ct = make_compute_ct(blocking, experts_per_chip, activations_are_row_major);
 
     KernelDescriptor::Defines dataflow_defines{{"H_MCAST_POSTED", geo::H_MCAST_POSTED ? "1" : "0"}};
     KernelDescriptor::Defines compute_defines;
@@ -515,11 +524,11 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             const auto h_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, 0, hgroups - 1, kgroups - 1);
             reader_args.reserve(
                 17 + 2 * kgroups + x_mcast_args.size() + h_mcast_args.size() +
-                h_group_rect_args[y / blocking.mgroup_rows].size());
+                h_group_rect_args[y / blocking.mgroup_rows].size() + 2u * experts_per_chip);
             reader_args.push_back(0u);  // reserved runtime slot
             reader_args.push_back(tensor_arguments.activations.buffer());
-            reader_args.push_back(tensor_arguments.w_gate.buffer());
-            reader_args.push_back(tensor_arguments.w_down.buffer());
+            reader_args.push_back(tensor_arguments.w_gates[0].buffer());
+            reader_args.push_back(tensor_arguments.w_downs[0].buffer());
             reader_args.push_back(tensor_arguments.counts.buffer());
             reader_args.push_back(tensor_arguments.global_expert_idx_table.buffer());
             reader_args.push_back(blocking.kr_sizes[y]);
@@ -543,14 +552,23 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             for (const uint32_t arg : h_group_rect_args[y / blocking.mgroup_rows]) {
                 reader_args.push_back(arg);
             }
+            // Per-expert weight bases, role-major, at the END of the list: every earlier offset the
+            // kernels derive from HGROUPS/KGROUPS stays where it was, so only one new constexpr
+            // offset per kernel tracks this table.
+            for (const auto& w_gate : tensor_arguments.w_gates) {
+                reader_args.push_back(w_gate.buffer());
+            }
+            for (const auto& w_down : tensor_arguments.w_downs) {
+                reader_args.push_back(w_down.buffer());
+            }
             reader_descriptor.emplace_runtime_args(core, reader_args);
 
             KernelDescriptor::RTArgList writer_args;
-            writer_args.reserve(17 + 2 * kgroups + 4);
+            writer_args.reserve(17 + 2 * kgroups + 4 + 2u * experts_per_chip);
             writer_args.push_back(0u);  // reserved runtime slot
-            writer_args.push_back(tensor_arguments.w_up.buffer());
+            writer_args.push_back(tensor_arguments.w_ups[0].buffer());
             writer_args.push_back(output.buffer());
-            writer_args.push_back(tensor_arguments.w_down.buffer());
+            writer_args.push_back(tensor_arguments.w_downs[0].buffer());
             writer_args.push_back(blocking.kr_sizes[y]);
             writer_args.push_back(blocking.kr_starts[y]);
             writer_args.push_back(blocking.hn_starts[x]);
@@ -572,6 +590,12 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             }
             for (uint32_t arg = 0; arg < 4; ++arg) {
                 writer_args.push_back(h_mcast_noc1_args[arg]);
+            }
+            for (const auto& w_up : tensor_arguments.w_ups) {
+                writer_args.push_back(w_up.buffer());
+            }
+            for (const auto& w_down : tensor_arguments.w_downs) {
+                writer_args.push_back(w_down.buffer());
             }
             writer_descriptor.emplace_runtime_args(core, writer_args);
 
