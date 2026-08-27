@@ -20,11 +20,20 @@ to generate a perf test for", so three runs were spent looking at the model, the
 and the build -- for a pinned dependency. The moment mcp<2 was installed, the very next attempt
 returned a real verdict instead.
 
-TWO RULES:
+WHAT THE PIN DID NOT FIX, 2026-08-27. The identical failure recurred on a box whose venv was built
+from a tree that predated the pin: uv resolved mcp 2.1.1 from claude-agent-sdk's uncapped
+`mcp>=1.23.0` floor, and the file saying `<2` arrived hours later by merge -- a merge changes the
+file, not the venv. A ceiling only helps machines built after it lands, and it holds the tool one
+major behind forever. So the servers were made to run on EITHER major instead, and the requirement
+became a floor.
 
-    1. The version that works is PINNED where people install from, not just in one venv. An upper
-       bound is the whole point -- 2.0.0 was a breaking relocation, and a floor would not have helped.
-    2. "Unavailable" must carry its reason. An agent with no way to RUN what it writes cannot
+THREE RULES:
+
+    1. Every in-process MCP server imports FastMCP under mcp 1.x AND MCPServer under 2.x. This is
+       what replaced the upper bound: compatibility travels with the source, a pin does not.
+    2. The probe checks the SAME PAIR the servers import. Hard-coding one spelling reintroduces the
+       silent fallback with the check as its cause rather than the dependency.
+    3. "Unavailable" must carry its reason. An agent with no way to RUN what it writes cannot
        converge, and reporting that as non-convergence sends the reader after the wrong thing.
 """
 
@@ -36,19 +45,43 @@ _PA = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PA))
 
 
-def test_mcp_is_pinned_below_the_release_that_moved_fastmcp():
+_SERVERS = (
+    _PA / "cc_optimize" / "perf_mcp.py",
+    _PA / "cc_optimize" / "perf_test_mcp.py",
+    _PA.parent.parent.parent / "scripts" / "tt_hw_planner" / "bringup_mcp.py",
+    _PA.parent.parent.parent / "scripts" / "tt_hw_planner" / "e2e_mcp.py",
+)
+
+
+def test_every_in_process_mcp_server_survives_the_fastmcp_relocation():
+    """The compatibility that replaced the pin -- and it has to be in EVERY server, not most.
+
+    perf_mcp.py carried this fallback from the start; the other three did not, which is exactly why
+    a 2.x venv killed the perf-test server while the optimize server kept running and the failure
+    looked model-shaped.
+    """
+    for path in _SERVERS:
+        src = path.read_text()
+        assert "from mcp.server.fastmcp import FastMCP" in src, f"{path.name} lost the mcp 1.x import"
+        assert (
+            "from mcp.server.mcpserver import MCPServer as FastMCP" in src
+        ), f"{path.name} dies at import on mcp >= 2.0"
+
+
+def test_the_requirement_is_a_floor_not_a_ceiling():
+    """An upper bound puts the tool one major behind and only helps machines built after it lands."""
     req = (_PA / "requirements-agent.txt").read_text()
-    m = re.search(r"^mcp>=[\d.]+,<2\s*$", req, re.M)
-    assert m, "mcp is not pinned below 2 in requirements-agent.txt"
+    assert re.search(r"^mcp>=[\d.]+\s*$", req, re.M), "the mcp requirement is not a plain floor"
+    assert not re.search(r"^mcp[^\n]*<2", req, re.M), "the <2 ceiling is back; make the servers compatible instead"
 
 
-def test_the_pin_explains_itself():
-    """A bare `<2` invites someone to relax it on the next dependency sweep."""
+def test_the_requirement_explains_itself():
+    """Without the history, the next dependency sweep re-pins it or drops the fallback."""
     req = (_PA / "requirements-agent.txt").read_text()
     i = req.index("mcp>=")
-    window = req[max(0, i - 700) : i]
-    assert "FastMCP" in window, "nothing records WHY the upper bound exists"
-    assert "did not converge" in window, "the symptom is not recorded, so the pin looks arbitrary"
+    window = req[max(0, i - 900) : i]
+    assert "FastMCP" in window, "nothing records WHAT broke"
+    assert "did not converge" in window, "the symptom is not recorded, so the fallback looks arbitrary"
 
 
 def _launcher():
@@ -57,16 +90,34 @@ def _launcher():
     return src[i : i + 2200]
 
 
+def _probe_source():
+    """The literal the launcher hands to `python -c`."""
+    import ast
+
+    tree = ast.parse((_PA / "agent" / "perf_test_agent.py").read_text())
+    return next(
+        ast.literal_eval(n.value)
+        for n in tree.body
+        if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "_MCP_IMPORT_PROBE"
+    )
+
+
 def test_an_unstartable_server_is_reported_not_swallowed():
     body = _launcher()
-    assert "import mcp.server.fastmcp" in body, "nothing checks that the MCP server can start"
+    assert "_MCP_IMPORT_PROBE" in body, "nothing checks that the MCP server can start"
     assert "cannot start" in body, "the failure is still reported as plain non-convergence"
 
 
+def test_the_probe_accepts_either_mcp_major():
+    """A probe narrower than the servers reports a working server as unavailable."""
+    probe = _probe_source()
+    assert "from mcp.server.fastmcp import FastMCP" in probe
+    assert "from mcp.server.mcpserver import MCPServer as FastMCP" in probe
+
+
 def test_the_message_names_the_fix():
-    """The reader should not have to find the pin themselves."""
+    """The reader should not have to find the dependency themselves."""
     body = _launcher()
-    assert "mcp>=1.0,<2" in body
     assert "requirements-agent.txt" in body
 
 
@@ -80,7 +131,7 @@ def test_a_missing_server_file_is_reported_too():
 def test_the_probe_cannot_hang_the_run():
     """It runs a subprocess on the device-work path; an unbounded one would be a new way to stall."""
     body = _launcher()
-    i = body.index("import mcp.server.fastmcp")
+    i = body.index("_MCP_IMPORT_PROBE")
     assert "timeout=" in body[i : i + 300], "the import probe has no timeout"
 
 
