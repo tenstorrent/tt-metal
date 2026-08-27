@@ -330,6 +330,9 @@ class MiniMaxH3Pipeline:
         # `export_video_audio_yuv` instead of a `(1, 3, T, H, W)` float tensor. Off by default because
         # it changes this method's return type, and every quality gate reads the float one.
         self.vae_output_type = "float"  # "float" | "uint8" | "yuv420"
+        # Decode tiles per device per wave (batch dim). >1 cuts wave count at the cost of activation
+        # memory; set before the first decode. 1 is the original one-tile-per-device schedule.
+        self.vae_waves_per_device = 2
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
@@ -1086,6 +1089,7 @@ class MiniMaxH3Pipeline:
                 # and the uint8 cast take, and `_decode_video` is left with at most a range shift.
                 pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD) if unit_pixels else None,
                 readback_uint8=self.vae_output_type == "uint8",
+                waves_per_device=self.vae_waves_per_device,
             )
             state = self._read_safetensors("vae")
             self._vae.load_decoder_state(state)
