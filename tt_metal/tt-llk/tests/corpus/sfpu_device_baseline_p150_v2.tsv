@@ -7,7 +7,8 @@
 # update is a REVIEWED manual step (review the run's KERNEL-DELTA.md alongside).
 # Pin anchors (conf_lint R5b/R6b enforce these against sweep_2x2.conf):
 #  CANDIDATE 29. 45ba7169920924fd6ebeb6eeb3766156b413dbf895e091b53603bed1e35e7d79 (UNRATIFIED SUPERSEDED; never a baseline anchor) — proposed pin 29 (2026-08-25)
-#  35. 133619cf6b77005e275a6a551ed4e39ddb0e174746dab37210f051a5f91f8f0c (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 35 = pin 34 + HY park-ordering keep gates (2026-08-27)
+#  36. 86fcd08e1babc0878bafb9f6eb33d4d8abac9b0a41d9c3fc744d285e148b136c (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 36 = pin 35 + morning flip pair HZ/IA (2026-08-27)
+#  35. 133619cf6b77005e275a6a551ed4e39ddb0e174746dab37210f051a5f91f8f0c (superseded by 36; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 35 = pin 34 + HY park-ordering keep gates (2026-08-27)
 #  34. e6cf49e9bd832fab780236d681bcbf60a51f87740a71c1e68b230f20f65521ca (superseded by 35; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 34 = pin 33 + unlock pair HT/HS (2026-08-26)
 #  33. 1f0f5a44a00104522b978f56bf7372ea76a225255dfc040c7f18c55a76027926 (superseded by 34; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 33 = pin 32 + HR crossloop-cc-peel (2026-08-26)
 #  32. 4943ca7fe17642e935f32aee81c9496f5a9a754e86e4497d5f3b4dc93d39f701 (superseded by 33; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 32 = pin 31 + ordering/tier pair HN/HO (2026-08-26)
