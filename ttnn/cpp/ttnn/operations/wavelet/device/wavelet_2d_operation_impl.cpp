@@ -532,8 +532,7 @@ template <typename Scheme>
         Lwt2DRouteDomainPolicy::kExact);
     validate_lwt_2d_tiling_contract(plan.tiling);
     TT_FATAL(
-        plan.input_height <= static_cast<size_t>(std::numeric_limits<int32_t>::max() / 2) &&
-            plan.input_width <= static_cast<size_t>(std::numeric_limits<int32_t>::max() / 2),
+        plan.input_height <= kMax2DLogicalExtent && plan.input_width <= kMax2DLogicalExtent,
         "2D LWT input dimensions exceed the signed boundary-index range");
     TT_FATAL(
         plan.allocated_l1_bytes <= available_l1_bytes,
@@ -561,8 +560,7 @@ template <typename Scheme>
         architecture_policy.inverse_2d_coordination_penalty_cycles_per_core);
     TT_FATAL(!plan.chunks.empty(), "2D ILWT requires at least one planned chunk");
     TT_FATAL(
-        plan.output_height <= static_cast<size_t>(std::numeric_limits<int32_t>::max() / 2) &&
-            plan.output_width <= static_cast<size_t>(std::numeric_limits<int32_t>::max() / 2),
+        plan.output_height <= kMax2DLogicalExtent && plan.output_width <= kMax2DLogicalExtent,
         "2D ILWT output dimensions exceed the signed boundary-index range");
     TT_FATAL(
         plan.allocated_l1_bytes <= available_l1_bytes,
