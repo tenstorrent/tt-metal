@@ -112,8 +112,7 @@ constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 constexpr uint32_t kValidPagesFieldOffset = 6;
 constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 1;
 constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 5;
-constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount =
-    kNeighborReaderTensorDescriptorFieldCount + 1;
+constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount = kNeighborReaderTensorDescriptorFieldCount + 1;
 constexpr uint32_t kNeighborReaderInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborReaderInputTileEndFieldOffset = 3;
 constexpr uint32_t kNeighborReaderInputBatchBaseFieldOffset = 4;
@@ -204,7 +203,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Opt-in two-stage fused readiness: every received shard signals once at its row midpoint and
     // once when complete. Only consumers that interpret the doubled semaphore protocol may enable it.
     bool partial_readiness_enabled = false,
-    RingAttentionRankMapping rank_mapping = {});
+    RingAttentionRankMapping rank_mapping = {},
+    std::optional<Tensor> page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

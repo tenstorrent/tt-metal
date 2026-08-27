@@ -536,7 +536,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t kv_cache_layer_idx,
     bool split_forwarding_enabled,
     bool partial_readiness_enabled,
-    RingAttentionRankMapping rank_mapping) {
+    RingAttentionRankMapping rank_mapping,
+    std::optional<Tensor> page_bundle_indices,
+    uint32_t kv_cache_page_size) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -670,6 +672,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     const bool output_bank_owned_schedule =
+        !page_bundle_indices.has_value() &&
         ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(input_tensor, output_tensor, dim);
     if (partial_readiness_enabled) {
         TT_FATAL(fuse_op, "Partial all-gather readiness requires a fused consumer");
@@ -798,6 +801,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         slot_id.has_value() == kv_actual_isl.has_value(),
         "Ring attention metadata requires slot_id and kv_actual_isl tensors together");
     const bool has_metadata = slot_id.has_value();
+    const bool has_page_bundles = page_bundle_indices.has_value();
     const uint32_t meta_cb_index = tt::CB::c_in3;
     if (has_metadata) {
         const uint32_t meta_cb_page_size_bytes = kv_actual_isl->buffer()->page_size();
@@ -814,6 +818,22 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                     .buffer_index = static_cast<uint8_t>(meta_cb_index),
                     .data_format = tt::DataFormat::RawUInt32,
                     .page_size = meta_cb_page_size_bytes,
+                }}},
+            });
+        }
+    }
+    const uint32_t page_bundle_cb_index = tt::CB::c_in4;
+    if (has_page_bundles) {
+        const uint32_t table_bytes = static_cast<uint32_t>(page_bundle_indices->logical_volume() * sizeof(uint16_t));
+        const uint32_t page_bundle_cb_page_size_bytes = round_up_to_mul32(table_bytes);
+        for (const auto& core_ranges : {sender_forward_core_ranges, sender_backward_core_ranges}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = page_bundle_cb_page_size_bytes,
+                .core_ranges = core_ranges,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(page_bundle_cb_index),
+                    .data_format = tt::DataFormat::RawUInt16,
+                    .page_size = page_bundle_cb_page_size_bytes,
                 }}},
             });
         }
@@ -856,6 +876,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
             kPrefetchPackets,                                   // kPrefetchPackets
+            static_cast<uint32_t>(has_page_bundles),
+            page_bundle_cb_index,
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount,
@@ -871,6 +893,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         if (has_metadata) {
             tt::tt_metal::TensorAccessorArgs(slot_id->buffer()).append_to(args);
             tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer()).append_to(args);
+        }
+        if (has_page_bundles) {
+            tt::tt_metal::TensorAccessorArgs(page_bundle_indices->buffer()).append_to(args);
         }
         return args;
     };
@@ -1009,12 +1034,19 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         for (uint32_t i = 0; i < num_inputs; i++) {
             const auto input_tensor_shape = input_tensor[i].padded_shape();
             const auto output_tensor_shape = output_tensor[i].padded_shape();
-            const uint32_t num_heads = input_tensor_shape[kHeadDimension];
+            const uint32_t num_heads =
+                has_page_bundles ? output_tensor_shape[kHeadDimension] : input_tensor_shape[kHeadDimension];
             // single_batch_head_num_pages is always pages-per-(batch,head); independent of slicing.
-            const uint32_t full_batch_head_size = input_tensor_shape[kBatchDimension] * num_heads;
+            const uint32_t full_batch_head_size =
+                (has_page_bundles ? output_tensor_shape[kBatchDimension] : input_tensor_shape[kBatchDimension]) *
+                num_heads;
 
             const uint32_t input_tensor_Wt = input_tensor_shape[kWidthDimension] / tt::constants::TILE_WIDTH;
-            const uint32_t input_tensor_Ht = input_tensor_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
+            const uint32_t input_tensor_Ht =
+                has_page_bundles
+                    ? static_cast<uint32_t>(
+                          page_bundle_indices->logical_volume() * (kv_cache_page_size / tt::constants::TILE_HEIGHT))
+                    : input_tensor_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
             const uint32_t output_tensor_Wt = output_tensor_shape[kWidthDimension] / tt::constants::TILE_WIDTH;
             const uint32_t output_tensor_Ht = output_tensor_shape[kSequenceDimension] / tt::constants::TILE_HEIGHT;
             TT_ASSERT(!(input_tensor_shape[kWidthDimension] % tt::constants::TILE_WIDTH));
@@ -1057,7 +1089,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 gather_valid_Ht.has_value() ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
                                             : single_batch_head_num_pages;
             tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 6 == valid_pages_per_batch_head
-            tensor_descriptor_args.push_back(placement.link);  // 7 == worker_link
+            tensor_descriptor_args.push_back(placement.link);              // 7 == worker_link
             if (has_metadata) {
                 tensor_descriptor_args.push_back(input_tensor_shape[kBatchDimension]);  // 8 == input_cache_batch_extent
             }
@@ -1075,9 +1107,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const auto emit_worker_runtime_args = [&](const WorkerPlacement& placement, bool is_forward) {
         const auto tensor_descriptor_args = build_tensor_descriptor_args(placement);
         const uint32_t sem_index =
-            is_forward
-                ? ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kForwardSemaphoreIdx
-                : ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kBackwardSemaphoreIdx;
+            is_forward ? ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kForwardSemaphoreIdx
+                       : ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::kBackwardSemaphoreIdx;
         const auto& direction_signaler_cores = is_forward ? forward_signaler_cores : backward_signaler_cores;
         const uint32_t worker_signaler_index = signaler_index(direction_signaler_cores, placement.core);
 
@@ -1099,6 +1130,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             reader_args.push_back(chunk_local_tiles);
             reader_args.push_back(kv_cache_num_layers);
             reader_args.push_back(kv_cache_layer_idx);
+        }
+        if (has_page_bundles) {
+            reader_args.push_back(page_bundle_indices->buffer());
+            reader_args.push_back(kv_cache_num_layers);
+            reader_args.push_back(kv_cache_layer_idx);
+            reader_args.push_back(kv_cache_page_size / tt::constants::TILE_HEIGHT);
         }
         if (fuse_op) {
             std::vector<uint32_t> signaler_args;

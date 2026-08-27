@@ -242,7 +242,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    const std::optional<ttnn::Tensor>& page_bundle_indices,
+    uint32_t kv_cache_page_size) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -288,6 +290,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         // pre-existing behaviour for callers that pass no layer packing.
         kv_cache_num_layers.value_or(1),
         kv_cache_layer_idx.value_or(0),
+        page_bundle_indices,
+        kv_cache_page_size,
         sliding_window_size);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
@@ -319,7 +323,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    const std::optional<ttnn::Tensor>& page_bundle_indices,
+    uint32_t kv_cache_page_size) {
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_kv,
@@ -357,6 +363,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         kv_actual_isl_tensor,
         kv_cache_num_layers.value_or(1),
         kv_cache_layer_idx.value_or(0),
+        page_bundle_indices,
+        kv_cache_page_size,
         std::nullopt);  // sliding_window_size
     return {output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
