@@ -462,6 +462,9 @@ class TtPrefillBlock(LightweightModule):
             hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
             # getattr because every other model config lacks these; None makes TtMoe fall back.
             routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
+            # Absent on the models whose routed-expert shape never favours the composite, so
+            # they keep the single-op path rather than paying a second dispatch for nothing.
+            routed_expert_hybrid_token_threshold=getattr(model_cfg, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None),
             shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
             latent_weights=state_dict.get("latent_weights"),  # None if cache exists
             latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
