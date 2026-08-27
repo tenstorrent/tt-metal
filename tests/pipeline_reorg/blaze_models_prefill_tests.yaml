@@ -144,6 +144,8 @@
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
+    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
@@ -164,6 +166,8 @@
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
+    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
@@ -175,7 +179,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 25
+      timeout: 35
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
