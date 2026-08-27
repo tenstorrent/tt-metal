@@ -13,18 +13,20 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     MathOperation,
+    PerfRunType,
     ReducePool,
     UnpackerEngine,
     format_dict,
 )
 from helpers.logger import logger
 from helpers.param_config import parametrize
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
     TEST_FACE_DIMS,
@@ -220,6 +222,11 @@ def test_sfpu_reduce_quasar(
     input_bounds,
     dimension_combinations,
     reduced_extent,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     """SFPU reduce on Quasar: collapse a Dest block along one axis with SUM, AVG or MAX.
 
@@ -294,10 +301,13 @@ def test_sfpu_reduce_quasar(
         reduce_pool=reduce_pool,
     )
 
-    configuration = TestConfig(
-        "sources/quasar/sfpu_reduce_quasar_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/sfpu_reduce_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             MATH_OP(mathop=mathop, pool_type=reduce_pool),
             generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(),
@@ -306,13 +316,14 @@ def test_sfpu_reduce_quasar(
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt),
             NUM_FACES(4),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -326,11 +337,21 @@ def test_sfpu_reduce_quasar(
             # SFPSWAP's compare orders.
             twos_complement=formats.input_format == DataFormat.Int32,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
-        disable_format_inference=True,
-        compile_time_formats=True,
+        "dest_acc": dest_acc,
+        "unpack_to_dest": True,
+        "disable_format_inference": True,
+        "compile_time_formats": True,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 
@@ -407,37 +428,42 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range):
         reduce_pool=reduce_pool,
     )
 
-    configuration = TestConfig(
-        "sources/quasar/sfpu_reduce_quasar_test.cpp",
-        formats,
-        templates=[
-            MATH_OP(mathop=mathop, pool_type=reduce_pool),
-            generate_input_dim(input_dimensions, input_dimensions),
-            IMPLIED_MATH_FORMAT(),
-            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
-            DEST_SYNC(),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_FACES(4),
-            TEST_FACE_DIMS(),
-            DEST_INDEX(0),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
-            twos_complement=True,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
-        disable_format_inference=True,
-        compile_time_formats=True,
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/sfpu_reduce_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=mathop, pool_type=reduce_pool),
+                generate_input_dim(input_dimensions, input_dimensions),
+                IMPLIED_MATH_FORMAT(),
+                UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
+                DEST_SYNC(),
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_cnt),
+                NUM_FACES(4),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt,
+                tile_count_B=tile_cnt,
+                tile_count_res=tile_cnt,
+                twos_complement=True,
+            ),
+            "dest_acc": dest_acc,
+            "unpack_to_dest": True,
+            "disable_format_inference": True,
+            "compile_time_formats": True,
+        },
     )
     res_from_L1 = configuration.run().result
 
