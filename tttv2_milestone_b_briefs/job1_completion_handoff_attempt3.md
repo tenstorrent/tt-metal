@@ -262,19 +262,39 @@ prefill-after-a-decode is not. Production has the same property. Batch 32 itself
 not blocked - the demo's batch-32 test prefills all 32 slots before any decodes and
 passes.
 
-**This is the first thing to do next**, and here is what to know before trying it.
-The fix is to release the global CB on `activate("prefill")` and recreate it on the
-next `activate("decode")`, behind a config flag, with that test as the oracle. It
-was deliberately **not** attempted here: it changes the mode-switching of the one
-module every qualified decode path depends on, and turning it on would put every
-number in this handoff back in doubt with no budget left to re-take them. Two traps:
+**The obvious fix is already implemented, and hardware refuted it. Do not spend
+that run again.** `Prefetcher2DConfig.release_global_cb_on_prefill` (default False,
+two host tests, an `LLAMA33_70B_GALAXY_RELEASE_GLOBAL_CB` opt-in) releases the
+buffer on the way into prefill and recreates it on the way into decode. On silicon,
+consecutive lines (`logs3/a3_64_batch32_release_traced.log`):
 
-* the recreated buffer must land at the **same L1 address**, or the decode programs
-  already in the ttnn program cache hold stale addresses - that is a silent
-  corruption, not an error;
-* **every** reference has to be dropped. Attempt 1 found that `cleanup()` alone
-  does not free it because the mode contexts still hold handles; `self._global_cb`
-  and `self._contexts["decode"].global_cb` are both live references.
+```text
+[prefetcher] released the global circular buffer on entering prefill
+TT_THROW: Statically allocated circular buffers in program 100 clash with L1
+          buffers on core range [0-0 - 0-3]. L1 buffer allocated at 544832 ...
+```
+
+The release ran - that print is unconditional once the flag is on, and it exists so
+this could not be read ambiguously - and the base address is *identical* to the run
+without it. **Dropping every Python reference to a `global_circular_buffer` does not
+return its L1.** There is no `deallocate` on the type. Attempt 1's "cannot free the
+global circular buffer" is literally true and not a statement about reference
+counting.
+
+**The better hypothesis, and what to try first.** The fault is that a *full-grid*
+prefill program cannot place its circular buffers on the sender columns - and the
+prefill mode plan is currently one sub-device covering the **whole grid**
+(`galaxy_prefill_mode_plan_cores`). Confine it to the **worker** cores and every
+prefill program moves off the sender columns; the buffer's lifetime stops mattering.
+That is the shape every other defect in this milestone turned out to have: a
+placement, not a lifetime.
+
+It costs 20 of 70 cores for prefill, and it changes the grid of every prefill
+program - so prefill 128, prefill 2048, the 80-layer prefill and the accuracy gate
+all need re-taking behind it. Budget for that; the numbers are cheap to re-take now
+that the weight cache is warm (a step-2 gate cycle is ~7 minutes, the accuracy gate
+~16).
+
 
 ## Where attempt 3 stopped, in one paragraph
 
@@ -285,8 +305,9 @@ prefills and decodes real reference tokens inside the reference top-5; the
 Milestone B teacher-forced accuracy gate for Llama passes at top-1 98.04% and
 top-5 100.00%; and the 80-layer demo produces fluent English. Seven defects were
 found and fixed, two of which produced no error of any kind. The one step-3 item
-left is two runners in one process, which is limitation L1's remaining half, named
-and reproduced rather than worked around.
+left is two runners in one process, which is limitation L1's remaining half - named,
+reproduced, and with its obvious fix implemented and *refuted on hardware* so the
+next session starts one option down rather than one option up.
 
 **If you are `mb-qwen`: there is now a Llama baseline to compare against, and it is
 the numbers at the top of this document.** Read `REPORT.md` §A3.5 for the list of
