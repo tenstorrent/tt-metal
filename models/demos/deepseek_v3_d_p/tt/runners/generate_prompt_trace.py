@@ -11,6 +11,13 @@ producer validate device KV against a reference generated for that exact prompt.
 
 MLA models only (DeepSeek / Kimi): the golden is the compressed KVPE
 ``[seq, KV_LORA_RANK + QK_ROPE_HEAD_DIM]`` per layer.
+
+It also writes ``hidden_states/layer_N.safetensors`` and ``n_layers``, which is what the per-layer
+PCC tests read (``load_debug_trace``'s "per-layer format"); ``--no-hidden-states`` writes the
+producer's subset alone. One caveat this cannot fix: the reference here is the same torch/HF path
+those tests would otherwise compare against, so a golden from this script gives plumbing and
+per-layer localisation, NOT independence from the reference implementation. Only a trace recorded
+from a different implementation (vLLM) does that.
 """
 
 import argparse
@@ -53,11 +60,26 @@ def _resolve_model_path(variant) -> Path:
     )
 
 
-def _load_config(model_path: Path, isl: int):
-    config = AutoConfig.from_pretrained(str(model_path), trust_remote_code=True)
-    # Kimi ships a multimodal wrapper; the MLA reference wants the text sub-config.
-    if hasattr(config, "text_config") and hasattr(config.text_config, "hidden_size"):
-        config = config.text_config
+def _load_config(variant, model_path: Path, isl: int):
+    """The config the reference forward runs on.
+
+    Prefers the variant's ``config_builder`` -- the same hook ``conftest._resolve_config_only`` uses
+    -- so a variant needing normalization gets it here too. Without this, the golden is generated
+    from a raw AutoConfig: Mistral Small 4 then has no ``rope_theta`` (AttributeError in rope setup)
+    and, worse, no ``mla_disable_yarn_mscale``, so the reference would bake DeepSeek's mscale**2 =
+    2.2058 softmax scale into the golden -- a wrong golden that every downstream comparison agrees
+    with. Variants without a builder (DeepSeek, Kimi) take the AutoConfig path exactly as before.
+    """
+    builder = variant.config_builder
+    if builder is not None:
+        # Zero-arg by protocol (same as conftest); the builder resolves the checkpoint from
+        # PREFILL_HF_MODEL, i.e. the dir _resolve_model_path already validated.
+        config = builder()
+    else:
+        config = AutoConfig.from_pretrained(str(model_path), trust_remote_code=True)
+        # Kimi ships a multimodal wrapper; the MLA reference wants the text sub-config.
+        if hasattr(config, "text_config") and hasattr(config.text_config, "hidden_size"):
+            config = config.text_config
     config = deepcopy(config)
     # AutoConfig does not populate this; the reference forward path expects it set.
     config.max_seq_len = isl
@@ -103,25 +125,83 @@ def _meta_pe_to_hf(pe: torch.Tensor) -> torch.Tensor:
     return torch.cat([pe[:, 0::2], pe[:, 1::2]], dim=-1)
 
 
-def write_trace_dir(out_dir: Path, token_ids: torch.Tensor, ref_kvpe_list, kv_lora_rank: int) -> Path:
+def write_trace_dir(
+    out_dir: Path,
+    token_ids: torch.Tensor,
+    ref_kvpe_list,
+    kv_lora_rank: int,
+    qk_rope_head_dim: int | None = None,
+    ref_snapshots=None,
+    num_layers: int | None = None,
+    num_real_tokens: int | None = None,
+) -> Path:
+    """Write ``kv_cache/`` always, and ``hidden_states/`` when ``ref_snapshots`` is given.
+
+    The producer validates device KV against ``kv_cache/`` alone. The per-layer PCC tests read
+    decoder outputs from ``hidden_states/layer_i.safetensors`` and take the layer count from
+    ``metadata["n_layers"]``, so a dir written without snapshots serves the producer and makes
+    ``load_debug_trace`` raise on the missing file -- loud, which is the point.
+    """
     out_dir = Path(out_dir)
     (out_dir / "kv_cache").mkdir(parents=True, exist_ok=True)
-    (out_dir / "metadata.json").write_text(json.dumps({"token_ids": token_ids[0].tolist()}))
 
     for i, kvpe in enumerate(ref_kvpe_list):
-        # ref_kvpe_list[i] is the HF DynamicCache key cache for the layer, [1, 1, seq, head_dim].
+        # ref_kvpe_list[i] is the layer's compressed MLA line, [1, 1, seq, kv_lora_rank + rope].
         t = kvpe
         while t.dim() > 2:
             t = t[0]
         t = t.to(torch.float32)
+        # A reference that cached expanded per-head keys arrives here as [seq, head_dim]; the nope
+        # slice would clamp, `pe` would come out empty, and the golden would be quietly the wrong
+        # width. reference_kvpe_for_layer derives the compressed line, so this only fires if that
+        # stops happening -- but it fails silently if unchecked.
+        if qk_rope_head_dim is not None and t.shape[-1] != kv_lora_rank + qk_rope_head_dim:
+            raise SystemExit(
+                f"layer {i}: reference KVPE width {t.shape[-1]} != {kv_lora_rank} + {qk_rope_head_dim}; "
+                "this is not the compressed MLA line the device caches"
+            )
         nope = t[:, :kv_lora_rank]  # compared directly by the producer, written as-is
         pe = _meta_pe_to_hf(t[:, kv_lora_rank:])
         row = torch.cat([nope, pe], dim=-1).contiguous()
         save_file({f"kv_post_transform_layer_{i}": row}, str(out_dir / "kv_cache" / f"layer_{i}.safetensors"))
+
+    meta = {"token_ids": token_ids[0].tolist()}
+    if num_real_tokens is not None:
+        meta["num_real_tokens"] = int(num_real_tokens)
+
+    if ref_snapshots is not None:
+        # ref_snapshots is [embed, layer_0..layer_{n-1}, norm, lm_head]; layer i is at 1 + i.
+        # fp32 like the kv rows above: the snapshots are fp32 and a bf16 golden would put its own
+        # rounding into every PCC (visible on the near-1.0 early layers). Costs ~3 GB at 36L/isl 5120.
+        n = num_layers if num_layers is not None else len(ref_snapshots) - 3
+        (out_dir / "hidden_states").mkdir(parents=True, exist_ok=True)
+        for i in range(n):
+            t = ref_snapshots[1 + i]
+            while t.dim() > 2:
+                t = t[0]
+            save_file(
+                {f"decoder_output_layer_{i}": t.to(torch.float32).contiguous()},
+                str(out_dir / "hidden_states" / f"layer_{i}.safetensors"),
+            )
+        meta["n_layers"] = n
+
+        # The reference's own next token, for the consumer's first-token check. Taken at the last
+        # REAL position: this generator forces right padding, so the final rows are pad tokens whose
+        # argmax is not the model's next token.
+        logits = ref_snapshots[-1]
+        while logits.dim() > 2:
+            logits = logits[0]
+        last_real = (num_real_tokens or logits.shape[0]) - 1
+        meta["next_token_id"] = int(logits[last_real].float().argmax().item())
+        meta["next_token_position"] = last_real
+
+    (out_dir / "metadata.json").write_text(json.dumps(meta))
     return out_dir
 
 
-def generate(model: str, prompt_text: str, isl: int, num_layers: int, out_dir: Path) -> Path:
+def generate(
+    model: str, prompt_text: str, isl: int, num_layers: int, out_dir: Path, hidden_states: bool = True
+) -> Path:
     variant = get_adapter(model)
     # Sparse/DSA models also keep an index-key cache (config 1); the producer's validation reads its
     # golden from the trace dir, but this generator writes only the KVPE cache — so reject them loudly
@@ -129,7 +209,7 @@ def generate(model: str, prompt_text: str, isl: int, num_layers: int, out_dir: P
     if hasattr(variant.model_config, "INDEX_HEAD_DIM"):
         raise SystemExit(f"{model} is a sparse/DSA model; prompt-trace generation supports dense-KVPE MLA only")
     model_path = _resolve_model_path(variant)
-    config = _load_config(model_path, isl)
+    config = _load_config(variant, model_path, isl)
     tokenizer = AutoTokenizer.from_pretrained(
         str(model_path), use_fast=True, trust_remote_code=variant.tokenizer_trust_remote_code
     )
@@ -153,9 +233,20 @@ def generate(model: str, prompt_text: str, isl: int, num_layers: int, out_dir: P
         seq_len=isl,
     )
 
-    kv_lora_rank = variant.model_config.KV_LORA_RANK
-    out = write_trace_dir(out_dir, token_ids, result.ref_kvpe_list, kv_lora_rank)
-    logger.success(f"[gen-trace] wrote {num_layers}-layer golden trace to {out}")
+    out = write_trace_dir(
+        out_dir,
+        token_ids,
+        result.ref_kvpe_list,
+        variant.model_config.KV_LORA_RANK,
+        qk_rope_head_dim=variant.model_config.QK_ROPE_HEAD_DIM,
+        ref_snapshots=result.ref_snapshots if hidden_states else None,
+        num_layers=num_layers,
+        num_real_tokens=int(attention_mask.sum()),
+    )
+    logger.success(
+        f"[gen-trace] wrote {num_layers}-layer golden trace to {out} "
+        f"(hidden_states={'yes' if hidden_states else 'no'})"
+    )
     return out
 
 
@@ -167,10 +258,15 @@ def main() -> None:
     p.add_argument("--isl", type=int, default=int(os.environ.get("PREFILL_MAX_SEQ_LEN", "1024")))
     p.add_argument("--num-layers", type=int, default=int(os.environ.get("PREFILL_NUM_LAYERS", "2")))
     p.add_argument("--out", required=True, help="output trace dir")
+    p.add_argument(
+        "--no-hidden-states",
+        action="store_true",
+        help="write kv_cache/ only (enough for the producer; the per-layer PCC tests need the rest)",
+    )
     args = p.parse_args()
 
     prompt_text = _load_prompt_text(args.prompt, args.prompt_file)
-    out = generate(args.model, prompt_text, args.isl, args.num_layers, Path(args.out))
+    out = generate(args.model, prompt_text, args.isl, args.num_layers, Path(args.out), not args.no_hidden_states)
     # last stdout line: the trace dir, for a caller to capture
     print(str(out))
 

@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_1 import glm_decoder_layer_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -79,6 +80,10 @@ class PrefillBlockThresholds:
 
 DSV3_THRESHOLDS = PrefillBlockThresholds()
 KIMI_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
+# Mistral runs GPT_DEVICE, and the selector above only special-cases GateComputeMode.DEVICE, so every
+# other device gate lands on `moe_gate_host` -- the same reason Kimi tunes that field rather than
+# moe_gate_device. Floor set just under the measured 0.990894 (pcc-prompt_5k, mesh-8x4, CHUNK=5120).
+MISTRAL4_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.990)
 
 # Determinism: every iteration must be bit-identical to the iter-0 baseline (strict).
 DETERMINISM_PCC_THRESHOLD = 1.0
@@ -484,6 +489,45 @@ def run_model(
             _, pe_pcc = comp_pcc(ref_kvpe[:, :, :, kv_lora_rank:].float(), tt_kvpe[:, :, :, kv_lora_rank:].float())
             logger.info(f"KVPE cache KV part PCC: {kv_pcc:.6f} (threshold: {thresholds.kvpe_kv})")
             logger.info(f"KVPE cache PE part PCC: {pe_pcc:.6f} (threshold: {thresholds.kvpe_pe})")
+
+            # A single PCC over the whole tensor cannot say WHERE the error is, and the two failure
+            # shapes need different fixes: a uniform miss is precision/convention, a localised one is
+            # a boundary (last partial chunk, padding tail, final tile). Set KVPE_POSITION_BREAKDOWN=1
+            # to print per-band PCC. Diagnostic only -- off by default, asserts nothing.
+            if os.environ.get("KVPE_POSITION_BREAKDOWN"):
+                ref_pe = ref_kvpe[0, 0, :, kv_lora_rank:].float()
+                dev_pe = tt_kvpe[0, 0, :, kv_lora_rank:].float()
+                ref_kv = ref_kvpe[0, 0, :, :kv_lora_rank].float()
+                dev_kv = tt_kvpe[0, 0, :, :kv_lora_rank].float()
+                seq = ref_pe.shape[0]
+                sp = mesh_shape[sp_axis]
+                per_chip = seq // sp
+                logger.info(f"KVPE position breakdown: seq={seq} sp={sp} per_chip={per_chip} tile=32")
+                logger.info(f"{'band':>16} {'PE PCC':>10} {'KV PCC':>10} {'|ref|max':>10} {'|dev|max':>10}")
+                bands = [
+                    (i * per_chip, (i + 1) * per_chip, f"chip{i} {i*per_chip}-{(i+1)*per_chip}") for i in range(sp)
+                ]
+                # the last chip again, split fine: a tile- or tail-sized error hides inside a 640-row band
+                last = seq - per_chip
+                bands += [
+                    (last + k, min(last + k + 64, seq), f"  tail {last+k}-{min(last+k+64, seq)}")
+                    for k in range(0, per_chip, 128)
+                ]
+                chip_pe_pcc = []
+                for idx, (lo, hi, label) in enumerate(bands):
+                    if hi <= lo:
+                        continue
+                    p = comp_pcc(ref_pe[lo:hi], dev_pe[lo:hi], 0.0)[1]
+                    k = comp_pcc(ref_kv[lo:hi], dev_kv[lo:hi], 0.0)[1]
+                    if idx < sp:  # the per-chip bands come first; the tail bands overlap the last one
+                        chip_pe_pcc.append((float(p), idx))
+                    logger.info(
+                        f"{label:>16} {float(p):>10.6f} {float(k):>10.6f} "
+                        f"{ref_pe[lo:hi].abs().max():>10.3f} {dev_pe[lo:hi].abs().max():>10.3f}"
+                    )
+                worst = min(chip_pe_pcc)[1]
+                logger.info(f"KVPE worst SP band: chip{worst} (rows {worst*per_chip}-{(worst+1)*per_chip})")
+
             assert kv_pcc > thresholds.kvpe_kv, f"KVPE KV PCC {kv_pcc:.6f} below threshold {thresholds.kvpe_kv}"
             assert pe_pcc > thresholds.kvpe_pe, f"KVPE PE PCC {pe_pcc:.6f} below threshold {thresholds.kvpe_pe}"
 
@@ -721,6 +765,103 @@ def test_kimi_prefill_block(
         determinism_check=determinism_check,
         num_iterations=num_iterations,
         thresholds=KIMI_THRESHOLDS,
+        use_pretrained=use_pretrained,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mistral Small 4 block test
+# ---------------------------------------------------------------------------
+# Two rows differ from the Kimi test above, both forced by the config rather than chosen:
+#
+#   * NO "dense" row. text_config.first_k_dense_replace = 0, so all 36 layers are MoE and a dense
+#     block is a configuration this model never has. Kimi/DeepSeek run ("dense", None) because their
+#     first 1 / 3 layers really are dense.
+#   * GPT_DEVICE, not DEVICE_FP32. moe_grouped_topk.cpp's parse_score_func accepts only sigmoid and
+#     sqrtsoftplus, so the sigmoid device gate cannot express Mistral's softmax -> top-4 ->
+#     renormalize router. Running DEVICE_FP32 here would apply a sigmoid affinity and silently
+#     produce wrong routing weights -- no crash, and invisible to an MLA-only test.
+#
+# Random weights only for now: the adapter carries supports_pretrained=False and no TTNN weight cache
+# has been populated, so a pretrained row would skip rather than fail. Add ("pretrained") once a cache
+# exists -- and check `passed` vs `skipped`, since a skip reads as success in the summary.
+@pytest.mark.parametrize(
+    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
+    [
+        ("random", False, 1024, 8),
+        ("random", False, 5 * 1024, 8),
+        ("prompt_5k", True, 5 * 1024, 8),
+    ],
+    ids=["smoke-random", "perf-random-5k", "pcc-prompt_5k"],
+)
+@pytest.mark.parametrize(
+    "layer_type, gate_fallback_mode",
+    [("moe", GateComputeMode.GPT_DEVICE)],
+    ids=["moe_gate_gpt"],
+)
+@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            fabric2d_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.parametrize("num_iterations", [1, 2, 5], ids=["iter1", "iter2", "iter5"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 targets the Blackhole galaxy")
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
+def test_mistral4_prefill_block(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    is_balanced,
+    isl_total,
+    dispatch_buffer_capacity_factor,
+    layer_type,
+    gate_fallback_mode,
+    num_links,
+    pcc_validation,
+    input_source,
+    tokenizer,
+    is_ci_env,
+    is_ci_v2_env,
+    determinism_check,
+    num_iterations,
+    use_pretrained,
+    request,
+):
+    topology = per_axis_topology(device_params["fabric_config"])
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        is_balanced,
+        isl_total,
+        dispatch_buffer_capacity_factor,
+        layer_type,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        pcc_validation,
+        input_source,
+        tokenizer,
+        request,
+        is_ci_env,
+        is_ci_v2_env,
+        determinism_check=determinism_check,
+        num_iterations=num_iterations,
+        thresholds=MISTRAL4_THRESHOLDS,
         use_pretrained=use_pretrained,
     )
 
