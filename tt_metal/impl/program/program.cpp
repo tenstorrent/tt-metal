@@ -2572,10 +2572,14 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 build_options.hlk_desc.buf_dataformat_arr.begin(),
                 build_options.hlk_desc.buf_dataformat_arr.end(),
                 is_fp8_format)) {
+            const bool has_local_fp32_epoch = std::ranges::any_of(
+                build_options.unpack_to_dest_mode,
+                [](UnpackToDestMode mode) { return mode != UnpackToDestMode::Default; });
             TT_FATAL(
-                build_options.fp32_dest_acc_en,
+                build_options.fp32_dest_acc_en || has_local_fp32_epoch,
                 "Blackhole: Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true in ComputeConfig. The DEST "
-                "register must be in 32-bit (family-agnostic) mode when any CB on the same core uses "
+                "register must be in 32-bit (family-agnostic) mode, globally or through an explicit "
+                "per-CB FP32 epoch, when any CB on the same core uses "
                 "an 8-bit float format. Kernel: {}",
                 kernel->name());
         }
