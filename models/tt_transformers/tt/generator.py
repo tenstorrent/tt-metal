@@ -291,7 +291,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # this key. ``capped_warmup_seq_len`` is the ceiling the rest of
                 # warmup uses: past it the call would be split into chunks and
                 # capture something else.
-                total_seq_len = min(num_cached + prefill_seq_len, model_args.capped_warmup_seq_len)
+                total_seq_len = self._resumed_warmup_prompt_len(
+                    prefill_seq_len, num_cached, model_args.capped_warmup_seq_len
+                )
                 suffix = total_seq_len - num_cached
                 if suffix <= 0 or get_padded_prefill_len(suffix) != prefill_seq_len:
                     logger.warning(
@@ -1510,6 +1512,23 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
         return math.lcm(block_size, int(q_chunk))
 
+    def _assert_uniform_resume_alignment(self, prefill_seq_len, block_size, expected):
+        """Replica 0's alignment stands for every replica. Fail if it stops doing so.
+
+        ``create_submeshes`` splits the mesh into submeshes of one shape, and
+        ``initialize_vllm_model`` builds every replica's ``ModelArgs`` from the same
+        arguments, so they all pin the same q_chunk_size. The per-user offsets are
+        therefore aligned once against replica 0 rather than per replica. Nothing in
+        the type system holds that, so check it instead of trusting it.
+        """
+        for model_id in range(1, self.data_parallel):
+            other = self._resume_offset_alignment(prefill_seq_len, block_size, model_id)
+            assert other == expected, (
+                f"replica {model_id} needs resume alignment {other} where replica 0 needs "
+                f"{expected} at padded length {prefill_seq_len}; offsets are aligned once "
+                "against replica 0 and would be wrong for this replica."
+            )
+
     def _align_resume_offsets(self, num_cached_per_user, prompt_lens, kv_cache):
         """Floor each resume offset to what the paged ops and the traced SDPA need.
 
@@ -1543,10 +1562,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # The alignment depends on the padded suffix length, which depends on
             # the offset, so it has to settle: flooring lengthens the suffix, a
             # longer suffix can pin a larger q_chunk_size, and that can demand a
-            # smaller offset again. Both are monotonic and the q_chunk_size set is
-            # finite, so this terminates; the bound is a guard, not an expectation.
+            # smaller offset again.
+            #
+            # The bound is exact, not generous. A pass that does not break must
+            # lower the offset, which lengthens the suffix, which moves it to a
+            # strictly higher padded bucket: an equal bucket would give an equal
+            # alignment and the pass would have broken. So the bucket count bounds
+            # the passes. It is a loose ceiling in practice, because
+            # get_attn_sdpa_prefill_program_config pins only 64 or 256 and two
+            # passes always suffice.
             for _ in range(len(get_all_padded_prefill_lengths(int(seq_len))) + 1):
-                alignment = self._resume_offset_alignment(get_padded_prefill_len(int(seq_len) - floored), block_size)
+                padded_suffix = get_padded_prefill_len(int(seq_len) - floored)
+                alignment = self._resume_offset_alignment(padded_suffix, block_size)
+                self._assert_uniform_resume_alignment(padded_suffix, block_size, alignment)
                 settled = (int(num_cached) // alignment) * alignment
                 if settled == floored:
                     break
@@ -1560,6 +1588,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 logger.debug(f"Resume offset alignment: user {i} start_pos {num_cached} -> {floored}")
             aligned.append(floored)
         return aligned
+
+    @staticmethod
+    def _resumed_warmup_prompt_len(prefill_seq_len, num_cached, capped_warmup_seq_len):
+        """Prompt length whose suffix after ``num_cached`` pads back to this bucket.
+
+        Only the suffix reaches the kernel, so the prompt has to clear the offset by
+        a full bucket. Spanning the bucket alone leaves no suffix at all once
+        ``block_size`` reaches the smallest traced length. ``capped_warmup_seq_len``
+        is the ceiling the rest of warmup uses: past it the call is split into chunks
+        and captures a different trace.
+        """
+        return min(num_cached + prefill_seq_len, capped_warmup_seq_len)
 
     def _paged_prefill_block_size(self, kv_cache):
         """Block size for chunked-prefill page-table padding/slicing.
