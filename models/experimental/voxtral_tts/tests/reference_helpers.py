@@ -48,7 +48,7 @@ def backbone_state():
 
 def fixture_embeds(case_idx, w=None):
     """Fixture case -> (real prompt embeds [1,P,3072], case dict), exactly as the pipeline builds
-    them. Moved here from the retired `tt_gates.py` so the CLI, the tests and the quality report
+    them. Moved here from `gates.py` (formerly `tt_gates.py`) so the CLI, the tests and the quality report
     cannot drift to two different notions of "the real prompt"."""
     from models.experimental.voxtral_tts.reference import voxtral_pipeline_ref as pref
 

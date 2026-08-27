@@ -36,7 +36,7 @@ import time
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 GEN = os.path.join(HERE, "generated")
-GATES = os.path.join(HERE, "tests", "tt_gates.py")
+GATES = os.path.join(HERE, "tests", "gates.py")
 MOSVENV = "/tmp/mosvenv/bin/python"
 
 # Tolerances are the branch's own MEASURED noise floors, not guesses -- STATUS.md 6.15, 6.52, 6.63.
@@ -97,47 +97,63 @@ def grab(out, pattern, cast=float):
     return cast(m.group(1)) if m else None
 
 
+def gate_json(gate, timeout):
+    """Run one gate in its own process and return its metrics dict.
+
+    JSON, not a regex over the printed tables: the tables are for humans and get reworded, and a
+    metric that silently stops matching its pattern is exactly how a gate reports success while
+    measuring nothing. A missing key still lands as None here and the REQUIRED check below turns
+    that into a loud exit 2.
+    """
+    out = sh([GATES, "--gate", gate, "--json"], timeout=timeout)
+    for line in out.splitlines():
+        if line.startswith("GATE_JSON:"):
+            try:
+                return json.loads(line[len("GATE_JSON:"):])
+            except json.JSONDecodeError:
+                return {}
+    return {}
+
+
 def run_fast(res, log):
     log("pytest")
-    o = sh(["-m", "pytest", os.path.join(HERE, "tests"), "-q"], timeout=900)
+    # `not slow` keeps the fast tier at its documented ~3.5 min. The slow marks are the on-device
+    # PCC tests added when the gates became pytest -- prefill x15, decode x15, the teacher-forced
+    # whole model -- and the full tier runs those as its own gates anyway, so including them here
+    # would pay for them twice.
+    o = sh(["-m", "pytest", os.path.join(HERE, "tests"), "-q", "-m", "not slow"], timeout=900)
     res["pytest_passed"] = grab(o, r"(\d+) passed", int)
     res["pytest_failed"] = grab(o, r"(\d+) failed", int) or 0
 
     log("gate flow")
-    o = sh([GATES, "--gate", "flow"], timeout=900)
-    res["flow_velocity_pcc"] = grab(o, r"velocity\s*\] PCC ([\d.]+)")
-    res["flow_semantic_exact"] = ("exact match: True" in o) or None
-    res["flow_codes_74"] = grab(o, r"(\d+) of 74 codes differ", int)
-    if res["flow_codes_74"] is None and "IDENTICAL" in o:
-        res["flow_codes_74"] = 0
+    m = gate_json("flow", timeout=900)
+    res["flow_velocity_pcc"] = m.get("flow_velocity_pcc")
+    res["flow_semantic_exact"] = m.get("flow_semantic_exact")
+    res["flow_codes_74"] = m.get("flow_codes_74")
 
     log("gate codes")
-    o = sh([GATES, "--gate", "codes"], timeout=1800)
-    res["codes_real_pct"] = grab(o, r"REAL-PROMPT TOTAL \d+/\d+ \(([\d.]+)%\)")
-    res["codes_real_n"] = grab(o, r"REAL-PROMPT TOTAL (\d+)/", int)
-    m = re.search(r"SYNTHETIC.*?=> semantic mismatches (\d+), acoustic (\d+)/(\d+)", o, re.S)
-    res["codes_synth_n"] = int(m.group(2)) if m else None
+    m = gate_json("codes", timeout=1800)
+    res["codes_real_pct"] = m.get("codes_real_pct")
+    res["codes_real_n"] = m.get("codes_real_n")
+    res["codes_synth_n"] = m.get("codes_synth_n")
 
 
 def run_full(res, log):
     log("gate wiring")
-    res["wiring_pcc"] = grab(sh([GATES, "--gate", "wiring"], timeout=900),
-                             r"1 layer prefill\] PCC ([\d.]+)")
+    res["wiring_pcc"] = gate_json("wiring", timeout=900).get("wiring_pcc")
     log("gate prefill26 (15 prompts)")
-    o = sh([GATES, "--gate", "prefill26"], timeout=2400)
-    pccs = [float(x) for x in re.findall(r"^\s+\d+\s+\S+\s+\d+\s+[\d.]+\s+([\d.]+)", o, re.M)]
-    res["prefill_pcc_last"] = min(pccs) if pccs else None
-    res["prefill_n_cases"] = len(pccs) or None
+    m = gate_json("prefill26", timeout=2400)
+    res["prefill_pcc_last"] = m.get("prefill_pcc_last")   # min across cases, as always recorded
+    res["prefill_n_cases"] = m.get("prefill_n_cases")
 
     log("gate codec")
-    o = sh([GATES, "--gate", "codec"], timeout=1200)
-    res["codec_pcc_t24"] = grab(o, r"\[codec T=24\] WAVEFORM\s+PCC ([\d.]+)")
+    res["codec_pcc_t24"] = gate_json("codec", timeout=1200).get("codec_pcc_t24")
 
     log("gate decode (15 prompts x 22 frames)")
-    o = sh([GATES, "--gate", "decode"], timeout=2400)
-    res["decode_mean_pp"] = grab(o, r"pooled over all frames\s+mean\s+([\d.]+)%")
-    res["decode_p90_pp"] = grab(o, r"pooled over all frames.*?p90\s+([\d.]+)%")
-    res["decode_min_pcc"] = grab(o, r"pooled over all frames.*?min PCC ([\d.]+)")
+    m = gate_json("decode", timeout=2400)
+    res["decode_mean_pp"] = m.get("decode_mean_pp")
+    res["decode_p90_pp"] = m.get("decode_p90_pp")
+    res["decode_min_pcc"] = m.get("decode_min_pcc")
 
 
 def run_audio(res, log, tag, seeds):

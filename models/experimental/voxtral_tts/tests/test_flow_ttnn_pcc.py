@@ -18,7 +18,7 @@ torch = pytest.importorskip("torch")
 ttnn = pytest.importorskip("ttnn")
 
 from models.experimental.voxtral_tts.reference import voxtral_flow_ref as fref  # noqa: E402
-from models.experimental.voxtral_tts.reference.voxtral_common_ref import pcc  # noqa: E402
+from models.experimental.voxtral_tts.tests.gates import compare_hidden  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import TtVoxtralFlow  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
 
@@ -46,7 +46,7 @@ def test_velocity_pcc(rig):
     t_emb = fref.time_embedding(torch.tensor(0.375).view(1, 1).repeat(2, 1), w["time_embedding.inv_freq"])
     exp = fref.predict_velocity(x_0, h, t_emb, w)
     got = gen._predict_velocity(x_0, h, t_emb)
-    got_pcc = pcc(got, exp)
+    got_pcc = compare_hidden(got, exp)["pcc"]
     print(f"\n  [velocity] PCC {got_pcc:.8f}  maxabs {(got - exp).abs().max():.3e}")
     assert got_pcc > PCC_VELOCITY, f"velocity PCC {got_pcc:.8f}"
 

@@ -20,5 +20,5 @@ __pycache__/
 # The repo ROOT .gitignore has a blanket `*.pt`, which silently swallowed the test fixture when
 # it was first added (0a172981d4 says it vendored the file; the `git add` skipped it, and the
 # loss went unnoticed because test_real_speech_frames_decode_correctly SKIPS when it is absent
-# while tt_gates.py --gate decode raises FileNotFoundError). Re-include it explicitly.
+# while gates.py --gate decode raises FileNotFoundError). Re-include it explicitly.
 !tests/real_frames_fixture.pt
