@@ -445,6 +445,39 @@ exception, and that costs a device reset to learn.
 
 ---
 
+### 7.2 The shim and the first ported suite
+
+`ttnn.program_spec` (`ttnn/cpp/ttnn-nanobind/program_spec.cpp`) binds the 2.0 host API, and
+`unified_harness.py` grew `unified_program_spec()` / `run_unified_spec()` beside the existing
+`unified_program()`. `test_unified_unary.py --metal2` runs the same kernel through a
+`ProgramSpec`; both paths pass, with **identical numbers** on all five ops (recip PCC 0.999991
+/ rel 0.00421, and so on down the list) -- which is a stronger agreement than a tolerance
+check, since any difference in what reached the device would move them.
+
+Three things the port settled that the spec had left open.
+
+**Endpoint roles are the api.h table, and they were cheap.** `dfb_input(name, thread)` /
+`dfb_output(name, thread)` / `dfb_intermed(name)` are the three columns of that comment block,
+and the harness turns them into producer/consumer bindings. §5.1 called this the hardest part;
+in practice it was about twenty lines. The cost it predicted is real but smaller than
+described: the DM *thread number* has to agree between the role and the kernel's
+`noc_load<0>` / `noc_store<1>`, and nothing states that in one place.
+
+**The slot prediction is now CHECKED, and the check is what `dfb::` tokens are actually good
+for.** The harness predicts slots from declaration order (metal's lowest-free-slot rule) and
+passes them as named compile-time args. The kernel then verifies them on the COMPUTE
+projection -- the one projection that binds every buffer, inputs as consumer and outputs as
+producer -- with a `static_assert(kCbIn == uint32_t(dfb::in) && ...)`. So the tokens turn out
+not to be useless to this model after all: they cannot *name* a buffer in a shared source
+(§7.1), but they can *verify* one wherever they exist. Confirmed non-vacuous by perturbing the
+prediction, which fails the build with the message naming the cause.
+
+**Named compile-time args carried across unchanged.** `get_named_compile_time_arg_val` works
+on both paths -- `named_ct_arg_map_generated.h` is emitted unconditionally
+(`genfiles.cpp:120`) -- so only the accessor construction needed a `#if`. One kernel, four
+guarded lines, both paths green. That is what makes the remaining suites a sweep rather than a
+fork.
+
 ## 8. What this buys, against the hazard ledger
 
 | hazard | today | after |

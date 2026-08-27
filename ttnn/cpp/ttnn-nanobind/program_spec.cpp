@@ -36,6 +36,7 @@
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
+#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -177,6 +178,10 @@ void py_module_types(nb::module_& mod) {
     // ---------------------------------------------------------------- enums
     export_enum<exp::DFBEndpointType>(mod, "DFBEndpointType");
     export_enum<exp::DFBAccessPattern>(mod, "DFBAccessPattern");
+    // Precision is part of ComputeGen1Config's surface and is not bound anywhere else in
+    // ttnn, so it is exported here rather than left unreachable. (The legacy path spells the
+    // same choice as ComputeConfigDescriptor's math_approx_mode bool.)
+    export_enum<tt::tt_metal::Precision>(mod, "Precision");
 
     // ------------------------------------------------------------- KernelSpec
     auto kernel_spec = nb::class_<exp::KernelSpec>(mod, "KernelSpec", R"pbdoc(

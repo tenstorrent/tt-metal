@@ -272,3 +272,246 @@ def split_evenly(total, parts):
         out.append((begin, count))
         begin += count
     return out
+
+
+# ---------------------------------------------------------------------------
+# Metal 2.0 path
+#
+# The same model, built as a ProgramSpec instead of a ProgramDescriptor. Everything above
+# stays; a suite moves over one at a time and the two paths coexist. See
+# unified_metal2_spec.md.
+#
+# THE ONE THING THAT IS GENUINELY NEW is that the host now has to say, per buffer, which
+# kernel produces it and which consumes it. Metal 2.0 requires exactly one of each per node
+# (dataflow_buffer_spec.hpp), and it refuses a program where a buffer has neither.
+#
+# That is not a new fact about the model, though -- it is the table at the top of
+# tt/unified/api.h, which has always said the same thing in a comment:
+#
+#     INPUT                    OUTPUT                   INTERMED
+#          DM    Compute            DM    Compute            DM    Compute
+#     reserve <- *               * -> reserve                   reserve
+#       write                          write                      write
+#        push ->    wait         wait <-  push                     push
+#                  read          read                              wait
+#           * <-     pop          pop -> *                         read
+#                                                                   pop
+#
+# INPUT means the DM thread produces and compute consumes; OUTPUT is the other way round;
+# INTERMED is compute on both ends, which Metal 2.0 supports as a "self-loop" DFB
+# (program_spec.cpp:942). So the port turns that comment into something the host validates.
+#
+# What the comment does NOT say, and the host now needs, is WHICH data-movement thread. That
+# lives in the kernel today, in the `thread` template argument of every noc_load / noc_store,
+# and there is nothing checking the two agree. A mismatch is not silent -- the buffer's
+# endpoint lands on the wrong KernelSpec, so either validation refuses the spec or the kernel
+# names an accessor that was never bound -- but it is a new contract, and the kernel-side
+# static_assert described in unified_kernels/unary.cpp is what closes the other half of it.
+# ---------------------------------------------------------------------------
+
+# Kernel DM thread number -> the RISC that runs it. This is adaptor_v1.hpp's mapping, read
+# in the other direction: it derives the thread id from COMPILE_FOR_BRISC / COMPILE_FOR_NCRISC,
+# so the host has to place the KernelSpecs to match or `noc_load<0>` runs on the wrong core.
+DM_THREAD_PROCESSOR = {
+    0: (ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.RISCV_0_default),
+    1: (ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.RISCV_1_default),
+}
+
+
+class Dfb:
+    """A dataflow buffer, plus which projections stand at its two ends.
+
+    `kind` is one of the three columns of the api.h table; `thread` is the DM thread at the
+    data-movement end, and is None for an INTERMED buffer, which has no data-movement end.
+    """
+
+    INPUT = "input"
+    OUTPUT = "output"
+    INTERMED = "intermed"
+
+    def __init__(self, name, kind, thread, dtype, num_pages):
+        self.name = name
+        self.kind = kind
+        self.thread = thread
+        self.dtype = dtype
+        self.num_pages = num_pages
+
+
+def dfb_input(name, thread, *, dtype=ttnn.bfloat16, num_pages=2):
+    """Filled by DM thread `thread`, read by compute."""
+    return Dfb(name, Dfb.INPUT, thread, dtype, num_pages)
+
+
+def dfb_output(name, thread, *, dtype=ttnn.bfloat16, num_pages=2):
+    """Filled by compute, drained by DM thread `thread`."""
+    return Dfb(name, Dfb.OUTPUT, thread, dtype, num_pages)
+
+
+def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_pages=2):
+    """Compute on both ends: an accumulator, a retained value, a scratch block."""
+    return Dfb(name, Dfb.INTERMED, None, dtype, num_pages)
+
+
+def unified_program_spec(
+    *,
+    kernel_source,
+    nodes,
+    dfbs,
+    tensors,
+    named_compile_time_args=None,
+    defines=None,
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    dynamic_noc=False,
+    name="unified",
+):
+    """Build a ProgramSpec that compiles ONE source for all five threads.
+
+    The Metal 2.0 counterpart of unified_program(). Same idea -- three KernelSpecs pointing
+    at one file, identical compile-time args on all three -- with three differences that the
+    2.0 host API forces rather than invites:
+
+      * Compile-time args are NAMED ONLY. KernelSpec::CompileTimeArgs is a
+        Table<string, uint32_t>; there is no positional list, so there is nowhere for a
+        TensorAccessorArgs block to go and nothing for its offsets to drift against.
+      * Tensors are BOUND, not addressed. Each gets a TensorParameter and a per-kernel
+        accessor name, and the kernel says TensorAccessor(tensor::<name>). No base address
+        runtime arg, so hazard D18 has no surface left.
+      * Buffers carry ENDPOINT ROLES, which is the new obligation; see above.
+
+    Args:
+        kernel_source: path to the unified kernel, relative to TT_METAL_HOME.
+        nodes: a ttnn.CoreRangeSet (or CoreCoord / CoreRange) the program runs on.
+        dfbs: list of Dfb, from dfb_input / dfb_output / dfb_intermed. DECLARATION ORDER
+            MATTERS -- see the slot note below.
+        tensors: dict of {parameter name: ttnn.Tensor}. Every kernel binds every tensor,
+            which is legal because a tensor binding carries no exclusive role (unlike a DFB
+            binding), and necessary because a unified kernel names every accessor on every
+            projection.
+        named_compile_time_args: list of (name, value), shared by all three kernels. The
+            buffer slots are appended to this, so a kernel reads its own circular buffer id
+            by name rather than hardcoding a number.
+
+    Returns the ProgramSpec. Run it with run_unified_spec().
+
+    ON BUFFER SLOTS. A kernel needs its buffers' slot numbers as compile-time VALUES, not as
+    `dfb::` binding tokens: a token is emitted only into the kernels that bind that buffer
+    (genfiles.cpp:129), a DFB's two endpoint roles are both spoken for, and a unified kernel
+    declares every Storage on every projection -- so a token spelling does not compile. See
+    unified_gate/gate_a_tokens.cpp, which fails for exactly that reason.
+
+    So the slot is passed as a named compile-time arg, and it is PREDICTED here from metal's
+    allocator rule: the lowest free slot among buffers sharing cores, in declaration order
+    (dataflow_buffer.cpp:1724). Since every buffer here shares the whole node set, that is
+    just 0, 1, 2, ... in the order given.
+
+    A prediction is not a guarantee, so it is CHECKED rather than trusted -- on the compute
+    projection, which is the one projection that binds every buffer (inputs as consumer,
+    outputs as producer, intermediates as both) and can therefore compare all of them against
+    the tokens the host really assigned. That check is a static_assert in the kernel; see
+    unified_kernels/unary.cpp.
+    """
+    ps = ttnn.program_spec
+
+    # The slot prediction. Kept in one place so the assumption is stated once rather than in
+    # every kernel, and so the kernel-side check has something to check against.
+    slots = {d.name: i for i, d in enumerate(dfbs)}
+
+    named_cts = list(named_compile_time_args or [])
+    named_cts += [(f"cb_{d.name}", slots[d.name]) for d in dfbs]
+
+    bbox = nodes.bounding_box() if hasattr(nodes, "bounding_box") else None
+    grid_h = (bbox.end.y - bbox.start.y + 1) if bbox else 1
+    grid_w = (bbox.end.x - bbox.start.x + 1) if bbox else 1
+    all_defines = list(defines or []) + [
+        ("TT_UNIFIED_CORE_GRID_H", str(grid_h)),
+        ("TT_UNIFIED_CORE_GRID_W", str(grid_w)),
+    ]
+    if bbox is not None and nodes.num_cores() == grid_h * grid_w:
+        all_defines.append(("TT_UNIFIED_CORE_GRID_EXACT", "1"))
+
+    def make_kernel(unique_id, hw_config):
+        k = ps.KernelSpec()
+        k.unique_id = unique_id
+        k.source = kernel_source
+        k.hw_config = hw_config
+        k.compile_time_args = {n: int(v) for n, v in named_cts}
+        k.compiler_options.include_paths = UNIFIED_INCLUDE_PATHS
+        k.compiler_options.defines = {n: v for n, v in all_defines}
+        bindings = []
+        for param in tensors:
+            b = ps.KernelSpec.TensorBinding()
+            b.tensor_parameter_name = param
+            b.accessor_name = param
+            bindings.append(b)
+        k.tensor_bindings = bindings
+        return k
+
+    dm_cfgs = {}
+    noc_mode = None  # DataMovementGen1Config's own default unless dynamic_noc is asked for
+    for thread, (proc, noc) in DM_THREAD_PROCESSOR.items():
+        cfg = ps.DataMovementGen1Config()
+        cfg.processor = proc
+        cfg.noc = noc
+        if dynamic_noc:
+            cfg.noc_mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC
+        dm_cfgs[thread] = cfg
+
+    compute_cfg = ps.ComputeGen1Config()
+    compute_cfg.fpu_math_fidelity = math_fidelity
+    compute_cfg.sfpu_precision_mode = ps.Precision.Approximate if math_approx_mode else ps.Precision.Precise
+
+    kernels = {
+        "dm0": make_kernel("dm0", dm_cfgs[0]),
+        "dm1": make_kernel("dm1", dm_cfgs[1]),
+        "compute": make_kernel("compute", compute_cfg),
+    }
+
+    # The endpoint bindings: the api.h table, applied.
+    dfb_specs = []
+    for d in dfbs:
+        spec = ps.DataflowBufferSpec()
+        spec.unique_id = d.name
+        spec.entry_size = DTYPE_TILE_BYTES[d.dtype]
+        spec.num_entries = d.num_pages
+        spec.data_format_metadata = d.dtype
+        dfb_specs.append(spec)
+
+        if d.kind == Dfb.INPUT:
+            kernels[f"dm{d.thread}"].dfb_bindings += [ps.producer_of(d.name, d.name)]
+            kernels["compute"].dfb_bindings += [ps.consumer_of(d.name, d.name)]
+        elif d.kind == Dfb.OUTPUT:
+            kernels["compute"].dfb_bindings += [ps.producer_of(d.name, d.name)]
+            kernels[f"dm{d.thread}"].dfb_bindings += [ps.consumer_of(d.name, d.name)]
+        elif d.kind == Dfb.INTERMED:
+            # A self-loop: compute stands at both ends. Two bindings on ONE kernel, which
+            # Metal 2.0 allows precisely because their roles are opposite.
+            kernels["compute"].dfb_bindings += [
+                ps.producer_of(d.name, d.name),
+                ps.consumer_of(d.name, d.name),
+            ]
+        else:
+            raise ValueError(f"unknown dfb kind {d.kind!r}")
+
+    wu = ps.WorkUnitSpec()
+    wu.name = "wu0"
+    wu.kernels = ["dm0", "dm1", "compute"]
+    wu.target_nodes = nodes
+
+    spec = ps.ProgramSpec()
+    spec.name = name
+    spec.kernels = [kernels["dm0"], kernels["dm1"], kernels["compute"]]
+    spec.dataflow_buffers = dfb_specs
+    spec.tensor_parameters = [ps.TensorParameter(n, t.spec) for n, t in tensors.items()]
+    spec.work_units = [wu]
+    return spec
+
+
+def run_unified_spec(device, spec, tensors):
+    """Build the program from `spec`, bind `tensors`, enqueue it, and wait.
+
+    `tensors` is the same dict handed to unified_program_spec, so the TensorParameters and
+    the TensorArguments cannot drift apart.
+    """
+    ps = ttnn.program_spec
+    ps.run_program_spec(device, spec, ps.ProgramRunArgs(), list(tensors.items()))
