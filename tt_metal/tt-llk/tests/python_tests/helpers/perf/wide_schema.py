@@ -21,7 +21,14 @@ Imports no device libraries, so it loads without hardware.
 
 from dataclasses import dataclass
 
-from .schema import MEAN, STD, stat_column
+from .schema import (
+    MEAN,
+    METRIC_BASES,
+    RUN_TYPE_NAMES,
+    STD,
+    metric_column,
+    stat_column,
+)
 
 
 @dataclass(frozen=True)
@@ -51,12 +58,36 @@ _TIMING_COLUMNS = [
 ]
 
 
+# Counter-derived metric columns, same formula-driven treatment as timing. Both
+# names export_metrics can use are enumerated: the raw value when a run type ran
+# once, mean/std when it ran >=2 times. Run types are listed rather than taken
+# from the frozenset because the schema fixes column order; the assert keeps the
+# two in step.
+_METRIC_RUN_TYPES = (
+    "L1_TO_L1",
+    "UNPACK_ISOLATE",
+    "MATH_ISOLATE",
+    "PACK_ISOLATE",
+    "L1_CONGESTION",
+    "SFPU_ISOLATE",
+)
+assert set(_METRIC_RUN_TYPES) == set(RUN_TYPE_NAMES), (
+    "_METRIC_RUN_TYPES is out of sync with schema.RUN_TYPE_NAMES: "
+    f"{sorted(set(_METRIC_RUN_TYPES) ^ set(RUN_TYPE_NAMES))}"
+)
+_METRIC_COLUMNS = [
+    Column(metric_column(run_type, base), "float64", True, "metrics")
+    for run_type in _METRIC_RUN_TYPES
+    for metric in sorted(METRIC_BASES)
+    for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
+]
+
+
 # ── The one published table: every column, headers + provenance ─────────────
 # This IS the table handed to the data team; the Parquet is written with it. Each
 # column's `origin` says who fills it — "test" (default) or "ci".
-# TODO(counters, deferred — see #51249): counter/metric columns join here as
-# nullable once a counter run captures their exact names. Quasar has its own
-# published table in wide_schema_quasar.py — do not mix Quasar columns in here.
+# Quasar has its own published table in wide_schema_quasar.py — do not mix Quasar
+# columns in here.
 DB_SCHEMA = [
     Column("marker", "string", False, "identity"),
     # formats
@@ -127,6 +158,8 @@ DB_SCHEMA = [
     Column("value_bits", "int64", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
+    # counter-derived metrics (complete run type x metric grid — see above)
+    *_METRIC_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──
     Column("test_name", "string", False, "identity", origin="ci"),
     Column("commit_sha", "string", False, "provenance", origin="ci"),
