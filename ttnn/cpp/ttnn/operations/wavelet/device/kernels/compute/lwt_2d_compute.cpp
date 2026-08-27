@@ -361,6 +361,7 @@ void kernel_main() {
     constexpr uint32_t cb_source1 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_base = get_compile_time_arg_val(2);
     constexpr uint32_t cb_output = get_compile_time_arg_val(3);
+    compute_kernel_hw_startup(cb_base, cb_output);
     init_sfpu(cb_base, cb_output);
     const uint32_t chunk_count = get_arg_val<uint32_t>(0);
     constexpr uint32_t routes_per_axis = Scheme::num_steps;

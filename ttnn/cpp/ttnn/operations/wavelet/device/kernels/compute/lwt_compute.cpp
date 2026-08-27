@@ -410,6 +410,7 @@ void lwt_compute() {
 void kernel_main() {
     constexpr uint32_t cb_base = get_compile_time_arg_val(2);
     constexpr uint32_t cb_output = get_compile_time_arg_val(3);
+    compute_kernel_hw_startup(cb_base, cb_output);
     init_sfpu(cb_base, cb_output);
     ttnn::operations::wavelet::kernels::lwt_compute<WAVELET_1D_ACTIVE_SCHEME_TYPE>();
 }

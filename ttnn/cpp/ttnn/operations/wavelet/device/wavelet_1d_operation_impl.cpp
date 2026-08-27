@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "tt-logger/tt-logger.hpp"
+#include "tt-metalium/allocator.hpp"
 #include "tt-metalium/buffer.hpp"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/core_coord.hpp"
@@ -485,7 +486,8 @@ void add_narrow_tile_circular_buffer(
     const std::vector<CoreChunkWork>& work,
     const uint32_t chunks_per_sample,
     const uint32_t input_pages_per_sample,
-    const uint32_t output_pages_per_sample) {
+    const uint32_t output_pages_per_sample,
+    const uint32_t l1_alignment_bytes) {
     tt::tt_metal::ProgramDescriptor descriptor;
     add_narrow_tile_circular_buffer(descriptor, cores, kSrcTile0Cb, 2 * kTileGroupBuffering);
     add_narrow_tile_circular_buffer(descriptor, cores, kSrcTile1Cb, 2 * kTileGroupBuffering);
@@ -494,7 +496,7 @@ void add_narrow_tile_circular_buffer(
     add_circular_buffer(
         descriptor, cores, kSrcCacheCb, device_protocol::kLwtCacheStickCount, device_protocol::kStickBytes);
     add_circular_buffer(descriptor, cores, kInterleaveCb, 1, device_protocol::kStickBytes);
-    add_circular_buffer(descriptor, cores, kSyncCb, 1, kStorageAlignmentBytes);
+    add_circular_buffer(descriptor, cores, kSyncCb, 1, l1_alignment_bytes);
     add_circular_buffer(descriptor, cores, kReaderConfigCb, 1, device_protocol::kRouteConfigPageBytes);
     add_circular_buffer(descriptor, cores, kWriterConfigCb, 1, device_protocol::kRouteConfigPageBytes);
     add_workspace_circular_buffers(descriptor, cores, plan.workspace_elements, hybrid_tile_mirror);
@@ -762,7 +764,8 @@ void add_narrow_tile_circular_buffer(
     const std::vector<CoreChunkWork>& work,
     const uint32_t chunks_per_sample,
     const uint32_t input_pages_per_sample,
-    const uint32_t output_pages_per_sample) {
+    const uint32_t output_pages_per_sample,
+    const uint32_t l1_alignment_bytes) {
     tt::tt_metal::ProgramDescriptor descriptor;
     add_narrow_tile_circular_buffer(descriptor, cores, kSrcTile0Cb, 2 * kTileGroupBuffering);
     add_narrow_tile_circular_buffer(descriptor, cores, kSrcTile1Cb, 2 * kTileGroupBuffering);
@@ -771,7 +774,7 @@ void add_narrow_tile_circular_buffer(
     add_circular_buffer(
         descriptor, cores, kSrcCacheCb, device_protocol::kLwtCacheStickCount, device_protocol::kStickBytes);
     add_circular_buffer(descriptor, cores, kInterleaveCb, interleave_batch_sticks, device_protocol::kStickBytes);
-    add_circular_buffer(descriptor, cores, kSyncCb, 1, kStorageAlignmentBytes);
+    add_circular_buffer(descriptor, cores, kSyncCb, 1, l1_alignment_bytes);
     add_circular_buffer(descriptor, cores, kReaderConfigCb, 1, device_protocol::kRouteConfigPageBytes);
     add_circular_buffer(descriptor, cores, kWriterConfigCb, 1, device_protocol::kRouteConfigPageBytes);
     add_workspace_circular_buffers(descriptor, cores, plan.workspace_elements, hybrid_tile_mirror);
@@ -912,7 +915,7 @@ void validate_1d_tensor(const Tensor& tensor, const char* tensor_name) {
             DataType::FLOAT32,
             tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
             memory_config,
-            tt::tt_metal::Alignment{kStorageAlignmentBytes}));
+            tt::tt_metal::Alignment{kStickWidth}));
 }
 
 void validate_preallocated_output(
@@ -1147,6 +1150,7 @@ template <typename Scheme>
         pages_per_batch_item(tensor_args.input, input_shape.batch_count, "LWT input");
     const uint32_t output_pages_per_sample =
         pages_per_batch_item(std::get<0>(tensor_return_value), input_shape.batch_count, "LWT approximation output");
+    const uint32_t l1_alignment_bytes = mesh_device.allocator()->get_alignment(tt::tt_metal::BufferType::L1);
     auto descriptor = create_forward_program_descriptor(
         core_range_set(buffers.cores),
         input_buffer,
@@ -1161,7 +1165,8 @@ template <typename Scheme>
         work,
         chunks_per_sample,
         input_pages_per_sample,
-        output_pages_per_sample);
+        output_pages_per_sample,
+        l1_alignment_bytes);
     wavelet_program_utils::append_program_to_mesh_ranges(
         workload, std::move(descriptor), tensor_coords, "Wavelet workload has no mesh coordinate range");
     return workload;
@@ -1275,6 +1280,7 @@ template <typename Scheme>
         pages_per_batch_item(tensor_args.approximation, coefficient_shape.batch_count, "ILWT approximation");
     const uint32_t output_pages_per_sample =
         pages_per_batch_item(tensor_return_value, coefficient_shape.batch_count, "ILWT output");
+    const uint32_t l1_alignment_bytes = mesh_device.allocator()->get_alignment(tt::tt_metal::BufferType::L1);
     auto descriptor = create_inverse_program_descriptor(
         core_range_set(buffers.cores),
         approximation_buffer,
@@ -1290,7 +1296,8 @@ template <typename Scheme>
         work,
         chunks_per_sample,
         input_pages_per_sample,
-        output_pages_per_sample);
+        output_pages_per_sample,
+        l1_alignment_bytes);
     wavelet_program_utils::append_program_to_mesh_ranges(
         workload, std::move(descriptor), tensor_coords, "Wavelet workload has no mesh coordinate range");
     return workload;
