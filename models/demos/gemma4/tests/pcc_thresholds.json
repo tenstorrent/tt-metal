@@ -14,6 +14,14 @@
     "1x4": {
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.98,
       "test_full_model_parity_warmup_then_inference[blackhole-pli-all-kv-shared-steps4-1x4]": 0.98
+    },
+    "1x2": {
+      "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap as the 1x1 entry, which the file records as bit-identical WH/BH at 0.986292. Measured on a real WH T3K (tier-1 unit, E2B config): 1x2 0.9863179, 1x8 0.9862551. Gated for the two shipped WH meshes only -- N300 (1x2) and T3K (1x8). Without these keys those parametrizations fall back to the 0.99 default and fail while 1x1 passes -- a missing gate, not a regression (argmax unaffected). LLK fp32-accumulation fix tracked in #48746.",
+      "test_attention_paged_decode_via_harness[wormhole_b0-full-1x2]": 0.986
+    },
+    "1x8": {
+      "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap as the 1x1 entry, which the file records as bit-identical WH/BH at 0.986292. Measured on a real WH T3K (tier-1 unit, E2B config): 1x2 0.9863179, 1x8 0.9862551. Gated for the two shipped WH meshes only -- N300 (1x2) and T3K (1x8). Without these keys those parametrizations fall back to the 0.99 default and fail while 1x1 passes -- a missing gate, not a regression (argmax unaffected). LLK fp32-accumulation fix tracked in #48746.",
+      "test_attention_paged_decode_via_harness[wormhole_b0-full-1x8]": 0.986
     }
   },
   "gemma-4-E4B-it": {
