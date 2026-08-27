@@ -14,6 +14,7 @@ If your tests are failing for *no reason*, read our [debugging guide](debugging_
 | 6 | [Running the tests](#running-the-tests) |
 | 7 | [Where do my compilation artifacts end up?](#where-do-my-compilation-artifacts-end-up) |
 | 8 | [How do I see what code did my test cover during execution?](#how-do-i-see-what-code-did-my-tests-cover) |
+| 9 | [Out-of-tree / proprietary kernels](#out-of-tree--proprietary-kernels) |
 ---
 
 # Terminology
@@ -531,3 +532,38 @@ If coverage is enabled, all coverage data is merged at the end of execution of t
 # How do I see what code did my tests cover?
 
 After finishing compilation and execution of your tests with coverage enabled, run `./generate_coverage_report.sh` placed in the `./tt-llk/tests` folder. The generated report is placed in the same folder as your `./tt-llk` repo. For convenient preview of the coverage data, I'd recommend installing the [Live Server VSCode extension](https://marketplace.visualstudio.com/items?itemName=ritwickdey.LiveServer). When it opens your browser tab, you'll see the `./coverage_report` folder. By clicking on it, you'll see `html` report of lines, files and folders your run covered.
+
+# Out-of-tree / proprietary kernels
+
+The harness can compile Layer-1 LLK headers (`_llk_*` / `ckernel::sfpu::*`) that live **outside** this public repo. It cannot run metal compute-API wrappers or fused-op `op.hpp` files (those need CBs and the metal JIT).
+
+An external pytest suite should:
+
+1. Put `tests/python_tests` on `sys.path` and load the shared plugin:
+   ```python
+   sys.path.insert(0, str(llk_python_tests))
+   pytest_plugins = ["helpers.llk_pytest_plugin"]
+   ```
+   Invoke pytest with that suite as the rootdir (so `pytest_plugins` is legal). Set `LLK_HOME` if it cannot be inferred. `CHIP_ARCH` is optional on a live card (`check_context()`); export it for compile-only / no-device.
+   Test files should not touch `sys.path`. The plugin prepends `<rootdir>/python_tests` so suite-local packages (e.g. `goldens/`) import without per-test boilerplate. Keep suite-local Python packages there, not under a `helpers/` overlay (that name is reserved for the harness).
+
+2. Register proprietary search dirs on `TestConfig` (before or after `setup_build`):
+   ```python
+   from helpers.test_config import TestConfig
+   TestConfig.add_include_dirs(
+       repo_root,
+       proprietary_llk_api_dir,
+       *TestConfig.llk_tree_include_roots(proprietary_tt_llk_arch_dir),
+   )
+   TestConfig.add_src_include_dirs(proprietary_helpers_src)  # optional #include <foo.cpp>
+   TestConfig.add_helpers_tree(proprietary_helpers_tree)     # optional include/ + src/
+   ```
+   For a single variant, pass `include_dirs=`, `src_include_dirs=`, or `helpers_trees=` to the constructor instead.
+   `add_include_dirs` is header `-I`. `add_src_include_dirs` is the `tests/helpers/src` role (`#include <trisc.cpp>`), not the test driver path. Extra src-include dirs are prepended ahead of in-tree `helpers/src`.
+   `-I` is not recursive: `llk_tree_include_roots` expands one `tt_llk_<arch>` tree into `llk_lib`, `common/inc`, and `common/inc/sfpu`. Extra dirs are prepended so they win over in-tree `experimental/` copies.
+
+3. Point `TestConfig` at an out-of-tree C++ driver with an **absolute** `test_name`. Relative names still mean `tests/<name>` inside tt-llk. Absolute paths are quote-included; artefacts are stored under `/tmp/tt-llk-build/sources/<basename>/` so the harness never `mkdir`s through the `.cpp` file.
+
+The C++ driver must follow the usual `LLK_TRISC_UNPACK` / `MATH` / `PACK` + `run_kernel()` contract and call the underscored LLK APIs. Reuse the existing venv/SFPI under `tests/.venv` — do not invent a second toolchain.
+
+In-tree tests are unchanged: `conftest.py` still re-exports the arch skip markers (`from conftest import skip_for_wormhole`).

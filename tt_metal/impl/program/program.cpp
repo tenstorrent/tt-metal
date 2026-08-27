@@ -454,6 +454,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .unpack_to_dest_mode = compute_descriptor.unpack_to_dest_mode,
                         .bfp8_pack_precise = compute_descriptor.bfp8_pack_precise,
                         .math_approx_mode = compute_descriptor.math_approx_mode,
+                        .enable_trisc2_rvv = compute_descriptor.enable_trisc2_rvv,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
@@ -2422,7 +2423,7 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
-        ProgramCommandSequence program_command_sequence;
+        ProgramCommandSequence program_command_sequence{MetalContext::instance(extract_context_id(mesh_device))};
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
@@ -2463,7 +2464,7 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
     if (!trace_cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
-        ProgramCommandSequence program_command_sequence;
+        ProgramCommandSequence program_command_sequence{MetalContext::instance(extract_context_id(mesh_device))};
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(

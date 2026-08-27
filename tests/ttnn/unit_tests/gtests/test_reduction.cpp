@@ -37,6 +37,8 @@
 #include "ttnn/operations/reduction/moe/moe.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
 #include "ttnn/operations/reduction/sampling/sampling.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 #include "ttnn/operations/reduction/topk/topk.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -759,6 +761,85 @@ TEST_F(ReductionSmoke, TopkMultiCoreRows64) {
             ASSERT_EQ(static_cast<float>(values[row * k + m]), 512.0f - 4.0f * m) << "row=" << row << " m=" << m;
             ASSERT_EQ(indices[row * k + m], static_cast<uint16_t>(peak_col(row, m))) << "row=" << row << " m=" << m;
         }
+    }
+}
+
+// Host-side lock on the split-selection contract of find_topk_core_config.
+// The function is a pure function of its arguments (host-only math, it never
+// queries a device), which is why this test runs without silicon attached.
+//
+// Contract locked here:
+// - Among all valid power-of-two splits, the function selects the one that
+//   minimizes the makespan score kLocalCostFactor * Wt_local +
+//   kFinalCostFactor * Wt_final (constants defined next to the sweep in
+//   topk_utils.cpp, fitted to silicon measurements). Warning to future
+//   editors: a greedy first-valid / max-cores pick is NOT equivalent -- it
+//   maximizes the serial final-stage gather and measures slower on silicon,
+//   so don't simplify the sweep back to that.
+// - num_cores is asserted as width / split (the only value consistent with a
+//   returned config), so a re-fit of the cost constants edits one number per row.
+// - The core-rectangle orientation (selected_x/selected_y): the arrangement
+//   search takes the WIDEST (smallest-y) factorization that fits -- the
+//   arrangement the cost constants were fitted against on silicon.
+// - The Ht-gate domain (W in [multi_core_low_ht_min_width,
+//   multi_core_min_width) = [1024, 8192)) yields valid configs, including
+//   W=1024 right at the eligibility floor, where the start-split clamp in
+//   the sweep must bind.
+// - Non-tile-multiple K (50): Wt_final rounds K UP to the tile boundary
+//   (ceil(k/32) tiles per core, matching what the writer kernels physically
+//   gather), so k=50 must select the same config as k=64.
+//
+// The core range and tile sizes mirror what the multi-core factory passes on
+// the p150a unit the constants were fitted on (bf16 values, uint16 indices,
+// BH L1; e.g. a 13x10 compute grid on that box -- p150a worker grids vary
+// per unit with harvesting, 12x10 on others, which is why production code
+// queries the grid instead of assuming one). If kLocalCostFactor /
+// kFinalCostFactor or the sweep order changes, these assertions catch it
+// even though every numerical topk test stays green.
+TEST(TopkCoreConfigModel, SelectsFittedMakespanMinimum) {
+    constexpr uint32_t l1_size = 1536 * 1024;                                       // BH L1 per core
+    constexpr uint32_t value_tile_size = tt::tile_size(tt::DataFormat::Float16_b);  // 2048
+    constexpr uint32_t index_tile_size = tt::tile_size(tt::DataFormat::UInt16);     // 2048
+    constexpr uint32_t min_dim = ttnn::prim::constants::min_dim_per_core;           // 64
+    const tt::tt_metal::CoreRange core_range({0, 0}, {12, 9});  // grid of the fitting box (p150a grids vary per unit)
+
+    struct Case {
+        uint32_t width;
+        uint32_t k;
+        uint16_t expected_split;
+        uint16_t expected_x;
+        uint16_t expected_y;
+    };
+    // Expected values: the minimum of 7 * Wt_local + 2 * Wt_final over all
+    // valid power-of-two splits, computable by hand -- recompute each row
+    // when re-fitting the cost constants.
+    const std::array<Case, 7> cases{{
+        {8192, 64, 512, 8, 2},
+        {8192, 50, 512, 8, 2},  // == the k=64 row: Wt_final rounds k up to the tile boundary
+        {8192, 32, 256, 8, 4},
+        {32768, 64, 1024, 8, 4},
+        // Ht-gate domain (low-tile-row shapes below multi_core_min_width):
+        {1024, 32, 128, 8, 1},  // eligibility floor: 32 tiles < lp2(96 cores), the start-split clamp must bind
+        {2048, 32, 128, 8, 2},
+        {4096, 32, 256, 8, 2},
+    }};
+    for (const auto& c : cases) {
+        const auto config = ttnn::prim::find_topk_core_config(
+            c.width, min_dim, c.width / 2, c.k, core_range, l1_size, value_tile_size, index_tile_size);
+        ASSERT_TRUE(config.has_value()) << "W=" << c.width << " k=" << c.k;
+        EXPECT_EQ(config->split_size, c.expected_split) << "W=" << c.width << " k=" << c.k;
+        EXPECT_EQ(config->num_cores, c.width / c.expected_split) << "W=" << c.width << " k=" << c.k;
+        EXPECT_EQ(config->selected_x, c.expected_x) << "W=" << c.width << " k=" << c.k;
+        EXPECT_EQ(config->selected_y, c.expected_y) << "W=" << c.width << " k=" << c.k;
+    }
+
+    // Grids that cannot host the multi-core layout (local rectangle + final-core
+    // row) must return nullopt -- never crash -- so the caller falls back to
+    // single-core; single-row and two-row grids are the tight cases.
+    for (const auto& small_range : {tt::tt_metal::CoreRange({0, 0}, {7, 0}), tt::tt_metal::CoreRange({0, 0}, {7, 1})}) {
+        const auto config = ttnn::prim::find_topk_core_config(
+            2048, min_dim, 1024, 32, small_range, l1_size, value_tile_size, index_tile_size);
+        EXPECT_FALSE(config.has_value()) << "range=" << small_range.str();
     }
 }
 

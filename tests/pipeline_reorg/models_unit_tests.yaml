@@ -17,6 +17,10 @@
   cmd: |
     export TT_METAL_WATCHER=15
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    # CPU-only (<10s, no device, no weights): guards the warm-weight-cache marker semantics
+    # (variant-qualified markers, fail-closed unverifiable variants, sidecar single-load) that
+    # every tt_transformers e2e leg depends on. See #45400.
+    pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
@@ -738,6 +742,42 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
+- name: DeepSeek-V3 unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    export MESH_DEVICE=T3K
+    fail=0
+    pytest --timeout 60 --durations=0 models/demos/deepseek_v3/tests/unit || fail=1
+    pytest --durations=0 models/demos/deepseek_v3/tests/test_rms_norm.py || fail=1
+    exit $fail
+  model: deepseek-v3
+  model_family: DeepSeek
+  skus:
+    wh_llmbox:
+      timeout: 22
+      tier: 1
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+
+- name: DeepSeek-V3 module unit tests (host-side)
+  cmd: |
+    unset TT_METAL_WATCHER
+    export MESH_DEVICE=N150
+    pytest --durations=0 models/demos/deepseek_v3/tests -m t3k_compat \
+      --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
+      --ignore=models/demos/deepseek_v3/tests/test_cache_specs_harness.py
+  model: deepseek-v3
+  model_family: DeepSeek
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 1
+  owner_id: U04N3GWH8F9 # Kartik Paigwar
+  team: models
+
 - name: GPT-OSS-120B (disaggregated prefill) unit tests
   # Single-card PCC units for the gpt_oss_d_p prefill package (standalone: random weights +
   # a self-contained torch reference, no HF_MODEL). Directory glob so the kv-cache / MoE tests
@@ -920,6 +960,40 @@
       tier: 1
     bh_quietbox_2:
       timeout: 115
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT encoder unit tests, shared amongst all models.
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE  # umt5 fetches the Wan2.2 tokenizer from the hub
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    export DIT_UNIT_TEST=1  # read at collection time by t5/test_t5_full, umt5/test_umt5, clip/test_clip_full_projection
+    # No -k: params needing more than 8 devices skip themselves in the mesh_device fixture.
+    # -rs keeps those skip reasons visible so a green leg can be told from one that ran nothing.
+    # mistral3 is excluded: it loads black-forest-labs/FLUX.2-dev, a manually gated repo that CI's
+    # HF_TOKEN has no access to, so all 13 of its cases fail with a 403 GatedRepoError. This is an
+    # access problem, not a caching one -- MLPerf write access does not help.
+    # TODO(#54499): get the CI account added to the FLUX.2-dev allowlist, then drop the --ignore.
+    # qwen3vl vision_tower is excluded: 8 of its 22 cases fail (6 PCC misses that worsen with
+    # aspect ratio -- 98.6% at 4:3, 96.9% at 16:9, 93.1% at 4:1 against a 99% threshold -- plus 2
+    # TT_FATAL allocator faults on max_load). Added by #52874 and never run by any pipeline, so
+    # these are pre-existing, not regressions. It is also 63 of the leg's 98 minutes.
+    # TODO(#54498): hand the PCC/allocator failures to the MiniMax H3 owners, then drop the --ignore.
+    # gemma is excluded on two counts: google/gemma-3-12b-it-qat-q4_0-unquantized is gated and CI's
+    # token is not on its allowlist (4 cases), and test_gemma_connector_blocks calls a stale
+    # EmbeddingsConnector.forward signature (1 case). See #54503.
+    # TODO(#54503): allowlist the token and fix the connector call site, then drop the --ignore.
+    pytest --timeout 10000 -rs --durations=0 \
+      --ignore=models/tt_dit/tests/encoders/mistral3 \
+      --ignore=models/tt_dit/tests/encoders/gemma \
+      --ignore=models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_vision_tower.py \
+      models/tt_dit/tests/encoders/
+  model: dit-encoders
+  skus:
+    wh_llmbox:
+      timeout: 45 # 35m02s measured on run 33021627869, +~28% margin
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1501,7 +1575,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 15
+      timeout: 23
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -1662,6 +1736,68 @@
   skus:
     wh_llmbox:
       timeout: 4
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers RMSNorm 2D module unit tests
+  cmd: |
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+    pytest models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations-min=3.0 \
+      --cov=models.common.modules.rmsnorm.rmsnorm_2d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_galaxy_perf:
+      timeout: 5
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers MLP 2D module unit tests
+  cmd: |
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+    pytest models/common/tests/modules/mlp/test_mlp_2d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations-min=3.0 \
+      --cov=models.common.modules.mlp.mlp_2d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_galaxy_perf:
+      timeout: 5
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers auto-compose 2D unit tests
+  cmd: |
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+    pytest models/common/tests/test_auto_compose.py \
+      --tb=short \
+      --durations-min=3.0 \
+      --cov=models.common.auto_compose \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_galaxy_perf:
+      timeout: 5
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
