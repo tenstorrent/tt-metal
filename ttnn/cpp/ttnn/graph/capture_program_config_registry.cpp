@@ -39,20 +39,10 @@ std::span<const ProgramConfigExtractor> program_config_extractors() {
     // the point the op announces its attributes via device_operation::launch; validate that per op
     // before adding it here.
     static const std::vector<ProgramConfigExtractor> extractors = {
-        // Matmul: prim::matmul announces finalized attributes after both the
-        // program and compute-kernel configs have been selected. Capture the
-        // complete effective recipe, including duplicated untilize_out state,
-        // so a registry hit cannot be queried with fallback-only resources.
-        make_extractor<ttnn::prim::MatmulParams>([](const ttnn::prim::MatmulParams& params)
-                                                     -> std::optional<ttnn::prim::MatmulCapturedRecipe> {
-            if (!params.program_config.has_value() || !params.compute_kernel_config.has_value()) {
-                return std::nullopt;
-            }
-            return ttnn::prim::MatmulCapturedRecipe{
-                .program_config = *params.program_config,
-                .compute_kernel_config = *params.compute_kernel_config,
-                .untilize_out = params.untilize_out};
-        }),
+        // Matmul: prim::matmul fills normalized_attributes.program_config (the auto-selected config)
+        // before launch, so it is present and final when the attributes are announced.
+        make_extractor<ttnn::prim::MatmulParams>(
+            [](const ttnn::prim::MatmulParams& params) { return params.program_config; }),
     };
     return extractors;
 }

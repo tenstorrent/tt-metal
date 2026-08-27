@@ -10,9 +10,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/inspector.hpp>
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
-#include "../registry/agmm_config_registry.hpp"
 
 #include <tt-metalium/hal.hpp>
 
@@ -466,54 +464,10 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     bool fuse_swiglu,
     const std::vector<uint32_t>& chunk_sizes) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
-    namespace registry = ttnn::experimental::all_gather_minimal_matmul_registry;
-
-    const auto registry_mode = registry::current_mode();
-    std::optional<registry::DispatchResult> registry_dispatch;
-    if (registry_mode != registry::Mode::Off) {
-        auto eligibility = registry::Eligibility{
-            .has_explicit_program_config = config.has_value(),
-            .has_explicit_compute_kernel_config = compute_kernel_config.has_value()};
-        std::optional<bool> observed_trace_capture_active;
-        try {
-            if (auto* device = input_tensor.device(); device != nullptr) {
-                observed_trace_capture_active =
-                    tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(device).has_value();
-            } else {
-                observed_trace_capture_active = false;
-            }
-        } catch (...) {
-            // Unknown trace state is ineligible in both Shadow and On.
-            observed_trace_capture_active = true;
-        }
-        eligibility.trace_capture_active =
-            registry::fail_closed_trace_capture_active(registry_mode, observed_trace_capture_active);
-
-        // The production table is intentionally empty and request construction
-        // remains unavailable until canonical multi-device attestation exists.
-        // After cheap trace/explicit-override preflight, resolve() observes the
-        // empty table before attempting request or attestation work.
-        registry_dispatch = registry::resolve_for_dispatch(
-            registry_mode, std::nullopt, registry::AttestationStatus::UnsupportedAttestation, eligibility);
-        registry::record_resolution(registry_mode, registry_dispatch->resolution, registry_dispatch->action);
-    }
-
-    const bool registry_selected =
-        registry_dispatch.has_value() && registry_dispatch->action == registry::ExecutionAction::ApplyRecipe;
-    const std::optional<const experimental::prim::MinimalMatmulConfig> selected_config =
-        registry_selected
-            ? std::optional<const experimental::prim::MinimalMatmulConfig>{registry_dispatch->recipe->config}
-            : std::nullopt;
-    const std::optional<DeviceComputeKernelConfig> selected_compute_kernel_config =
-        registry_selected ? std::optional<DeviceComputeKernelConfig>{registry_dispatch->recipe->compute_kernel_config}
-                          : std::nullopt;
-    const auto& execution_config = registry_selected ? selected_config : config;
-    const auto& execution_compute_kernel_config =
-        registry_selected ? selected_compute_kernel_config : compute_kernel_config;
 
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
-        execution_compute_kernel_config,
+        compute_kernel_config,
         tt::tt_metal::MathFidelity::HiFi2,
         false /*approx_mode*/,
         true /*fp32_acc*/,
@@ -532,7 +486,7 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
                                       : fsdp_topology.value_or(ttnn::ccl::Topology::Ring);
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        execution_config,
+        config,
         std::move(fused_activation),
         memory_config,
         dtype,
@@ -566,15 +520,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         addcmul_input_tensor2,
         persistent_weight_buffer};
 
-    std::vector<Tensor> returned_tensors;
-    if (registry_selected) {
-        const registry::SelectedExecutionGuard registry_execution_observer(&registry_selected);
-        returned_tensors = registry::execute_selected_call_once(registry_execution_observer, [&] {
-            return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
-        });
-    } else {
-        returned_tensors = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
-    }
+    std::vector<Tensor> returned_tensors =
+        ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
     // Strip the activation-gather intermediate (slot 0) and, if present, the weight-gather
     // intermediate (slot 1). What's returned are just the chunked matmul outputs.
     size_t strip_count = 1 + (fsdp_cluster_axis.has_value() ? 1 : 0);

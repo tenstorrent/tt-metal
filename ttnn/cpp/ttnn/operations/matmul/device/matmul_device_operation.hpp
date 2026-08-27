@@ -60,19 +60,6 @@ MatmulParams create_matmul_attributes(
     const MatmulParams& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors);
 
-// Single source of truth for the compute-kernel configuration that matmul
-// places in its finalized device-operation attributes.  Read-only tooling may
-// call this helper to attest an omitted caller CKC, but must bind the result to
-// the complete call context that supplied these arguments.
-DeviceComputeKernelConfig resolve_matmul_effective_compute_kernel_config(
-    tt::ARCH arch,
-    tt::tt_metal::DataType input_a_dtype,
-    tt::tt_metal::DataType input_b_dtype,
-    tt::tt_metal::DataType output_dtype,
-    bool has_program_config,
-    bool has_user_core_coord,
-    const std::optional<const DeviceComputeKernelConfig>& caller_compute_kernel_config);
-
 }  // namespace ttnn::prim
 
 namespace ttnn::prim {

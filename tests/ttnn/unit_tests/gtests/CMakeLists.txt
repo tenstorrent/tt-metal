@@ -207,13 +207,9 @@ endif()
 
 # unit_tests_ttnn_mock_allocator
 
-add_library(unit_tests_ttnn_mock_allocator_lib OBJECT)
-add_library(TTNN::Test::MockAllocator ALIAS unit_tests_ttnn_mock_allocator_lib)
-target_sources(unit_tests_ttnn_mock_allocator_lib PRIVATE ${UNIT_TESTS_TTNN_MOCK_ALLOCATOR_SOURCES})
-setup_ttnn_test_target(unit_tests_ttnn_mock_allocator_lib)
-
 add_executable(unit_tests_ttnn_mock_allocator)
-target_link_libraries(unit_tests_ttnn_mock_allocator PRIVATE TTNN::Test::MockAllocator)
+target_sources(unit_tests_ttnn_mock_allocator PRIVATE ${UNIT_TESTS_TTNN_MOCK_ALLOCATOR_SOURCES})
+setup_ttnn_test_target(unit_tests_ttnn_mock_allocator)
 
 add_subdirectory(multiprocess)
 add_subdirectory(udm)

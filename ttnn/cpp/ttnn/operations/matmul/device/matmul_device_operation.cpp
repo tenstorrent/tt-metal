@@ -2782,35 +2782,6 @@ MatmulDeviceOperation::create_op_performance_model(
     return result;
 }
 
-DeviceComputeKernelConfig resolve_matmul_effective_compute_kernel_config(
-    const tt::ARCH arch,
-    const DataType input_a_dtype,
-    const DataType input_b_dtype,
-    const DataType output_dtype,
-    const bool has_program_config,
-    const bool has_user_core_coord,
-    const std::optional<const DeviceComputeKernelConfig>& caller_compute_kernel_config) {
-    bool are_inputs_low_precision_df =
-        ((input_a_dtype == DataType::BFLOAT8_B || input_a_dtype == DataType::BFLOAT4_B) &&
-         (input_b_dtype == DataType::BFLOAT8_B || input_b_dtype == DataType::BFLOAT4_B));
-    const auto increase_fidelity = !has_program_config && !has_user_core_coord && !are_inputs_low_precision_df;
-    auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
-    bool are_inputs_32F = (input_a_dtype == DataType::FLOAT32 && input_b_dtype == DataType::FLOAT32);
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
-    // When inputs are FLOAT32 (which drives fp32_dest_acc_en=True by default), use HiFi3 on Wormhole B0.
-    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    math_fidelity = are_inputs_32F ? (is_wormhole ? MathFidelity::HiFi3 : MathFidelity::HiFi4) : math_fidelity;
-
-    const bool is_float_32 = output_dtype == DataType::FLOAT32;
-    return init_device_compute_kernel_config(
-        arch,
-        caller_compute_kernel_config,
-        math_fidelity,
-        /*default_approx_mode=*/false,
-        /*default_fp32_acc=*/is_float_32,
-        /*default_l1_acc=*/!is_float_32);
-}
-
 MatmulParams create_matmul_attributes(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -2821,6 +2792,16 @@ MatmulParams create_matmul_attributes(
     auto arch = device->arch();
     const bool has_user_grid = parameters.user_core_coord.has_value();
     const bool has_program_config = parameters.program_config.has_value();
+    bool are_inputs_low_precision_df =
+        ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
+         (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
+    const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
+    auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
+    bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // When inputs are FLOAT32 (which drives fp32_dest_acc_en=True by default), use HiFi3 on Wormhole B0.
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
+    math_fidelity = are_inputs_32F ? (is_wormhole ? MathFidelity::HiFi3 : MathFidelity::HiFi4) : math_fidelity;
 
     bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(
         input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b, parameters.program_config));
@@ -2858,14 +2839,14 @@ MatmulParams create_matmul_attributes(
             output_dtype = input_tensor_a.dtype();
         }
     }
-    auto kernel_config_val = resolve_matmul_effective_compute_kernel_config(
+    bool is_float_32 = output_dtype == DataType::FLOAT32;
+    auto kernel_config_val = init_device_compute_kernel_config(
         arch,
-        input_tensor_a.dtype(),
-        input_tensor_b.dtype(),
-        output_dtype.value(),
-        has_program_config,
-        has_user_grid,
-        parameters.compute_kernel_config);
+        parameters.compute_kernel_config,
+        math_fidelity,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/is_float_32,
+        /*default_l1_acc=*/!is_float_32);
     ttnn::verify_numerical_configuration(arch, parameters.compute_kernel_config);
     auto in0_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_a, parameters.transpose_a);
     auto in1_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_b, parameters.transpose_b);

@@ -22,14 +22,6 @@ target_link_libraries(
 
 install(TARGETS tt-nn-validation-basic RUNTIME COMPONENT ttnn-validation)
 
-# Device-free public-wrapper registry contract. Keep the mock-device tests in
-# their own executable so the ordinary validation binary does not inherit a
-# second mock allocator environment.
-add_executable(tt-nn-validation-matmul-registry-wrappers)
-target_link_libraries(tt-nn-validation-matmul-registry-wrappers PRIVATE TTNN::Test::MockAllocator)
-
-install(TARGETS tt-nn-validation-matmul-registry-wrappers RUNTIME COMPONENT ttnn-validation)
-
 # Mock cluster descriptor YAMLs used by configure_mock_mode() in tt-nn-validation-basic
 # ship in tt-metalium-validation.deb (see tt_metal/test/CMakeLists.txt). tt-nn-validation
 # picks them up via its Depends: metalium-validation in cmake/packaging.cmake.

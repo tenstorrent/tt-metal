@@ -29,15 +29,6 @@ struct MatmulParams {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt;
 };
 
-// Owned, finalized execution state captured by stateful constraint queries.
-// Program config alone is not a complete matmul recipe: registry selection can
-// also change the compute-kernel config and the duplicated untilize_out state.
-struct MatmulCapturedRecipe {
-    operations::matmul::MatmulProgramConfig program_config;
-    ttnn::DeviceComputeKernelConfig compute_kernel_config;
-    bool untilize_out = false;
-};
-
 struct MatmulInputs {
     std::vector<Tensor> input_tensors;                                // a,b, weights
     std::vector<std::optional<const Tensor>> optional_input_tensors;  // bias

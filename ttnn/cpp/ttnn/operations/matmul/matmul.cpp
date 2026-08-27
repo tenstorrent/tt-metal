@@ -4,12 +4,8 @@
 
 #include "matmul.hpp"
 
-#include <array>
-#include <bit>
 #include <numeric>
 #include <variant>
-
-#include <tt-metalium/experimental/inspector.hpp>
 
 #include "device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -19,8 +15,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 
-#include "ttnn/graph/constraint_query_context.hpp"
-#include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_registry_dispatch.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -220,234 +215,13 @@ static bool get_post_process_bias(
     return post_process_bias;
 }
 
-registry::RegistryRequestInspection registry::inspect_registry_request(
-    const ttnn::Tensor& input_tensor_a,
-    const ttnn::Tensor& input_tensor_b,
-    const bool has_bias,
-    const CallSemantics call_semantics,
-    const ttnn::prim::MatmulParams& parameters,
-    const std::optional<ttnn::Tensor>& optional_output_tensor,
-    const bool trace_capture_active,
-    const DeviceAttestationProvider provider) {
-    const auto io_contract = resolve_matmul_io_contract(IoContractRequest{
-        .input_a_dtype = input_tensor_a.dtype(),
-        .input_a_tile = input_tensor_a.tensor_spec().tile(),
-        .input_b_tile = input_tensor_b.tensor_spec().tile(),
-        .requested_output_memory_config = parameters.output_mem_config,
-        .requested_output_dtype = parameters.output_dtype,
-        .requested_output_tile = parameters.output_tile,
-        .optional_output = optional_output_tensor.has_value()
-                               ? std::make_optional(OptionalOutputContract{
-                                     .memory_config = optional_output_tensor->memory_config(),
-                                     .dtype = optional_output_tensor->dtype(),
-                                     .tile = optional_output_tensor->tensor_spec().tile()})
-                               : std::nullopt,
-        .transpose_a = parameters.transpose_a,
-        .transpose_b = parameters.transpose_b,
-    });
-    RegistryRequestInspection inspection{
-        .eligibility = v1_eligibility_from_call_state(
-            call_semantics,
-            io_contract.status,
-            trace_capture_active,
-            has_bias,
-            parameters,
-            optional_output_tensor.has_value(),
-            input_tensor_a.is_sharded(),
-            input_tensor_b.is_sharded(),
-            io_contract.output_memory_config.is_sharded(),
-            has_nondefault_v1_tile_transpose(input_tensor_a.tensor_spec().tile()) ||
-                has_nondefault_v1_tile_transpose(input_tensor_b.tensor_spec().tile()) ||
-                has_nondefault_v1_tile_transpose(io_contract.output_tile) ||
-                input_tensor_a.tensor_spec().tile().get_height() != 32 ||
-                input_tensor_a.tensor_spec().tile().get_width() != 32 ||
-                input_tensor_b.tensor_spec().tile().get_height() != 32 ||
-                input_tensor_b.tensor_spec().tile().get_width() != 32 || io_contract.output_tile.get_height() != 32 ||
-                io_contract.output_tile.get_width() != 32)};
-    // Reject caller-known exclusions before shape, device, firmware, and
-    // cluster attestation. Shadow must remain an inexpensive observation of
-    // the ordinary path for calls that cannot possibly match the v1 table.
-    if (preflight_v1_eligibility(inspection.eligibility) != ResolutionReason::CertifiedMatch) {
-        return inspection;
-    }
-
-    const auto* device_a = input_tensor_a.device();
-    const auto* device_b = input_tensor_b.device();
-    if (input_tensor_a.logical_shape().rank() != 2 || input_tensor_b.logical_shape().rank() != 2 ||
-        device_a == nullptr || device_a != device_b || device_a->num_devices() != 1) {
-        return inspection;
-    }
-
-    const auto a_logical = utilities::get_matmul_tensor_logical_shape(input_tensor_a, parameters.transpose_a);
-    const auto b_logical = utilities::get_matmul_tensor_logical_shape(input_tensor_b, parameters.transpose_b);
-    const auto a_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_a, parameters.transpose_a);
-    const auto b_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_b, parameters.transpose_b);
-    if (a_logical[-1] != b_logical[-2] || a_padded[-1] != b_padded[-2]) {
-        return inspection;
-    }
-
-    inspection.device_attestation = query_device_attestation(*device_a, provider);
-    const auto tensor_request = [](const ttnn::Tensor& tensor) {
-        const auto& tile = tensor.tensor_spec().tile();
-        const auto& memory_config = tensor.memory_config();
-        return TensorRequest{
-            .dtype = tensor.dtype(),
-            .layout = tensor.layout(),
-            .memory_layout = memory_config.memory_layout(),
-            .buffer_type = memory_config.buffer_type(),
-            .tile_height = tile.get_height(),
-            .tile_width = tile.get_width(),
-        };
-    };
-    const auto grid = device_a->compute_with_storage_grid_size();
-    std::optional<std::uint32_t> activation_op;
-    std::array<std::uint32_t, MatmulRegistryRequest::kMaxActivationParameters> activation_params{};
-    std::uint8_t activation_param_count = 0;
-    if (parameters.user_fused_activation.has_value()) {
-        activation_op = static_cast<std::uint32_t>(parameters.user_fused_activation->op_type);
-        if (parameters.user_fused_activation->params.size() > activation_params.size()) {
-            return inspection;
-        }
-        for (const auto parameter : parameters.user_fused_activation->params) {
-            activation_params[activation_param_count++] = std::bit_cast<std::uint32_t>(parameter);
-        }
-    }
-
-    inspection.request = MatmulRegistryRequest{
-        .schema_version = 1,
-        .call = call_semantics,
-        .workload =
-            WorkloadRequest{
-                .logical_m = a_logical[-2],
-                .logical_k = a_logical[-1],
-                .logical_n = b_logical[-1],
-                .padded_m = a_padded[-2],
-                .padded_k = a_padded[-1],
-                .padded_n = b_padded[-1],
-            },
-        .input_a = tensor_request(input_tensor_a),
-        .input_b = tensor_request(input_tensor_b),
-        .output =
-            TensorRequest{
-                .dtype = io_contract.output_dtype,
-                .layout = tt::tt_metal::Layout::TILE,
-                .memory_layout = io_contract.output_memory_config.memory_layout(),
-                .buffer_type = io_contract.output_memory_config.buffer_type(),
-                .tile_height = io_contract.output_tile.get_height(),
-                .tile_width = io_contract.output_tile.get_width(),
-            },
-        .device =
-            DeviceRequest{
-                .attestation_status = inspection.device_attestation.status,
-                .architecture = inspection.device_attestation.attestation.architecture,
-                .board_capability_class = inspection.device_attestation.attestation.board_capability_class,
-                .device_count = static_cast<std::uint32_t>(device_a->num_devices()),
-                .mesh_rows = static_cast<std::uint32_t>(device_a->num_rows()),
-                .mesh_cols = static_cast<std::uint32_t>(device_a->num_cols()),
-                .compute_grid_x = grid.x,
-                .compute_grid_y = grid.y,
-                .topology_sha256 = inspection.device_attestation.attestation.topology_sha256,
-                .runtime_capability_sha256 = inspection.device_attestation.attestation.runtime_capability_sha256,
-            },
-        .transpose_a = parameters.transpose_a,
-        .transpose_b = parameters.transpose_b,
-        .has_bias = has_bias,
-        .has_activation = parameters.user_fused_activation.has_value(),
-        .untilize_out = parameters.untilize_out,
-        .bcast_batch = parameters.bcast_batch,
-        .run_batched = parameters.user_run_batched,
-        .activation_op = activation_op,
-        .activation_param_f32_bits = activation_params,
-        .activation_param_count = activation_param_count,
-    };
-    return inspection;
-}
-
-static registry::DistributedMatmulClass classify_distributed_matmul_call(
-    const ttnn::Tensor& input_tensor_a,
-    const ttnn::Tensor& input_tensor_b,
-    const bool has_bias,
-    const registry::CallSemantics call_semantics,
-    const ttnn::prim::MatmulParams& parameters,
-    const std::optional<ttnn::Tensor>& optional_output_tensor) noexcept {
-    try {
-        const auto* device_a = input_tensor_a.device();
-        const auto* device_b = input_tensor_b.device();
-        const std::uint32_t device_count =
-            device_a == nullptr ? 0 : static_cast<std::uint32_t>(device_a->num_devices());
-        if (device_count <= 1) {
-            return registry::DistributedMatmulClass::NotDistributed;
-        }
-        if (device_b == nullptr) {
-            return registry::DistributedMatmulClass::Unknown;
-        }
-
-        const auto tensor_view = [](const ttnn::Tensor& tensor) {
-            const auto& logical_shape = tensor.logical_shape();
-            const auto& topology = tensor.tensor_topology();
-            const auto& distribution_shape = topology.distribution_shape();
-            const auto& placements = topology.placements();
-            const auto& mesh_coordinates = topology.mesh_coords();
-            const auto storage_coordinates = tensor.device_storage().get_coords();
-            return registry::DistributedTensorView{
-                .logical_shape = std::span<const std::uint32_t>(logical_shape.begin(), logical_shape.end()),
-                .dtype = tensor.dtype(),
-                .layout = tensor.layout(),
-                .memory_layout = tensor.memory_config().memory_layout(),
-                .buffer_type = tensor.memory_config().buffer_type(),
-                .distribution_shape =
-                    std::span<const std::uint32_t>(distribution_shape.begin(), distribution_shape.end()),
-                .placements = std::span<const tt::tt_metal::distributed::MeshMapperConfig::Placement>(
-                    placements.data(), placements.size()),
-                .mesh_coordinates = std::span<const tt::tt_metal::distributed::MeshCoordinate>(
-                    mesh_coordinates.data(), mesh_coordinates.size()),
-                .storage_coordinates = std::span<const tt::tt_metal::distributed::MeshCoordinate>(
-                    storage_coordinates.data(), storage_coordinates.size()),
-            };
-        };
-
-        const auto& device_shape = device_a->shape();
-        return registry::classify_distributed_matmul(registry::DistributedMatmulObservation{
-            .domain = call_semantics.domain,
-            .tensors_share_device = device_a == device_b,
-            .device_count = device_count,
-            .device_mesh_shape = std::span<const std::uint32_t>(device_shape.begin(), device_shape.end()),
-            .input_a = tensor_view(input_tensor_a),
-            .input_b = tensor_view(input_tensor_b),
-            .transpose_a = parameters.transpose_a,
-            .transpose_b = parameters.transpose_b,
-            .has_bias = has_bias,
-            .has_activation = parameters.user_fused_activation.has_value(),
-            .has_program_config = parameters.program_config.has_value(),
-            .has_compute_kernel_config = parameters.compute_kernel_config.has_value(),
-            .has_user_core_grid = parameters.user_core_coord.has_value(),
-            .has_output_dtype = parameters.output_dtype.has_value(),
-            .has_optional_output = optional_output_tensor.has_value(),
-            .has_output_tile = parameters.output_tile.has_value(),
-            .has_global_cb = parameters.global_cb.has_value(),
-            .has_sub_device = parameters.sub_device_id.has_value(),
-            .has_bcast_batch = parameters.bcast_batch.has_value(),
-            .untilize_out = parameters.untilize_out,
-            .run_batched = parameters.user_run_batched,
-            .output_is_dram_interleaved =
-                parameters.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-                parameters.output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM,
-        });
-    } catch (...) {
-        // Topology inspection is observation-only and must preserve all legacy
-        // validation/exception timing. Any unavailable fact fails closed.
-        return registry::DistributedMatmulClass::Unknown;
-    }
-}
-
 static ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const registry::CallSemantics call_semantics,
-    ttnn::prim::MatmulParams& parameters,
-    std::optional<ttnn::Tensor>& optional_output_tensor,
-    bool* external_registry_selected = nullptr) {
+    const ttnn::prim::MatmulParams& legacy_parameters,
+    std::optional<ttnn::Tensor>& optional_output_tensor) {
     if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
         TT_THROW(
             "ttnn.matmul: Both arguments to matmul need to be at least 1D, but got shapes {} and {}",
@@ -455,87 +229,20 @@ static ttnn::Tensor bound_matmul(
             input_tensor_b.logical_shape());
     }
 
-    const auto registry_mode = registry::current_mode();
-    std::optional<ttnn::prim::MatmulParams> registry_parameters;
-    if (registry_mode != registry::Mode::Off) {
-        registry::record_distributed_observation(
-            registry_mode,
-            classify_distributed_matmul_call(
-                input_tensor_a, input_tensor_b, bias.has_value(), call_semantics, parameters, optional_output_tensor));
-        std::optional<bool> observed_trace_capture_active;
-        try {
-            if (auto* device = input_tensor_a.device(); device != nullptr) {
-                observed_trace_capture_active =
-                    tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(device).has_value();
-            } else {
-                observed_trace_capture_active = false;
-            }
-        } catch (...) {
-            // An unknown trace state is ineligible in both Shadow and On.
-            observed_trace_capture_active = true;
-        }
-        const bool trace_capture_active =
-            registry::fail_closed_trace_capture_active(registry_mode, observed_trace_capture_active);
-
-        auto eligibility = registry::Eligibility{.call = call_semantics, .trace_capture_active = trace_capture_active};
-        std::optional<registry::MatmulRegistryRequest> registry_request;
-        try {
-            auto inspection = registry::inspect_registry_request(
-                input_tensor_a,
-                input_tensor_b,
-                bias.has_value(),
-                call_semantics,
-                parameters,
-                optional_output_tensor,
-                trace_capture_active);
-            eligibility = inspection.eligibility;
-            registry_request = inspection.request;
-            if (registry_request.has_value()) {
-                registry::initialize_registry_compatibility_from_attestation(inspection.device_attestation);
-            }
-        } catch (...) {
-            // Observation and request construction may inspect tensors before
-            // legacy validators do. Preserve legacy exception timing if they
-            // cannot form an exact request. Recipe materialization is handled
-            // separately by the fail-closed dispatch gate.
-            registry_request.reset();
-        }
-        const bool stateless_constraint_query_active = ttnn::graph::is_stateless_constraint_query_active();
-        auto registry_dispatch = stateless_constraint_query_active
-                                     ? registry::resolve_for_dispatch_decision(
-                                           registry_mode, registry_request, eligibility)
-                                     : registry::resolve_for_dispatch(
-                                           registry_mode, registry_request, eligibility, parameters);
-        registry::record_resolution(
-            registry_mode, call_semantics.domain, registry_dispatch.resolution, registry_dispatch.action);
-        if (registry::registry_constraint_state_required(
-                registry_mode,
-                registry_dispatch.action,
-                stateless_constraint_query_active)) {
-            TT_THROW(
-                "RegistryConstraintStateRequired: an exact On-mode matmul registry hit requires "
-                "query_op_constraints_with_initial_state");
-        }
-        registry_parameters = std::move(registry_dispatch.materialized_parameters);
-    }
-    const bool registry_selected = registry_parameters.has_value();
-    if (external_registry_selected != nullptr) {
-        *external_registry_selected = registry_selected;
-    }
-    const registry::SelectedExecutionGuard registry_execution_observer(
-        call_semantics.domain, external_registry_selected == nullptr ? &registry_selected : nullptr);
-
-    // On uses one complete temporary object. Shadow and every fallback retain
-    // the exact legacy object, including later in-place transpose normalization.
-    auto& execution_parameters = registry_parameters.has_value() ? registry_parameters.value() : parameters;
+    // Registry dispatch owns all inspection and resolution mechanics. Work on
+    // a local copy so fallback and the legacy body always share one parameter
+    // object, while the wrapper-owned input remains untouched.
+    auto parameters = legacy_parameters;
+    registry::try_apply_registry_parameters(
+        input_tensor_a, input_tensor_b, bias.has_value(), call_semantics, parameters, optional_output_tensor);
 
     if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
         TT_FATAL(
-            !execution_parameters.user_fused_activation.has_value(),
+            !parameters.user_fused_activation.has_value(),
             "Sharded matmul run with {} activation: this should be placed in the program config's "
             "fused_activation "
             "field",
-            execution_parameters.user_fused_activation.value().op_type);
+            parameters.user_fused_activation.value().op_type);
     }
 
     // Check for zero volume tensors
@@ -543,17 +250,17 @@ static ttnn::Tensor bound_matmul(
         return detail::handle_zero_volume_matmul(
             input_tensor_a,
             input_tensor_b,
-            execution_parameters.output_mem_config,
-            execution_parameters.output_dtype,
-            execution_parameters.transpose_a,
-            execution_parameters.transpose_b,
+            parameters.output_mem_config,
+            parameters.output_dtype,
+            parameters.transpose_a,
+            parameters.transpose_b,
             bias);
     }
 
     //----------------------------------------------------------------------------------------------
     // The following code is replicated from matmul_op.cpp and helps determine the program config
-    auto matmul_struct = ttnn::prim::create_matmul_attributes(
-        input_tensor_a, input_tensor_b, execution_parameters, {optional_output_tensor});
+    auto matmul_struct =
+        ttnn::prim::create_matmul_attributes(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor});
 
     uint32_t bias_single_tile_size = 0;
     if (bias.has_value()) {
@@ -563,8 +270,8 @@ static ttnn::Tensor bound_matmul(
     MatmulProgramConfig chosen_program_config = get_program_config(
         input_tensor_a,
         input_tensor_b,
-        execution_parameters.transpose_a,
-        execution_parameters.transpose_b,
+        parameters.transpose_a,
+        parameters.transpose_b,
         bias_single_tile_size,
         matmul_struct);
     //----------------------------------------------------------------------------------------------
@@ -574,8 +281,8 @@ static ttnn::Tensor bound_matmul(
         !(std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config) ||
           std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(chosen_program_config) ||
           std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(chosen_program_config));
-    bool needs_manual_transpose_a = execution_parameters.transpose_a && needs_manual_transpose;
-    bool needs_manual_transpose_b = execution_parameters.transpose_b && needs_manual_transpose;
+    bool needs_manual_transpose_a = parameters.transpose_a && needs_manual_transpose;
+    bool needs_manual_transpose_b = parameters.transpose_b && needs_manual_transpose;
 
     const auto& input_tensor_a_adjusted = needs_manual_transpose_a
                                               ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
@@ -591,34 +298,32 @@ static ttnn::Tensor bound_matmul(
     // We need to change the transpose_a and transpose_b flags if we manually transposed
     // the input tensors
     if (needs_manual_transpose_a) {
-        execution_parameters.transpose_a = false;
+        parameters.transpose_a = false;
     }
     if (needs_manual_transpose_b) {
-        execution_parameters.transpose_b = false;
+        parameters.transpose_b = false;
     }
 
     bool post_process_bias = get_post_process_bias(
         bias,
-        execution_parameters.program_config,
-        execution_parameters.user_core_coord,
-        execution_parameters.output_mem_config,
+        parameters.program_config,
+        parameters.user_core_coord,
+        parameters.output_mem_config,
         input_tensor_a_adjusted,
         input_tensor_b_adjusted,
-        execution_parameters.transpose_a,
-        execution_parameters.transpose_b);
+        parameters.transpose_a,
+        parameters.transpose_b);
 
     auto attributes = ttnn::prim::create_matmul_attributes(
-        input_tensor_a_adjusted, input_tensor_b_adjusted, execution_parameters, {optional_output_tensor});
+        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
 
-    auto output_tensor = registry::execute_selected_call_once(registry_execution_observer, [&] {
-        return ttnn::prim::matmul(
-                   input_tensor_a_adjusted,
-                   input_tensor_b_adjusted,
-                   post_process_bias ? std::nullopt : bias,
-                   optional_output_tensor,
-                   attributes)
-            .at(0);
-    });
+    auto output_tensor = ttnn::prim::matmul(
+                             input_tensor_a_adjusted,
+                             input_tensor_b_adjusted,
+                             post_process_bias ? std::nullopt : bias,
+                             optional_output_tensor,
+                             attributes)
+                             .at(0);
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
         output_tensor = ttnn::reshape(
@@ -657,8 +362,8 @@ static ttnn::Tensor bound_matmul(
         output_tensor = ttnn::reshape(output_tensor, result_shape);
     }
 
-    if (execution_parameters.user_fused_activation.has_value() && !execution_parameters.user_core_coord.has_value()) {
-        const UnaryWithParam& activation = execution_parameters.user_fused_activation.value();
+    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
+        const UnaryWithParam& activation = parameters.user_fused_activation.value();
 
         output_tensor =
             ttnn::unary_chain(output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
@@ -876,35 +581,29 @@ Tensor addmm(
         output_tile,
         /*global_cb=*/std::nullopt,
         /*sub_device_id=*/std::nullopt};
-    bool registry_selected = false;
-    const registry::SelectedExecutionGuard registry_execution_observer(
-        registry::OperationDomain::Addmm, &registry_selected);
-    return registry::execute_selected_call_once(registry_execution_observer, [&] {
-        auto out_tensor = bound_matmul(
-            mat1_tensor,
-            mat2_tensor,
-            std::nullopt,
-            registry::addmm_call_semantics(alpha, beta),
-            matmul_params,
-            optional_output_tensor,
-            &registry_selected);
+    auto out_tensor = bound_matmul(
+        mat1_tensor,
+        mat2_tensor,
+        std::nullopt,
+        registry::addmm_call_semantics(alpha, beta),
+        matmul_params,
+        optional_output_tensor);
 
-        if (alpha != 1.0) {
-            multiply_(out_tensor, alpha);
+    if (alpha != 1.0) {
+        multiply_(out_tensor, alpha);
+    }
+
+    if (beta != 0.0) {
+        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta, out_tensor.dtype()) : input_tensor;
+        // The matmul output dtype can differ from input_tensor's dtype when `dtype` overrides it.
+        // binary_ng's in-place add requires both operands to share a dtype
+        if (add_tensor.dtype() != out_tensor.dtype()) {
+            add_tensor = ttnn::typecast(add_tensor, out_tensor.dtype());
         }
+        add_(out_tensor, add_tensor);
+    }
 
-        if (beta != 0.0) {
-            auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta, out_tensor.dtype()) : input_tensor;
-            // The matmul output dtype can differ from input_tensor's dtype when `dtype` overrides it.
-            // binary_ng's in-place add requires both operands to share a dtype
-            if (add_tensor.dtype() != out_tensor.dtype()) {
-                add_tensor = ttnn::typecast(add_tensor, out_tensor.dtype());
-            }
-            add_(out_tensor, add_tensor);
-        }
-
-        return out_tensor;
-    });
+    return out_tensor;
 }
 
 Tensor sparse_matmul(

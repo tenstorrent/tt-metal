@@ -8,9 +8,6 @@
 
 #include <any>
 #include <optional>
-#include <stdexcept>
-#include <string_view>
-#include <utility>
 
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
@@ -27,18 +24,15 @@
 
 #include "device/mock_device_util.hpp"
 
-#include "ttnn/graph/constraint_query_context.hpp"
-#include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
+#include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat_force.hpp"
 
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
-#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -72,103 +66,9 @@ protected:
     }
 };
 
-namespace {
-
-class ScopedMatmulRegistryMode {
-public:
-    explicit ScopedMatmulRegistryMode(const ttnn::MatmulRegistryMode mode) :
-        original_(ttnn::CONFIG.get<"matmul_registry_mode">()) {
-        set(mode);
-    }
-
-    ~ScopedMatmulRegistryMode() {
-        ttnn::CONFIG.set<"matmul_registry_mode">(original_);
-        ttnn::operations::matmul::registry::reset_startup_mode_for_testing();
-        ttnn::operations::matmul::registry::reset_stats_for_testing();
-    }
-
-    void set(const ttnn::MatmulRegistryMode mode) {
-        ttnn::operations::matmul::registry::reset_startup_mode_for_testing();
-        ttnn::operations::matmul::registry::reset_stats_for_testing();
-        ttnn::CONFIG.set<"matmul_registry_mode">(mode);
-    }
-
-private:
-    ttnn::MatmulRegistryMode original_;
-};
-
-std::pair<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec> registry_matmul_specs() {
-    return {
-        tt::tt_metal::TensorSpec(
-            ttnn::Shape{64, 128}, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG)),
-        tt::tt_metal::TensorSpec(
-            ttnn::Shape{128, 64}, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG))};
-}
-
-ttnn::graph::ConstraintQueryResponse query_registry_matmul(
-    tt::tt_metal::distributed::MeshDevice* device,
-    const tt::tt_metal::TensorSpec& spec_a,
-    const tt::tt_metal::TensorSpec& spec_b) {
-    return ttnn::graph::query_op_constraints(
-        ttnn::matmul,
-        device,
-        spec_a,
-        spec_b,
-        false,
-        false,
-        ttnn::L1_MEMORY_CONFIG,
-        DataType::BFLOAT16,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt);
-}
-
-void expect_same_constraints(
-    const ttnn::graph::ConstraintQueryResponse& expected, const ttnn::graph::ConstraintQueryResponse& actual) {
-    EXPECT_EQ(actual.status, expected.status);
-    EXPECT_EQ(actual.resource_usage.cb_peak_size_per_core, expected.resource_usage.cb_peak_size_per_core);
-    EXPECT_EQ(actual.resource_usage.l1_buffers_peak_per_core, expected.resource_usage.l1_buffers_peak_per_core);
-    EXPECT_EQ(
-        actual.resource_usage.dataflow_buffer_peak_size_per_core,
-        expected.resource_usage.dataflow_buffer_peak_size_per_core);
-    EXPECT_EQ(
-        actual.resource_usage.scratchpad_peak_size_per_core, expected.resource_usage.scratchpad_peak_size_per_core);
-    EXPECT_EQ(actual.resource_usage.peak_memory_usage_per_core, expected.resource_usage.peak_memory_usage_per_core);
-    EXPECT_EQ(actual.resource_usage.l1_output_buffer_per_core, expected.resource_usage.l1_output_buffer_per_core);
-    EXPECT_EQ(actual.output_tensor_specs, expected.output_tensor_specs);
-}
-
-}  // namespace
-
 // ============================================================================
 // NO_DISPATCH / NORMAL graph-capture tests
 // ============================================================================
-
-TEST_F(QueryOpConstraintsMockDevice, StatelessConstraintQueryMarksOnlyItsInvocationScope) {
-    EXPECT_FALSE(ttnn::graph::is_stateless_constraint_query_active());
-    const auto spec = tt::tt_metal::TensorSpec(
-        ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
-        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-
-    const auto response = ttnn::graph::query_op_constraints(
-        [](const ttnn::Tensor& input) -> ttnn::Tensor {
-            if (ttnn::graph::is_stateless_constraint_query_active()) {
-                throw std::runtime_error("stateless_constraint_query_active");
-            }
-            return input;
-        },
-        mock_device_.get(),
-        spec);
-
-    EXPECT_EQ(response.status, ttnn::graph::ExecutionStatus::Error);
-    EXPECT_EQ(response.error_message, "stateless_constraint_query_active");
-    EXPECT_FALSE(ttnn::graph::is_stateless_constraint_query_active());
-}
 
 TEST_F(QueryOpConstraintsMockDevice, DeviceTensorCreationInGraphCapture) {
     const auto input_spec = tt::tt_metal::TensorSpec(
@@ -463,129 +363,11 @@ TEST_F(QueryOpConstraintsMockDevice, Matmul) {
     EXPECT_EQ(query.output_tensor_specs->size(), 1u);
 }
 
-TEST_F(QueryOpConstraintsMockDevice, MatmulRegistryOffAndEmptyShadowPreserveConstraintQuery) {
-    const auto [spec_a, spec_b] = registry_matmul_specs();
-    const auto incompatible_spec_b = tt::tt_metal::TensorSpec(
-        ttnn::Shape{64, 64}, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-    [[maybe_unused]] ScopedMatmulRegistryMode registry_mode(ttnn::MatmulRegistryMode::Off);
-
-    const auto off = query_registry_matmul(mock_device_.get(), spec_a, spec_b);
-    ASSERT_EQ(off.status, ttnn::graph::ExecutionStatus::Success) << "Off error: " << off.error_message.value_or("none");
-    const auto off_error = query_registry_matmul(mock_device_.get(), spec_a, incompatible_spec_b);
-    ASSERT_EQ(off_error.status, ttnn::graph::ExecutionStatus::Error);
-    auto snapshot = ttnn::operations::matmul::registry::stats_snapshot();
-    EXPECT_EQ(
-        snapshot.domains[static_cast<std::size_t>(ttnn::operations::matmul::registry::OperationDomain::DenseMatmul)]
-            .resolution_attempts,
-        0);
-
-    registry_mode.set(ttnn::MatmulRegistryMode::Shadow);
-    const auto shadow = query_registry_matmul(mock_device_.get(), spec_a, spec_b);
-    ASSERT_EQ(shadow.status, ttnn::graph::ExecutionStatus::Success)
-        << "Shadow error: " << shadow.error_message.value_or("none");
-    expect_same_constraints(off, shadow);
-
-    snapshot = ttnn::operations::matmul::registry::stats_snapshot();
-    const auto& dense =
-        snapshot.domains[static_cast<std::size_t>(ttnn::operations::matmul::registry::OperationDomain::DenseMatmul)];
-    EXPECT_EQ(dense.resolution_attempts, 1);
-    EXPECT_EQ(
-        dense.reasons[static_cast<std::size_t>(ttnn::operations::matmul::registry::ResolutionReason::EmptyRegistry)],
-        1);
-
-    const auto shadow_error = query_registry_matmul(mock_device_.get(), spec_a, incompatible_spec_b);
-    ASSERT_EQ(shadow_error.status, ttnn::graph::ExecutionStatus::Error);
-    ASSERT_TRUE(off_error.error_message.has_value());
-    ASSERT_TRUE(shadow_error.error_message.has_value());
-    constexpr std::string_view expected_validation =
-        "The width of the first tensor must be equal to the height of the second tensor";
-    EXPECT_NE(off_error.error_message->find(expected_validation), std::string::npos);
-    EXPECT_NE(shadow_error.error_message->find(expected_validation), std::string::npos);
-}
-
-TEST_F(QueryOpConstraintsMockDevice, PublicMatmulWrappersForwardOneDisjointDomainEach) {
-    namespace registry = ttnn::operations::matmul::registry;
-    const auto [spec_a, spec_b] = registry_matmul_specs();
-    const auto addend_spec = tt::tt_metal::TensorSpec(
-        ttnn::Shape{64, 64}, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-    [[maybe_unused]] ScopedMatmulRegistryMode registry_mode(ttnn::MatmulRegistryMode::Shadow);
-
-    const auto matmul = query_registry_matmul(mock_device_.get(), spec_a, spec_b);
-    const auto linear = ttnn::graph::query_op_constraints(
-        ttnn::linear,
-        mock_device_.get(),
-        spec_a,
-        spec_b,
-        std::nullopt,
-        false,
-        false,
-        ttnn::L1_MEMORY_CONFIG,
-        DataType::BFLOAT16,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt);
-    const auto addmm = ttnn::graph::query_op_constraints(
-        ttnn::addmm,
-        mock_device_.get(),
-        addend_spec,
-        spec_a,
-        spec_b,
-        1.0F,
-        0.0F,
-        ttnn::L1_MEMORY_CONFIG,
-        DataType::BFLOAT16,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt);
-    const auto direct_primitive = ttnn::graph::query_op_constraints(
-        [](const ttnn::Tensor& input_a, const ttnn::Tensor& input_b) {
-            ttnn::prim::MatmulParams parameters;
-            parameters.output_mem_config = ttnn::L1_MEMORY_CONFIG;
-            parameters.output_dtype = DataType::BFLOAT16;
-            const auto attributes = ttnn::prim::create_matmul_attributes(input_a, input_b, parameters, {std::nullopt});
-            return ttnn::prim::matmul(input_a, input_b, std::nullopt, std::nullopt, attributes).at(0);
-        },
-        mock_device_.get(),
-        spec_a,
-        spec_b);
-
-    ASSERT_EQ(matmul.status, ttnn::graph::ExecutionStatus::Success)
-        << "matmul error: " << matmul.error_message.value_or("none");
-    ASSERT_EQ(linear.status, ttnn::graph::ExecutionStatus::Success)
-        << "linear error: " << linear.error_message.value_or("none");
-    ASSERT_EQ(addmm.status, ttnn::graph::ExecutionStatus::Success)
-        << "addmm error: " << addmm.error_message.value_or("none");
-    ASSERT_EQ(direct_primitive.status, ttnn::graph::ExecutionStatus::Success)
-        << "direct primitive error: " << direct_primitive.error_message.value_or("none");
-
-    const auto snapshot = registry::stats_snapshot();
-    for (const auto domain :
-         {registry::OperationDomain::DenseMatmul,
-          registry::OperationDomain::Linear,
-          registry::OperationDomain::Addmm}) {
-        const auto& domain_stats = snapshot.domains[static_cast<std::size_t>(domain)];
-        EXPECT_EQ(domain_stats.resolution_attempts, 1);
-        EXPECT_EQ(domain_stats.reasons[static_cast<std::size_t>(registry::ResolutionReason::EmptyRegistry)], 1);
-    }
-    EXPECT_EQ(
-        snapshot.domains[static_cast<std::size_t>(registry::OperationDomain::IneligibleSharedCaller)]
-            .resolution_attempts,
-        0);
-}
-
 // ============================================================================
 // Capture the ttnn-auto-selected program config through the uniform query API
 // ============================================================================
 
-TEST_F(QueryOpConstraintsMockDevice, MatmulExecutionRecipeCaptured) {
-    [[maybe_unused]] ScopedMatmulRegistryMode registry_mode(ttnn::MatmulRegistryMode::Off);
+TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
     const auto spec_a = tt::tt_metal::TensorSpec(
         ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
@@ -620,15 +402,12 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulExecutionRecipeCaptured) {
     EXPECT_EQ(out.response.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << out.response.error_message.value_or("none");
 
-    // Captured, and unpacks to the complete finalized matmul recipe. A program
-    // config alone is insufficient because registry selection can also change
-    // CKC and duplicated untilize_out state.
+    // Captured, and unpacks (above the API) to the concrete matmul config type.
     ASSERT_TRUE(out.captured_config.has_value());
-    const auto& captured = std::any_cast<const ttnn::prim::MatmulCapturedRecipe&>(*out.captured_config);
-    EXPECT_FALSE(captured.untilize_out);
+    const auto& captured = std::any_cast<const ttnn::operations::matmul::MatmulProgramConfig&>(*out.captured_config);
 
-    // Cross-check: feeding the captured program and compute-kernel configs back in reproduces the
-    // op's own kernel footprint — i.e. we captured the recipe the op actually ran, not an
+    // Cross-check: feeding the captured config back in as an explicit program config reproduces the
+    // op's own kernel footprint — i.e. we captured the config the op actually ran, not an
     // approximation. This round-trip is the contract every op extractor must satisfy.
     auto verify = ttnn::graph::query_op_constraints_with_initial_state(
         ttnn::matmul,
@@ -640,9 +419,9 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulExecutionRecipeCaptured) {
         false,
         ttnn::L1_MEMORY_CONFIG,
         DataType::BFLOAT16,
-        std::make_optional(captured.program_config),  // explicit program config = the captured one
+        std::make_optional(captured),  // explicit config = the captured one
         std::nullopt,
-        std::make_optional(captured.compute_kernel_config),
+        std::nullopt,
         std::nullopt,
         std::nullopt,
         std::nullopt,
@@ -659,7 +438,7 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulExecutionRecipeCaptured) {
 // Requesting a width-sharded output drives ttnn to auto-select a 1D (multi-cast) matmul program
 // config — a different variant than the interleaved case — and the query still captures it and
 // round-trips it to the same footprint.
-TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedExecutionRecipeCaptured) {
+TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
     // M=512 (16 tiles), K=256 (8 tiles), N=1024 (32 tiles).
     const auto spec_a = tt::tt_metal::TensorSpec(
         ttnn::Shape(ttnn::Array4D{1, 1, 512, 256}),
@@ -704,15 +483,10 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedExecutionRecipeCaptured) 
         << "Error: " << out.response.error_message.value_or("none");
 
     ASSERT_TRUE(out.captured_config.has_value());
-    const auto& captured = std::any_cast<const ttnn::prim::MatmulCapturedRecipe&>(*out.captured_config);
+    const auto& captured = std::any_cast<const ttnn::operations::matmul::MatmulProgramConfig&>(*out.captured_config);
     // A width-sharded output yields the 1D multi-cast config, not the interleaved 2D one.
     EXPECT_TRUE(
-        std::holds_alternative<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
-            captured.program_config));
-    EXPECT_EQ(
-        captured.untilize_out,
-        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(captured.program_config)
-            .untilize_out);
+        std::holds_alternative<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(captured));
 
     auto verify = ttnn::graph::query_op_constraints_with_initial_state(
         ttnn::matmul,
@@ -724,9 +498,9 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedExecutionRecipeCaptured) 
         false,
         width_sharded,
         DataType::BFLOAT16,
-        std::make_optional(captured.program_config),  // explicit program config = the captured one
+        std::make_optional(captured),  // explicit config = the captured one
         std::nullopt,
-        std::make_optional(captured.compute_kernel_config),
+        std::nullopt,
         std::nullopt,
         std::nullopt,
         std::nullopt,

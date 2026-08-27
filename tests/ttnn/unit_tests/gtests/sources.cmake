@@ -43,8 +43,6 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
 )
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES
-    ccl/test_all_gather_minimal_matmul_async_cache_identity.cpp
-    ccl/test_all_gather_minimal_matmul_registry.cpp
     ccl/test_ccl_commands.cpp
     ccl/test_ccl_helpers.cpp
     ccl/test_ccl_reduce_scatter_host_helpers.cpp

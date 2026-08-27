@@ -17,7 +17,6 @@
 #include <tuple>
 #include <variant>
 #include "ttnn/graph/capture_program_config.hpp"
-#include "ttnn/graph/constraint_query_context.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -228,7 +227,6 @@ inline ConstraintQueryResponse error_response(const std::string& message) {
 template <typename Op, typename... Args>
 auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, Args&&... args) {
     detail::LogLevelGuard log_guard(spdlog::level::level_enum::off);
-    ScopedStatelessConstraintQuery stateless_query_context;
     nlohmann::json op_trace;
     std::vector<Tensor> outputs;
     // outer graph capture is to avoid dispatching/allocating dummy input tensors

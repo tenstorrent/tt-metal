@@ -17,7 +17,6 @@ from loguru import logger
 import ttnn._ttnn
 
 Config = ttnn._ttnn.core.Config
-MatmulRegistryMode = ttnn._ttnn.core.MatmulRegistryMode
 CONFIG = ttnn._ttnn.CONFIG
 CONFIG_PATH = None
 if "TTNN_CONFIG_PATH" in os.environ:
@@ -60,8 +59,6 @@ def save_config_to_json_file(json_path):
             value = getattr(CONFIG, key)
             if isinstance(value, pathlib.Path):
                 value = str(value)
-            elif isinstance(value, MatmulRegistryMode):
-                value = int(value)
             normalized_config[key] = value
         json.dump(normalized_config, f, indent=4)
 

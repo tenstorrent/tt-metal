@@ -51,7 +51,6 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.cpp
     all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp
     all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp
-    all_gather_minimal_matmul_async/registry/agmm_config_registry.cpp
     matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp
     matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp
     matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp

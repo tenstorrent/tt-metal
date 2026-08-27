@@ -18,23 +18,6 @@
 
 namespace ttnn::core {
 
-namespace {
-// A populated, compatible registry is the ordinary matmul policy. Empty,
-// incompatible, unsupported, or explicitly overridden requests still fall
-// through to TTNN's existing selector, and callers can set Off before first
-// use for an emergency rollback.
-MatmulRegistryMode matmul_registry_mode = MatmulRegistryMode::On;
-MatmulRegistryMode agmm_registry_mode = MatmulRegistryMode::Off;
-}  // namespace
-
-MatmulRegistryMode get_matmul_registry_mode() noexcept { return matmul_registry_mode; }
-
-void set_matmul_registry_mode(const MatmulRegistryMode mode) noexcept { matmul_registry_mode = mode; }
-
-MatmulRegistryMode get_agmm_registry_mode() noexcept { return agmm_registry_mode; }
-
-void set_agmm_registry_mode(const MatmulRegistryMode mode) noexcept { agmm_registry_mode = mode; }
-
 Config CONFIG{};
 
 std::vector<std::pair<std::string, std::string>> Config::get_config_entries() const {
@@ -46,8 +29,6 @@ std::vector<std::pair<std::string, std::string>> Config::get_config_entries() co
                 fmt::format("{}", reflect::get<I>(this->attributes)));
         },
         this->attributes);
-    entries.emplace_back("matmul_registry_mode", fmt::format("{}", get_matmul_registry_mode()));
-    entries.emplace_back("agmm_registry_mode", fmt::format("{}", get_agmm_registry_mode()));
     return entries;
 }
 
@@ -175,8 +156,6 @@ std::ostream& operator<<(std::ostream& os, const Config& config) {
                << fmt::format("{}", reflect::get<I>(config.attributes)) << ",";
         },
         config.attributes);
-    os << "matmul_registry_mode=" << fmt::format("{}", get_matmul_registry_mode()) << ",";
-    os << "agmm_registry_mode=" << fmt::format("{}", get_agmm_registry_mode()) << ",";
     os << fmt::format("{}", config.get<"report_path">());
     os << "}";
     return os;

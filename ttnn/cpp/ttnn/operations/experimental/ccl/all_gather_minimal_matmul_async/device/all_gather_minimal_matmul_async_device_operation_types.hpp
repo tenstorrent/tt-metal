@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <bit>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -115,38 +114,32 @@ struct AllGatherMinimalMatmulAsyncParams {
         "num_workers_per_link",
         "num_buffers_per_channel",
         "config",
-        "fused_activation",
-        "output_dtype",
-        "fused_ternary_scalar_bits",
-        "compute_kernel_config",
         "chunks",
         "dim",
         "chunk_sizes",
         "fsdp_cluster_axis",
         "fsdp_ring_size",
         "using_persistent_weight_buffer",
-        "fsdp_topology",
         "fuse_swiglu");
 
     auto attribute_values() const {
-        return std::tuple_cat(
-            std::forward_as_tuple(this->num_links, this->ring_size, this->output_mem_config, this->topology),
-            std::make_tuple(std::make_pair(this->cluster_axis.has_value(), this->cluster_axis)),
-            std::forward_as_tuple(
-                this->force_transpose, this->num_workers_per_link, this->num_buffers_per_channel, this->config),
-            // The generic optional hash has no presence discriminator. Pairing presence with the value prevents
-            // disengaged optionals from aliasing engaged zero-valued enums such as BFLOAT16 and EXP.
-            std::make_tuple(
-                std::make_pair(this->fused_activation.has_value(), this->fused_activation),
-                std::make_pair(this->output_dtype.has_value(), this->output_dtype),
-                std::make_pair(
-                    this->fused_ternary_scalar.has_value(),
-                    this->fused_ternary_scalar.has_value() ? std::bit_cast<uint32_t>(this->fused_ternary_scalar.value())
-                                                           : 0U)),
-            std::forward_as_tuple(this->compute_kernel_config, this->chunks, this->dim, this->chunk_sizes),
-            std::make_tuple(std::make_pair(this->fsdp_cluster_axis.has_value(), this->fsdp_cluster_axis)),
-            std::forward_as_tuple(
-                this->fsdp_ring_size, this->using_persistent_weight_buffer, this->fsdp_topology, this->fuse_swiglu));
+        return std::forward_as_tuple(
+            this->num_links,
+            this->ring_size,
+            this->output_mem_config,
+            this->topology,
+            this->cluster_axis,
+            this->force_transpose,
+            this->num_workers_per_link,
+            this->num_buffers_per_channel,
+            this->config,
+            this->chunks,
+            this->dim,
+            this->chunk_sizes,
+            this->fsdp_cluster_axis,
+            this->fsdp_ring_size,
+            this->using_persistent_weight_buffer,
+            this->fuse_swiglu);
     }
 };
 
