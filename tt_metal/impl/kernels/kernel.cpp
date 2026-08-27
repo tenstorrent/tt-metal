@@ -346,6 +346,14 @@ void Kernel::process_scratchpad_binding_handles(
     }
 }
 
+void Kernel::process_tensor_binding_sequences(
+    const std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)> callback)
+    const {
+    for (const auto& sequence : this->tensor_binding_sequences_) {
+        callback(sequence.sequence_name, sequence.members);
+    }
+}
+
 ////////////////////////////////////////////////////////////
 // Blaze-only experimental named args
 // Removal is tracked by issue #50953
@@ -590,6 +598,19 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(handle.accessor_name);
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
+    }
+    // Tensor Binding Sequence: the ordering of the tensor binding matters here, 2 tensor bindings of
+    // the same set of members but with different orderings are different tensor binding sequences.
+    // Do not sort this sequence.
+    // Per-member size is hashed before the bytes so {"a","bc"} and {"ab","c"} do not collide.
+    hasher.update(static_cast<uint64_t>(this->tensor_binding_sequences_.size()));
+    for (const auto& sequence : this->tensor_binding_sequences_) {
+        hasher.update(sequence.sequence_name);
+        hasher.update(static_cast<uint64_t>(sequence.members.size()));
+        for (const auto& member : sequence.members) {
+            hasher.update(static_cast<uint64_t>(member.size()));
+            hasher.update(member);
+        }
     }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
     // Named RTA and CRTA counts also need to be hashed!
