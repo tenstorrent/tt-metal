@@ -15,6 +15,7 @@ from models.experimental.xtts.tt.xtts_gpt_block import (
     _mm_1d_config,
     _to_device,
     _to_device_w8,
+    matmul_compute_config,
     sharded_decode_ln,
     sharded_prefill_ln,
 )
@@ -103,9 +104,10 @@ class TtXttsGptModel(LightweightModule):
         mel_part = ttnn.slice(enc_n, [0, text_len, 0], [b, text_len + mel_len, HIDDEN_SIZE])
         ttnn.deallocate(enc_n)
 
-        text_logits = ttnn.linear(text_part, self.text_head_weight, bias=self.text_head_bias)
+        cc = matmul_compute_config(self.device)
+        text_logits = ttnn.linear(text_part, self.text_head_weight, bias=self.text_head_bias, compute_kernel_config=cc)
         ttnn.deallocate(text_part)
-        mel_logits = ttnn.linear(mel_part, self.mel_head_weight, bias=self.mel_head_bias)
+        mel_logits = ttnn.linear(mel_part, self.mel_head_weight, bias=self.mel_head_bias, compute_kernel_config=cc)
         ttnn.deallocate(mel_part)
         return text_logits, mel_logits
 
@@ -178,6 +180,7 @@ class TtXttsGptModel(LightweightModule):
             program_config=_mm_1d_config(
                 self.device, latent.shape[-2], latent.shape[-1], self.mel_head_weight.shape[-1]
             ),
+            compute_kernel_config=matmul_compute_config(self.device),
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         return logits, latent

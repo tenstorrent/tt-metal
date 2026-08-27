@@ -26,7 +26,9 @@ _SHARD_RESBLOCKS = True
 
 _BLOCK_SHARD_STAGES = {0}
 
-_CONV_FIDELITY = ttnn.MathFidelity.HiFi2
+# bf16 weights x bf16 activations need HiFi4 to use the full mantissa; at HiFi2 the vocoder alone
+# costs ~0.0056 of end-to-end spectrogram PCC (0.9944 -> 0.9987 with reference latents).
+_CONV_FIDELITY = ttnn.MathFidelity.HiFi4
 
 _INTERLEAVED_CONV_DB = {"enable_act_double_buffer": True, "enable_weights_double_buffer": True}
 
