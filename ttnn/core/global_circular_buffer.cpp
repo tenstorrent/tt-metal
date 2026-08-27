@@ -381,7 +381,8 @@ uint32_t validate_krow_major_weight_for_matmul_1d(
         // has always required K to divide by it, so keep rejecting exactly the configs it always did.
         TT_FATAL(
             weight_K_tiles % program_config.in0_block_w == 0,
-            "weight K ({} tiles) must be divisible by in0_block_w ({})",
+            "legacy K-row-major gather still requires weight K ({} tiles) divisible by config in0_block_w ({}); "
+            "the matmul derives K-block width from K/ring_size, not this field",
             weight_K_tiles,
             program_config.in0_block_w);
     }
