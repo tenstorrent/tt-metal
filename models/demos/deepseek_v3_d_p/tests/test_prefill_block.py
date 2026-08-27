@@ -59,6 +59,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     extract_layer_state_dict,
     get_4d_causal_mask,
     load_and_compute_layer_by_layer,
+    mla_kvpe_width,
     reference_kvpe_for_layer,
     tokenize_prompt_to_isl,
 )
@@ -227,6 +228,21 @@ def run_model(
         torch_ref_cache = cache_dir / f"torch_reference_{input_source}.pt"
 
         ref_cache_loadable = torch_ref_cache.exists() and (pcc_validation or input_source in _PROMPT_PATHS)
+        # A cache written before the KVPE fix holds the reference's EXPANDED per-head keys, not the
+        # compressed latent the device stores. Existence alone would reuse it and keep reporting the
+        # -1.0 rows this change removes, so check the stored width and recompute if it is stale --
+        # otherwise the fix is silently bypassed on every cache a developer already has.
+        if ref_cache_loadable and pcc_validation:
+            expected_kvpe_width = mla_kvpe_width(config)
+            if expected_kvpe_width is not None:
+                probe = torch.load(torch_ref_cache, weights_only=True).get("ref_kvpe")
+                if probe is not None and probe.shape[-1] != expected_kvpe_width:
+                    logger.warning(
+                        f"Cached reference at {torch_ref_cache} stores KVPE of width "
+                        f"{probe.shape[-1]}, expected {expected_kvpe_width} (pre-fix expanded keys); "
+                        f"recomputing the reference instead of reusing it."
+                    )
+                    ref_cache_loadable = False
         need_hf_model = not ttnn_cache_complete or (
             (pcc_validation or input_source in _PROMPT_PATHS) and not ref_cache_loadable
         )
