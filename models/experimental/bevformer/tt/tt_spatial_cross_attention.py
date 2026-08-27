@@ -45,6 +45,18 @@ def _flat_row_index(row_ids: torch.Tensor, device) -> ttnn.Tensor:
     )
 
 
+def _fold_cameras_into_batch(tensor, bs: int, num_cams: int, seq_len: int, embed_dims: int):
+    """``[num_cams, seq_len, bs, embed_dims]`` -> ``[bs * num_cams, seq_len, embed_dims]``.
+
+    Done in ROW_MAJOR. ``bs`` arrives second-to-last, so a tiled input pads it to a full tile — 32x
+    the buffer at bs=1, on the largest tensor in the layer. The folded shape is tile-clean, so
+    converting after the fold is the cheap direction; converting before it is not.
+    """
+    folded = ttnn.permute(ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT), (2, 0, 1, 3))
+    folded = ttnn.reshape(folded, (bs * num_cams, seq_len, embed_dims))
+    return ttnn.to_layout(folded, ttnn.TILE_LAYOUT)
+
+
 def _index_dtype(num_rows: int):
     """Narrowest index dtype ``ttnn.scatter_add`` accepts that still addresses ``num_rows``.
 
@@ -294,11 +306,12 @@ class TTSpatialCrossAttention:
                 f"spatial_shapes: {spatial_shapes_torch.tolist()}, key.shape: {key.shape}"
             )
 
-        # [num_cams, L, bs, embed_dims] -> [bs * num_cams, L, embed_dims]
-        key_reshaped = ttnn.permute(key, (2, 0, 1, 3))  # [bs, num_cams, L, embed_dims]
-        key_reshaped = ttnn.reshape(key_reshaped, (bs * self.num_cams, L, self.embed_dims))
-        value_reshaped = ttnn.permute(value, (2, 0, 1, 3))  # [bs, num_cams, L, embed_dims]
-        value_reshaped = ttnn.reshape(value_reshaped, (bs * self.num_cams, L, self.embed_dims))
+        # Callers routinely pass one tensor as both key and value; the fold is the most expensive
+        # reshape in the layer, so it is not worth doing twice for the same buffer.
+        key_reshaped = _fold_cameras_into_batch(key, bs, self.num_cams, L, self.embed_dims)
+        value_reshaped = (
+            key_reshaped if value is key else _fold_cameras_into_batch(value, bs, self.num_cams, L, self.embed_dims)
+        )
 
         if ENABLE_LOGGING:
             logger.info("SCA Calling Deformable Attention")

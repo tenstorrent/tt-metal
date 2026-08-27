@@ -115,7 +115,9 @@ def test_bevformer_encoder_perf(
     # Uploaded once so the profiled iterations measure the encoder, not the transfer
     tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_camera_features = ttnn.from_torch(
+        camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
     tt_level_start_index = ttnn.from_torch(
         level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )

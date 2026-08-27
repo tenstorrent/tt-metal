@@ -147,7 +147,7 @@ def build_layer_fixture(device, config, bev_size, batch_size: int, dtype=ttnn.bf
 
     tt_inputs = {
         "bev_query": ttnn.from_torch(bev_query, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT),
-        "key": ttnn.from_torch(camera_features, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT),
+        "key": ttnn.from_torch(camera_features, device=device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT),
         "bev_pos": ttnn.from_torch(bev_pos, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT),
         "spatial_shapes": spatial_shapes,
         "bev_shape": bev_shape,

@@ -130,7 +130,11 @@ def test_bevformer_encoder_forward(
     # Convert tensors to ttnn format for ttnn model
     tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    # ROW_MAJOR: batch is second-to-last in [num_cams, L, bs, embed_dims], so tiling here pads it to
+    # 32 and inflates the encoder's largest tensor 32-fold. SCA tiles it after the camera fold.
+    tt_camera_features = ttnn.from_torch(
+        camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
     tt_level_start_index = ttnn.from_torch(
         level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )

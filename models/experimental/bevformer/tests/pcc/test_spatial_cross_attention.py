@@ -122,7 +122,11 @@ def test_spatial_cross_attention_forward(
 
     # Convert tensors to ttnn format for ttnn model
     tt_bev_queries = ttnn.from_torch(bev_queries, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    # ROW_MAJOR: batch is second-to-last in [num_cams, L, bs, embed_dims], so tiling here pads it to
+    # 32 and inflates the layer's largest tensor 32-fold. SCA tiles it after the camera fold.
+    tt_camera_features = ttnn.from_torch(
+        camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
     tt_reference_points_cam = ttnn.from_torch(
         reference_points_cam, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
