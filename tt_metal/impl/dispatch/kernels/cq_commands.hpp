@@ -384,7 +384,8 @@ constexpr uint32_t CQ_DISPATCH_MAX_WRITE_OFFSETS = 4;
 
 struct CQDispatchSetWriteOffsetCmd {
     uint8_t offset_count;  // Number of uint32_t offsets this command sets. Offsets are stored after the CQDispatchCmd.
-    uint16_t program_host_id;  // Program Host ID for upcoming commands. Used for profiling.
+    uint16_t pad1;
+    uint32_t host_runtime_id;  // Host runtime ID for upcoming commands. Used for profiling.
 } __attribute__((packed));
 
 struct CQDispatchSetUnicastOnlyCoresCmd {
