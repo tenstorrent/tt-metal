@@ -131,3 +131,23 @@ def test_multiply_into_dead_rhs_uses_rhs_as_output(monkeypatch):
 
     assert result is rhs
     assert calls == [(lhs, rhs, memory_config, rhs)]
+
+
+def test_multiply_into_dead_lhs_uses_lhs_as_output(monkeypatch):
+    from models.experimental.gated_attention_gated_deltanet.tt import ttnn_delta_rule_seq as seq
+
+    calls = []
+
+    class FakeTTNN:
+        @staticmethod
+        def multiply(lhs, rhs, memory_config=None, output_tensor=None):
+            calls.append((lhs, rhs, memory_config, output_tensor))
+            return output_tensor
+
+    monkeypatch.setattr(seq, "ttnn", FakeTTNN)
+    lhs, rhs, memory_config = object(), object(), object()
+
+    result = seq._multiply_into_dead_lhs(lhs, rhs, memory_config=memory_config)
+
+    assert result is lhs
+    assert calls == [(lhs, rhs, memory_config, lhs)]
