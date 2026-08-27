@@ -110,6 +110,56 @@ std::string_view buffer_type_name(const registry::compact::BufferType buffer_typ
     return "unknown";
 }
 
+std::string_view math_fidelity_name(const tt::tt_metal::MathFidelity fidelity) {
+    switch (fidelity) {
+        case tt::tt_metal::MathFidelity::LoFi: return "lofi";
+        case tt::tt_metal::MathFidelity::HiFi2: return "hifi2";
+        case tt::tt_metal::MathFidelity::HiFi3: return "hifi3";
+        case tt::tt_metal::MathFidelity::HiFi4: return "hifi4";
+        default: throw std::invalid_argument("effective matmul CKC has unsupported math fidelity");
+    }
+}
+
+std::string_view throttle_level_name(const ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level) {
+    using ThrottleLevel = ttnn::operations::compute_throttle_utils::ThrottleLevel;
+    switch (throttle_level) {
+        case ThrottleLevel::NO_THROTTLE: return "no_throttle";
+        case ThrottleLevel::LEVEL_1: return "throttle_1";
+        case ThrottleLevel::LEVEL_2: return "throttle_2";
+        case ThrottleLevel::LEVEL_3: return "throttle_3";
+        default: throw std::invalid_argument("effective matmul CKC has unsupported throttle level");
+    }
+}
+
+nb::dict effective_compute_kernel_config(const DeviceComputeKernelConfig& config) {
+    nb::dict result;
+    result["dst_full_sync_en"] = config.dst_full_sync_en;
+    result["fp32_dest_acc_en"] = config.fp32_dest_acc_en;
+    result["math_approx_mode"] = config.math_approx_mode;
+    result["math_fidelity"] = math_fidelity_name(config.math_fidelity);
+    result["packer_l1_acc"] = config.packer_l1_acc;
+    result["throttle_level"] = throttle_level_name(config.throttle_level);
+    return result;
+}
+
+nb::dict compact_program_config(const MatmulMultiCoreReuseProgramConfig& config) {
+    if (config.allowed_worker_cores.has_value()) {
+        throw std::invalid_argument(
+            "effective-default inspection requires omitted allowed_worker_cores for compact registry replay");
+    }
+    nb::dict result;
+    result["allowed_worker_cores"] = nb::none();
+    result["compute_grid_x"] = config.compute_with_storage_grid_size.x;
+    result["compute_grid_y"] = config.compute_with_storage_grid_size.y;
+    result["family"] = "multi_core_reuse";
+    result["in0_block_w"] = config.in0_block_w;
+    result["out_subblock_h"] = config.out_subblock_h;
+    result["out_subblock_w"] = config.out_subblock_w;
+    result["per_core_m"] = config.per_core_M;
+    result["per_core_n"] = config.per_core_N;
+    return result;
+}
+
 nb::dict tensor_key(const registry::compact::TensorDescriptor& tensor) {
     nb::dict result;
     result["buffer_type"] = buffer_type_name(tensor.buffer_type);
@@ -194,6 +244,117 @@ registry::CallSemantics inspected_call_semantics(
     throw std::invalid_argument("domain must be dense.matmul, dense.linear, or dense.addmm");
 }
 
+bool is_input_batched(const auto& shape) {
+    if (shape.rank() < 2) {
+        return false;
+    }
+    for (auto index = 0; index < shape.rank() - 2; ++index) {
+        if (shape[index] > 1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+ttnn::prim::MatmulParams inspected_default_parameters(
+    const ttnn::Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DataType> dtype) {
+    return ttnn::prim::MatmulParams{
+        /*program_config=*/std::nullopt,
+        /*bcast_batch=*/std::nullopt,
+        memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
+        dtype,
+        /*compute_kernel_config=*/std::nullopt,
+        /*untilize_out=*/false,
+        /*user_core_coord=*/std::nullopt,
+        /*user_fused_activation=*/std::nullopt,
+        /*user_run_batched=*/is_input_batched(input_tensor_b.logical_shape()),
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        /*output_tile=*/std::nullopt,
+        /*global_cb=*/std::nullopt,
+        /*sub_device_id=*/std::nullopt};
+}
+
+struct InspectedNativeRegistryContext {
+    registry::compact::KeyDescriptor key;
+    registry::RegistryCompatibilityAttestation attestation;
+};
+
+InspectedNativeRegistryContext inspect_native_registry_context(
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    const registry::CallSemantics call_semantics,
+    const ttnn::prim::MatmulParams& parameters) {
+    auto* device = input_tensor_a.device();
+    if (device == nullptr) {
+        throw std::invalid_argument("matmul registry inspection requires open device tensors");
+    }
+    bool trace_capture_active;
+    try {
+        trace_capture_active = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(device).has_value();
+    } catch (...) {
+        throw std::runtime_error("matmul registry inspection could not attest trace-capture state");
+    }
+
+    const auto inspection = registry::inspect_registry_request(
+        input_tensor_a,
+        input_tensor_b,
+        /*has_bias=*/false,
+        call_semantics,
+        parameters,
+        /*optional_output_tensor=*/std::nullopt,
+        trace_capture_active);
+    if (!inspection.request.has_value()) {
+        throw std::invalid_argument("call cannot form a complete one-chip rank-2 matmul registry key");
+    }
+    if (inspection.device_attestation.status != registry::DeviceAttestationStatus::Success) {
+        throw std::runtime_error(fmt::format(
+            "matmul registry device attestation failed: {}",
+            registry::device_attestation_status_name(inspection.device_attestation.status)));
+    }
+
+    const auto envelope_reason = registry::validate_v1_request_envelope(*inspection.request, inspection.eligibility);
+    if (envelope_reason != registry::ResolutionReason::CertifiedMatch) {
+        throw std::invalid_argument(fmt::format(
+            "call is outside the exact registry key v1 envelope (reason={})",
+            static_cast<std::uint8_t>(envelope_reason)));
+    }
+
+    const auto key = registry::compact_registry_key(*inspection.request);
+    if (!key.has_value() || key->output.buffer_type != registry::compact::BufferType::Dram ||
+        key->output.layout != registry::compact::Layout::Tile ||
+        key->output.memory_layout != registry::compact::MemoryLayout::Interleaved || key->output.tile_height != 32 ||
+        key->output.tile_width != 32) {
+        throw std::invalid_argument("call is not representable by the exact registry key v1 schema");
+    }
+
+    const auto attestation = registry::registry_compatibility_attestation(inspection.device_attestation);
+    if (key->topology_sha256 != attestation.actual_topology_sha256 ||
+        key->board_capability_class != attestation.board_capability_class ||
+        key->codegen_recipe_abi != attestation.codegen_recipe_abi) {
+        throw std::runtime_error("native registry key and compatibility attestation disagree");
+    }
+    return {.key = *key, .attestation = attestation};
+}
+
+nb::dict admitted_call_state(const registry::compact::KeyDescriptor& key) {
+    nb::dict call_state;
+    call_state["bcast_batch"] = nb::none();
+    call_state["global_cb"] = nb::none();
+    call_state["output"] = tensor_key(key.output);
+    call_state["output_tile"] = nb::none();
+    call_state["sub_device_id"] = nb::none();
+    call_state["transpose_a"] = false;
+    call_state["transpose_b"] = false;
+    call_state["untilize_out"] = false;
+    call_state["user_core_coord"] = nb::none();
+    call_state["user_fused_activation"] = nb::none();
+    call_state["user_run_batched"] = false;
+    return call_state;
+}
+
 }  // namespace
 
 void py_module(nb::module_& mod) {
@@ -232,99 +393,14 @@ Consumers must reject any result whose ``device_attestation_status`` is not
            const std::optional<float> alpha,
            const std::optional<float> beta) {
             const auto call_semantics = inspected_call_semantics(domain, alpha, beta);
-            const auto is_input_batched = [](const auto& shape) {
-                if (shape.rank() < 2) {
-                    return false;
-                }
-                for (auto index = 0; index < shape.rank() - 2; ++index) {
-                    if (shape[index] > 1) {
-                        return true;
-                    }
-                }
-                return false;
-            };
-            const auto parameters = ttnn::prim::MatmulParams{
-                /*program_config=*/std::nullopt,
-                /*bcast_batch=*/std::nullopt,
-                memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
-                dtype,
-                /*compute_kernel_config=*/std::nullopt,
-                /*untilize_out=*/false,
-                /*user_core_coord=*/std::nullopt,
-                /*user_fused_activation=*/std::nullopt,
-                /*user_run_batched=*/is_input_batched(input_tensor_b.logical_shape()),
-                /*transpose_a=*/false,
-                /*transpose_b=*/false,
-                /*output_tile=*/std::nullopt,
-                /*global_cb=*/std::nullopt,
-                /*sub_device_id=*/std::nullopt};
-
-            auto* device = input_tensor_a.device();
-            if (device == nullptr) {
-                throw std::invalid_argument("matmul registry key inspection requires open device tensors");
-            }
-            bool trace_capture_active;
-            try {
-                trace_capture_active = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(device).has_value();
-            } catch (...) {
-                throw std::runtime_error("matmul registry key inspection could not attest trace-capture state");
-            }
-
-            const auto inspection = registry::inspect_registry_request(
-                input_tensor_a,
-                input_tensor_b,
-                /*has_bias=*/false,
-                call_semantics,
-                parameters,
-                /*optional_output_tensor=*/std::nullopt,
-                trace_capture_active);
-            if (!inspection.request.has_value()) {
-                throw std::invalid_argument("call cannot form a complete one-chip rank-2 matmul registry key");
-            }
-            if (inspection.device_attestation.status != registry::DeviceAttestationStatus::Success) {
-                throw std::runtime_error(fmt::format(
-                    "matmul registry key device attestation failed: {}",
-                    registry::device_attestation_status_name(inspection.device_attestation.status)));
-            }
-
-            const auto envelope_reason =
-                registry::validate_v1_request_envelope(*inspection.request, inspection.eligibility);
-            if (envelope_reason != registry::ResolutionReason::CertifiedMatch) {
-                throw std::invalid_argument(fmt::format(
-                    "call is outside the exact registry key v1 envelope (reason={})",
-                    static_cast<std::uint8_t>(envelope_reason)));
-            }
-
-            const auto key = registry::compact_registry_key(*inspection.request);
-            if (!key.has_value() || key->output.buffer_type != registry::compact::BufferType::Dram ||
-                key->output.layout != registry::compact::Layout::Tile ||
-                key->output.memory_layout != registry::compact::MemoryLayout::Interleaved ||
-                key->output.tile_height != 32 || key->output.tile_width != 32) {
-                throw std::invalid_argument("call is not representable by the exact registry key v1 schema");
-            }
-
-            const auto attestation = registry::registry_compatibility_attestation(inspection.device_attestation);
-            if (key->topology_sha256 != attestation.actual_topology_sha256 ||
-                key->board_capability_class != attestation.board_capability_class ||
-                key->codegen_recipe_abi != attestation.codegen_recipe_abi) {
-                throw std::runtime_error("native registry key and compatibility attestation disagree");
-            }
+            const auto parameters = inspected_default_parameters(input_tensor_b, memory_config, dtype);
+            const auto inspection =
+                inspect_native_registry_context(input_tensor_a, input_tensor_b, call_semantics, parameters);
+            const auto& key = inspection.key;
+            const auto& attestation = inspection.attestation;
             nb::dict native_preimage;
-            native_preimage["domain"] = compact_domain_name(key->domain);
-            native_preimage["key"] = native_key(*key);
-
-            nb::dict call_state;
-            call_state["bcast_batch"] = nb::none();
-            call_state["global_cb"] = nb::none();
-            call_state["output"] = tensor_key(key->output);
-            call_state["output_tile"] = nb::none();
-            call_state["sub_device_id"] = nb::none();
-            call_state["transpose_a"] = false;
-            call_state["transpose_b"] = false;
-            call_state["untilize_out"] = false;
-            call_state["user_core_coord"] = nb::none();
-            call_state["user_fused_activation"] = nb::none();
-            call_state["user_run_batched"] = false;
+            native_preimage["domain"] = compact_domain_name(key.domain);
+            native_preimage["key"] = native_key(key);
 
             nb::dict result;
             result["artifact_kind"] = "ttnn_matmul_registry_resolved_key";
@@ -336,7 +412,7 @@ Consumers must reject any result whose ``device_attestation_status`` is not
             result["actual_topology_sha256"] = digest_hex(attestation.actual_topology_sha256);
             result["actual_runtime_capability_sha256"] = digest_hex(attestation.actual_runtime_capability_sha256);
             result["native_registry_key_v1"] = std::move(native_preimage);
-            result["admitted_call_state_v1"] = std::move(call_state);
+            result["admitted_call_state_v1"] = admitted_call_state(key);
             return result;
         },
         nb::arg("input_tensor_a"),
@@ -356,6 +432,94 @@ output-tile/optional-output state and a DRAM-interleaved tile-32 output.
 ``dense.linear`` admits no bias or activation. ``dense.addmm`` requires exact
 ``alpha`` and ``beta`` values and admits beta positive or negative zero only,
 so its additive input is unused and cannot be an unkeyed semantic dependency.
+)doc");
+
+    mod.def(
+        "matmul_registry_effective_default_compute_kernel_config",
+        [](const ttnn::Tensor& input_tensor_a,
+           const ttnn::Tensor& input_tensor_b,
+           const MatmulProgramConfig& program_config,
+           const std::string_view domain,
+           const std::optional<MemoryConfig>& memory_config,
+           const std::optional<DataType> dtype,
+           const std::optional<float> alpha,
+           const std::optional<float> beta,
+           const std::optional<const DeviceComputeKernelConfig>& caller_compute_kernel_config,
+           const std::optional<const CoreGrid>& caller_core_grid) {
+            if (caller_compute_kernel_config.has_value()) {
+                throw std::invalid_argument(
+                    "effective-default inspection requires caller compute_kernel_config to be omitted");
+            }
+            if (caller_core_grid.has_value()) {
+                throw std::invalid_argument("effective-default inspection requires caller core_grid to be omitted");
+            }
+            const auto* compact_program = std::get_if<MatmulMultiCoreReuseProgramConfig>(&program_config);
+            if (compact_program == nullptr) {
+                throw std::invalid_argument(
+                    "effective-default inspection supports only MatmulMultiCoreReuseProgramConfig");
+            }
+
+            const auto call_semantics = inspected_call_semantics(domain, alpha, beta);
+            const auto default_parameters = inspected_default_parameters(input_tensor_b, memory_config, dtype);
+            const auto inspection =
+                inspect_native_registry_context(input_tensor_a, input_tensor_b, call_semantics, default_parameters);
+
+            auto explicit_program_parameters = default_parameters;
+            explicit_program_parameters.program_config = program_config;
+            const auto finalized = ttnn::prim::create_matmul_attributes(
+                input_tensor_a, input_tensor_b, explicit_program_parameters, /*optional_output_tensors=*/{});
+            if (!finalized.compute_kernel_config.has_value()) {
+                throw std::runtime_error("matmul attribute finalization did not produce an effective CKC");
+            }
+
+            nb::dict native_preimage;
+            native_preimage["domain"] = compact_domain_name(inspection.key.domain);
+            native_preimage["key"] = native_key(inspection.key);
+
+            nb::dict context;
+            context["native_registry_key_v1"] = std::move(native_preimage);
+            context["admitted_call_state_v1"] = admitted_call_state(inspection.key);
+            context["program_config"] = compact_program_config(*compact_program);
+            context["caller_compute_kernel_config"] = nb::none();
+            context["caller_core_grid"] = nb::none();
+
+            const auto& attestation = inspection.attestation;
+            nb::dict result;
+            result["artifact_kind"] = "ttnn_matmul_effective_default_compute_kernel_config";
+            result["schema_version"] = 1;
+            result["device_attestation_status"] =
+                registry::device_attestation_status_name(attestation.device_attestation_status);
+            result["codegen_recipe_abi"] = attestation.codegen_recipe_abi;
+            result["board_capability_class"] = attestation.board_capability_class;
+            result["actual_semantic_source_sha256"] = digest_hex(attestation.actual_semantic_source_sha256);
+            result["actual_build_identity_sha256"] = digest_hex(attestation.actual_build_identity_sha256);
+            result["actual_topology_sha256"] = digest_hex(attestation.actual_topology_sha256);
+            result["actual_runtime_capability_sha256"] = digest_hex(attestation.actual_runtime_capability_sha256);
+            result["context"] = std::move(context);
+            result["effective_compute_kernel_config"] =
+                effective_compute_kernel_config(finalized.compute_kernel_config.value());
+            return result;
+        },
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("program_config"),
+        nb::arg("domain"),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("alpha") = nb::none(),
+        nb::arg("beta") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("core_grid") = nb::none(),
+        R"doc(Return matmul's actual effective CKC for one exact explicit-program call context.
+
+The caller CKC and core grid must be omitted. The result comes from the same
+``create_matmul_attributes`` path used to launch the operation, including the
+effective throttle. It is bound in one fail-closed artifact to the exact native
+registry key, admitted call state, compact program descriptor, build identity,
+and live device attestation. V1 supports only the compact one-chip rank-2
+``MatmulMultiCoreReuseProgramConfig`` envelope and performs no lookup,
+selection, execution, or telemetry mutation.
 )doc");
 
     mod.def(

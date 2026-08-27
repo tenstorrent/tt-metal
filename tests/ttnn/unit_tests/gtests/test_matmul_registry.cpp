@@ -19,6 +19,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
 #include "ttnn/operations/matmul/device/config/registry/matmul_program_config_model.hpp"
 #include "ttnn/operations/matmul/device/config/registry/matmul_registry_descriptor.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 
 namespace ttnn::operations::matmul::registry {
 namespace {
@@ -72,6 +73,68 @@ template <typename T>
 concept HasComputeKernelConfig = requires(T value) { value.compute_kernel_config; };
 
 static_assert(!HasComputeKernelConfig<compact::ProgramConfigCandidate>);
+
+TEST(MatmulConfigRegistry, EffectiveComputeKernelConfigUsesExecutionDefaultSourceOfTruth) {
+    const auto explicit_program_bf16 = ttnn::prim::resolve_matmul_effective_compute_kernel_config(
+        tt::ARCH::BLACKHOLE,
+        DataType::BFLOAT16,
+        DataType::BFLOAT16,
+        DataType::BFLOAT16,
+        /*has_program_config=*/true,
+        /*has_user_core_coord=*/false,
+        std::nullopt);
+    EXPECT_EQ(explicit_program_bf16.math_fidelity, tt::tt_metal::MathFidelity::LoFi);
+    EXPECT_FALSE(explicit_program_bf16.math_approx_mode);
+    EXPECT_FALSE(explicit_program_bf16.fp32_dest_acc_en);
+    EXPECT_TRUE(explicit_program_bf16.packer_l1_acc);
+    EXPECT_FALSE(explicit_program_bf16.dst_full_sync_en);
+    EXPECT_EQ(
+        explicit_program_bf16.throttle_level, ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
+
+    const auto implicit_program_bf16 = ttnn::prim::resolve_matmul_effective_compute_kernel_config(
+        tt::ARCH::BLACKHOLE,
+        DataType::BFLOAT16,
+        DataType::BFLOAT16,
+        DataType::BFLOAT16,
+        /*has_program_config=*/false,
+        /*has_user_core_coord=*/false,
+        std::nullopt);
+    EXPECT_EQ(implicit_program_bf16.math_fidelity, tt::tt_metal::MathFidelity::HiFi2);
+
+    const auto explicit_program_fp32_wh = ttnn::prim::resolve_matmul_effective_compute_kernel_config(
+        tt::ARCH::WORMHOLE_B0,
+        DataType::FLOAT32,
+        DataType::FLOAT32,
+        DataType::FLOAT32,
+        /*has_program_config=*/true,
+        /*has_user_core_coord=*/false,
+        std::nullopt);
+    EXPECT_EQ(explicit_program_fp32_wh.math_fidelity, tt::tt_metal::MathFidelity::HiFi3);
+    EXPECT_TRUE(explicit_program_fp32_wh.fp32_dest_acc_en);
+    EXPECT_FALSE(explicit_program_fp32_wh.packer_l1_acc);
+
+    auto caller_config = DeviceComputeKernelConfig{
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi2,
+        .math_approx_mode = true,
+        .fp32_dest_acc_en = false,
+        .packer_l1_acc = false,
+        .dst_full_sync_en = true,
+        .throttle_level = ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_3};
+    const auto explicit_caller = ttnn::prim::resolve_matmul_effective_compute_kernel_config(
+        tt::ARCH::BLACKHOLE,
+        DataType::BFLOAT16,
+        DataType::BFLOAT16,
+        DataType::BFLOAT16,
+        /*has_program_config=*/true,
+        /*has_user_core_coord=*/false,
+        caller_config);
+    EXPECT_EQ(explicit_caller.math_fidelity, caller_config.math_fidelity);
+    EXPECT_EQ(explicit_caller.math_approx_mode, caller_config.math_approx_mode);
+    EXPECT_EQ(explicit_caller.fp32_dest_acc_en, caller_config.fp32_dest_acc_en);
+    EXPECT_EQ(explicit_caller.packer_l1_acc, caller_config.packer_l1_acc);
+    EXPECT_EQ(explicit_caller.dst_full_sync_en, caller_config.dst_full_sync_en);
+    EXPECT_EQ(explicit_caller.throttle_level, caller_config.throttle_level);
+}
 
 compact::KeyDescriptor compact_key(const std::uint64_t logical_m) {
     compact::KeyDescriptor key{};
