@@ -1400,7 +1400,6 @@ def _program_config_exact_entry_cpp(item: dict[str, Any]) -> str:
 
 
 def _online_model_cpp(model: dict[str, Any], index: int) -> str:
-
     family_names = {
         "multi_core_reuse": "MultiCoreReuse",
         "multi_cast_1d": "MultiCast1D",

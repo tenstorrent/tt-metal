@@ -20,9 +20,9 @@ def _entry(domain: str, *, alpha_bits=None, beta_bits=None) -> dict:
     }
 
 
-def test_empty_lock_has_no_cases_without_inventing_required_domains() -> None:
+def test_empty_lock_has_no_cases_without_inventing_required_domains(expect_error) -> None:
     assert represented_semantic_cases({"entries": []}) == ()
-    with pytest.raises(CanaryLockError, match="no valid dense entry"):
+    with expect_error(CanaryLockError, "no valid dense entry"):
         represented_semantic_cases({"entries": []}, require_populated=True)
 
 
@@ -60,6 +60,6 @@ def test_cases_are_unique_and_follow_only_represented_operation_semantics() -> N
         {"domain": "dense.matmul", "key": None},
     ],
 )
-def test_malformed_or_unsupported_semantics_fail_closed(entry: dict) -> None:
-    with pytest.raises(CanaryLockError):
+def test_malformed_or_unsupported_semantics_fail_closed(entry: dict, expect_error) -> None:
+    with expect_error(CanaryLockError, "matmul registry entry 0"):
         represented_semantic_cases({"entries": [entry]})
