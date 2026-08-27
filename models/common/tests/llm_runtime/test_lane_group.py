@@ -26,6 +26,19 @@ class _SingletonSamplingParams:
     top_p: tuple[float, ...]
 
 
+@dataclass(frozen=True)
+class _StatefulSamplingParams:
+    temperature: list[float]
+    top_k: torch.Tensor
+    top_p: list[float]
+    presence_penalty: list[float]
+    frequency_penalty: list[float]
+    repetition_penalty: list[float]
+    seed: list[int | None]
+    enable_log_probs: list[bool]
+    num_logprobs: list[int]
+
+
 class _Lane:
     def __init__(self, lane_idx, *, capacity=2):
         self.lane_idx = lane_idx
@@ -469,6 +482,217 @@ def test_decode_slices_fixed_lane_capacity_and_normalizes_sampled_tokens():
     assert lane0_kwargs["slot_remap"].tolist() == [1, 0]
     assert lane1_kwargs["slot_remap"].tolist() == [1, 0]
     assert lane0_kwargs["reset_batch"] is lane1_kwargs["reset_batch"] is True
+
+
+@pytest.mark.parametrize(
+    (
+        "layout",
+        "prefill_tokens",
+        "empty_slots",
+        "prefill_sampling",
+        "decode_tokens",
+        "decode_positions",
+        "decode_sampling",
+        "slot_remap",
+        "expected_prefill_tokens",
+        "expected_decode_tokens",
+        "expected_lane_slots",
+        "expected_lane_seeds",
+    ),
+    [
+        pytest.param(
+            "front_packed_gathered",
+            torch.tensor([[10], [11], [12], [13]]),
+            [0, 1, 2, 3],
+            _StatefulSamplingParams(
+                temperature=[0.0, 0.8, 1.0, 1.2],
+                top_k=torch.tensor([1, 5, 7, 9]),
+                top_p=[0.0, 0.7, 0.8, 0.9],
+                presence_penalty=[0.0, 0.1, 0.2, 0.3],
+                frequency_penalty=[0.0, 0.4, 0.5, 0.6],
+                repetition_penalty=[1.0, 1.1, 1.2, 1.3],
+                seed=[100, 101, 102, 103],
+                enable_log_probs=[False, True, False, True],
+                num_logprobs=[0, 0, 0, 0],
+            ),
+            torch.tensor([10, 11, 12, 13]),
+            torch.tensor([1, 2, 3, 4]),
+            _StatefulSamplingParams(
+                temperature=[0.0, 0.8, 1.0, 1.2],
+                top_k=torch.tensor([1, 5, 7, 9]),
+                top_p=[0.0, 0.7, 0.8, 0.9],
+                presence_penalty=[0.0, 0.1, 0.2, 0.3],
+                frequency_penalty=[0.0, 0.4, 0.5, 0.6],
+                repetition_penalty=[1.0, 1.1, 1.2, 1.3],
+                seed=[100, 101, 102, 103],
+                enable_log_probs=[False, True, False, True],
+                num_logprobs=[0, 0, 0, 0],
+            ),
+            torch.tensor([1, 0, 3, 2]),
+            [10, 11, 112, 113],
+            [10, 11, 112, 113],
+            ([0, 1], [0, 1]),
+            ([100, 101], [102, 103]),
+            id="front_packed_gathered",
+        ),
+        pytest.param(
+            "stable_gap_lane",
+            torch.tensor([[11], [13]]),
+            [1, 3],
+            _StatefulSamplingParams(
+                temperature=[0.8, 1.2],
+                top_k=torch.tensor([5, 9]),
+                top_p=[0.7, 0.9],
+                presence_penalty=[0.1, 0.3],
+                frequency_penalty=[0.4, 0.6],
+                repetition_penalty=[1.1, 1.3],
+                seed=[101, 103],
+                enable_log_probs=[True, True],
+                num_logprobs=[0, 0],
+            ),
+            torch.tensor([0, 11, 0, 13]),
+            torch.tensor([-1, 2, -1, 4]),
+            _StatefulSamplingParams(
+                temperature=[0.0, 0.8, 0.0, 1.2],
+                top_k=torch.tensor([1, 5, 1, 9]),
+                top_p=[0.0, 0.7, 0.0, 0.9],
+                presence_penalty=[0.0, 0.1, 0.0, 0.3],
+                frequency_penalty=[0.0, 0.4, 0.0, 0.6],
+                repetition_penalty=[1.0, 1.1, 1.0, 1.3],
+                seed=[None, 101, None, 103],
+                enable_log_probs=[False, True, False, True],
+                num_logprobs=[0, 0, 0, 0],
+            ),
+            torch.tensor([0, 1, 2, 3]),
+            [11, 113],
+            [0, 11, 100, 113],
+            ([1], [1]),
+            ([None, 101], [None, 103]),
+            id="stable_gap_lane",
+        ),
+    ],
+)
+def test_sampling_state_boundary_contract_for_gathered_and_lane_layouts(
+    layout,
+    prefill_tokens,
+    empty_slots,
+    prefill_sampling,
+    decode_tokens,
+    decode_positions,
+    decode_sampling,
+    slot_remap,
+    expected_prefill_tokens,
+    expected_decode_tokens,
+    expected_lane_slots,
+    expected_lane_seeds,
+):
+    """Validate layouts already constructed at the tt-metal target boundary.
+
+    ``front_packed_gathered`` models the dense, rank-segmented payload supplied
+    after gathered-DP packing. ``stable_gap_lane`` models the fixed stable-slot
+    grid supplied by lane-DP. This deliberately does not claim to test the vLLM
+    code that constructs or gathers either payload.
+    """
+
+    lanes = [_Lane(0), _Lane(1)]
+    group = LaneGroupExecutor(lanes)
+    prompt_tokens = torch.tensor([[200, -1], [210, 211], [220, -1], [230, 231]])
+    output_tokens = [[300, -1], [310, 311], [320, -1], [330, 331]]
+    execution = [f"trace-{layout}-0", f"trace-{layout}-1"]
+
+    prefill_result = group.prefill_forward(
+        prefill_tokens,
+        torch.arange(len(prefill_tokens), dtype=torch.int32).view(-1, 1),
+        empty_slots=empty_slots,
+        sampling_params=prefill_sampling,
+        prompt_tokens=prompt_tokens,
+        output_tokens=output_tokens,
+        slot_remap=slot_remap,
+        execution=execution,
+    )
+    assert prefill_result[0].tolist() == expected_prefill_tokens
+
+    decode_result = group.decode_forward(
+        decode_tokens,
+        decode_positions,
+        torch.arange(4, dtype=torch.int32).view(4, 1),
+        sampling_params=decode_sampling,
+        prompt_tokens=prompt_tokens,
+        output_tokens=output_tokens,
+        slot_remap=slot_remap,
+        reset_batch=True,
+        execution=execution,
+    )
+    assert decode_result[0].tolist() == expected_decode_tokens
+
+    if layout == "front_packed_gathered":
+        prefill_rows = ([0, 1], [2, 3])
+        prefill_prompt = (
+            prompt_tokens[0:2].tolist(),
+            prompt_tokens[2:4].tolist(),
+        )
+        prefill_output = (output_tokens[0:2], output_tokens[2:4])
+        lane_remap = ([1, 0], [1, 0])
+    else:
+        prefill_rows = ([0], [1])
+        prefill_prompt = (
+            [[-1, -1], prompt_tokens[1].tolist()],
+            [[-1, -1], prompt_tokens[3].tolist()],
+        )
+        prefill_output = (
+            [[-1, -1], output_tokens[1]],
+            [[-1, -1], output_tokens[3]],
+        )
+        lane_remap = ([0, 1], [0, 1])
+
+    for lane_idx, lane in enumerate(lanes):
+        prefill = next(kwargs for method, kwargs in lane.calls if method == "prefill")
+        decode = next(kwargs for method, kwargs in lane.calls if method == "decode")
+        source_rows = prefill_rows[lane_idx]
+        prefill_params = prefill["sampling_params"]
+        decode_params = decode["sampling_params"]
+        assert prefill["empty_slots"] == expected_lane_slots[lane_idx]
+        assert prefill["execution"] == execution[lane_idx]
+        assert prefill_params.temperature == [prefill_sampling.temperature[row] for row in source_rows]
+        assert prefill_params.top_k.tolist() == [int(prefill_sampling.top_k[row]) for row in source_rows]
+        assert prefill_params.top_p == [prefill_sampling.top_p[row] for row in source_rows]
+        assert prefill_params.presence_penalty == [prefill_sampling.presence_penalty[row] for row in source_rows]
+        assert prefill_params.frequency_penalty == [prefill_sampling.frequency_penalty[row] for row in source_rows]
+        assert prefill_params.repetition_penalty == [prefill_sampling.repetition_penalty[row] for row in source_rows]
+        assert prefill_params.seed == [prefill_sampling.seed[row] for row in source_rows]
+        assert prefill_params.enable_log_probs == [prefill_sampling.enable_log_probs[row] for row in source_rows]
+        assert prefill_params.num_logprobs == [prefill_sampling.num_logprobs[row] for row in source_rows]
+        assert prefill["prompt_tokens"].tolist() == prefill_prompt[lane_idx]
+        assert prefill["output_tokens"] == prefill_output[lane_idx]
+        assert prefill["slot_remap"].tolist() == lane_remap[lane_idx]
+        assert decode["execution"] == execution[lane_idx]
+        lane_slice = slice(lane_idx * 2, lane_idx * 2 + 2)
+        assert decode_params.temperature == decode_sampling.temperature[lane_slice]
+        assert decode_params.top_k.tolist() == decode_sampling.top_k[lane_slice].tolist()
+        assert decode_params.top_p == decode_sampling.top_p[lane_slice]
+        assert decode_params.presence_penalty == decode_sampling.presence_penalty[lane_slice]
+        assert decode_params.frequency_penalty == decode_sampling.frequency_penalty[lane_slice]
+        assert decode_params.repetition_penalty == decode_sampling.repetition_penalty[lane_slice]
+        assert decode_params.seed == expected_lane_seeds[lane_idx]
+        assert decode_params.enable_log_probs == decode_sampling.enable_log_probs[lane_slice]
+        assert decode_params.num_logprobs == decode_sampling.num_logprobs[lane_slice]
+        assert decode["prompt_tokens"].tolist() == prompt_tokens[lane_idx * 2 : lane_idx * 2 + 2].tolist()
+        assert decode["output_tokens"] == output_tokens[lane_idx * 2 : lane_idx * 2 + 2]
+        assert decode["slot_remap"].tolist() == lane_remap[lane_idx]
+        assert decode["reset_batch"] is True
+
+    raw = group.decode_forward(
+        decode_tokens,
+        decode_positions,
+        torch.arange(4, dtype=torch.int32).view(4, 1),
+        sampling_params=decode_sampling,
+        read_from_device=False,
+    )
+    host_outputs, events = group.read_decode_output(raw, async_read=True)
+    completed = group.process_decode_output_host(host_outputs, is_tokens=True)
+    assert events == ["event-0", "event-1"]
+    assert completed[0].tolist() == [0, 1, 2, 3]
+    assert completed[1] is None
 
 
 def test_decode_broadcasts_singleton_sampling_values_to_later_dp_lanes():
