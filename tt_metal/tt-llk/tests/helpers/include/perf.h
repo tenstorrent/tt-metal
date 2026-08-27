@@ -43,7 +43,8 @@ enum class PerfRunType
     UNPACK_ISOLATE,
     MATH_ISOLATE,
     PACK_ISOLATE,
-    L1_CONGESTION
+    L1_CONGESTION,
+    SFPU_ISOLATE
 };
 
 inline void _perf_unpack_set_valid(std::uint32_t source)
@@ -120,8 +121,6 @@ inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
 
 inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim)
 {
-    // fixme: add quasar support
-
     for (std::uint32_t loop = 0; loop < loop_factor; loop++)
     {
         for (std::uint32_t j = 0; j < kt_dim; j++)

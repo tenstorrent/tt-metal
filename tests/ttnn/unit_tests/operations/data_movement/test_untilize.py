@@ -2930,3 +2930,230 @@ def test_untilize_nd_shard_to_same_shard_spec_uneven_input_shard_spec(
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor)
 
     assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
+
+
+# --- Codegen-path coverage ---
+#
+# ttnn.untilize routes gate-supported cases to codegen and the rest to native, and offers no way to
+# ask for one: the verification-only entries below live in the private module for that reason (see
+# untilize_force.hpp). The nightly routing suite only asserts the *rejected* cases fall back to
+# native, so nothing there fails if a codegen kernel itself breaks -- these pin codegen and compare
+# it against native on the same input. That comparison is exact for every dtype below because
+# untilize only relayouts values, so any mismatch is a real kernel bug rather than tolerance.
+#
+# One case per writer the program factory can pick (untilize_codegen_supported.cpp decides which
+# shapes are in scope at all):
+#   multi-tile-row, tile-aligned -> row-parallel writer, one tile row per core
+#   single tile-row, Wt > 1      -> column-parallel writer, tile columns split across the grid
+#   non-tile-aligned bfloat16    -> row-parallel writer's unpadding path, which skips pad rows
+# bfloat8_b appears only tile-aligned: the gate routes non-aligned bfloat8_b to native because
+# the reference casts it to bfloat16 first, a step this implementation does not have.
+codegen_supported_cases = [
+    # (tensor_shape, dtype, output_buffer_type)
+    ([2, 2, 64, 128], ttnn.bfloat16, ttnn.BufferType.DRAM),
+    ([2, 2, 64, 128], ttnn.bfloat8_b, ttnn.BufferType.DRAM),
+    ([2, 2, 64, 128], ttnn.bfloat16, ttnn.BufferType.L1),
+    ([32, 512], ttnn.bfloat16, ttnn.BufferType.DRAM),
+    ([1, 2, 100, 68], ttnn.bfloat16, ttnn.BufferType.DRAM),
+]
+
+codegen_case_ids = [
+    "row_parallel|bfloat16|dram",
+    "row_parallel|bfloat8_b|dram",
+    "row_parallel|bfloat16|l1",
+    "column_parallel|bfloat16|dram",
+    "unpadding|bfloat16|dram",
+]
+
+
+_force_native = ttnn._ttnn.operations.data_movement.untilize_force_native
+_force_codegen = ttnn._ttnn.operations.data_movement.untilize_force_codegen
+
+
+def _codegen_input_tensor(device, tensor_shape, dtype):
+    return ttnn.from_torch(
+        torch.randn(tensor_shape, dtype=torch.bfloat16), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+
+@pytest.mark.parametrize("tensor_shape, dtype, output_buffer_type", codegen_supported_cases, ids=codegen_case_ids)
+def test_untilize_codegen(device, tensor_shape, dtype, output_buffer_type):
+    torch.manual_seed(42)
+    input_ttnn_tensor = _codegen_input_tensor(device, tensor_shape, dtype)
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
+
+    golden = _force_native(input_ttnn_tensor, memory_config=output_memory_config)
+    output = _force_codegen(input_ttnn_tensor, memory_config=output_memory_config)
+
+    assert output.shape == golden.shape, f"Output shape {output.shape} does not match native shape {golden.shape}"
+    assert_equal(ttnn.to_torch(golden), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize(
+    "tensor_shape",
+    [[2, 2, 64, 128], [32, 512]],
+    ids=["row_parallel", "column_parallel"],
+)
+def test_pc_untilize_codegen(device, tensor_shape):
+    torch.manual_seed(42)
+    num_iters = 3
+    input_tensors = [_codegen_input_tensor(device, tensor_shape, ttnn.bfloat16) for _ in range(num_iters)]
+    goldens = [ttnn.to_torch(_force_native(tensor)) for tensor in input_tensors]
+
+    for i in range(num_iters):
+        with device.cache_entries_counter.measure():
+            output = _force_codegen(input_tensors[i])
+
+        assert_equal(goldens[i], ttnn.to_torch(output))
+        if i == 0:
+            base_count = device.cache_entries_counter.total
+        else:
+            assert device.cache_entries_counter.total == base_count, "program cache entries differ on same configs"
+
+
+# The sub_core_grids factory shares its writer kernel
+# (writer_unary_stick_layout_split_rows_interleaved_parallel_columns) with the
+# parallelize-column factory. That kernel consumes (num_sticks / TILE_HEIGHT) *
+# num_tiles_per_core tiles via wait_front, but reader/compute only push
+# num_tiles_per_core tiles per core. ntiles_per_column > 1 violates this
+# producer/consumer contract, so validate_on_program_cache_miss must reject it.
+@pytest.mark.parametrize(
+    "input_shape, num_cores",
+    [
+        ([1, 1, 64, 1024], 8),  # ntiles_per_column=2
+        ([1, 1, 96, 512], 8),  # ntiles_per_column=3
+    ],
+)
+def test_untilize_sub_core_grids_multi_tile_height_rejected(device, input_shape, num_cores, expect_error):
+    """Tall tensors (ntiles_per_column > 1) with sub_core_grids must be rejected, not hung."""
+    torch.manual_seed(0)
+    input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
+    input_ttnn = ttnn.from_torch(
+        input_torch,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    with expect_error(RuntimeError, "sub_core_grid untilize only supports"):
+        ttnn.untilize(input_ttnn, use_multicore=True, sub_core_grids=sub_core_grids)
+
+
+def test_untilize_sub_core_grids_single_tile_height(device):
+    """Single-tile-height tensor (ntiles_per_column == 1) with sub_core_grids still works."""
+    torch.manual_seed(0)
+    input_shape = [1, 1, 32, 1024]  # height=32 = one tile row → ntiles_per_column=1
+    num_cores = 8
+    input_torch = torch.randn(input_shape, dtype=torch.bfloat16)
+    input_ttnn = ttnn.from_torch(
+        input_torch,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    output = ttnn.untilize(input_ttnn, use_multicore=True, sub_core_grids=sub_core_grids)
+    assert_equal(input_torch, ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("warmup", [False, True], ids=["cold", "warmup_then_constrain"])
+@pytest.mark.parametrize("headroom_regime", ["shallower_cb_plan", "no_cb_plan_fits"])
+def test_untilize_codegen_with_resident_l1_buffers(device, headroom_regime, warmup):
+    """Regression: the codegen CB plan must be budgeted against LIVE L1 occupancy.
+
+    Statically allocated CBs grow upward from the allocator's base L1 address while L1 tensors are
+    allocated downward from the top of L1, so the space actually available to a program's CBs is
+    lowest_occupied_compute_l1_address() - base, not the whole of L1. The codegen path originally
+    planned against the whole of L1, which is only correct on an otherwise-idle device; with a
+    model's weights/trace buffers resident in L1 it planned a CB region that overlapped them and
+    ProgramImpl::validate_circular_buffer_region() aborted the run with
+
+        Statically allocated circular buffers in program N clash with L1 buffers on core range ...
+
+    rather than degrading to a shallower CB plan (or falling back to native). Seen end-to-end on
+    Gemma-3-4B in trace mode; reproduced here at the op level by pinning a persistent interleaved
+    L1 tensor before untilizing.
+
+    Two regimes, both of which must simply produce the right answer:
+      - shallower_cb_plan: enough headroom for the single-buffered codegen plan but not the
+        double-buffered one, so the program factory must degrade the tier it picks.
+      - no_cb_plan_fits: not even the single-buffered codegen plan fits, so the program factory
+        must build the native-equivalent program instead of failing.
+
+    This asserts only on the result, never on which implementation served it.
+
+    warmup=True first untilizes with free L1 (caches a roomier plan), deallocates that
+    output, then constrains L1. The CB-tier / Native-block-split is in the program-cache
+    key, so the second call must miss and rebuild rather than clash.
+    """
+    torch.manual_seed(42)
+
+    TILE_BYTES = 2048  # bfloat16 tile
+    info = ttnn._ttnn.reports.get_device_info(device)
+
+    # Wt wide enough that the whole-of-L1 budget selects a double-buffered CB plan, but still
+    # inside the gate's wide-chunk threshold (2 * Wt * 2048 <= 800_000 => Wt <= 195). Two tile
+    # rows keep this on the row-parallel writer, whose CB plan is sized by Wt.
+    wt = 192
+    height_tiles = 2
+    single_buffer_bytes = 2 * wt * TILE_BYTES  # cb_in + cb_out, one slot each
+    double_in_bytes = 3 * wt * TILE_BYTES  # 2x cb_in + 1x cb_out
+
+    # cb_limit is exactly the whole-of-L1 budget the buggy plan used: worker L1 minus the base.
+    if info.cb_limit < double_in_bytes:
+        pytest.skip(f"needs at least {double_in_bytes} B of CB space, device offers {info.cb_limit} B")
+
+    if headroom_regime == "shallower_cb_plan":
+        # A headroom window that fits the single-buffer plan but NOT the double-buffered one, so
+        # the only non-clashing codegen plan is unambiguous and an unbudgeted build provably
+        # overruns it.
+        headroom_target = single_buffer_bytes + 64 * 1024
+        expected_headroom = (single_buffer_bytes, double_in_bytes)
+    else:
+        # Below every codegen tier, so the factory has to hand off to native. Still generous
+        # enough for native's own blocked CBs, which it sizes against the same live L1 space.
+        headroom_target = 256 * 1024
+        if headroom_target >= single_buffer_bytes:
+            pytest.skip("device L1 headroom cannot be driven below the smallest codegen CB plan")
+        expected_headroom = (0, single_buffer_bytes)
+
+    tiles_per_bank = (info.cb_limit - headroom_target) // TILE_BYTES
+    if tiles_per_bank <= 0:
+        pytest.skip("device L1 is too small to leave a meaningful headroom window")
+
+    # Built before the L1 reservation so that any device-side tilize in from_torch runs with the
+    # usual amount of L1 available; only the untilize under test should see the pressure.
+    # untilize only relayouts values, so the input is its own golden.
+    input_torch_tensor = torch.randn([1, 1, 32 * height_tiles, 32 * wt], dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if warmup:
+        warmup_output = ttnn.untilize(input_ttnn_tensor)
+        assert_equal(input_torch_tensor, ttnn.to_torch(warmup_output))
+        ttnn.deallocate(warmup_output)
+
+    # Interleaved L1 spreads pages round-robin over every bank, so tiles_per_bank tiles per bank
+    # pushes the lowest occupied L1 address down on all of them. Allocated directly on device: the
+    # contents are irrelevant, only the occupancy matters.
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        # Guard against a vacuous pass: if the reservation did not land where intended there is no
+        # L1 pressure left to regress against.
+        actual_headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        low, high = expected_headroom
+        assert low <= actual_headroom < high, (
+            f"resident L1 buffer left {actual_headroom} B above the CB base; the {headroom_regime} "
+            f"regime needs it in [{low}, {high})"
+        )
+
+        output = ttnn.untilize(input_ttnn_tensor)
+
+        assert_equal(input_torch_tensor, ttnn.to_torch(output))
+    finally:
+        ttnn.deallocate(resident)

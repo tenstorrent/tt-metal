@@ -135,11 +135,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
 
     distributed::EnqueueWriteMeshBuffer(data_movement_queue, input, input_data, true);
 
-    auto tid = distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+    auto tid = this->device_->begin_mesh_trace(mesh_command_queue);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-    this->device_->end_mesh_trace(mesh_command_queue.id(), tid);
+    this->device_->end_mesh_trace(mesh_command_queue, tid);
 
-    this->device_->replay_mesh_trace(mesh_command_queue.id(), tid, true);
+    this->device_->replay_mesh_trace(mesh_command_queue, tid, true);
     distributed::ReadShard(data_movement_queue, trace_output_data, output, distributed::MeshCoordinate{0, 0}, true);
     // distributed::EnqueueReadMeshBuffer(data_movement_queue, trace_output_data, output, true);
     EXPECT_TRUE(eager_output_data == trace_output_data);
@@ -190,13 +190,13 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
         distributed::EnqueueWriteMeshBuffer(data_movement_queue, input, input_data, true);
 
         if (not trace_captured) {
-            trace_id = distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+            trace_id = this->device_->begin_mesh_trace(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
+            this->device_->end_mesh_trace(mesh_command_queue, trace_id);
             trace_captured = true;
         }
 
-        this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
+        this->device_->replay_mesh_trace(mesh_command_queue, trace_id, false);
         distributed::ReadShard(data_movement_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, true);
 
         // Expect same output across all loops
@@ -274,15 +274,15 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     }
 
     // Capture trace on a trace queue
-    auto tid = distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+    auto tid = this->device_->begin_mesh_trace(mesh_command_queue);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-    this->device_->end_mesh_trace(mesh_command_queue.id(), tid);
+    this->device_->end_mesh_trace(mesh_command_queue, tid);
 
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         tt::ScopedTimer timer("Trace loop " + std::to_string(i));
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, kNonBlocking);
-        this->device_->replay_mesh_trace(mesh_command_queue.id(), tid, kNonBlocking);
+        this->device_->replay_mesh_trace(mesh_command_queue, tid, kNonBlocking);
         distributed::ReadShard(
             mesh_command_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, kNonBlocking);
     }
@@ -317,9 +317,9 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
     workload.add_program(device_range_, std::move(simple_program));
 
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, true);
-    auto tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
+    auto tid = mesh_device->begin_mesh_trace(mesh_command_queue);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, kNonBlocking);
-    mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
+    mesh_device->end_mesh_trace(mesh_command_queue, tid);
 
     // Instantiate a trace on a device bound command queue
     auto trace_inst = mesh_device->get_mesh_trace(tid);
@@ -371,9 +371,9 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
 
     distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, true);
 
-    auto tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
+    auto tid = mesh_device->begin_mesh_trace(mesh_command_queue);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-    mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
+    mesh_device->end_mesh_trace(mesh_command_queue, tid);
 
     // Create and Enqueue a Program with a live trace to ensure that a warning is generated
     auto input_temp = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
@@ -386,7 +386,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
 
     // Run trace that can clobber the temporary buffers created above
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-    mesh_device->replay_mesh_trace(mesh_command_queue.id(), tid, true);
+    mesh_device->replay_mesh_trace(mesh_command_queue, tid, true);
     distributed::ReadShard(mesh_command_queue, trace_output_data, output, distributed::MeshCoordinate{0, 0}, true);
     EXPECT_TRUE(eager_output_data == trace_output_data);
 
@@ -437,12 +437,12 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
 
         if (!has_trace) {
             // Program must be cached first
-            tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
+            tid = mesh_device->begin_mesh_trace(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
+            mesh_device->end_mesh_trace(mesh_command_queue, tid);
             has_trace = true;
         }
-        mesh_device->replay_mesh_trace(mesh_command_queue.id(), tid, true);
+        mesh_device->replay_mesh_trace(mesh_command_queue, tid, true);
 
         distributed::ReadShard(mesh_command_queue, trace_output_data, output, distributed::MeshCoordinate{0, 0}, true);
         if (has_eager) {
@@ -524,16 +524,16 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     }
 
     // Capture trace on a trace queue
-    auto tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
+    auto tid = mesh_device->begin_mesh_trace(mesh_command_queue);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload0, kNonBlocking);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload1, kNonBlocking);
-    mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
+    mesh_device->end_mesh_trace(mesh_command_queue, tid);
 
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         ScopedTimer timer("Trace loop " + std::to_string(i));
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, kNonBlocking);
-        mesh_device->replay_mesh_trace(mesh_command_queue.id(), tid, kNonBlocking);
+        mesh_device->replay_mesh_trace(mesh_command_queue, tid, kNonBlocking);
         distributed::ReadShard(
             mesh_command_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, kNonBlocking);
     }
@@ -617,17 +617,17 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     }
 
     // Capture trace on a trace queue
-    auto tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
+    auto tid = mesh_device->begin_mesh_trace(mesh_command_queue);
     for (uint32_t i = 0; i < num_programs; i++) {
         distributed::EnqueueMeshWorkload(mesh_command_queue, workloads[i], kNonBlocking);
     }
-    mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
+    mesh_device->end_mesh_trace(mesh_command_queue, tid);
 
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         ScopedTimer timer("Trace loop " + std::to_string(i));
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, kNonBlocking);
-        mesh_device->replay_mesh_trace(mesh_command_queue.id(), tid, kNonBlocking);
+        mesh_device->replay_mesh_trace(mesh_command_queue, tid, kNonBlocking);
         distributed::ReadShard(
             mesh_command_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, kNonBlocking);
     }
@@ -658,8 +658,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
-                     << " does not have any active ethernet cores";
+        GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
     auto& mesh_command_queue = this->device_->mesh_command_queue();
@@ -682,8 +681,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace) {
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
-                     << " does not have any active ethernet cores";
+        GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
     auto& mesh_command_queue = this->device_->mesh_command_queue();
@@ -734,8 +732,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
-                     << " does not have any active ethernet cores";
+        GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
     auto& mesh_command_queue = this->device_->mesh_command_queue();
@@ -763,8 +760,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
-                     << " does not have any active ethernet cores";
+        GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
     auto& mesh_command_queue = this->device_->mesh_command_queue();
@@ -901,10 +897,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
         const bool use_trace = (rand() % 2) == 0;
         if (use_trace) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            const distributed::MeshTraceId trace_id =
-                distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+            const distributed::MeshTraceId trace_id = this->device_->begin_mesh_trace(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
+            this->device_->end_mesh_trace(mesh_command_queue, trace_id);
             trace_ids.push_back(trace_id);
             program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].impl().get_id(), trace_id);
         }
@@ -916,7 +911,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
         const bool use_trace = program_ids_to_trace_ids.contains(program_id);
         if (use_trace) {
             const distributed::MeshTraceId trace_id = program_ids_to_trace_ids[program_id];
-            this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
+            this->device_->replay_mesh_trace(mesh_command_queue, trace_id, false);
         }
         distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
     }
@@ -929,8 +924,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) {
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
-                     << " does not have any active ethernet cores";
+        GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
     auto& mesh_command_queue = this->device_->mesh_command_queue();
@@ -956,10 +950,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
         if (use_trace) {
             ;
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            const distributed::MeshTraceId trace_id =
-                distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+            const distributed::MeshTraceId trace_id = this->device_->begin_mesh_trace(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
+            this->device_->end_mesh_trace(mesh_command_queue, trace_id);
             trace_ids.push_back(trace_id);
             program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].impl().get_id(), trace_id);
         }
@@ -971,7 +964,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
         const bool use_trace = program_ids_to_trace_ids.contains(program_id);
         if (use_trace) {
             const distributed::MeshTraceId trace_id = program_ids_to_trace_ids[program_id];
-            this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
+            this->device_->replay_mesh_trace(mesh_command_queue, trace_id, false);
         }
         distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
     }
@@ -984,8 +977,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
     if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
-        GTEST_SKIP() << "Skipping test because device " << this->device_->get_devices()[0]->id()
-                     << " does not have any active ethernet cores";
+        GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
     auto& mesh_command_queue = this->device_->mesh_command_queue();
@@ -1023,10 +1015,9 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
         if (use_trace) {
             ;
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            const distributed::MeshTraceId trace_id =
-                distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+            const distributed::MeshTraceId trace_id = this->device_->begin_mesh_trace(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
+            this->device_->end_mesh_trace(mesh_command_queue, trace_id);
             trace_ids.push_back(trace_id);
             program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].impl().get_id(), trace_id);
         }
@@ -1038,7 +1029,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
         const bool use_trace = program_ids_to_trace_ids.contains(program_id);
         if (use_trace) {
             const distributed::MeshTraceId trace_id = program_ids_to_trace_ids[program_id];
-            this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
+            this->device_->replay_mesh_trace(mesh_command_queue, trace_id, false);
         }
         distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
     }
@@ -1143,7 +1134,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueDFBProgramTrace) {
 
     // --- Trace capture: enqueue twice with different DFB configs ---
 
-    auto tid = distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+    auto tid = this->device_->begin_mesh_trace(mesh_command_queue);
 
     // First enqueue: config A, output to output_addr_a.
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
@@ -1160,7 +1151,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueDFBProgramTrace) {
     // Second enqueue: config B, output to output_addr_b.
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
 
-    this->device_->end_mesh_trace(mesh_command_queue.id(), tid);
+    this->device_->end_mesh_trace(mesh_command_queue, tid);
 
     // --- Replay and verify ---
 
@@ -1169,7 +1160,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueDFBProgramTrace) {
     detail::WriteToDeviceL1(device, worker, output_addr_a, zeros);
     detail::WriteToDeviceL1(device, worker, output_addr_b, zeros);
 
-    this->device_->replay_mesh_trace(mesh_command_queue.id(), tid, true);
+    this->device_->replay_mesh_trace(mesh_command_queue, tid, true);
 
     // Read back entry_size written by each execution.
     vector<uint32_t> result_a, result_b;

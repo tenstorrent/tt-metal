@@ -14,6 +14,8 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -88,12 +90,12 @@ TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
     auto activations_tile_layout =
         convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(tensor.get_values()));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-    this->WriteBuffer(src0_dram_buffer, activations);
+    slow_dispatch::WriteToBuffer(*src0_dram_buffer, activations);
 
     auto identity = create_identity_matrix(32, 32, 32);
     auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-    this->WriteBuffer(src1_dram_buffer, weights);
+    slow_dispatch::WriteToBuffer(*src1_dram_buffer, weights);
 
     SetRuntimeArgs(
         program,
@@ -115,10 +117,10 @@ TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
         core,
         {dst_l1_buffer->address(), (std::uint32_t)l1_dst_noc_xy.x, (std::uint32_t)l1_dst_noc_xy.y, num_tiles});
 
-    this->RunProgram(std::move(program));
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    this->ReadBuffer(dst_l1_buffer, result_vec);
+    slow_dispatch::ReadFromBuffer(*dst_l1_buffer, result_vec);
 
     // Validation
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);

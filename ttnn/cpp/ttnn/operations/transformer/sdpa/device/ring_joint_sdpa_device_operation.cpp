@@ -263,9 +263,15 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
 
     if (args.has_sliding_window() && tensor_args.is_chunked()) {
         const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
+        // One complete group is enough: at logical_n == q_group_size device 0 clips its
+        // window at token 0 and devices 1..R-1 consume predecessors within that group.
+        // Below one group build_sliding_q_work_plan is empty, so the reader would not push
+        // Q and compute would wait forever.
         TT_FATAL(
-            args.logical_n >= 2 * q_group_size,
-            "Chunked sliding attention requires a complete predecessor and current Q group");
+            args.logical_n >= q_group_size,
+            "Chunked sliding attention requires at least one complete Q group. Got logical_n={}, group size={}",
+            args.logical_n,
+            q_group_size);
         TT_FATAL(
             args.logical_n % q_group_size == 0,
             "Chunked sliding attention requires logical_n to end on a complete ring-group boundary. Got "
@@ -431,53 +437,54 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const bool has_kv_pad_rotation = args.has_kv_pad_rotation();
 
     if (args.has_sliding_window()) {
-        constexpr uint32_t gpt_oss_window_size = 128;
-        constexpr uint32_t gpt_oss_local_q_heads = 8;
-        constexpr uint32_t gpt_oss_local_kv_heads = 1;
-        constexpr uint32_t gpt_oss_head_dim = 64;
+        const uint32_t window_size = args.sliding_window_size.value();
         const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
         const bool supported_k_chunk = k_chunk_size == 128;
-        TT_FATAL(
-            args.sliding_window_size.value() == gpt_oss_window_size,
-            "Ring sliding-window attention supports the GPT-OSS {}-token window, got {}",
-            gpt_oss_window_size,
-            args.sliding_window_size.value());
+        // These are the only ring sizes exercised by the current one-hop compact-halo deployment.
+        // Extend the test matrix before widening this allowlist.
         TT_FATAL(
             args.ring_size == 4 || args.ring_size == 8,
-            "GPT-OSS sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
+            "Chunked sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
             args.ring_size);
         TT_FATAL(
             B == 1 || (B == 2 && args.ring_size == 8),
-            "GPT-OSS sliding attention supports batch 1 or the SP8 batch-2 surrogate, got B={} SP{}",
+            "Chunked sliding attention supports batch 1 or the SP8 batch-2 surrogate, got B={} SP{}",
             B,
             args.ring_size);
         TT_FATAL(
-            NQH == gpt_oss_local_q_heads && NKH == gpt_oss_local_kv_heads && tensor_args.v_num_heads() == 1,
-            "GPT-OSS sliding attention requires local heads 8Q:1K:1V, got {}Q:{}K:{}V",
-            NQH,
+            NKH == tensor_args.v_num_heads(),
+            "Chunked sliding attention requires matching K and V head counts, got K={} V={}",
             NKH,
             tensor_args.v_num_heads());
         TT_FATAL(
-            DH == gpt_oss_head_dim && tensor_args.v_head_dim(args.latent_v_head_dim) == gpt_oss_head_dim,
-            "GPT-OSS sliding attention requires Q/K/V head dimension {}, got Q={} V={}",
-            gpt_oss_head_dim,
+            NKH > 0 && NQH % NKH == 0,
+            "Chunked sliding attention requires Q heads to be a multiple of KV heads (GQA), got {}Q:{}K",
+            NQH,
+            NKH);
+        TT_FATAL(
+            DH == tensor_args.v_head_dim(args.latent_v_head_dim),
+            "Chunked sliding attention requires matching Q/V head dimension, got Q={} V={}",
             DH,
             tensor_args.v_head_dim(args.latent_v_head_dim));
-        TT_FATAL(has_input_v && has_gathered_v && !has_latent_v, "GPT-OSS sliding attention requires separate K and V");
+        TT_FATAL(
+            DH % tt::constants::TILE_WIDTH == 0,
+            "Chunked sliding attention requires a tile-aligned head dimension, got {}",
+            DH);
+        TT_FATAL(has_input_v && has_gathered_v && !has_latent_v, "Chunked sliding attention requires separate K and V");
         TT_FATAL(
             input_tensor_q.dtype() == DataType::BFLOAT16 && tensor_args.input_k.dtype() == DataType::BFLOAT8_B &&
                 tensor_args.input_v->dtype() == DataType::BFLOAT8_B &&
                 gathered_input_tensor_k.dtype() == DataType::BFLOAT8_B &&
                 tensor_args.gathered_v->dtype() == DataType::BFLOAT8_B,
-            "GPT-OSS sliding attention requires BF16 Q and BFP8_B K/V");
+            "Chunked sliding attention requires BF16 Q and BFP8_B K/V");
         TT_FATAL(
             gathered_buffer_n < N_local_kv * args.ring_size,
-            "GPT-OSS sliding attention requires a compact halo buffer, got gathered rows {} for {} global rows",
+            "Chunked sliding attention requires a compact halo buffer, got gathered rows {} for {} global rows",
             gathered_buffer_n,
             N_local_kv * args.ring_size);
         TT_FATAL(
             supported_q_chunk && supported_k_chunk,
-            "GPT-OSS sliding attention supports Q chunks 64/128 and K chunk 128, got Q={} K={}",
+            "Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q={} K={}",
             q_chunk_size,
             k_chunk_size);
         TT_FATAL(args.is_causal, "Ring sliding-window attention is currently causal-only");
@@ -485,7 +492,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!args.is_balanced, "Chunked ring sliding-window attention requires is_balanced=false");
         TT_FATAL(!args.is_cross, "Ring sliding-window attention does not support cross attention");
         TT_FATAL(L == 0, "Ring sliding-window attention does not support joint tokens");
-        const uint32_t halo_tokens = sliding_halo_token_count(gpt_oss_window_size, k_chunk_size);
+        const uint32_t halo_tokens = sliding_halo_token_count(window_size, k_chunk_size);
+        TT_FATAL(halo_tokens > 0, "Chunked sliding attention requires sliding_window_size > 1, got {}", window_size);
         TT_FATAL(
             N_local_q % q_chunk_size == 0,
             "q_chunk_size must divide the per-device Q slab for chunked sliding attention");
@@ -494,8 +502,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "k_chunk_size must divide the per-device Q slab for chunked sliding attention");
         TT_FATAL(
             halo_tokens <= N_local_q,
-            "Chunked GPT-OSS halo {} exceeds the per-device Q slab {}",
+            "Chunked sliding halo {} (window {}) exceeds the per-device Q slab {}; wider windows need a multi-hop "
+            "halo",
             halo_tokens,
+            window_size,
             N_local_q);
     }
 
@@ -912,6 +922,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.has_latent_v(),
         tensor_args.v_num_heads(),
         tensor_args.v_head_dim(args.latent_v_head_dim),
+        args.sliding_window_size,
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args);
 }

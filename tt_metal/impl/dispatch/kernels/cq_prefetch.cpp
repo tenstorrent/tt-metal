@@ -26,6 +26,14 @@
 #include "api/debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
+// FABRIC_RELAY is defined exactly when !is_hd(), so this catches an _h/_d build.
+// Quasar FD assumes prefetcher and dispatcher share a Tensix; remote-chip support needs cross-Tensix verification.
+// That includes payload-before-credit ordering: these builds relay over fabric, where the NoC packet flush tag
+// this file relies on does not apply.
+#if defined(ARCH_QUASAR) && defined(FABRIC_RELAY)
+#error "Quasar FD supports the _hd prefetcher only; the split _h/_d variants are not supported yet."
+#endif
+
 #include <array>
 #include <cstdint>
 
@@ -264,6 +272,11 @@ struct DispatchSRelayInlineState {
     static constexpr uint32_t downstream_log_page_size = dispatch_s_cb_log_page_size;
     static constexpr uint32_t downstream_cb_base_addr = dispatch_s_buffer_base;
     static constexpr uint32_t downstream_cb_end_addr = dispatch_s_buffer_end;
+    // tt-1xx has a separate cmd buf for small writes, so this state keeps its own DEST_COORD there. Quasar has
+    // only one full write buffer, so this aliases onto cmd buf 0 and shares DispatchRelayInlineState's
+    // DEST_COORD, which cq_noc_async_write_init_state programs once (CQ_NOC_SnDL does not refresh it). Safe
+    // only while dispatch_s is co-resident with the dispatcher, so both init calls write the same coordinate.
+    // TODO: revisit when the FD command-buffer policy is reworked.
     static constexpr uint32_t downstream_write_cmd_buf = BRISC_WR_REG_CMD_BUF;
     static constexpr uint32_t downstream_noc_index = my_noc_index;
     static inline CBWriter<
@@ -296,6 +309,20 @@ static uint32_t downstream_data_ptr_s = dispatch_s_buffer_base;
 static uint32_t ringbuffer_wp = scratch_db_base;
 static uint32_t ringbuffer_offset = 0;
 
+// Whether to compile the specialized shapes of the relay_paged read loop, below. Each is specialized for a property
+// of the command that holds for its whole duration, and each costs its own copy of the loop.
+//
+// A Tensix prefetcher has room for them: its kernel text region is 1432 KB. An erisc one has 24 KB less the erisc
+// firmware's own text, which on Wormhole leaves 21424 B, and the fan-out is what took that build over the line
+// (issue #52429). So an erisc compiles the general shape alone. It keeps the bank walk, which is not part of the
+// cost -- it replaces address generation rather than adding to it -- and gives up programming the transaction
+// length once per command and folding a shared bank offset into the row address.
+#if defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)
+constexpr bool specialize_paged_read_loop = false;
+#else
+constexpr bool specialize_paged_read_loop = true;
+#endif
+
 // Whether every interleaved bank carries the same base offset, for DRAM and for L1. That is what lets the relay_paged
 // read loop fold the offset into the row address and stop reprogramming the source address per read. The bank tables
 // are fixed once firmware init has written them, so this is scanned once in kernel_main rather than per command.
@@ -304,7 +331,10 @@ static bool l1_bank_offsets_uniform = false;
 
 template <bool is_dram>
 FORCE_INLINE bool bank_offsets_uniform() {
-    if constexpr (is_dram) {
+    if constexpr (!specialize_paged_read_loop) {
+        // The folding path is not compiled, so nothing reads the scan and kernel_main does not run it.
+        return false;
+    } else if constexpr (is_dram) {
         return dram_bank_offsets_uniform;
     } else {
         return l1_bank_offsets_uniform;
@@ -332,30 +362,6 @@ bool process_cmd(
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state);
 
-#ifdef ARCH_QUASAR
-// Same-core copy: L1->L1 memcpy through the L1 uncached alias, used when prefetcher and dispatcher are on
-// the same core.
-FORCE_INLINE void local_copy_bytes(uintptr_t dst_addr, uintptr_t src_addr, uint32_t num_bytes, uint32_t dst_end) {
-    ASSERT((src_addr & 0x3u) == 0);
-    ASSERT((dst_addr & 0x3u) == 0);
-    ASSERT(dst_addr + num_bytes <= dst_end);
-    volatile uint32_t tt_l1_ptr* dst_ptr = uncached_l1_ptr<uint32_t>(dst_addr);
-    volatile uint32_t tt_l1_ptr* src_ptr = uncached_l1_ptr<uint32_t>(src_addr);
-    const uint32_t words = num_bytes >> 2;
-    for (uint32_t i = 0; i < words; ++i) {
-        dst_ptr[i] = src_ptr[i];
-    }
-    const uint32_t tail_bytes = num_bytes & 0x3u;
-    if (tail_bytes != 0) {
-        volatile uint8_t tt_l1_ptr* dst_tail = uncached_l1_ptr<uint8_t>(dst_addr + (words << 2));
-        volatile uint8_t tt_l1_ptr* src_tail = uncached_l1_ptr<uint8_t>(src_addr + (words << 2));
-        for (uint32_t i = 0; i < tail_bytes; ++i) {
-            dst_tail[i] = src_tail[i];
-        }
-    }
-}
-#endif
-
 template <uint32_t downstream_cb_base_addr, uint32_t downstream_cmd_buf>
 FORCE_INLINE void write_downstream(
     uintptr_t& data_ptr,
@@ -371,8 +377,6 @@ FORCE_INLINE void write_downstream(
                 static_cast<uint32_t>(data_ptr),
                 get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
                 remaining);
-#elif defined(ARCH_QUASAR)
-            local_copy_bytes(local_downstream_data_ptr, data_ptr, remaining, downstream_end);
 #else
             cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
                 static_cast<uint32_t>(data_ptr),
@@ -390,10 +394,13 @@ FORCE_INLINE void write_downstream(
         static_cast<uint32_t>(data_ptr),
         get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
         length);
-#elif defined(ARCH_QUASAR)
-    local_copy_bytes(local_downstream_data_ptr, data_ptr, length, downstream_end);
 #else
-    cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
+    cq_noc_async_write_with_state_any_len<
+        true,
+        true,
+        CQNocWait::CQ_NOC_WAIT,
+        downstream_cmd_buf,
+        /*flush_last_transfer=*/true>(
         static_cast<uint32_t>(data_ptr),
         get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
         length);
@@ -908,24 +915,19 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
     if (dispatch_data_ptr == downstream_cb_end) {
         dispatch_data_ptr = downstream_cb_base;
     }
+    // On Quasar these writes carry no flush tag: this routine does not release the page, so the header
+    // and the payload that follows are published by one release_pages, and the flush on the payload's
+    // last transfer covers all packets before it.
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
-#if defined(ARCH_QUASAR)
-        local_copy_bytes(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
-#else
         noc_async_write(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
-#endif
         dispatch_data_ptr += remaining;
         length -= remaining;
         data_ptr = cmddat_q_base;
     }
-#if defined(ARCH_QUASAR)
-    local_copy_bytes(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
-#else
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
-#endif
     dispatch_data_ptr += length;
 
     return cmd->relay_inline.stride;
@@ -946,35 +948,36 @@ static uint32_t write_pages_to_dispatcher(
         DispatchRelayInlineState::cb_writer.acquire_pages(npages);
     }
 
-    [[maybe_unused]] uint64_t noc_addr;
+    uint64_t noc_addr;
     if (downstream_data_ptr == downstream_cb_end) {
         downstream_data_ptr = downstream_cb_base;
     } else if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
         uint32_t last_chunk_size = downstream_cb_end - downstream_data_ptr;
-#if defined(FABRIC_RELAY) || !defined(ARCH_QUASAR)
         noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-#endif
 #if defined(FABRIC_RELAY)
         noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
-#elif defined(ARCH_QUASAR)
-        local_copy_bytes(downstream_data_ptr, scratch_write_addr, last_chunk_size, downstream_cb_end);
 #else
-        cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, last_chunk_size);
+        cq_noc_async_write_with_state_any_len<
+            true,
+            true,
+            CQNocWait::CQ_NOC_WAIT,
+            DispatchRelayInlineState::downstream_write_cmd_buf>(scratch_write_addr, noc_addr, last_chunk_size);
 #endif
         downstream_data_ptr = downstream_cb_base;
         scratch_write_addr += last_chunk_size;
         amt_to_write -= last_chunk_size;
     }
-#if defined(FABRIC_RELAY) || !defined(ARCH_QUASAR)
     noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-#endif
 
 #if defined(FABRIC_RELAY)
     noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
-#elif defined(ARCH_QUASAR)
-    local_copy_bytes(downstream_data_ptr, scratch_write_addr, amt_to_write, downstream_cb_end);
 #else
-    cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, amt_to_write);
+    cq_noc_async_write_with_state_any_len<
+        true,
+        true,
+        CQNocWait::CQ_NOC_WAIT,
+        DispatchRelayInlineState::downstream_write_cmd_buf,
+        /*flush_last_transfer=*/true>(scratch_write_addr, noc_addr, amt_to_write);
 #endif
     downstream_data_ptr += amt_to_write;
 
@@ -1324,10 +1327,13 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
 // per chunk and each loop body is free of it.
 //
 // Deliberately out of line. Inlined, the three loops below were emitted at both call sites and for both values of
-// is_dram -- twelve read loops, half of them redundant, and 1.7 KB of dispatch code that the eth prefetcher's 22 KB
+// is_dram -- twelve read loops, half of them redundant, and 1.7 KB of dispatch code that the eth prefetcher's 21 KB
 // kernel region does not have. Out of line the loops are still inlined here, so the per-page work is unchanged, and
 // the one call per scratch buffer is amortized over every page read into it: on Blackhole a 64 MB paged read holds
 // to within 0.5% from 32 B pages up, on DRAM and on L1.
+//
+// Where specialize_paged_read_loop is false only the general loop is compiled, and both callers pass flags that are
+// constant-false, so the choice below folds away with the other two loops.
 template <bool is_dram, typename AddrGen>
 __attribute__((noinline)) uint32_t read_pages_into_scratch(
     bool single_read,
@@ -1337,13 +1343,18 @@ __attribute__((noinline)) uint32_t read_pages_into_scratch(
     uint32_t scratch_read_addr,
     uint32_t amt_to_read,
     uint32_t page_size) {
-    if (!single_read) {
+    if constexpr (specialize_paged_read_loop) {
+        if (!single_read) {
+            return read_pages_into_scratch<false, false>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
+        }
+        if (folded_offset) {
+            return read_pages_into_scratch<true, true>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
+        }
+        return read_pages_into_scratch<true, false>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
+    } else {
+        ASSERT(!single_read && !folded_offset);
         return read_pages_into_scratch<false, false>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
     }
-    if (folded_offset) {
-        return read_pages_into_scratch<true, true>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
-    }
-    return read_pages_into_scratch<true, false>(addr_gen, walker, scratch_read_addr, amt_to_read, page_size);
 }
 
 // This fn prefetches data from DRAM memory and writes data to the dispatch core.
@@ -1412,7 +1423,7 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
     // command buffer with is their own, since the writes to the dispatcher go out on a different one. Programming it
     // with no send is the same thing paged_read_into_cmddat_q and noc_read_64bit_any_len do, and leaves the address
     // registers to the read loop, which has to write them anyway.
-    const bool single_read = page_size <= NOC_MAX_BURST_SIZE;
+    const bool single_read = specialize_paged_read_loop && page_size <= NOC_MAX_BURST_SIZE;
     if (single_read) {
         noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT>(
             noc_index, 0, 0, 0, page_size);
@@ -1976,10 +1987,12 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
 #if defined(FABRIC_RELAY)
         noc_async_write(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
-#elif defined(ARCH_QUASAR)
-        local_copy_bytes(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
 #else
-        cq_noc_async_write_with_state_any_len<true, true>(
+        cq_noc_async_write_with_state_any_len<
+            true,
+            true,
+            CQNocWait::CQ_NOC_WAIT,
+            DispatchRelayInlineState::downstream_write_cmd_buf>(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
 #endif
         dispatch_data_ptr += remaining;
@@ -1998,10 +2011,12 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
 
 #if defined(FABRIC_RELAY)
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
-#elif defined(ARCH_QUASAR)
-    local_copy_bytes(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
 #else
-    cq_noc_async_write_with_state_any_len<true, true>(
+    cq_noc_async_write_with_state_any_len<
+        true,
+        true,
+        CQNocWait::CQ_NOC_WAIT,
+        DispatchRelayInlineState::downstream_write_cmd_buf>(
         static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
 #endif
     dispatch_data_ptr += length;
@@ -3033,13 +3048,10 @@ void kernel_main_d() {
         num_hops,
         NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 #else
-#if !defined(ARCH_QUASAR)
-    // On Quasar, relay to the dispatcher is a same-core uncached memcpy; no NOC init-state needed.
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, 1, my_noc_index);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0, 1, my_noc_index);
-#endif
 #endif
 
     // Initialize cmd_ptr tracking for release_pages synchronization assertions
@@ -3091,13 +3103,10 @@ void kernel_main_hd() {
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
 
-#if !defined(ARCH_QUASAR)
-    // On Quasar, relay to the dispatcher is a same-core uncached memcpy; no NOC init-state needed.
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0);
-#endif
 
     while (!done) {
         DeviceZoneScopedN("CQ-PREFETCH");
@@ -3125,8 +3134,10 @@ void kernel_main() {
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
-    dram_bank_offsets_uniform = InterleavedBankWalker<true>::scan_offsets_uniform();
-    l1_bank_offsets_uniform = InterleavedBankWalker<false>::scan_offsets_uniform();
+    if constexpr (specialize_paged_read_loop) {
+        dram_bank_offsets_uniform = InterleavedBankWalker<true>::scan_offsets_uniform();
+        l1_bank_offsets_uniform = InterleavedBankWalker<false>::scan_offsets_uniform();
+    }
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();

@@ -19,15 +19,17 @@
 # selected by the binding's PREFILL_MANIFEST) and live at
 # models/demos/common/prefill/runners/topology_configuration/. Pass your binding as $1.
 #
-# Examples:
+# Examples (drive each with prefill_producer.py on the launch host). The request_* bindings are
+# model-agnostic and carry no PREFILL_MANIFEST, so they run the default model; set PREFILL_MANIFEST in
+# the binding's global_env to select another (e.g. deepseek_v3_d_p/.../manifests/kimi26.json for Kimi-2.6):
 #   # 2-galaxy D2D pipeline (connected MGD, FABRIC_2D):
-#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_rank_binding_2rank_d2d.yaml bh-glx-d07u02:1,bh-glx-d07u08:1
+#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_2rank.yaml bh-glx-d07u02:1,bh-glx-d07u08:1
 #
 #   # 4-galaxy D2D pipeline (ring-chain host order — see the 4-galaxy connected MGD):
-#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_rank_binding_4rank_d2d.yaml bh-glx-d07u02:1,bh-glx-d07u08:1,bh-glx-d08u08:1,bh-glx-d08u02:1
+#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_4rank.yaml bh-glx-d07u02:1,bh-glx-d07u08:1,bh-glx-d08u08:1,bh-glx-d08u02:1
 #
 #   # single-galaxy 1-rank full-model de-risk:
-#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_real_1galaxy_1rank.yaml bh-glx-d07u02:1
+#   ./run_pipeline_prefill.sh models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_1rank.yaml bh-glx-d07u02:1
 set -euo pipefail
 
 RANK_BINDING="${1:?usage: run_pipeline_prefill.sh <rank_binding.yaml> [host_list] [tcp_iface]}"
@@ -47,21 +49,28 @@ export TT_METAL_HOME PYTHONPATH="$TT_METAL_HOME"
 export TT_METAL_CACHE="${PP_TT_METAL_CACHE:-/tmp/tt-metal-cache-pp}"
 cd "$TT_METAL_HOME"
 
-# Optional shell-selected model: forward PREFILL_MANIFEST / PREFILL_MODEL to every rank when set, so a
-# GENERIC binding (one that does not set the model in its global_env) can run any model without a
+# Optional shell-selected model, SINGLE-HOST ONLY: forward PREFILL_MANIFEST / PREFILL_MODEL when set, so
+# a GENERIC binding (one that does not set the model in its global_env) can run any model without a
 # per-model binding, e.g.
 #   PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
 #     ./run_pipeline_prefill.sh <generic_binding.yaml> <host_list>
 # Use this with a binding that leaves the model unset; don't also set it in that binding's global_env.
+# Multi-host: -x reaches only the launch-host rank, so remote ranks silently take the default model and
+# disagree on the chunk plan — put PREFILL_MANIFEST (ABSOLUTE path) in the binding's global_env instead.
 FWD_ENV=""
 [ -n "${PREFILL_MANIFEST:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MANIFEST"
 [ -n "${PREFILL_MODEL:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MODEL"
+# The KV-PCC read-back gate needs the runner to publish its chunk table; forward the flag when set so a
+# single-host accuracy run can enable it from the shell (multi-host: same -x caveat as the model above).
+[ -n "${PREFILL_MOCK_MIGRATION:-}" ] && FWD_ENV="${FWD_ENV} -x PREFILL_MOCK_MIGRATION"
 
 # -x PATH/LD_LIBRARY_PATH: ttrun only forwards TT_*/ARCH_*/... prefixed vars, not PATH, so peer ranks
 # would otherwise resolve a bare `python3` to the system interpreter (no ttnn). Forwarding the launch
 # host's PATH works only because every host's venv sits at the identical clone path.
+# `--` terminates ttrun's own option parsing: ttrun's -m short flag (--mesh-graph-descriptor) otherwise
+# swallows the target's `python3 -m <module>` and trips the mesh-graph/rank-binding mutual-exclusion check.
 exec python3 ttnn/ttnn/distributed/ttrun.py \
   --tcp-interface "$TCP_IFACE" \
   --rank-binding "$RANK_BINDING" \
   --mpi-args "--host ${HOST_LIST} --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH${FWD_ENV}" \
-  python3 -m models.demos.common.prefill.runners.prefill_runner
+  -- python3 -m models.demos.common.prefill.runners.prefill_runner

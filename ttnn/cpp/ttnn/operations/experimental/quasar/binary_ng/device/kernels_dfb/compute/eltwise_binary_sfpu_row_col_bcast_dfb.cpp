@@ -99,6 +99,7 @@ ALWI void process_tile(
     PREPROCESS(BCAST_OP, dfb_pre_bcast_id, dfb_post_bcast_id, dfb_out_id, num_tiles_per_cycle);
     dfb_post_bcast.wait_front(num_tiles_per_cycle);
 
+    compute_kernel_hw_startup(dfb_raw_row_id, dfb_llk_post_id);
     for (uint32_t j = tile_start; j < freq; ++j) {
         // --- ROW broadcast pass (per iteration): the raw partial row tile -> full tile in llk_post.
         // Identical to the single-operand ROW kernel's broadcast pass (unary_bcast<ROW> + the two
@@ -112,7 +113,8 @@ ALWI void process_tile(
         // llk_post with pack_init so pack_tile writes there.
         pack_init(dfb_llk_post_id);
 #endif
-        unary_bcast_init<BroadcastType::ROW>(dfb_raw_row_id, dfb_llk_post_id);
+        reconfig_data_format(dfb_raw_row_id, dfb_raw_row_id);
+        unary_bcast_init<BroadcastType::ROW>(dfb_raw_row_id);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_raw_row_id, 0, 0);

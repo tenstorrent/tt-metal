@@ -180,6 +180,10 @@ def run(
     # mesh_tensor_to_torch (taking just device_tensors[0] returns only the
     # chip-0 slice and leaves the rest of the global tensor empty).
     if is_mesh_device:
+        # NOT wired to scatter_placement: this module REQUIRES the reassembled output (see the comment
+        # above) and preallocates its output with its own ot_placement, so the input's construction
+        # path says nothing about how the reduction distributed its result. Collapsing to chip 0 here
+        # would compare one shard against a global golden.
         output_tensor = mesh_tensor_to_torch(output_tensor, device)
         # mesh_tensor_to_torch returns the device tensor with reduced dims still
         # tile-padded (a reduced dim of logical size 1 comes back as 32). Slice

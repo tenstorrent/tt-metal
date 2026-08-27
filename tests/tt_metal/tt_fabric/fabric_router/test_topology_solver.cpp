@@ -248,6 +248,35 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor) {
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes (mesh_id 0 and 1)";
 }
 
+// Regression: MGD lists grid shape only (no explicit MESH connection entries); intra-mesh edges come from
+// MeshGraphDescriptor::populate_intra_mesh_connections. Used by generate_rank_bindings + multi-MGD merge tests.
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromBhGalaxyDescriptorMatchesMeshGraph) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_single_4x4_mesh.textproto";
+
+    MeshGraphDescriptor mesh_graph_descriptor(mesh_graph_desc_path);
+    MeshGraph mesh_graph(cluster_type, mesh_graph_desc_path.string());
+
+    auto adjacency_from_descriptor = build_adjacency_graph_logical(mesh_graph_descriptor);
+    auto adjacency_from_graph = build_adjacency_graph_logical(mesh_graph);
+
+    ASSERT_EQ(adjacency_from_descriptor.size(), adjacency_from_graph.size());
+    for (const auto& [mesh_id, adj_graph] : adjacency_from_descriptor) {
+        ASSERT_TRUE(adjacency_from_graph.contains(mesh_id))
+            << "Mesh " << mesh_id.get() << " should exist in adjacency map from MeshGraph";
+        const auto& adj_graph_from_graph = adjacency_from_graph.find(mesh_id)->second;
+        EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
+            << "Mesh " << mesh_id.get() << " should have the same number of nodes";
+        for (const auto& node : adj_graph.get_nodes()) {
+            EXPECT_EQ(adj_graph.get_neighbors(node).size(), adj_graph_from_graph.get_neighbors(node).size())
+                << "Mesh " << mesh_id.get() << " node " << node << " neighbor count should match MeshGraph path";
+        }
+    }
+}
+
 TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor2) {
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
@@ -3457,6 +3486,147 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SplittingTar
     ASSERT_FALSE(result.success) << "Target group {1,2,3} cannot be split across global groups {10},{11},{12}";
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Host-group occupancy tests for the declarative same-rank-group objectives:
+//   - set_max_same_rank_groups_used(k): HARD cap -- at most k distinct host groups may be occupied (solver picks which).
+//   - set_minimize_same_rank_groups_used(true): SOFT best-effort minimize toward the capacity lower bound.
+//
+// These mirror the production setup in topology_mapper_utils.cpp: register the physical host partitions as same-rank
+// GLOBAL groups with NO target groups (an inert same-rank constraint that only exposes per-host membership), then apply
+// the objective. SAT honors it via the at-most-K occupancy encoding; DFS honors it via the candidate prune.
+// ---------------------------------------------------------------------------------------------------------------------
+
+// Counts how many distinct host groups (from `global_groups`) the produced mapping lands on.
+static size_t count_host_groups_used(
+    const MappingResult<TestTargetNode, TestGlobalNode>& result,
+    const std::vector<std::set<TestGlobalNode>>& global_groups) {
+    std::set<size_t> used;
+    for (const auto& [t, g] : result.target_to_global) {
+        for (size_t i = 0; i < global_groups.size(); ++i) {
+            if (global_groups[i].contains(g)) {
+                used.insert(i);
+                break;
+            }
+        }
+    }
+    return used.size();
+}
+
+// N isolated target nodes 1..N (no edges): placement is constrained only by occupancy / the host cap, isolating the
+// objective from connectivity so the assertions are deterministic.
+static AdjacencyGraph<TestTargetNode> make_disconnected_target_graph(size_t n) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap adj;
+    for (size_t i = 1; i <= n; ++i) {
+        adj[static_cast<TestTargetNode>(i)] = {};
+    }
+    return AdjacencyGraph<TestTargetNode>(adj);
+}
+
+// N isolated global nodes 100..100+N-1.
+static AdjacencyGraph<TestGlobalNode> make_disconnected_global_graph(size_t n) {
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap adj;
+    for (size_t i = 0; i < n; ++i) {
+        adj[static_cast<TestGlobalNode>(100 + i)] = {};
+    }
+    return AdjacencyGraph<TestGlobalNode>(adj);
+}
+
+// num_groups host partitions of group_size consecutive globals each, starting at 100 (matches the graph above).
+static std::vector<std::set<TestGlobalNode>> make_host_groups(size_t num_groups, size_t group_size) {
+    std::vector<std::set<TestGlobalNode>> groups;
+    TestGlobalNode g = 100;
+    for (size_t i = 0; i < num_groups; ++i) {
+        std::set<TestGlobalNode> grp;
+        for (size_t j = 0; j < group_size; ++j) {
+            grp.insert(g++);
+        }
+        groups.push_back(std::move(grp));
+    }
+    return groups;
+}
+
+// HARD cap: both backends must confine placement to at most k occupied host groups (SAT via the at-most-k occupancy
+// encoding, DFS via the candidate prune in dfs_recursive).
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_HardCapRespected) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4, kCap = 2;
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(result.success) << name << ": " << result.error_message;
+        ASSERT_EQ(result.target_to_global.size(), kNumTargets) << name;
+        EXPECT_LE(count_host_groups_used(result, host_groups), kCap)
+            << name << ": set_max_same_rank_groups_used(" << kCap << ") must confine placement to <= " << kCap
+            << " host groups";
+    }
+}
+
+// SOFT minimize: reduces occupancy to the capacity lower bound ceil(n_target / host_capacity).
+TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_ReducesOccupiedGroups) {
+    constexpr size_t kNumTargets = 8, kNumGroups = 4, kGroupSize = 4;
+    constexpr size_t kMinGroups = (kNumTargets + kGroupSize - 1) / kGroupSize;  // 2
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph(kNumGroups * kGroupSize);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_minimize_same_rank_groups_used(true);
+
+    auto result = solve_topology_mapping(
+        target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << result.error_message;
+    ASSERT_EQ(result.target_to_global.size(), kNumTargets);
+    EXPECT_LE(count_host_groups_used(result, host_groups), kMinGroups)
+        << "minimize must not exceed the capacity lower bound of " << kMinGroups << " host groups";
+}
+
+// Issue #50253 shape: a ring (cycle) embedded using whole hosts. The 4-node target cycle only closes on the 4-cycle
+// formed by hosts {10,11}+{12,13}; the third host hangs off to the side. A HARD cap of k_min = ceil(4/2) = 2 with
+// full packing (4 == 2*2) forces the all-or-nothing occupancy fast path on a cyclic (not path) embedding -- the case
+// main's weak cardinality counter could miss. Mirrors what topology_mapper_utils sets for inter-mesh alignment.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_RingFullPacking) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2, 4};
+    target_adj[2] = {1, 3};
+    target_adj[3] = {2, 4};
+    target_adj[4] = {3, 1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    // 4-cycle 10-11-13-12-10 across hosts {10,11},{12,13}; host {14,15} hangs off node 13.
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[10] = {11, 12};
+    global_adj[11] = {10, 13};
+    global_adj[12] = {10, 13};
+    global_adj[13] = {11, 12, 15};
+    global_adj[15] = {13, 14};
+    global_adj[14] = {15};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    std::vector<std::set<TestGlobalNode>> global_groups{{10, 11}, {12, 13}, {14, 15}};
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{}, global_groups));
+    constraints.set_max_same_rank_groups_used(2);      // HARD cap at k_min
+    constraints.set_minimize_same_rank_groups_used(true);
+
+    auto result = solve_topology_mapping(
+        target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(count_host_groups_used(result, global_groups), 2u)
+        << "4-node ring must pack onto the minimum ceil(4/2) = 2 host groups";
+}
+
 // Cross-validation: same-rank feasibility vs required mappings (set_theory check in validate()).
 TEST_F(TopologySolverTest, MappingConstraints_SetSameRankRejected_WhenRequiredPinsDifferentPartitions) {
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
@@ -5247,8 +5417,10 @@ AdjacencyGraph<TestGlobalNode> make_mesh_level_physical_graph_cluster_trace_80()
     return AdjacencyGraph<TestGlobalNode>(global_adj_map);
 }
 
-// Shared enumeration cap for Benchmark_*_MultiSolve_SatDfs (keep Line64 and Ring64/trace comparable).
-constexpr size_t kTopologyBenchmarkMultiSolveEnumerationCap = 10;
+// Line64 mesh benchmark: keep moderate cap (many Hamiltonian paths exist; full grid enumeration explodes).
+constexpr size_t kTopologyBenchmarkLine64MultiSolveEnumerationCap = 10;
+// Ring64 on 80-node trace: large cap for incremental scaling (SAT vs DFS); may exhaust before cap.
+constexpr size_t kTopologyBenchmarkRing64MultiSolveEnumerationCap = 10;
 
 // Real inter-mesh physical adjacency captured from the superpod DeepSeek "blitz decode" 64-stage pipeline run
 // (512 ASICs -> 64 logical meshes). The logical topology is a pure 64-node ring and the physical graph here also
@@ -5290,7 +5462,7 @@ TEST_F(TopologySolverTest, Benchmark_Line64_On_Mesh4x16_MultiSolve_SatDfs) {
     constexpr size_t kPathNodes = 64;
     constexpr size_t kMeshRows = 4;
     constexpr size_t kMeshCols = 16;
-    constexpr size_t kMaxSolutions = kTopologyBenchmarkMultiSolveEnumerationCap;
+    constexpr size_t kMaxSolutions = kTopologyBenchmarkLine64MultiSolveEnumerationCap;
 
     static_assert(kMeshRows * kMeshCols == kPathNodes, "mesh node count must match path length");
 
@@ -5432,7 +5604,7 @@ TEST_F(TopologySolverTest, Benchmark_Ring64_On_ClusterTrace80_MultiSolve_SatDfs)
     using namespace tt::tt_fabric::detail;
     constexpr size_t kRingNodes = 64;
     constexpr size_t kTraceNodes = 80;
-    constexpr size_t kMaxSolutions = kTopologyBenchmarkMultiSolveEnumerationCap;
+    constexpr size_t kMaxSolutions = kTopologyBenchmarkRing64MultiSolveEnumerationCap;
 
     auto target_graph = create_1d_ring_graph<TestTargetNode>(kRingNodes);
     auto global_graph = make_mesh_level_physical_graph_cluster_trace_80();

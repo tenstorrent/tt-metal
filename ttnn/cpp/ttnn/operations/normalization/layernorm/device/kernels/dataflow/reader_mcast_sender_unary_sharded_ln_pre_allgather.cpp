@@ -54,8 +54,8 @@ void kernel_main() {
     Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(16));
     UnicastEndpoint remote_ep;
 
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial2);
-    const DataFormat data_format = get_dataformat(dfb_ex_partial2);
+    DataflowBuffer dfb_ex_partial2_obj(dfb_ex_partial2);
+    const uint32_t single_tile_size_bytes = dfb_ex_partial2_obj.get_tile_size();
 
     RemoteCoord remote_coords[num_blocks];
     uint32_t x = start_x, y = start_y;

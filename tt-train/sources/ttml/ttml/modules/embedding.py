@@ -63,11 +63,15 @@ class VocabParallelEmbedding(AbstractModuleBase):
         axis_name: Mesh axis used for tensor parallelism.
 
     Note:
-        ``num_embeddings`` need only be divisible by ``tp_size`` — the per-device
-        shard is not required to be tile-aligned. The embedding *backward* kernel,
-        however, requires ``seq_len`` and ``embedding_dim`` to be multiples of 32,
-        so for training callers must tile-align the sequence length (the model
-        forward paths already pad it).
+        ``num_embeddings`` must be divisible by ``tp_size``, and the resulting
+        per-device shard must match the row count of the tensor ``weight_init``
+        returns (checked in ``__init__``). Sharding a global ``[1, 1, V, H]``
+        tensor satisfies this for any TP-divisible ``V``; a ``weight_init`` that
+        allocates per-device instead may tile-pad the shard, so those callers
+        need ``num_embeddings`` to be a multiple of ``32 * tp_size``. The
+        embedding *backward* kernel additionally requires ``seq_len`` and
+        ``embedding_dim`` to be multiples of 32, so for training callers must
+        tile-align the sequence length (the model forward paths already pad it).
     """
 
     def __init__(
@@ -102,6 +106,20 @@ class VocabParallelEmbedding(AbstractModuleBase):
         weight_shape = (1, 1, num_embeddings, embedding_dim)
         weight_mapper = mesh.axis_mapper(axis_name, tdim=2)
         self.weight = Parameter(weight_init(weight_shape, mapper=weight_mapper))
+
+        # The ownership offsets below assume each device's slice is exactly
+        # ``num_embeddings_per_partition`` rows. A ``weight_init`` that allocates
+        # per-device (rather than sharding a global tensor) may round the shard up
+        # to a tile boundary, which silently shifts every rank after the first by
+        # the difference -- so check the tensor we actually got.
+        local_rows = self.weight.tensor.shape()[2]
+        if local_rows != self.num_embeddings_per_partition:
+            raise ValueError(
+                f"VocabParallelEmbedding weight has {local_rows} rows per device but ownership "
+                f"offsets assume {self.num_embeddings_per_partition} "
+                f"(num_embeddings {num_embeddings} // tp_size {self.tp_size}). Pad num_embeddings "
+                f"to a multiple of 32 * tp_size ({32 * self.tp_size}) so the shard is tile-aligned."
+            )
 
         # Per-device vocab-start offset (one shard per TP rank); int32 + row-major to
         # match the ids so the subtract in forward stays off the tile path.

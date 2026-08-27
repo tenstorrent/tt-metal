@@ -59,7 +59,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_dfb, trans_mat_dfb, out_dfb);
     // Start from the state at the end of each iteration so same-format reconfigurations compile out.
-    binary_op_init_common(cos_interm_dfb, sin_interm_dfb, out_dfb);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(cos_interm_dfb, sin_interm_dfb, out_dfb);
 
     // Get the trans_mat
     trans_mat_dfb_obj.wait_front(onetile);
@@ -106,7 +107,7 @@ void kernel_main() {
 
                 reconfig_data_format(trans_mat_dfb, rotated_in_interm_dfb, in_dfb, sin_dfb);
                 pack_reconfig_data_format(rotated_in_interm_dfb, sin_interm_dfb);
-                mul_tiles_init(rotated_in_interm_dfb, sin_dfb);
+                mul_init(rotated_in_interm_dfb, sin_dfb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     // sin_interim = rotated * sin
@@ -137,7 +138,7 @@ void kernel_main() {
                 cos_interm_dfb_obj.wait_front(Wt);
                 reconfig_data_format(in_dfb, cos_interm_dfb, cos_dfb, sin_interm_dfb);
                 pack_reconfig_data_format(cos_interm_dfb, out_dfb);
-                add_tiles_init(cos_interm_dfb, sin_interm_dfb);
+                add_init(cos_interm_dfb, sin_interm_dfb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     // out = cos_interim + sin_interim

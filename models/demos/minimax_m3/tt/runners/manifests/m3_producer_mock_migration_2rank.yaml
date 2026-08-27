@@ -1,0 +1,40 @@
+# MiniMax-M3 — pipeline Gate P1 producer manifest: push 2 slots x 2 chunks through the 2-stage
+# intragalaxy pipeline, then read the KV back device-lessly through the merged table and PCC it against
+# the golden (all 60 layers resolve locally — both stages live on this host).
+#
+# Pairs with m3_binding_mock_migration_intragalaxy_2rank.yaml. No migration endpoint.
+#
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/minimax_m3/tt/runners/manifests/m3_producer_mock_migration_2rank.yaml
+#
+# prefill_producer (not migration_driver): this gate migrates nothing.
+
+model:
+  variant: minimax_m3
+  num_layers: 60
+  max_seq_len: 10240
+  chunk_size: 5120
+
+transport:
+  sp: 4                             # per-stage sub-mesh is [4,4]
+  tp: 4
+  h2d_service_id: m3_prefill      # [MATCH RUNNER]
+  connect_timeout_s: 60
+
+workload:
+  num_users: 2
+  chunks: "2"
+  max_requests: 2                 # one resident request per slot
+  interleave: round_robin
+  check_pcc: true                 # this IS the gate: per-slot read-back vs golden
+  trace_dir: /data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240
+
+migration:
+  issue: false
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /data/philei/tmp/m3_kv_chunk_table_pp.pb  # [MATCH RUNNER]
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/m3_kv_device_map.json           # [MATCH RUNNER] reader merges the _r*.json siblings
+  # Must match the runner — decides the index_k chunk size, hence the read-back decoder.
+  M3_INDEX_CACHE_BF16: "1"
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.88"

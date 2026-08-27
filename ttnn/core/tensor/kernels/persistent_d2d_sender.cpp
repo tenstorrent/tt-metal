@@ -78,8 +78,11 @@ constexpr uint32_t worker_mcast_noc_y_end = get_compile_time_arg_val(16);
 constexpr uint32_t num_workers = get_compile_time_arg_val(17);
 // Metadata block (indices 18..20). Master only. The designated worker wrote the blob
 // into the master service core's L1 at sender_metadata_l1_addr before acking.
+// metadata_span_bytes is the user metadata size rounded up to the L1 alignment: the host
+// sizes (and zero-inits) the staging buffer to exactly this, so it is what we ship. It is
+// independent of socket_page_size — the metadata does not travel as a socket page.
 constexpr uint32_t metadata_enabled = get_compile_time_arg_val(18);
-constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(19);
+constexpr uint32_t metadata_span_bytes = get_compile_time_arg_val(19);
 constexpr uint32_t sender_metadata_l1_addr = get_compile_time_arg_val(20);
 // Fabric-link lease (indices 21..22). Master only. share_fabric_links: 0 = OWN mode
 // (open at entry, never release); 1 = LEASE mode (hold nothing until granted a turn).
@@ -360,11 +363,13 @@ void kernel_main() {
             // 4b. Optional metadata: fabric-write the blob to the receiver's vestigial
             //     socket-FIFO L1 base (covered by the master's Flush-inc below); the
             //     receiver mcasts it to its worker grid after the data-landed signal.
+            //     Ships metadata_span_bytes — the staging buffer's size — so metadata
+            //     capacity is bounded by the FIFO, not by the flow-control socket page.
             if constexpr (metadata_enabled) {
                 const uint64_t md_dst =
                     get_noc_addr(receiver_noc_x, receiver_noc_y, sender_socket.downstream_fifo_addr);
                 fabric_write_bytes(
-                    fabric_connection, md_dst, sender_metadata_l1_addr, socket_page_size, data_packet_header_addr);
+                    fabric_connection, md_dst, sender_metadata_l1_addr, metadata_span_bytes, data_packet_header_addr);
             }
 
             // 5. Data-landed: the master's Flush-inc on bytes_sent (+1 of num_lanes).

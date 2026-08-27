@@ -11,6 +11,7 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "api/debug/waypoint.h"
+#include "llk_bfd_alloc.h"
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_operands.h"
@@ -22,7 +23,31 @@
  *************************************************************************/
 
 /**
- * @brief Programs l1 info & source register format for both UNP_A and UNP_B
+ * @brief Allocate a BFD id from the unpack partition, program its table entry from the operand's
+ * DFB info (shape, L1 base, formats), and record the id in the engine's current slot. The DFB id is
+ * used only to fetch buffer info — it never doubles as the BFD id.
+ *
+ * @tparam E: physical UNPACR engine that will consume the descriptor (Unp0 or Unp1)
+ * @tparam MODE: L1 access mode for the descriptor; Strided collapses y/z dims to 1 for the
+ * UNPACR_STRIDE tilize sequences.
+ */
+template <ckernel::trisc::BfdResource E, ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
+inline void llk_unpack_program_bfd(const std::uint32_t operand_id) {
+    // TODO: multi-TC not handled — only tc_slots[0]'s L1 base is programmed. When a DFB is mapped
+    // across multiple TCs this must program one descriptor per active tc_slot (same gap in
+    // llk_pack_program_bfd). Tied to the DFB<->buffer-descriptor decouple work.
+    ckernel::trisc::bfd_alloc_and_program<E, MODE>(
+        get_operand_tensor_shape(operand_id),
+        get_local_dfb_interface(operand_id).tc_slots[0].base_addr,
+        static_cast<std::uint32_t>(unpack_src_format[operand_id]));
+}
+
+/**
+ * @brief Programs source register format for both UNP_A and UNP_B
+ *
+ * Buffer descriptors are no longer programmed here: BFD ids are an LLK-internal resource
+ * allocated from the per-TRISC partition (see llk_bfd_alloc.h) and each op's llk_unpack_*_init
+ * programs its own table entry. DFB ids never double as BFD ids.
  *
  * @param operandA: The input0 operand circular buffer
  * @param operandB: The input1 operand circular buffer
@@ -31,40 +56,9 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
     const std::uint32_t unpB_operand_id = get_operand_id(unpB_operand);
 
-    // Program buffer descriptors for all 32 dataflow buffers, i is the logical dfb id.
-    // Skip non-participating DFBs via entry_size==0 (g_dfb_interface[] is zero-init,
-    // so non-populated entries naturally fall out). Loop bound is dfb::NUM_DFBS because
-    // g_dfb_interface[] is sized NUM_DFBS (=32) and NUM_CIRCULAR_BUFFERS resolves to 64
-    // on Quasar — GCC -Werror=aggressive-loop-optimizations rejects the OOB.
-    for (std::uint32_t i = 0; i < dfb::NUM_DFBS; ++i) {
-        if (g_dfb_interface[i].entry_size == 0) {
-            continue;
-        }
-        const DataFormat l1_data_format = static_cast<DataFormat>(unpack_src_format[i]);
-
-        if (l1_data_format == DataFormat::Invalid) {
-            continue;
-        }
-
-        // TODO: with multiple TCs are there multiple descriptors?
-        // z_dim is derived from the tensor shape rather than the raw face count: the hardware only
-        // accepts z_dim of 1 or 4, so a non-square face grid (e.g. the 1x2 grid of a 1x32 tiny tile)
-        // has to be addressed one face at a time, which is also what the tiny-tile unpack MOP assumes.
-        const tdma_descriptor_t td = ckernel::trisc::construct_tdma_desc(
-            get_operand_tensor_shape(i),
-            get_local_dfb_interface(i).tc_slots[0].base_addr,
-            static_cast<std::uint32_t>(l1_data_format),
-            i,
-            static_cast<std::uint32_t>(unpack_dst_format[i]));
-
-        ckernel::trisc::_configure_buf_desc_table_(i, td.buf_desc);
-    }
-
-    tdma_descriptor_t td_val_A, td_val_B;
-    td_val_A.reg_data_format = static_cast<std::uint8_t>(unpack_dst_format[unpA_operand_id]);
-    td_val_B.reg_data_format = static_cast<std::uint8_t>(unpack_dst_format[unpB_operand_id]);
-
-    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(unpack_dst_format[unpA_operand_id]),
+        static_cast<DataFormat>(unpack_dst_format[unpB_operand_id]));
 }
 
 /**

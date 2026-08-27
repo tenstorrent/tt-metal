@@ -31,6 +31,7 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.filter-categories.outputs.matrix }}
+      sim-libs: ${{ steps.filter-categories.outputs.sim-libs }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/ttsim_unit_tests.yaml
     steps:
@@ -69,42 +70,41 @@ jobs:
             echo "$filtered"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+          # prepare_test_matrix.py's sim-libs covers the pre-filter matrix; recompute from the
+          # filtered one so fetch-ttsim does not download libs for legs this run dropped.
+          echo "sim-libs=$(echo "$filtered" | jq -c '[.[].ttsim_lib // empty] | unique')" >> "$GITHUB_OUTPUT"
 
   fetch-ttsim:
     needs: load-test-matrix
-    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
-    runs-on: ubuntu-latest
+    if: ${{ needs.load-test-matrix.outputs.sim-libs != '[]' }}
+    runs-on: ubuntu-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: ${{ fromJson(needs.load-test-matrix.outputs.sim-libs) }}
+    concurrency:
+      group: ttsim-lib-${{ github.run_id }}-${{ matrix.lib }}
+      cancel-in-progress: false
+      queue: max
+    # The probe and upload talk to the artifact service with the runtime token, not
+    # GITHUB_TOKEN, so no actions: scope is needed — and requesting one fails for callers that
+    # run with the default actions: none (a nested job cannot exceed its caller's grant).
+    permissions:
+      contents: read
     steps:
-      - name: Checkout ttsim version
+      - name: Checkout fetch-ttsim action and pinned ttsim version
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: tt_metal/ttsim-version
+          sparse-checkout: |
+            .github/actions/fetch-ttsim
+            tt_metal/ttsim-version
           sparse-checkout-cone-mode: false
-      - name: Read ttsim version
-        id: ttsim-version
-        run: echo "version=$(cat tt_metal/ttsim-version)" >> "$GITHUB_OUTPUT"
-      - name: Download wormhole_b0 ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+      - name: ⬇️  Fetch ttsim
+        uses: ./.github/actions/fetch-ttsim
+        timeout-minutes: 10
         with:
-          repository: tenstorrent/ttsim
-          tag: ${{ steps.ttsim-version.outputs.version }}
-          fileName: libttsim_wh.so
-          out-file-path: /tmp/ttsim
-      - name: Download blackhole ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ steps.ttsim-version.outputs.version }}
-          fileName: libttsim_bh.so
-          out-file-path: /tmp/ttsim
-      - name: Upload ttsim binaries artifact
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: ttsim-binaries
-          path: /tmp/ttsim/
-          if-no-files-found: error
-          retention-days: 1
+          lib: ${{ matrix.lib }}
 
   ttsim-unit-tests:
     needs: [load-test-matrix, fetch-ttsim]
@@ -121,7 +121,7 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ contains(matrix.test-group.sku, 'blackhole') && 'blackhole' || 'wormhole_b0' }}
+        ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
       volumes:
         - ${{ github.workspace }}/docker-job:/work

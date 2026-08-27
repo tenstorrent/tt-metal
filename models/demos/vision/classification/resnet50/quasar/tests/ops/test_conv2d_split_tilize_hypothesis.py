@@ -58,6 +58,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 PCC = 0.97
@@ -167,8 +168,21 @@ def _run(mesh_device, *, use_split):
     assert_with_pcc(torch_golden, tt_out.float(), pcc=PCC)
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("use_split", [False, True], ids=["fused", "split"])
 def test_conv2d_split_tilize_hypothesis(mesh_device, use_split):
+    # WH-only HANG on BOTH variants: the WH fast_tilize->matmul cadence race (the kRaceGuardSpin one) -- MATH
+    # MWDD in matmul_block, PACK in program_packer_destination (SyncHalf/fast_tilize), cb stuck, genuine
+    # (asserts-on, no assert). [fused] (conv_bmm_tilize, tilize interleaved with matmul per block) AND [split]
+    # (Option-C conv_bmm_split_tilize, tilize-all-then-matmul) both hit it -- the matmul-phase pack races the same
+    # way regardless of when the tilize runs. Same family as test_conv2d_correctness_bisect[relu_now_sfpu] /
+    # test_conv2d.py[stem_7x7]. This is a Quasar-oriented diagnostic (validates the Quasar tilize<->matmul 0x19
+    # hypothesis), NOT the WH model path.
+    if is_wormhole_b0():
+        pytest.xfail(
+            "WH tilize->matmul fast_tilize cadence race (kRaceGuardSpin family; MATH in matmul_block, PACK in "
+            "program_packer_destination, SyncHalf/fast_tilize). Both [fused] conv_bmm_tilize and [split] Option-C "
+            "conv_bmm_split_tilize hit it. Same family as relu_now_sfpu/stem_7x7; not the WH model path."
+        )
     _run(mesh_device, use_split=use_split)

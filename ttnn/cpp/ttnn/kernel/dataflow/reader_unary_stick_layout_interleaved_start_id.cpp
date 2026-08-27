@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -16,6 +19,9 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(src0_args, src_addr);
 
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_sticks;
     for (uint32_t i = start_id; i != end_id; --i) {
@@ -23,11 +29,9 @@ void kernel_main() {
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb_reserve_back(cb_id_in0, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        uint64_t src_noc_addr = s0.get_noc_addr(i);
-        noc_async_read(src_noc_addr, l1_write_addr, stick_size);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, 1);
+        cb_in0.reserve_back(1);
+        noc.async_read(s0, cb_in0, stick_size, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_in0.push_back(1);
     }
 }

@@ -27,7 +27,24 @@ on:
       tier:
         required: true
         type: string
-        description: "Model tier to filter tests (1, 2, or 3)"
+        description: "Model tier to filter tests (1, 2, or 3). Ignored when `matrix` is provided."
+      matrix:
+        required: false
+        type: string
+        default: ""
+        description: "Optional pre-filtered JSON array of test legs. When set, skip YAML load/filters and only split into single-host vs multihost."
+      prefer-wheel-libs:
+        required: false
+        type: boolean
+        default: false
+        description: >
+          Forwarded to multihost setup. True to put manylinux wheel libs first on
+          LD_LIBRARY_PATH; false (T1 inplace) keeps the tarball build/lib.
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
     outputs:
       matrix:
         description: "Filtered matrix of single-host legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
@@ -36,8 +53,8 @@ on:
         description: "Filtered matrix of exabox multihost legs that ran."
         value: ${{ jobs.load-test-matrix.outputs.matrix_multihost }}
 
-# Default to read-only. Only the multihost job needs id-token (ttop OIDC), which it grants on the
-# job itself. Single-host legs pull the dev container image, so packages: read is the default.
+# Default to read-only. Only the multihost job needs id-token (multihost-ci runner chart), which it
+# grants on the job itself. Single-host legs pull the dev container image, so packages: read is the default.
 permissions:
   contents: read
   packages: read
@@ -52,6 +69,7 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/models_e2e_tests.yaml
     steps:
       - name: Checkout the repository
+        if: ${{ inputs.matrix == '' }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
@@ -60,8 +78,10 @@ jobs:
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
       - name: Install dependencies
+        if: ${{ inputs.matrix == '' }}
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
+        if: ${{ inputs.matrix == '' }}
         run: |
           set -e
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
@@ -71,33 +91,39 @@ jobs:
             "e2e" \
             "${{ inputs.tier }}"
       - name: Build unified test matrix based on enabled SKUs
+        if: ${{ inputs.matrix == '' }}
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Apply tier and model filters
+      - name: Apply filters and split single-host vs multihost
         id: apply-filters
         # Pass values via env rather than inline ${{ }} so arbitrary cmd content in the matrix
         # (apostrophes, parentheses, etc.) cannot break the shell quoting of the assignment.
         env:
-          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          PROVIDED_MATRIX: ${{ inputs.matrix }}
+          BUILT_MATRIX: ${{ steps.build-matrix.outputs.matrix }}
           TIER: ${{ inputs.tier }}
           MODEL: ${{ inputs.model }}
           SKUS: ${{ inputs.enabled-skus }}
         run: |
-          # Filter by tier
-          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier "$TIER" '[.[] | select(.tier == $tier)]')
-          # Filter by model (substring match, case-insensitive; comma-separated OR-list)
-          if [ "$MODEL" != "all" ]; then
-            FILTERED=$(echo "$FILTERED" | jq -c --arg m "$MODEL" '
-              ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
-              | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
+          if [ -n "$PROVIDED_MATRIX" ]; then
+            FILTERED="$PROVIDED_MATRIX"
+          else
+            # Filter by tier
+            FILTERED=$(echo "$BUILT_MATRIX" | jq -c --argjson tier "$TIER" '[.[] | select(.tier == $tier)]')
+            # Filter by model (substring match, case-insensitive; comma-separated OR-list)
+            if [ "$MODEL" != "all" ]; then
+              FILTERED=$(echo "$FILTERED" | jq -c --arg m "$MODEL" '
+                ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
+                | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
+            fi
           fi
-          # Split into single-host (container) and multihost (exabox ttop) legs. Multihost legs are
-          # tagged with "multihost": true by prepare_test_matrix.py when their SKU carries an
-          # `allocation` block in sku_config.yaml (i.e. runs_on exabox-multihost-with-nfs).
+          # Split into single-host (container) and multihost (exabox) legs. Multihost legs are
+          # tagged with "multihost": true by prepare_test_matrix.py when their SKU is an
+          # exabox multihost SKU (runs_on exabox-multihost* / allocation block).
           SINGLE=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost != true)]')
           MULTI=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost == true)]')
           emit() {  # $1 = output name, $2 = compact JSON array
@@ -112,7 +138,11 @@ jobs:
             fi
           }
           if [ "$SINGLE" = "[]" ] && [ "$MULTI" = "[]" ]; then
-            echo "::warning::No tests found for tier=${TIER}, model=${MODEL}, skus=[${SKUS}]. No test entry declares any of these SKUs; both single-host and multihost jobs will be skipped."
+            if [ -n "$PROVIDED_MATRIX" ]; then
+              echo "::warning::Caller-provided matrix is empty. Both single-host and multihost jobs will be skipped."
+            else
+              echo "::warning::No tests found for tier=${TIER}, model=${MODEL}, skus=[${SKUS}]. No test entry declares any of these SKUs; both single-host and multihost jobs will be skipped."
+            fi
           fi
           emit matrix "$SINGLE"
           emit matrix_multihost "$MULTI"
@@ -130,6 +160,7 @@ jobs:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         # Only the per-runner BH cache modes (local-disk, lfc) need HF online
@@ -234,7 +265,8 @@ jobs:
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["generated/test_logs"],
-              "output_dir": "generated/ai_summaries"
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}"
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
@@ -242,15 +274,14 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
-  # Multihost (exabox) e2e tests — the exabox ttop allocation/reset/teardown lifecycle lives in
-  # models-e2e-tests-multihost-impl.yaml (mirrors models-unit-tests-multihost). Legs are routed
-  # here (rather than to the containerized models-e2e-tests job) when their SKU carries an
-  # `allocation` block in sku_config.yaml, which prepare_test_matrix.py surfaces as
-  # "multihost": true and load-test-matrix collects into matrix_multihost.
+  # Multihost (exabox) e2e tests — lifecycle lives in models-e2e-tests-multihost-impl.yaml.
+  # Legs are routed here when prepare_test_matrix.py marks them "multihost": true
+  # (SKU runs_on contains an exabox-multihost* label) and load-test-matrix collects
+  # them into matrix_multihost.
   models-e2e-tests-multihost:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix_multihost != '[]' }}
-    # OIDC (ttop cluster auth) is needed only by this leg; grant it here rather than
+    # OIDC may be required by the multihost-ci runner chart; grant it here rather than
     # workflow-wide. Job-level permissions replace inherited defaults, so restate reads too.
     permissions:
       contents: read
@@ -263,3 +294,5 @@ jobs:
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       matrix: ${{ needs.load-test-matrix.outputs.matrix_multihost }}
+      prefer-wheel-libs: ${{ inputs.prefer-wheel-libs }}
+      summary-scope: ${{ inputs.summary-scope }}

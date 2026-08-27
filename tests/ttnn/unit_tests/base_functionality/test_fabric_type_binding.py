@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-free checks for the FabricType binding and the get_all_mgd_fabric_types export.
+"""Device-free checks for fabric type and routing-query bindings.
 
 The dim_types -> FabricType inference itself is covered by the C++ offline test
 (test_mesh_graph_descriptor.cpp). These guard the Python surface: that both symbols are
@@ -25,3 +25,7 @@ def test_fabric_type_is_bitflag():
 
 def test_get_all_mgd_fabric_types_exported():
     assert callable(ttnn.get_all_mgd_fabric_types)
+
+
+def test_get_forwarding_link_indices_exported():
+    assert callable(ttnn.get_forwarding_link_indices)

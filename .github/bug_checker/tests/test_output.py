@@ -6,6 +6,7 @@
 
 from bug_checker.llm import Finding
 from bug_checker.output import (
+    RERUN_FOOTER,
     findings_to_sarif,
     format_pr_comment,
     format_summary_comment,
@@ -162,3 +163,16 @@ def test_format_summary_comment_truncated_shown_with_no_findings():
 def test_format_summary_no_findings():
     summary = format_summary_comment([])
     assert "No issues found" in summary
+
+
+def test_format_summary_comment_ends_with_rerun_footer():
+    # The rerun hint must appear on every summary variant — with findings,
+    # without findings, and on failure — since commits pushed after a PR is
+    # opened do not re-trigger the check automatically.
+    assert "/bug-check run" in RERUN_FOOTER
+    for summary in (
+        format_summary_comment([]),
+        format_summary_comment([_make_finding()]),
+        format_summary_comment([], failed_rules=["my-rule"]),
+    ):
+        assert summary.endswith(RERUN_FOOTER)

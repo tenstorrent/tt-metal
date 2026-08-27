@@ -17,8 +17,8 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/hal.hpp>
 
@@ -436,8 +436,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         const tt::tt_metal::ShardSpec ri_shard_spec(setup.parallel_config.grid, ri_shard_shape, ri_orient);
         return MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, ri_shard_spec};
     }();
-    MeshTensor reader_indices_owned = tt::tt_metal::enqueue_write_tensor(
-        cq, reader_indices_host.host_tensor(), *mesh_device, reader_indices_mem_config);
+    MeshTensor reader_indices_owned =
+        cq.enqueue_write_tensor(reader_indices_host.host_tensor(), reader_indices_mem_config);
     const tt::tt_metal::TensorSpec reader_indices_spec = reader_indices_owned.tensor_spec();
     const uint32_t reader_indices_page_size = reader_indices_owned.mesh_buffer().page_size();
 
@@ -497,8 +497,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                 input.shard_spec().value().grid, shard_shape, config_orient);
             return MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
         }();
-        config_tensor_owned =
-            tt::tt_metal::enqueue_write_tensor(cq, config_tensor.host_tensor(), *mesh_device, config_mem_config);
+        config_tensor_owned = cq.enqueue_write_tensor(config_tensor.host_tensor(), config_mem_config);
         config_tensor_spec = config_tensor_owned->tensor_spec();
         config_buffer_page_size = config_tensor_owned->mesh_buffer().page_size();
     }
@@ -680,7 +679,15 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // -----------------------------------------------------------------------
     // Dataflow buffers.
     // -----------------------------------------------------------------------
-    const auto scalar_face = FaceGeometry{.face_r_dim = 1, .num_faces = 4};
+    //  Reduce scaler (srcB) face geometry. num_faces MUST be 1, not 4: the reduce-col strided
+    // tilize unpacks srcB with a single UNPACR1_FACE and NO L1 increment (TT_OP_UNPACR1_FACE_INC(0,0,0,0,...)
+    // in llk_unpack_reduce_col_tilizeA_strided.h), so it re-reads the same one scalar face regardless of the
+    // face count -- z=1 and z=4 are byte-identical. num_faces=4 built an illegal (x=16, y=1, z=4) buffer
+    // descriptor (a 2x2 face grid, face_r_dim=1) that trips validate_buffer_desc's "y_dim must be 16 when
+    // z_dim is 4" (ckernel_trisc_common.h). num_faces=1 gives the (x=16, y=1, z=1) descriptor the LLK
+    // documents as the expected srcB scaler layout, which validates with the assert enabled. (srcA keeps its
+    // full 32x32 4-face geometry below -- that operand genuinely needs it.)
+    const auto scalar_face = FaceGeometry{.face_r_dim = 1, .num_faces = 1};
     const uint32_t window_size_hw = kernel_h * kernel_w;
     // WORKAROUND (Quasar): the input-CB tile's face_r_dim feeds both the reduce tensor-shape and the
     // TDMA buffer-descriptor y_dim, and Quasar LLK restricts both to powers of 2 <= 16

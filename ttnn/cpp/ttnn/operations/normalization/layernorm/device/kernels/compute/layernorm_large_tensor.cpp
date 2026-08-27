@@ -48,12 +48,12 @@ void kernel_main() {
     constexpr auto dfb_out_id = get_named_compile_time_arg_val("cb_out");  // output
     constexpr auto dfb_gamma_id = get_named_compile_time_arg_val("cb_gamma");
     constexpr auto dfb_beta_id = get_named_compile_time_arg_val("cb_beta");
-    constexpr uint32_t dfb_xmm_id = get_named_compile_time_arg_val("cb_xmm");   // x minus mean
-    constexpr auto dfb_ex_id = get_named_compile_time_arg_val("cb_ex");         // E[x]
-    constexpr auto dfb_ex2_id = get_named_compile_time_arg_val("cb_ex2");       // E[(x-E[x])^2]
-    constexpr auto dfb_xmm2_id = get_named_compile_time_arg_val("cb_xmm2");     // xmm^2
-    constexpr auto dfb_ex2pe_id = get_named_compile_time_arg_val("cb_ex2pe");   // E[(x-E[x])^2]+eps
-    uint32_t dfb_fusion = get_named_compile_time_arg_val("cb_fusion");          // stream gamma/beta
+    constexpr uint32_t dfb_xmm_id = get_named_compile_time_arg_val("cb_xmm");  // x minus mean
+    constexpr auto dfb_ex_id = get_named_compile_time_arg_val("cb_ex");        // E[x]
+    constexpr auto dfb_ex2_id = get_named_compile_time_arg_val("cb_ex2");      // E[(x-E[x])^2]
+    constexpr auto dfb_xmm2_id = get_named_compile_time_arg_val("cb_xmm2");    // xmm^2
+    constexpr auto dfb_ex2pe_id = get_named_compile_time_arg_val("cb_ex2pe");  // E[(x-E[x])^2]+eps
+    uint32_t dfb_fusion = get_named_compile_time_arg_val("cb_fusion");         // stream gamma/beta
     constexpr auto scaler0 = 0;
     constexpr auto dfb_accumulate_id = get_named_compile_time_arg_val("cb_accumulate");  // For accumulating (x-E[x])^2
 
@@ -87,16 +87,16 @@ void kernel_main() {
     DataflowBuffer dfb_x(dfb_x_id);
 
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(dfb_in_id, dfb_inb_id, dfb_x_id);
+    compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_x_id);
 #else
-    // Always call binary_op_init_common regardless of TILIZE_IN.
+    // Always call compute_kernel_hw_startup regardless of TILIZE_IN.
     // This initializes llk_pack_dest_init, which sets up the MATH-PACK DST semaphore
     // in the "available for MATH" state.  Without it, the first tilize_block call's
     // internal llk_math_wait_for_dest_available() spins forever (deadlock).
 #ifdef RMSNORM
-    binary_op_init_common(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
+    compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
 #else
-    binary_op_init_common(dfb_in_id, dfb_scaler_id, dfb_ex_id);
+    compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
 #endif
     dfb_eps.wait_front(1);  // comes from the reader
@@ -132,9 +132,11 @@ void kernel_main() {
 #ifdef TILIZE_IN
             tilize_row_major_block(dfb_in_rm, dfb_in, block_size, block);
 #ifdef RMSNORM
-            binary_op_init_common(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
 #else
-            binary_op_init_common(dfb_in_id, dfb_scaler_id, dfb_ex_id);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
 #endif
             dfb_in.wait_front(block.full_block_size());
@@ -148,7 +150,7 @@ void kernel_main() {
 #else
             // x-E[x]
             reconfig_data_format(dfb_in_id, dfb_ex_id);
-            sub_bcast_cols_init_short(dfb_in_id, dfb_ex_id);
+            sub_bcast_cols_init(dfb_in_id, dfb_ex_id);
             for (auto i : block.local()) {
                 sub_tiles_bcast_cols(dfb_in_id, dfb_ex_id, i, 0, i);
             }
@@ -157,10 +159,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             dfb_inb.wait_front(block.full_block_size());
             reconfig_data_format_srca(dfb_in_id, dfb_inb_id);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 dfb_inb_id);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     dfb_inb_id, i, i);
             }
             dfb_inb.pop_front(block.full_block_size());
@@ -233,7 +235,7 @@ void kernel_main() {
         reconfig_data_format(dfb_ex2_id, dfb_eps_id);
         tile_regs_acquire();
 
-        add_tiles_init(dfb_ex2_id, dfb_eps_id);
+        add_init(dfb_ex2_id, dfb_eps_id);
         add_tiles(dfb_ex2_id, dfb_eps_id, 0, 0, dst0);
 
         rsqrt_tile_init<LEGACY_RSQRT>();
@@ -252,7 +254,9 @@ void kernel_main() {
         tile_regs_acquire();
         reconfig_data_format_srca(dfb_ex2pe_id);
 
-        unary_bcast_init<BroadcastType::COL>(dfb_ex2pe_id, dfb_ex2pe_id);
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        compute_kernel_hw_startup(dfb_ex2pe_id, dfb_ex2pe_id);
+        unary_bcast_init<BroadcastType::COL>(dfb_ex2pe_id);
         unary_bcast<BroadcastType::COL>(dfb_ex2pe_id, 0, dst0);
         dfb_ex2pe.pop_front(onetile);
 
@@ -281,9 +285,11 @@ void kernel_main() {
             tilize_row_major_block(dfb_in_rm, dfb_in, block_size, block);
 
 #ifdef RMSNORM
-            binary_op_init_common(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
 #else
-            binary_op_init_common(dfb_in_id, dfb_scaler_id, dfb_ex_id);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
 #endif
             tile_regs_acquire();
@@ -297,7 +303,7 @@ void kernel_main() {
 #else
             dfb_ex.wait_front(1);
             reconfig_data_format(dfb_in_id, dfb_ex_id);
-            sub_bcast_cols_init_short(dfb_in_id, dfb_ex_id);
+            sub_bcast_cols_init(dfb_in_id, dfb_ex_id);
             // x-E[x]
             for (auto i : block.local()) {
                 sub_tiles_bcast_cols(dfb_in_id, dfb_ex_id, i, 0, i);
@@ -307,10 +313,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             dfb_inb.wait_front(block.full_block_size());
             reconfig_data_format_srca(dfb_inb_id);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 dfb_inb_id);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     dfb_inb_id, i, i);
             }
             dfb_inb.pop_front(block.full_block_size());
@@ -334,7 +340,7 @@ void kernel_main() {
             reconfig_data_format(dfb_xmm_id, dfb_ex2pe_id);
             tile_regs_acquire();
 
-            mul_tiles_init(dfb_xmm_id, dfb_ex2pe_id);
+            mul_init(dfb_xmm_id, dfb_ex2pe_id);
             for (auto i : block.local()) {
                 mul_tiles(dfb_xmm_id, dfb_ex2pe_id, i, 0, i);
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -371,7 +377,7 @@ void kernel_main() {
                 }
                 dfb_gamma.wait_front(block.full_block_size());
                 DataflowBuffer(dfb_fusion).wait_front(block.full_block_size());
-                mul_bcast_rows_init_short(dfb_fusion, dfb_gamma_id);
+                mul_bcast_rows_init(dfb_fusion, dfb_gamma_id);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(dfb_fusion, dfb_gamma_id, i, i, i);
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -410,7 +416,7 @@ void kernel_main() {
                 pack_reconfig_data_format(dfb_out_id);
                 dfb_beta.wait_front(block.full_block_size());
                 DataflowBuffer(dfb_fusion).wait_front(block.full_block_size());
-                add_bcast_rows_init_short(dfb_fusion, dfb_beta_id);
+                add_bcast_rows_init(dfb_fusion, dfb_beta_id);
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(dfb_fusion, dfb_beta_id, i, i, i);
 #ifdef SFPU_OP_INIT_ACTIVATION

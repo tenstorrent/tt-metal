@@ -169,33 +169,29 @@ protected:
 
 class MeshDeviceSingleCardBufferFixture : public MeshDeviceSingleCardFixture {};
 
-// Single unit-mesh fixture: always owns exactly one MeshDevice and exposes
-// RunProgram / WriteBuffer / ReadBuffer overloads that do not take a device arg.
-class UnitMeshFixture : public MeshDeviceSingleCardFixture {
+// Single unit-mesh fixture: always owns exactly one unit MeshDevice.
+class UnitMeshAnyDispatchFixture : public AnyDispatchMeshDeviceSingleCardFixture {
 public:
-    distributed::MeshDevice& device() { return *device_; }
+    distributed::MeshDevice& device() { return *devices_.front(); }
 
-    void RunProgram(Program program, bool skip_finish = false) {
-        distributed::MeshWorkload workload;
-        workload.add_program(distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0)), std::move(program));
-        MeshDispatchFixture::RunProgram(device_, workload, skip_finish);
-    }
-    void FinishCommands() { MeshDispatchFixture::FinishCommands(device_); }
-    void WriteBuffer(const std::shared_ptr<distributed::MeshBuffer>& in_buffer, std::vector<uint32_t>& src_vec) {
-        MeshDispatchFixture::WriteBuffer(device_, in_buffer, src_vec);
-    }
-    void ReadBuffer(const std::shared_ptr<distributed::MeshBuffer>& out_buffer, std::vector<uint32_t>& dst_vec) {
-        MeshDispatchFixture::ReadBuffer(device_, out_buffer, dst_vec);
-    }
-
-private:
+protected:
     void create_devices() override {
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         AnyDispatchMeshDeviceSingleCardFixture::create_devices({mmio_device_id});
-        device_ = devices_.front();
     }
+};
 
-    std::shared_ptr<distributed::MeshDevice> device_;
+// Single unit-mesh fixture: always owns exactly one unit MeshDevice.
+// Requires slow dispatch mode.
+class UnitMeshFixture : public MeshDeviceSingleCardFixture {
+public:
+    distributed::MeshDevice& device() { return *devices_.front(); }
+
+protected:
+    void create_devices() override {
+        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        AnyDispatchMeshDeviceSingleCardFixture::create_devices({mmio_device_id});
+    }
 };
 
 class BlackholeSingleCardFixture : public MeshDeviceSingleCardFixture {

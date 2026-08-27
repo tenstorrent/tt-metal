@@ -14,6 +14,8 @@
 #
 # vLLM-specific per-entry keys (consumed by vllm-model-tests-impl.yaml):
 #   server-timeout / benchmark-timeout / sampling-test-timeout: per-step timeouts (minutes).
+#   structured-output-timeout: per-step timeout for the structured output benchmark
+#     (minutes). Defaults to benchmark-timeout; set it when that run is the long pole.
 #   mesh-device, arch, tt-config, additional-server-args, additional-benchmark-args,
 #   additional-structured-output-args, default-chat-template-kwargs, tt-llama-text-ver,
 #   tt-qwen3-text-ver, tt_mm_throttle_perf: server / benchmark configuration.
@@ -200,6 +202,10 @@
   tt-config: '{"sample_on_device_mode": "all"}'
   additional-server-args: "--max_num_seqs 1 --async-scheduling"
   structured-output: true
+  # The structured output run issues 32 x 1024-token requests against a server
+  # pinned to --max_num_seqs 1, so they are served strictly one at a time and the
+  # run takes far longer than the plain benchmark that shares benchmark-timeout.
+  structured-output-timeout: 30
   additional-structured-output-args: "--backend openai-chat --endpoint /v1/chat/completions --dataset json"
   skus:
     wh_galaxy_perf:

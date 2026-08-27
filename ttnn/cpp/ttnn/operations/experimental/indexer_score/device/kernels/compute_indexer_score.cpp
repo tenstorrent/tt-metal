@@ -117,7 +117,7 @@ inline void set_mul_reconfig() {
 template <uint32_t qk_cb, uint32_t w_cb, uint32_t acc_cb>
 inline void set_mul_mode() {
     set_mul_reconfig<qk_cb, w_cb, acc_cb>();
-    mul_bcast_cols_init_short(qk_cb, w_cb);
+    mul_bcast_cols_init(qk_cb, w_cb);
     // acc_to_dest=1: each mul MACs onto the same DEST tile (head 0 seeds the acquire-zeroed reg), so the
     // chunk's head reduction needs one pack, not a per-head packer-L1-acc RMW.
     MATH((llk_math_eltwise_binary_init<ckernel::EltwiseBinaryType::ELWMUL, ckernel::BroadcastType::COL, MATH_FIDELITY>(
@@ -308,7 +308,7 @@ inline void scale_q_by_w_inplace(uint32_t head_base) {
     pack_relu_config(ReluConfig::none());
     reconfig_data_format(cb_k, cb_q, cb_acc_strip, cb_w);  // srcA->q, srcB->w (guarded)
     pack_reconfig_data_format(cb_out_strip, cb_q);         // pack->cb_q (bf16, in place)
-    mul_bcast_cols_init_short(cb_q, cb_w);
+    mul_bcast_cols_init(cb_q, cb_w);
     for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
         const uint32_t w_idx = r * num_heads + head_base;
         for (uint32_t d = 0; d < head_dim_tiles; ++d) {
@@ -480,6 +480,15 @@ void kernel_main() {
                 }
             }
             span.set(group, band0 + band);
+            // kv_len is runtime-variable while the work split is compiled for K capacity. Cells
+            // wholly past that prefix have no K/output work. Head streaming still receives one
+            // q-mcast block per band, so drain it to keep the row rendezvous in lockstep.
+            if (span.k_tiles() == 0) {
+                if constexpr (stream_heads) {
+                    drain_phantom_band_q();
+                }
+                continue;
+            }
             // Fused + streamed k waits incrementally inside the matmul (overlap the DRAM read); all other
             // paths wait the whole chunk here.
             if constexpr (!fuse_single || !fused_stream_k) {

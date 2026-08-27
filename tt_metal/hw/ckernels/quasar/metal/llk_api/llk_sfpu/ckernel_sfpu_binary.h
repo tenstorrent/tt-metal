@@ -18,8 +18,8 @@ namespace sfpu {
 /**
  * @brief Converts float32 to bfloat16 using IEEE 754 Round-to-Nearest-Even (RNE).
  * Implements the "add 0x7fff + LSB" algorithm for correct tie-breaking, ported
- * from BH. Applied before SFPSTORE because Quasar truncates by default (BH FPU
- * exposes RNE for bf16 store natively).
+ * from BH. Applied in software before SFPSTORE because SFPSTORE truncates
+ * fp32->bf16 on all architectures.
  *
  * @param in: float32 value to convert
  * @return bf16 value packed in the upper 16 bits of a float32
@@ -55,14 +55,17 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
  *
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
  * @tparam BINOP: selects which binary op to compute (ADD, SUB, MUL or DIV)
- * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV)
+ * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB)
+ * @tparam dst_rounding_mode: bf16 narrowing applied to ADD/SUB results (no-op if is_fp32_dest_acc_en).
+ *         DIV ignores this and always rounds RNE, to match BH semantics.
  * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
  * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
  */
 template <
     [[maybe_unused]] bool APPROXIMATION_MODE,
     BinaryOp BINOP,
-    bool is_fp32_dest_acc_en = false,
+    bool is_fp32_dest_acc_en,
+    DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_sfpu_binary(
@@ -70,6 +73,9 @@ inline void calculate_sfpu_binary(
     static_assert(
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV,
         "calculate_sfpu_binary only supports ADD, SUB, MUL and DIV");
+    static_assert(
+        dst_rounding_mode == DstRoundingMode::Default || BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB,
+        "NearestEven rounding parameter is currently supported for ADD and SUB only");
     constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -103,6 +109,12 @@ inline void calculate_sfpu_binary(
                 // truncates by default).
                 result = float32_to_bf16_rne(result);
             }
+        }
+
+        if constexpr (
+            (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB) && !is_fp32_dest_acc_en &&
+            dst_rounding_mode == DstRoundingMode::NearestEven) {
+            result = float32_to_bf16_rne(result);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;

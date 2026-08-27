@@ -214,6 +214,10 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
     // For core types where the binary goes to a fixed L1 address (not stored in the config buffer),
     // track the last trace index that used each core type so we can sync before overwriting.
     std::vector<std::optional<uint32_t>> last_fixed_addr_sync_idx(programmable_core_count);
+    // Last trace index at which each CrossNodeDFB-using program was launched. Every launch
+    // rewrites that program's dedicated config Buffer (resetting credits), so a re-launch
+    // within the trace must wait until the previous launch of the same program completes.
+    std::map<uint64_t, uint32_t> last_cross_node_launch_idx;
     bool first_program_dispatched = false;
     std::optional<uint32_t> last_stall_idx;
     std::deque<size_t> subdevice_launch_window;
@@ -321,6 +325,18 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
                 .addr = *rta_addr + ringbuffer_starts_[index]};
             node.dispatch_metadata.binary_kernel_config_addrs[index] = {
                 .addr = binary_addr + ringbuffer_starts_[index]};
+        }
+
+        // Mirror the non-trace CrossNode ordering (see FDMeshCommandQueue::enqueue_program):
+        // the config Buffer rewrite goes out with the non-binary config data, so it must
+        // stall_first until the previous launch of the same program completes.
+        if (!node.program->get_per_core_cross_node_dfbs().empty()) {
+            auto [it, inserted] =
+                last_cross_node_launch_idx.try_emplace(node.program->get_id(), static_cast<uint32_t>(i));
+            if (!inserted) {
+                nonbinary_sync_idx = merge_syncs(nonbinary_sync_idx, it->second);
+                it->second = static_cast<uint32_t>(i);
+            }
         }
 
         node.dispatch_metadata.send_binary = !all_binaries_cached;

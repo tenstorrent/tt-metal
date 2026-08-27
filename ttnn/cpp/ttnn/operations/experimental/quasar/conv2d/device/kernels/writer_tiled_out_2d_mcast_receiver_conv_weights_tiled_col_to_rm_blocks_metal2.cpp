@@ -25,7 +25,6 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "conv_reader_common.hpp"
-#include "api/debug/ring_buffer.h"
 // DEBUG: weights-mcast-receiver deadlock localization. Marker 0xBP_00CC, P=phase, CC=load counter.
 
 void kernel_main() {
@@ -164,7 +163,6 @@ void kernel_main() {
                     // read weight blocks inner dim
                     // read weight slice - 1 block of weights in width dim and full weight matrix height
                     // read slice only once for all activation blocks
-                    WATCHER_RING_BUFFER_PUSH(0xB1000000u | (rb_wcnt & 0xffff));  // recv: pre reserve cb_weight
                     cb_weight_obj.reserve_back(weight_block_num_tiles);
                     // Set weights semaphore value to INVALID
                     weights_mcast_receiver_sem.set(INVALID);
@@ -172,10 +170,8 @@ void kernel_main() {
                     // Atomic increment source core counter
                     weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
 
-                    WATCHER_RING_BUFFER_PUSH(0xB3000000u | (rb_wcnt & 0xffff));  // recv: bumped, pre wait VALID
                     // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
                     weights_mcast_receiver_sem.wait(VALID);
-                    WATCHER_RING_BUFFER_PUSH(0xB4000000u | (rb_wcnt & 0xffff));  // recv: got VALID (weight loaded)
                     rb_wcnt++;
 
                     cb_weight_obj.push_back(weight_block_num_tiles);

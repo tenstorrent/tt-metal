@@ -35,7 +35,9 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
     CheckpointType,
     get_core_ranges,
     PREFETCHER_NOC1_GRID,
+    PREFETCHER_NOC1_GRID_BH,
     LM_HEAD_32_GRID,
+    LM_HEAD_32_GRID_BH,
     LM_HEAD_16_GRID,
     LM_HEAD_INPUT_GRID,
     LM_HEAD_OUTPUT_GRID,
@@ -215,17 +217,49 @@ class TtQwenModelArgs(TtModelArgs):
 
         if self.num_devices == 32:
             self.use_prefetcher = not self.is_blackhole
+            # The Blackhole galaxy dram_prefetcher decode path is opt-in (QWEN_BH_PREFETCHER=1):
+            # external runners (e.g. vLLM) stay on the proven no-prefetcher path by default, while
+            # the tt-metal CI yamls export the flag to keep the prefetcher path covered.
+            if self.is_blackhole and os.environ.get("QWEN_BH_PREFETCHER", "0") == "1":
+                self.use_prefetcher = True
 
-        # Set up prefetcher stuff
-        _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
+        # On Blackhole galaxy the fused galaxy CCLs (fused_rms_minimal, llama_rs_create_heads,
+        # all_gather_concat, llama_rs_matmul, llama_reduce_scatter) use 1D-multicast writers that no-op
+        # on the 2D-torus fabric, so with the prefetcher on we keep the ring matmuls (they must consume
+        # the prefetched global-CB weights) but route every collective through the stable/standard ops
+        # the no-prefetcher path already uses, each pinned to the worker sub-device. use_prefetcher
+        # still gates the matmuls; use_unfused_ccl gates the post-matmul collective/head/rotary logic.
+        self.use_unfused_ccl = (
+            self.use_prefetcher and self.is_blackhole and os.environ.get("QWEN_BH_UNFUSED_CCL", "1") == "1"
+        )
+
+        # Set up prefetcher stuff (Blackhole galaxy: 8 readers x 3 receivers; Wormhole: 12 x 2)
+        if self.is_blackhole:
+            _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(8, 3, False, is_blackhole=True)
+        else:
+            _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
 
         self.sub_core_max_y = 7 if self.is_blackhole else 9
         self.sub_core_grids = _build_galaxy_sub_core_grids(self.sub_core_max_y)
-        self.sub_core_grid_topk = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, self.sub_core_max_y)),
-            ]
-        )
+        if self.use_prefetcher and self.is_blackhole:
+            # The sampling top-k allocates large static circular buffers (padded vocab = 32768) on its
+            # sub-core grid. On Blackhole the prefetcher keeps a big resident global circular buffer
+            # (656*1088 ~= 697 KB) on the receiver columns 1-3, plus other worker-core buffers, so the
+            # 24-core top-k footprint no longer leaves enough contiguous L1 there ("static circular buffers
+            # clash with L1 buffers ... region ends at 809536"). Spread top-k across a much wider grid
+            # (columns 4-10, all 10 rows = 70 cores, clear of the prefetcher's global-CB columns 0-3 and
+            # the dispatch column 11) so the per-core static CB shrinks well below the resident buffers.
+            self.sub_core_grid_topk = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(10, 9)),
+                ]
+            )
+        else:
+            self.sub_core_grid_topk = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, self.sub_core_max_y)),
+                ]
+            )
         self.start_core = ttnn.CoreCoord(1, 0)
 
         HF_MODEL = os.getenv("HF_MODEL")
@@ -944,14 +978,27 @@ class TtQwenModelArgs(TtModelArgs):
 
             paged_sdpa_num_cores = 40 if self.is_blackhole else 48
             paged_sdpa_grid = (8, 5) if self.is_blackhole else (8, 6)
+            paged_sdpa_sub_core_grids = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, paged_sdpa_num_cores, self.sub_core_grids, row_wise=True
+            )
+            # SDPA decode must run on the same cores its Q/KV/output shards live on (the reducer/worker
+            # readers pull each core's Q shard in place), so its compute grid is pinned to sub_core_grids
+            # (cols 1-3, 5-6) and cannot be relocated off the dram_prefetcher global-CB receiver cores
+            # (cols 1-3) without deadlocking. Instead shrink the K/V circular buffers so they fit under
+            # the resident global CB during full-model trace capture. With dynamic chunking (k_chunk=0)
+            # the K/V CBs are sized for max_dynamic_chunk_size (dst_size = 8 tiles) -> ~256 KB, which
+            # overflows the ~423 KB of L1 left free below the global CB on the receiver cores by ~25 KB
+            # ("static circular buffers clash with L1 buffers on [1-0 - 3-7]"). Pin k_chunk_size to the
+            # paged KV block_size (64 tokens = 2 tiles): page-aligned so each chunk is exactly one page,
+            # and Sk_chunk_t=2 shrinks the K/V CBs to ~64 KB, clearing the clash. Flash-decode's online
+            # softmax makes the fixed smaller chunk numerically identical, just a few more K iterations.
+            paged_sdpa_k_chunk = 64 if (self.is_blackhole and self.use_prefetcher and self.use_unfused_ccl) else 0
             self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=paged_sdpa_grid,
-                sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                    self.start_core, paged_sdpa_num_cores, self.sub_core_grids, row_wise=True
-                ),
+                sub_core_grids=paged_sdpa_sub_core_grids,
                 exp_approx_mode=False,
                 q_chunk_size=0,
-                k_chunk_size=0,
+                k_chunk_size=paged_sdpa_k_chunk,
             )
 
             # TODO: Need to uplift UpdateCache to support dynamic chunk sizes if non-paged
@@ -1064,13 +1111,14 @@ class TtQwenModelArgs(TtModelArgs):
             ##### Prefetcher stuff #####
             self.model_config["USE_PREFETCHER"] = self.use_prefetcher
             RING_SIZE = 24
+            prefetcher_ring_grid = PREFETCHER_NOC1_GRID_BH if self.is_blackhole else PREFETCHER_NOC1_GRID
             ring_core_range_set = ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(
                         ttnn.CoreCoord(x, y),
                         ttnn.CoreCoord(x, y),
                     )
-                    for x, y in PREFETCHER_NOC1_GRID
+                    for x, y in prefetcher_ring_grid
                 ]
             )
             pf_mm_out_core_range_set = ttnn.CoreRangeSet(
@@ -1114,6 +1162,18 @@ class TtQwenModelArgs(TtModelArgs):
                 self.qkv_n_ring,
                 RING_SIZE,
                 untilize_out=True,
+            )
+            # Non-untilized (TILE) variant for the Blackhole unfused-CCL bring-up: bf8 output requires TILE
+            # layout, and the unfused create-head path feeds a bf8 TILE input to the column all-reduce
+            # (matching the no-prefetcher path). The fused path keeps the untilized config for
+            # llama_rs_create_heads.
+            self.model_config["XQKV_DECODE_RING_PROGCFG_TILE"] = self.matmul_1d_ring_config(
+                1,
+                32,
+                self.qkv_k_ring,
+                self.qkv_n_ring,
+                RING_SIZE,
+                untilize_out=False,
             )
             # BH no-prefetch: L1 column-sharded act @ DRAM width-sharded wqkv (test_galaxy_nd pattern).
             qkv_k_per_device = self.dim // self.cluster_shape[1]
@@ -1277,13 +1337,16 @@ class TtQwenModelArgs(TtModelArgs):
             # self.lm_head_shape = (self.dim // 4, 151936 // 8)
             self.lm_head_shape = (6144 // 4, 155648 // 8)
 
+            # On BH the lm_head all_reduce buffer (sub_core_grids) is capped to rows 0-7, so the
+            # resharded output grid must fit inside rows 0-7 too (see LM_HEAD_32_GRID_BH).
+            lm_head_32_grid = LM_HEAD_32_GRID_BH if self.is_blackhole else LM_HEAD_32_GRID
             lm_head_ring_core_range_set = ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(
                         ttnn.CoreCoord(x, y),
                         ttnn.CoreCoord(x, y),
                     )
-                    for x, y in LM_HEAD_32_GRID
+                    for x, y in lm_head_32_grid
                 ]
             )
 
@@ -1333,7 +1396,13 @@ class TtQwenModelArgs(TtModelArgs):
             self.model_config["LM_HEAD_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 # shape=(32, 16896 // LM_HEAD_RING_SIZE),  # padded shape
                 shape=(32, 19968 // LM_HEAD_RING_SIZE),  # padded shape
-                core_grid=lm_head_ring_core_output_range_set,
+                # LM_HEAD_OUTPUT_GRID's permuted order encodes the WH DRAM-sharded in1 bank mapping.
+                # Blackhole reads the decode weight DRAM-interleaved (see lm_head.py): ring core i
+                # computes global N slice i, so the output shard order must follow the INPUT ring
+                # order instead.
+                core_grid=lm_head_ring_core_input_range_set
+                if self.is_blackhole
+                else lm_head_ring_core_output_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -2073,7 +2142,9 @@ class TtQwenModelArgs(TtModelArgs):
             out_subblock_w -= 1
 
         # DRAM-sharded in1 still needs hop core without runtime prefetcher (see test_matmul_1d_ring_qwen).
-        hop_grid = [(3, 6)]
+        # Blackhole ring occupies cols 1-3 rows 0-7; the hop core must be outside that grid AND be a
+        # member of the global CB (a dummy-receiver core at (3,8)), mirroring WH's hop on a dummy receiver.
+        hop_grid = [(3, 8)] if self.is_blackhole else [(3, 6)]
         hop_core_range_set = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -2097,7 +2168,7 @@ class TtQwenModelArgs(TtModelArgs):
             mcast_in0=False,
             gather_in0=True,
             hop_cores=hop_core_range_set,
-            num_global_cb_receivers=2 if prefetch else 1,
+            num_global_cb_receivers=(3 if self.is_blackhole else 2) if prefetch else 1,
             untilize_out=untilize_out,
         )
 
@@ -2132,7 +2203,7 @@ class TtQwenModelArgs(TtModelArgs):
         while out_block_w % out_subblock_w != 0:
             out_subblock_w -= 1
 
-        hop_grid = [(3, 6)]
+        hop_grid = [(3, 8)] if self.is_blackhole else [(3, 6)]
         hop_core_range_set = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(

@@ -25,11 +25,11 @@ namespace fabric_api = tt::tt_fabric::linear::experimental;
 ////////////////////////////////////////////////////////////////
 // data_valid semaphore protocol
 //
-// data_valid counts the chunks upstream has relayed into our output -- cumulative over the op, reset at
-// completion. A chunk's absolute position is base_chunk + within-slice offset, with base_chunk = (iter-1) *
-// slice_count. The writer maintains the count (atomic-inc per chunks delivered); the reader waits on it with
-// noc_semaphore_wait_min at the last chunk of each batch it reads, then a final wait for total_chunks before
-// reset.
+// data_valid counts the chunks upstream has relayed into our output. The writer maintains the count (atomic-inc
+// per chunks delivered); the reader waits on it with noc_semaphore_wait_min at the last chunk of each batch it
+// reads, then waits for total_chunks and atomically subtracts exactly total_chunks at completion. Each
+// invocation consumes only its own credits, leaving any additional credits available to their owning
+// invocation. All reusable protocol state is maintained on device.
 //
 // Waiting on an absolute position (not a signal count) lets one reader path cover every case with no alignment
 // or per-topology special-casing:
@@ -46,19 +46,25 @@ namespace fabric_api = tt::tt_fabric::linear::experimental;
 // relay iteration via init(). A stripe's src address on this device equals its dst address on the neighbor, so
 // reader and writer share this iterator unchanged.
 template <
-    uint32_t output_chunks_per_stripe,
     uint32_t output_chunks_per_page,
     uint32_t output_chunk_size,
     uint32_t num_devices,
-    uint32_t slice_step>
+    uint32_t slice_step,
+    uint32_t static_output_chunks_per_stripe>
 class OutputStripeIterator {
     static constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
-    static constexpr uint32_t stripe_distance_chunks = num_devices * output_chunks_per_stripe;
-    static constexpr uint32_t output_pages_per_row = stripe_distance_chunks / output_chunks_per_page;
+    static_assert(slice_step == 1 || static_output_chunks_per_stripe != 0);
 
 public:
     // Point at `stripe` for the chunk range [start, start + count).
-    FORCE_INLINE void init(uint32_t stripe, uint32_t start, uint32_t count) {
+    FORCE_INLINE void init(uint32_t stripe, uint32_t start, uint32_t count, uint32_t output_chunks_per_stripe) {
+        if constexpr (static_output_chunks_per_stripe != 0) {
+            output_chunks_per_stripe_ = static_output_chunks_per_stripe;
+        } else {
+            output_chunks_per_stripe_ = output_chunks_per_stripe;
+        }
+        stripe_distance_chunks_ = num_devices * output_chunks_per_stripe_;
+        output_pages_per_row_ = stripe_distance_chunks_ / output_chunks_per_page;
         if constexpr (slice_step > 1) {
             static_assert(output_chunks_per_page == 1, "strided bank-owned schedule requires matched output pages");
             stripe_ = stripe;
@@ -67,20 +73,20 @@ public:
             count_ = count;
             return;
         }
-        const uint32_t s_start = (start / output_chunks_per_stripe) * stripe_distance_chunks +
-                                 (start % output_chunks_per_stripe) + stripe * output_chunks_per_stripe;
+        const uint32_t s_start = (start / output_chunks_per_stripe_) * stripe_distance_chunks_ +
+                                 (start % output_chunks_per_stripe_) + stripe * output_chunks_per_stripe_;
         page_id_ = s_start / output_chunks_per_page;
         byte_off_ = (s_start % output_chunks_per_page) * output_chunk_size;
         if constexpr (output_chunks_per_page == 1) {
             phase_ = 0;
-            stripe_jump_ = output_pages_per_row - (output_chunks_per_stripe - 1);
+            stripe_jump_ = output_pages_per_row_ - (output_chunks_per_stripe_ - 1);
         } else {
             // In concat mode the page phase (and hence the stripe jump) depends on the stripe.
-            const uint32_t off = (stripe * output_chunks_per_stripe) % output_chunks_per_page;
+            const uint32_t off = (stripe * output_chunks_per_stripe_) % output_chunks_per_page;
             phase_ = off * output_chunk_size;
-            stripe_jump_ = output_pages_per_row - (off + output_chunks_per_stripe - 1) / output_chunks_per_page;
+            stripe_jump_ = output_pages_per_row_ - (off + output_chunks_per_stripe_ - 1) / output_chunks_per_page;
         }
-        chunk_in_stripe_ = start % output_chunks_per_stripe;
+        chunk_in_stripe_ = start % output_chunks_per_stripe_;
         sent_ = 0;
         count_ = count;
     }
@@ -91,14 +97,14 @@ public:
     FORCE_INLINE std::pair<uint32_t, uint32_t> next() {
         if constexpr (slice_step > 1) {
             const uint32_t local_chunk = start_ + sent_ * slice_step;
-            const uint32_t stripe_group = local_chunk / output_chunks_per_stripe;
-            const uint32_t chunk_in_stripe = local_chunk % output_chunks_per_stripe;
             ++sent_;
-            return {stripe_group * stripe_distance_chunks + stripe_ * output_chunks_per_stripe + chunk_in_stripe, 0};
+            // A bank-owned worker receives a proper subset of one full stripe, so it never wraps into another
+            // stripe group. Keep this strided hot path entirely compile-time and free of divide/modulo.
+            return {stripe_ * static_output_chunks_per_stripe + local_chunk, 0};
         }
         std::pair<uint32_t, uint32_t> loc{page_id_, byte_off_};
         sent_++;
-        if (++chunk_in_stripe_ == output_chunks_per_stripe) {
+        if (++chunk_in_stripe_ == output_chunks_per_stripe_) {
             chunk_in_stripe_ = 0;
             page_id_ += stripe_jump_;
             byte_off_ = phase_;
@@ -114,6 +120,7 @@ public:
 
 private:
     uint32_t page_id_, byte_off_, chunk_in_stripe_, sent_, count_, phase_, stripe_jump_, stripe_, start_;
+    uint32_t output_chunks_per_stripe_, stripe_distance_chunks_, output_pages_per_row_;
 };
 
 // Unicasts pages one hop to the single neighbor. Handles packetization (pack several pages into one

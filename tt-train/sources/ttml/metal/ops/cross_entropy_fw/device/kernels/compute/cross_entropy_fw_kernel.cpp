@@ -2,20 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <api/debug/dprint.h>
 #include <api/compute/cb_api.h>
 #include <api/compute/pack.h>
 #include <api/compute/reconfig_data_format.h>
 #include <api/compute/reg_api.h>
+#include <api/debug/dprint.h>
 #include <hostdevcommon/kernel_structs.h>
 #include <tensix.h>
 
 #include <cstdint>
 
-#include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -25,8 +25,10 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/mask.h"
+#include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);  // rows to process in this kernel
 constexpr uint32_t block_size = get_compile_time_arg_val(1);         // size of block
@@ -42,6 +44,7 @@ constexpr auto cb_max_value_after_reduction = tt::CBIndex::c_8;
 constexpr auto cb_exp_sum_before_reduction = tt::CBIndex::c_9;
 constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_10;
 constexpr auto cb_output = tt::CBIndex::c_11;
+constexpr auto cb_mat_mul_reduce = tt::CBIndex::c_12;
 
 constexpr uint32_t onetile = 1;
 
@@ -198,7 +201,9 @@ void calculate_sum_exp_x() {
     tile_regs_acquire();
 
     const uint32_t max_value_register = 3U;
-    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    compute_kernel_hw_startup(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction);
     unary_bcast<BroadcastType::COL>(
         cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
     for (uint32_t col = 0; col < Wt; ++col) {
@@ -210,8 +215,11 @@ void calculate_sum_exp_x() {
         sub_binary_tile_init();
         sub_binary_tile(working_register, max_value_register, working_register);  // subtract max value from each tile
 
-        exp_tile_init();
-        exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
+        // exp via the shared SDPA path: on Blackhole this dispatches to the hand-scheduled
+        // TTI exp (~3x cheaper on the SFPU than the generic accurate exp_tile at bf16
+        // output precision); on Wormhole it falls back to the same accurate sfpi exp.
+        sdpa_exp_tile_init();
+        sdpa_exp_tile(working_register);  // calculate exp for each tile in tile register
 
         if constexpr (do_mask_w) {
             if (col + 1 == Wt) {
@@ -255,7 +263,9 @@ void calculate_sum_exp_x() {
     tile_regs_acquire();
 
     const uint32_t max_value_register = 3U;
-    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    compute_kernel_hw_startup(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction);
     unary_bcast<BroadcastType::COL>(
         cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
     for (uint32_t col = 0; col < Wt;) {
@@ -271,8 +281,8 @@ void calculate_sum_exp_x() {
             sub_binary_tile(
                 working_register, max_value_register, working_register);  // subtract max value from each tile
 
-            exp_tile_init();
-            exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
+            sdpa_exp_tile_init();
+            sdpa_exp_tile(working_register);  // calculate exp for each tile in tile register
 
             if constexpr (do_mask_w) {
                 if (col + 1 == Wt) {
@@ -312,18 +322,17 @@ void reduce_log_sum_exp_x() {
     cb_wait_front(cb_exp_sum_before_reduction, onetile);
     cb_reserve_back(cb_exp_sum_after_reduction, onetile);
 
+    cb_wait_front(cb_mat_mul_reduce, onetile);
+
     tile_regs_acquire();
     const uint32_t reduction_register = 0;
-    reconfig_data_format(cb_scaler, cb_exp_sum_before_reduction);
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-        cb_exp_sum_before_reduction, cb_scaler, cb_exp_sum_after_reduction);
-    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-        cb_exp_sum_before_reduction,
-        cb_scaler,
-        /* tile_idx */ 0,
-        /* tile_idx */ 0,
-        /* reduction_register */ reduction_register);
-    reduce_uninit();
+
+    // Row-reduce via matmul against a ones-column tile rather than reduce_tile: reduce_tile
+    // loses precision on large-vocab exp sums (same approach as cross_entropy_bw).
+    reconfig_data_format(cb_mat_mul_reduce, cb_exp_sum_before_reduction);
+    matmul_init(cb_exp_sum_before_reduction, cb_mat_mul_reduce, 0);
+    matmul_tiles(
+        cb_exp_sum_before_reduction, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduction_register);
 
     // log(sum(exp(x - max(x))))
     log_tile_init();
@@ -346,7 +355,8 @@ void kernel_main() {
     cb_wait_front(cb_scaler, onetile);
 
     init_sfpu(cb_input, cb_output);
-    binary_op_init_common(cb_input, cb_target_logits, cb_output);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(cb_input, cb_target_logits, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         find_max_value_in_row();  // find max value in each row
@@ -370,7 +380,7 @@ void kernel_main() {
         negative_tile(result_register);
 
         reconfig_data_format(cb_max_value_after_reduction, cb_exp_sum_after_reduction);
-        add_tiles_init(cb_max_value_after_reduction, cb_exp_sum_after_reduction, /* acc_to_dest */ true);
+        add_init(cb_max_value_after_reduction, cb_exp_sum_after_reduction, /* acc_to_dest */ true);
         add_tiles(
             cb_max_value_after_reduction,
             cb_exp_sum_after_reduction,

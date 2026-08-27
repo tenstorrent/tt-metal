@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import inspect
 import json
 import math
@@ -16,6 +17,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
+from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
+from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
+from models.common.weight_cache import mark_weight_cache_complete as _mark_weight_cache_complete
+from models.common.weight_cache import marker_path as _wc_marker_path
+from models.common.weight_cache import weight_cache_is_complete as _weight_cache_is_complete
 from models.tt_transformers.tt.common import (
     Mode,
     calculate_hidden_dim,
@@ -108,8 +114,7 @@ def should_pad_sampling_logits_to_power_of_2(
 ) -> bool:
     # Enable optional sampling padding for models that regress to single-core TopK. More info at issue #40399
     if sampling_splits < 1:
-        logger.warning(f"Sampling_splits must be >= 1, got {sampling_splits}")
-        return False
+        raise ValueError(f"sampling_splits must be >= 1, got {sampling_splits}")
 
     per_device_vocab = padded_vocab_size // sampling_splits
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
@@ -506,10 +511,14 @@ class ModelArgs:
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Qwen3.6-27B": "models/tt_transformers/model_params/Qwen3.6-27B",
+            "LFM2.5-VL-1.6B": "models/tt_transformers/model_params/LFM2.5-VL-1.6B",
         }.items()
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
+
+    # Opt-in: False so TP > n_kv_heads stays a hard error unless a subclass implements KV replication.
+    SUPPORTS_KV_REPLICATION = False
 
     def __init__(
         self,
@@ -561,6 +570,19 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        # Final logit soft-capping (Gemma-2). None => disabled, so no effect on other models.
+        # Attention-score softcapping (HF attn_logit_softcapping=50.0) is intentionally
+        # not stored or applied: ttnn SDPA has no softcap hook, and HF documents that
+        # omitting attn softcap at inference has only minor effect. See final-logit
+        # application in Transformer._apply_final_logit_softcapping.
+        self.final_logit_softcapping = None
+        self.model_type = None
+        # Decode-SDPA tuning. Architecture-specific overrides are applied once in
+        # _set_model_specific_params(); these defaults preserve existing behaviour for
+        # every model (q/k chunk 0 => op auto-selects, forced framework compute config).
+        self.sdpa_decode_q_chunk_size = 0
+        self.sdpa_decode_k_chunk_size = 0
+        self.sdpa_decode_use_default_compute_config = False
         self.use_hf_rope = use_hf_rope
 
         assert not os.getenv(
@@ -690,10 +712,22 @@ class ModelArgs:
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
-            assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+            # KV heads normally split one-or-more per device. SUPPORTS_KV_REPLICATION models
+            # instead replicate a head across the devices holding its GQA query group, so they
+            # only need TP to be a whole multiple of n_kv_heads (e.g. 4 KV heads on TP=8 -> each
+            # head shared by a device pair). n_local_kv_heads is then 1, hence the max() below.
+            if self.SUPPORTS_KV_REPLICATION and self.cluster_shape[1] > self.n_kv_heads:
+                assert self.cluster_shape[1] % self.n_kv_heads == 0, (
+                    f"with KV replication, num_devices must be a multiple of n_kv_heads: "
+                    f"{self.cluster_shape[1]} % {self.n_kv_heads}"
+                )
+            else:
+                assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / max(
+                1, self.n_kv_heads // self.cluster_shape[1]
+            )
 
             # All Gather Matmul for Dense Out (DO) - computed flag stored as instance attribute
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
@@ -1311,11 +1345,13 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
-                per_core_N=math.ceil(
-                    (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
-                )
-                if not self.is_galaxy
-                else None,
+                per_core_N=(
+                    math.ceil(
+                        (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
+                    )
+                    if not self.is_galaxy
+                    else None
+                ),
             )
 
     @lru_cache(maxsize=None)
@@ -1371,9 +1407,11 @@ class ModelArgs:
                     k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                     n=self.dim,
                     grid_size=self.mlp2_grid(seq_len),
-                    per_core_N=math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                    if not self.is_galaxy
-                    else None,
+                    per_core_N=(
+                        math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
+                        if not self.is_galaxy
+                        else None
+                    ),
                 )
         else:
             raise ValueError(f"Invalid mode: {mode}")
@@ -1533,21 +1571,29 @@ class ModelArgs:
         q_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
-            if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else min(256, chunk_start_idx & -chunk_start_idx)
-            if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else (
+                64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else (
+                    min(256, chunk_start_idx & -chunk_start_idx)
+                    if seq_len >= 2048
+                    else min(64, chunk_start_idx & -chunk_start_idx)
+                )
+            )
         )
         # Workaround for https://github.com/tenstorrent/tt-metal/issues/35225:
         k_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
-            if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else min(256, chunk_start_idx & -chunk_start_idx)
-            if seq_len >= 2048
-            else min(64, chunk_start_idx & -chunk_start_idx)
+            else (
+                64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else (
+                    min(256, chunk_start_idx & -chunk_start_idx)
+                    if seq_len >= 2048
+                    else min(64, chunk_start_idx & -chunk_start_idx)
+                )
+            )
         )
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
@@ -1558,7 +1604,16 @@ class ModelArgs:
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
-        """Get the SDPA program config for decode mode."""
+        """Get the SDPA program config for decode mode.
+
+        The KV chunk sizes come from self.sdpa_decode_{q,k}_chunk_size (default 0,
+        i.e. the op auto-selects). Architectures that need an explicit small chunk
+        set these in _set_model_specific_params(); e.g. Gemma-2 (head_dim=256), where
+        the auto chunk drives the flash-decode op into a multi-chunk path whose
+        cross-chunk reduction is numerically wrong for head_dim=256, producing a
+        sharp accuracy cliff once the context exceeds one chunk.
+        """
+        q_chunk, k_chunk = self.sdpa_decode_q_chunk_size, self.sdpa_decode_k_chunk_size
         if prefetcher is not None:
             sdpa_grid_size = (8, 8)
             start_core = ttnn.CoreCoord(1, 0)
@@ -1569,15 +1624,15 @@ class ModelArgs:
                     start_core, num_sdpa_cores, prefetcher.all_worker_cores_range_set, row_wise=True
                 ),
                 exp_approx_mode=False,
-                q_chunk_size=0,
-                k_chunk_size=0,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
             )
         else:
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=False,
-                q_chunk_size=0,
-                k_chunk_size=0,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
             )
 
     @lru_cache(maxsize=None)
@@ -1998,9 +2053,9 @@ class ModelArgs:
                 grid_size=self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
-                per_core_N=math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                if dram_sharded_wo
-                else None,
+                per_core_N=(
+                    math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width)) if dram_sharded_wo else None
+                ),
             )
         else:
             raise ValueError(f"Invalid mode: {mode}")
@@ -2396,6 +2451,7 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
+                "Qwen2.5-Coder-32B": {"N150": None, "N300": None, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -2410,11 +2466,31 @@ class ModelArgs:
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-2-2b": {
+                    "N150": 32,
+                    "N300": 32,
+                    "T3K": 32,
+                    "TG": 32,
+                    "P100": 32,
+                    "P150": 32,
+                    "P150x4": 32,
+                },
+                "gemma-2-9b": {
+                    # No N150 entry: the full 42-layer model exhausts single-chip DRAM
+                    # during weight caching, so gemma-2-9b is not supported on N150.
+                    "N300": 32,
+                    "T3K": 32,
+                    "TG": 32,
+                    "P100": 32,
+                    "P150": 32,
+                    "P150x4": 32,
+                },
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "LFM2.5-VL-1.6B": {"N150": 128, "N300": 128, "T3K": 128, "TG": None, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -2643,7 +2719,21 @@ class ModelArgs:
         return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
 
     def _set_model_specific_params(self):
-        return
+        # Gemma-family text models (gemma, gemma2) store RMSNorm weights as (1 + w)
+        # and scale input embeddings by sqrt(hidden_size). Gemma-3 keeps this in its
+        # own ModelArgs subclass; enabling it here (config-gated) brings up Gemma-2
+        # text models via HF_MODEL without touching any non-Gemma model.
+        if self.model_type is not None and str(self.model_type).lower() in ("gemma", "gemma2"):
+            self.rms_norm_add_unit_offset = True
+            self.embed_scale = self.dim**0.5
+            # head_dim=256 decode-attention fix: pin a small KV chunk and use the
+            # flash-decode op's default compute config. Matches the known-good Gemma-3
+            # decode SDPA (models/demos/gemma4/tt/attention/decode.py); the framework's
+            # auto chunk + forced fp32-accum compute config corrupt the cross-chunk
+            # online-softmax reduction for head_dim=256.
+            self.sdpa_decode_q_chunk_size = 32
+            self.sdpa_decode_k_chunk_size = 64
+            self.sdpa_decode_use_default_compute_config = True
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
@@ -2653,6 +2743,10 @@ class ModelArgs:
         text_config = config.get("text_config", config)
         self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
         layer_types = text_config["layer_types"] if "layer_types" in text_config else None
+
+        # Architecture family (e.g. "gemma2", "gemma3", "llama"). Used to enable
+        # architecture-specific behaviour without affecting other models.
+        self.model_type = text_config.get("model_type", config.get("model_type", None))
 
         # Common params with different names between Meta and HF
         self.dim = text_config.get("dim", text_config.get("hidden_size"))
@@ -2720,15 +2814,14 @@ class ModelArgs:
                 "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
             )
 
-        if self.num_devices > 0:
-            sampling_splits = self.num_devices if self.cluster_shape != [1, 1] else 2
-            # Only enable this optimization on the non-multi-step sampling path.
-            # The [1, 1] mesh path splits logits before TopK today and would need
-            # matching input padding in `TTSampling.sample()` to safely use it.
-            self.pad_logits_to_power_of_2 = self.cluster_shape != [1, 1] and (
-                should_pad_sampling_logits_to_power_of_2(self.base_model_name, self.padded_vocab_size, sampling_splits)
+        if self.num_devices > 0 and self.cluster_shape != [1, 1]:
+            self.pad_logits_to_power_of_2 = should_pad_sampling_logits_to_power_of_2(
+                self.base_model_name, self.padded_vocab_size, self.num_devices
             )
         else:
+            # Off on [1, 1]: an A/B on the multi-step split path (PR #53167)
+            # measured no end-to-end decode benefit from padding the topk chunks
+            # to a power of two, so the flag stays multi-device only.
             self.pad_logits_to_power_of_2 = False
 
         self.unpadded_hidden_dim = self.hidden_dim
@@ -2763,6 +2856,20 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
+        # Gemma-2 alternates local (sliding-window) and global attention. Upstream
+        # Gemma2Config.__post_init__ already fills `layer_types` before to_dict(), so
+        # for a real HF checkpoint this block is usually a no-op; keep it as a
+        # defensive fallback for dict-style configs that omit the list.
+        # Pattern: even layers = sliding (matches HF is_sliding = not bool(layer_idx % 2)).
+        if (
+            self.model_type is not None
+            and str(self.model_type).lower().startswith("gemma2")
+            and self.sliding_window is not None
+            and self.layer_types is None
+        ):
+            self.layer_types = ["sliding_attention" if (i % 2 == 0) else "full_attention" for i in range(self.n_layers)]
+            self.sliding_window_pattern = [lt == "sliding_attention" for lt in self.layer_types]
+
         # RoPE params (transformers 5.x nests these under `rope_parameters`)
         self.rope_theta = get_rope_theta(text_config)
         self.rope_theta_local = get_rope_local_base_freq(text_config)
@@ -2783,6 +2890,11 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+
+        # Final logit soft-capping (Gemma-2): logits -> tanh(logits / cap) * cap.
+        # Attn-score softcapping is not applied (see __init__ comment); only the
+        # final-logit cap is consumed, via Transformer._apply_final_logit_softcapping.
+        self.final_logit_softcapping = text_config.get("final_logit_softcapping", None)
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
@@ -3032,6 +3144,161 @@ class ModelArgs:
                 self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
             )
 
+    # Name of the marker file dropped into a weight-cache directory once every weight for that
+    # (model, dtype, mesh shape) has been materialized to disk. Generalizes the GPT-OSS
+    # warm-cache detector (#48531) to every tt_transformers e2e model.
+    # Marker filename and schema version both come from models/common/weight_cache.py -- this
+    # class must not define its own, or the two writers diverge (they previously shared a filename
+    # and version number while encoding mesh_shape incompatibly). See that module for the version
+    # history and what each field guarantees.
+    WEIGHT_CACHE_MARKER = _WC_MARKER
+    WEIGHT_CACHE_FORMAT_VERSION = _WC_FORMAT_VERSION
+
+    def _weight_cache_build_variant(self):
+        """A signature of the build options that change an ``as_tensor`` cache *filename*.
+
+        The cache name is ``{name}_dtype_{dtype}_layout_{layout}.tensorbin``, so anything that moves
+        a weight to a different dtype -- or adds weights outright -- produces a different file set.
+        Two knobs do that here: the DRAM prefetcher (pins every layer to decoder 0's dtype and adds
+        the ring-matmul splits in lm_head) and the precision/optimizations config (per-decoder,
+        per-tensor-group dtypes). Recording them means a cache seeded under one variant is not
+        accepted for a build that needs a different one -- which matters because a filename this
+        build needs but the seed never wrote would otherwise be regenerated by as_tensor FROM the
+        placeholder. (#45400 review)"""
+        try:
+            # get_tensor_dtype lives on the DecodersPrecision held in self.optimizations, NOT on
+            # ModelArgs. The original self.get_tensor_dtype(...) raised AttributeError on every
+            # model -- unnoticed because the old except collapsed it to the match-anything
+            # "unknown", and no hardware run executed this method until the 0ec5959bade sweep,
+            # where the fail-closed sentinel surfaced it on the first cold build. (#45400 review)
+            dtypes = [
+                str(self.optimizations.get_tensor_dtype(decoder_id, group, prefetcher=bool(self.prefetcher)))
+                for decoder_id in range(self.n_layers)
+                for group in TensorGroup
+            ]
+            precision = hashlib.sha1("|".join(dtypes).encode()).hexdigest()[:12]
+        except Exception as e:
+            # A variant we cannot compute is a variant we cannot verify. Do NOT collapse to a
+            # match-anything constant (that silently reopened the placeholder-persistence hole for
+            # every precision variant); return an unverifiable sentinel that the completeness gate
+            # rejects and mark_weight_cache_complete refuses to write, so the build cold-loads --
+            # slow but correct -- and the log says why. (#45400 review, finding R3)
+            logger.warning(f"Could not compute the weight-cache build variant ({e!r}); warm-cache skip disabled.")
+            return {"unverifiable": True, "error": f"{type(e).__name__}: {e}"}
+        return {
+            "prefetcher": bool(self.prefetcher),
+            "precision": precision,
+            # attention.py caches wqkv_bias_decode_sharded_{batch_size}, so batch is in a filename.
+            "batch": int(getattr(self, "max_batch_size", 0) or 0),
+            # attention.py picks cache_name("wo_width_sharded_2d") vs cache_name("wo") off this.
+            "fused_ag": bool(getattr(self, "use_fused_all_gather_matmul", False)),
+            # load_state_dict permutes QKV differently per rope mode, so the SAME cache filename
+            # carries different content across modes. The Llama CI job runs both modes against one
+            # cache dir; keeping the mode in the variant stops a marker seeded under one mode from
+            # certifying the other. (#45400 review, finding R2)
+            "hf_rope": bool(getattr(self, "use_hf_rope", False)),
+        }
+
+    def _weight_cache_identity(self, components=None):
+        """Marker identity for this build. `components` names the parts being constructed, so a
+        text-only seed cannot certify a cache for a build that also needs the vision tower."""
+        return dict(
+            model_name=self.model_name,
+            n_layers=self.n_layers,
+            mesh_shape=tuple(self.mesh_device.shape),
+            components=components,
+            build_variant=self._weight_cache_build_variant(),
+        )
+
+    def weight_cache_is_complete(self, dtype, components=None):
+        """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape, components)
+        was fully built by a previous run and every tensorbin that build produced is still present.
+
+        When True, ttnn.as_tensor loads every weight from its cached .tensorbin and the HF
+        state_dict is never read, so the caller can skip the expensive from_pretrained host
+        load entirely (the load that OOMs/hangs during prefill, #48509). Set
+        TT_TRANSFORMERS_FORCE_MODEL_LOAD=1 to force a fresh load (e.g. to regenerate the cache).
+
+        Delegates to models/common/weight_cache.py so there is a SINGLE marker reader/writer: the
+        two used to encode mesh_shape differently while sharing one filename and format_version,
+        so a model reachable from both (gemma3 inherits this class but its demos call the shared
+        helper) had each side reject the other's marker and cold-load forever. (#45400 review)"""
+        return _weight_cache_is_complete(self.weight_cache_path(dtype), **self._weight_cache_identity(components))
+
+    def mark_weight_cache_complete(self, dtype, state_dict=None, components=None):
+        """Record that the ttnn weight cache for this (model, dtype, mesh shape, components) was
+        fully built, so subsequent runs can skip the HF state_dict load.
+
+        state_dict (the real, just-loaded weights) is captured as a {key: [shape, dtype]} manifest
+        so a later warm run can reconstruct a dataless placeholder without touching HF. Must be
+        called AFTER the model is constructed, so the tensorbins exist to be recorded."""
+        if state_dict is None:
+            return
+        _mark_weight_cache_complete(
+            self.weight_cache_path(dtype),
+            state_dict,
+            is_moe=bool(getattr(self, "is_mixture_of_experts", False)),
+            **self._weight_cache_identity(components),
+        )
+
+    def placeholder_state_dict(self, dtype):
+        """Warm-cache build: return a lazy, dataless stand-in for the HF state_dict.
+
+        Every weight is served as an uninitialized CPU torch.empty of the shape/dtype recorded
+        in the marker manifest -- no from_pretrained, no weight bytes read from disk, so the
+        prefill host-OOM (#48509) is avoided. ttnn.as_tensor(cache_file_name=...) ignores this
+        placeholder on a cache hit (ttnn/operations/core.py) and loads the real weight from its
+        .tensorbin; the placeholder exists only to satisfy the host-side reshape ops
+        (permute/chunk/cat/transpose) the modules run before calling as_tensor. Guarded by
+        weight_cache_is_complete, so every as_tensor is guaranteed to hit and discard it.
+
+        The mapping is falsy (__bool__ -> False) so reference-building callers that test
+        `if not state_dict` (e.g. test_model_prefill) load real weights explicitly, while
+        modules that index it during construction still work."""
+        import collections.abc
+
+        marker = _wc_marker_path(self.weight_cache_path(dtype), self._weight_cache_build_variant())
+        meta = json.loads(marker.read_text())
+        manifest = meta["weights"]
+        self.is_mixture_of_experts = bool(meta.get("is_moe", False))
+        # Same reasoning as build_cached_state_dict: these are set by load_state_dict from the
+        # checkpoint keys, which the warm path never reads. The manifest has the same keys.
+        self.fuse_qkv = any("qkv" in k for k in manifest)
+        self.fuse_mlp = any("gate_up" in k for k in manifest)
+        if self.is_mixture_of_experts:
+            self.moe = True
+            expert_indices = [int(k[-11]) + 1 for k in manifest if "block_sparse_moe.experts" in k]
+            self.num_experts = max(expert_indices) if expert_indices else self.num_local_experts
+
+        dtype_cache = {}
+
+        def _to_dtype(s):
+            if s not in dtype_cache:
+                dtype_cache[s] = getattr(torch, s.rsplit(".", 1)[-1])
+            return dtype_cache[s]
+
+        class _PlaceholderStateDict(collections.abc.Mapping):
+            is_placeholder = True
+
+            def __init__(self, spec):
+                self._spec = spec  # key -> (shape, dtype_str)
+
+            def __bool__(self):
+                return False
+
+            def __getitem__(self, key):
+                shape, dt = self._spec[key]
+                return torch.empty(tuple(shape), dtype=_to_dtype(dt))
+
+            def __iter__(self):
+                return iter(self._spec)
+
+            def __len__(self):
+                return len(self._spec)
+
+        logger.info(f"Warm ttnn weight cache: built placeholder state_dict for {len(manifest)} weights (no HF load).")
+        return _PlaceholderStateDict(manifest)
+
     def get_model_config(self):
         return self.model_config
 
@@ -3100,7 +3367,7 @@ class ModelArgs:
                 self.CKPT_DIR,
                 torch_dtype="auto",
                 trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true"
+                local_files_only=os.getenv("CI") == "true",
                 # Note that the default setting is torch.dtype.float32, but model weights are
                 # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
@@ -3537,6 +3804,7 @@ class ModelArgs:
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
             "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
+            "LFM2.5-VL-1.6B": "LiquidAI/LFM2.5-VL-1.6B",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -4354,16 +4622,32 @@ class HfModelWrapper:
         position_ids = torch.tensor(
             [list(range(start_pos, start_pos + inputs_embeds.shape[1]))] * inputs_embeds.shape[0]
         )
-        logits, new_cache, hidden_states = self.model.forward(
-            inputs_embeds=inputs_embeds,
-            position_ids=position_ids,
-            use_cache=True,
-            past_key_values=self.past_key_values,
-            return_dict=False,
-            output_hidden_states=True,
-        )
+
+        # In prefill mode the reference must match the TT model, which returns the last decoder
+        # layer's output *before* the final norm. HF's output_hidden_states does not expose that
+        # tensor: the tuple is (embeddings, out_0, ..., out_{N-2}, norm(out_{N-1})), so hidden_states[-2]
+        # is the embeddings for a 1-layer model and the second-to-last layer otherwise. Capture the
+        # input to the final norm via a forward pre-hook to get the true pre-norm last-layer output.
+        captured = {}
+        handle = None
+        if mode != "decode":
+            handle = self.model.model.norm.register_forward_pre_hook(
+                lambda module, args: captured.__setitem__("pre_norm", args[0])
+            )
+        try:
+            logits, new_cache, hidden_states = self.model.forward(
+                inputs_embeds=inputs_embeds,
+                position_ids=position_ids,
+                use_cache=True,
+                past_key_values=self.past_key_values,
+                return_dict=False,
+                output_hidden_states=True,
+            )
+        finally:
+            if handle is not None:
+                handle.remove()
         self.past_key_values = new_cache
-        return logits if mode == "decode" else hidden_states[-2]  # last hidden state is final norm
+        return logits if mode == "decode" else captured["pre_norm"]
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)

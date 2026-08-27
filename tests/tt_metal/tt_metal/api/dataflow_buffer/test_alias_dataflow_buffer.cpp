@@ -24,13 +24,14 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
@@ -87,33 +88,32 @@ struct AliasDFBProgramComponents {
 };
 
 AliasDFBProgramComponents make_alias_dfb_program_spec(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const NodeCoord& node,
     uint32_t entry_size_a,
     uint32_t num_entries_a,
     uint32_t entry_size_b,
     uint32_t num_entries_b,
-    uint8_t  num_producers,
-    uint8_t  num_consumers) {
-
+    uint8_t num_producers,
+    uint8_t num_consumers) {
     const uint32_t epp_a = (num_entries_a + num_producers - 1) / num_producers;
     const uint32_t epp_b = (num_entries_b + num_producers - 1) / num_producers;
     const uint32_t epc_a = (num_entries_a + num_consumers - 1) / num_consumers;
     const uint32_t epc_b = (num_entries_b + num_consumers - 1) / num_consumers;
 
     MeshTensor in_a =
-        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size_a, num_entries_a));
+        MeshTensor::allocate_on_device(mesh_device, make_alias_dram_tensor_spec(entry_size_a, num_entries_a));
     MeshTensor in_b =
-        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b));
+        MeshTensor::allocate_on_device(mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b));
     MeshTensor out_a =
-        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size_a, num_entries_a));
+        MeshTensor::allocate_on_device(mesh_device, make_alias_dram_tensor_spec(entry_size_a, num_entries_a));
     MeshTensor out_b =
-        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b));
+        MeshTensor::allocate_on_device(mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b));
 
     // DM kernel configs (Gen1 + Gen2 variants so the same spec runs everywhere).
     DataMovementHardwareConfig producer_cfg;
     DataMovementHardwareConfig consumer_cfg;
-    if (mesh_device->arch() == ARCH::QUASAR) {
+    if (mesh_device.arch() == ARCH::QUASAR) {
         producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
         consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
@@ -220,22 +220,21 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
 }
 
 void run_alias_dfb_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const NodeCoord& node,
     uint32_t entry_size_a,
     uint32_t num_entries_a,
     uint32_t entry_size_b,
     uint32_t num_entries_b,
-    uint8_t  num_producers = 1,
-    uint8_t  num_consumers = 1) {
-
+    uint8_t num_producers = 1,
+    uint8_t num_consumers = 1) {
     auto [spec, in_a, in_b, out_a, out_b] = make_alias_dfb_program_spec(
         mesh_device, node,
         entry_size_a, num_entries_a,
         entry_size_b, num_entries_b,
         num_producers, num_consumers);
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program = MakeProgramFromSpec(mesh_device, spec);
 
     auto rtas = [&](uint32_t epc_a, uint32_t epc_b) {
         return MakeRuntimeArgsForSingleNode(
@@ -273,20 +272,19 @@ void run_alias_dfb_program(
     auto input_a = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words_a);
     auto input_b = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words_b);
 
-    detail::WriteToBuffer(*in_a.mesh_buffer().get_reference_buffer(), input_a);
-    detail::WriteToBuffer(*in_b.mesh_buffer().get_reference_buffer(), input_b);
+    slow_dispatch::WriteToBuffer(in_a.mesh_buffer(), input_a);
+    slow_dispatch::WriteToBuffer(in_b.mesh_buffer(), input_b);
 
-    if (mesh_device->arch() == ARCH::QUASAR) {
+    if (mesh_device.arch() == ARCH::QUASAR) {
         // TODO #38042: barrier for Quasar DRAM write visibility.
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_a, result_b;
-    detail::ReadFromBuffer(*out_a.mesh_buffer().get_reference_buffer(), result_a);
-    detail::ReadFromBuffer(*out_b.mesh_buffer().get_reference_buffer(), result_b);
+    slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);
+    slow_dispatch::ReadFromBuffer(out_b.mesh_buffer(), result_b);
 
     EXPECT_EQ(result_a, input_a)
         << "Phase A output mismatch: DFB_A data did not round-trip correctly";
@@ -304,27 +302,21 @@ struct AliasBorrowedDFBComponents {
 };
 
 AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const NodeCoord& node,
-    uint32_t entry_size,
-    uint32_t num_entries) {
-
+    distributed::MeshDevice& mesh_device, const NodeCoord& node, uint32_t entry_size, uint32_t num_entries) {
     const uint32_t epp = num_entries;
     const uint32_t epc = num_entries;
 
-    MeshTensor in_a =
-        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
-    MeshTensor in_b =
-        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
+    MeshTensor in_a = MeshTensor::allocate_on_device(mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
+    MeshTensor in_b = MeshTensor::allocate_on_device(mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
     MeshTensor out_a =
-        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
+        MeshTensor::allocate_on_device(mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
     MeshTensor out_b =
-        MeshTensor::allocate_on_device(*mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
-    MeshTensor ring = MeshTensor::allocate_on_device(*mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries));
+        MeshTensor::allocate_on_device(mesh_device, make_alias_dram_tensor_spec(entry_size, num_entries));
+    MeshTensor ring = MeshTensor::allocate_on_device(mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries));
 
     DataMovementHardwareConfig producer_cfg;
     DataMovementHardwareConfig consumer_cfg;
-    if (mesh_device->arch() == ARCH::QUASAR) {
+    if (mesh_device.arch() == ARCH::QUASAR) {
         producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
         consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
@@ -437,18 +429,17 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     return {std::move(spec), std::move(in_a), std::move(in_b), std::move(out_a), std::move(out_b), std::move(ring)};
 }
 
-TEST_F(MeshDeviceFixture, AliasDFBAddressEquality1Sx1S) {
+TEST_F(UnitMeshFixture, AliasDFBAddressEquality1Sx1S) {
     const NodeCoord node{0, 0};
 
-    [[maybe_unused]] auto [spec, in_a, in_b, out_a, out_b] = make_alias_dfb_program_spec(
-        devices_.at(0), node, 512, 8, 256, 16, 1, 1);
+    [[maybe_unused]] auto [spec, in_a, in_b, out_a, out_b] =
+        make_alias_dfb_program_spec(this->device(), node, 512, 8, 256, 16, 1, 1);
 
-    Program program = MakeProgramFromSpec(*devices_.at(0), spec);
+    Program program = MakeProgramFromSpec(this->device(), spec);
 
-    IDevice* device = devices_.at(0)->get_devices()[0];
-    detail::CompileProgram(device, program);
+    program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(device);
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     const uint32_t id_a = program.impl().get_dfb_handle("dfb_a");
     const uint32_t id_b = program.impl().get_dfb_handle("dfb_b");
@@ -464,19 +455,20 @@ TEST_F(MeshDeviceFixture, AliasDFBAddressEquality1Sx1S) {
         addr_a, addr_b);
 }
 
-TEST_F(MeshDeviceFixture, AliasDFBDataFlow1Sx1S) {
+TEST_F(UnitMeshFixture, AliasDFBDataFlow1Sx1S) {
     run_alias_dfb_program(
-        devices_.at(0), NodeCoord{0, 0},
-        /*entry_size_a=*/512, /*num_entries_a=*/8,
-        /*entry_size_b=*/256, /*num_entries_b=*/16);
+        this->device(),
+        NodeCoord{0, 0},
+        /*entry_size_a=*/512,
+        /*num_entries_a=*/8,
+        /*entry_size_b=*/256,
+        /*num_entries_b=*/16);
 }
 
 // Two WorkUnits on disjoint halves, each with its own aliased DFB pair. Slot packing must reuse
 // low slots across halves on WH/BH, and each half's alias pair must still share L1 and round-trip.
-TEST_F(MeshDeviceFixture, AliasDFBDisjointHalvesDataFlow) {
-    auto& mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
-    if (device->compute_with_storage_grid_size().x < 2) {
+TEST_F(UnitMeshFixture, AliasDFBDisjointHalvesDataFlow) {
+    if (this->device().compute_with_storage_grid_size().x < 2) {
         GTEST_SKIP() << "Needs at least two worker nodes in a row";
     }
 
@@ -488,9 +480,9 @@ TEST_F(MeshDeviceFixture, AliasDFBDisjointHalvesDataFlow) {
     constexpr uint32_t kEntriesB = 16;
 
     auto left = make_alias_dfb_program_spec(
-        mesh_device, node_a, kEntryA, kEntriesA, kEntryB, kEntriesB, /*num_producers=*/1, /*num_consumers=*/1);
+        this->device(), node_a, kEntryA, kEntriesA, kEntryB, kEntriesB, /*num_producers=*/1, /*num_consumers=*/1);
     auto right = make_alias_dfb_program_spec(
-        mesh_device, node_b, kEntryA, kEntriesA, kEntryB, kEntriesB, /*num_producers=*/1, /*num_consumers=*/1);
+        this->device(), node_b, kEntryA, kEntriesA, kEntryB, kEntriesB, /*num_producers=*/1, /*num_consumers=*/1);
 
     // Rename right-half entities so the combined ProgramSpec has unique ids.
     auto rename_dfb = [](DataflowBufferSpec& dfb, const std::string& new_name, const std::string& alias_name) {
@@ -568,9 +560,9 @@ TEST_F(MeshDeviceFixture, AliasDFBDisjointHalvesDataFlow) {
     left.spec.work_units.push_back(right.spec.work_units[0]);
 
     // Point tensor_parameters specs at the right-half MeshTensors' layouts (already set from right).
-    Program program = MakeProgramFromSpec(*mesh_device, left.spec);
+    Program program = MakeProgramFromSpec(this->device(), left.spec);
 
-    const bool is_quasar = device->arch() == ARCH::QUASAR;
+    const bool is_quasar = this->device().arch() == ARCH::QUASAR;
     // Each half has two aliased DFBs that conflict with each other → slots 0 and 1, reused across halves.
     EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"))->device_slot, 0u);
     EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"))->device_slot, 1u);
@@ -614,21 +606,21 @@ TEST_F(MeshDeviceFixture, AliasDFBDisjointHalvesDataFlow) {
     auto input_ra = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words_a);
     auto input_rb = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words_b);
 
-    detail::WriteToBuffer(*left.in_a.mesh_buffer().get_reference_buffer(), input_la);
-    detail::WriteToBuffer(*left.in_b.mesh_buffer().get_reference_buffer(), input_lb);
-    detail::WriteToBuffer(*right.in_a.mesh_buffer().get_reference_buffer(), input_ra);
-    detail::WriteToBuffer(*right.in_b.mesh_buffer().get_reference_buffer(), input_rb);
+    slow_dispatch::WriteToBuffer(left.in_a.mesh_buffer(), input_la);
+    slow_dispatch::WriteToBuffer(left.in_b.mesh_buffer(), input_lb);
+    slow_dispatch::WriteToBuffer(right.in_a.mesh_buffer(), input_ra);
+    slow_dispatch::WriteToBuffer(right.in_b.mesh_buffer(), input_rb);
     if (is_quasar) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> out_la, out_lb, out_ra, out_rb;
-    detail::ReadFromBuffer(*left.out_a.mesh_buffer().get_reference_buffer(), out_la);
-    detail::ReadFromBuffer(*left.out_b.mesh_buffer().get_reference_buffer(), out_lb);
-    detail::ReadFromBuffer(*right.out_a.mesh_buffer().get_reference_buffer(), out_ra);
-    detail::ReadFromBuffer(*right.out_b.mesh_buffer().get_reference_buffer(), out_rb);
+    slow_dispatch::ReadFromBuffer(left.out_a.mesh_buffer(), out_la);
+    slow_dispatch::ReadFromBuffer(left.out_b.mesh_buffer(), out_lb);
+    slow_dispatch::ReadFromBuffer(right.out_a.mesh_buffer(), out_ra);
+    slow_dispatch::ReadFromBuffer(right.out_b.mesh_buffer(), out_rb);
 
     EXPECT_EQ(out_la, input_la) << "left half DFB_A round-trip mismatch";
     EXPECT_EQ(out_lb, input_lb) << "left half DFB_B (alias) round-trip mismatch";
@@ -636,30 +628,37 @@ TEST_F(MeshDeviceFixture, AliasDFBDisjointHalvesDataFlow) {
     EXPECT_EQ(out_rb, input_rb) << "right half DFB_D (alias) round-trip mismatch";
 }
 
-TEST_F(MeshDeviceFixture, AliasDFBDataFlow2Sx4S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, AliasDFBDataFlow2Sx4S) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Multi-producer DFB requires Quasar TC hardware";
     }
     run_alias_dfb_program(
-        devices_.at(0), NodeCoord{0, 0},
-        /*entry_size_a=*/512, /*num_entries_a=*/8,
-        /*entry_size_b=*/256, /*num_entries_b=*/16,
-        /*num_producers=*/2, /*num_consumers=*/4);
+        this->device(),
+        NodeCoord{0, 0},
+        /*entry_size_a=*/512,
+        /*num_entries_a=*/8,
+        /*entry_size_b=*/256,
+        /*num_entries_b=*/16,
+        /*num_producers=*/2,
+        /*num_consumers=*/4);
 }
 
-TEST_F(MeshDeviceFixture, AliasDFBDataFlow4Sx2S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, AliasDFBDataFlow4Sx2S) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Multi-producer DFB requires Quasar TC hardware";
     }
     run_alias_dfb_program(
-        devices_.at(0), NodeCoord{0, 0},
-        /*entry_size_a=*/512, /*num_entries_a=*/8,
-        /*entry_size_b=*/256, /*num_entries_b=*/16,
-        /*num_producers=*/4, /*num_consumers=*/2);
+        this->device(),
+        NodeCoord{0, 0},
+        /*entry_size_a=*/512,
+        /*num_entries_a=*/8,
+        /*entry_size_b=*/256,
+        /*num_entries_b=*/16,
+        /*num_producers=*/4,
+        /*num_consumers=*/2);
 }
 
-TEST_F(MeshDeviceFixture, AliasDFBAllocSecondarySkipped) {
-    IDevice* device = devices_.at(0)->get_devices()[0];
+TEST_F(UnitMeshFixture, AliasDFBAllocSecondarySkipped) {
     const CoreCoord core{0, 0};
 
     const auto cfg_a = make_1sx1s_config(512, 8);
@@ -673,7 +672,7 @@ TEST_F(MeshDeviceFixture, AliasDFBAllocSecondarySkipped) {
 
     program.impl().set_dfb_alias(id_a, id_b);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(device);
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     const uint32_t addr_a = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
     const uint32_t addr_b = program.impl().get_dataflow_buffer(id_b)->uniform_alloc_addr();
@@ -689,8 +688,7 @@ TEST_F(MeshDeviceFixture, AliasDFBAllocSecondarySkipped) {
         << "Allocator double-counted the secondary: addr_c is too far";
 }
 
-TEST_F(MeshDeviceFixture, AliasDFBAlloc3Way) {
-    IDevice* device = devices_.at(0)->get_devices()[0];
+TEST_F(UnitMeshFixture, AliasDFBAlloc3Way) {
     const CoreCoord core{0, 0};
 
     const auto cfg_a = make_1sx1s_config(512,  8);
@@ -705,7 +703,7 @@ TEST_F(MeshDeviceFixture, AliasDFBAlloc3Way) {
     program.impl().set_dfb_alias(id_a, id_b);
     program.impl().set_dfb_alias(id_a, id_c);
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(device);
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     const uint32_t addr_a = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
     const uint32_t addr_b = program.impl().get_dataflow_buffer(id_b)->uniform_alloc_addr();
@@ -720,8 +718,7 @@ TEST_F(MeshDeviceFixture, AliasDFBAlloc3Way) {
         addr_a, addr_b, addr_c);
 }
 
-TEST_F(MeshDeviceFixture, AliasDFBAgreedGroupResize) {
-    IDevice* device = devices_.at(0)->get_devices()[0];
+TEST_F(UnitMeshFixture, AliasDFBAgreedGroupResize) {
     const CoreCoord core{0, 0};
 
     // Two aliased DFBs starting at equal total size (4096 B), plus a trailing non-aliased DFB to
@@ -737,7 +734,7 @@ TEST_F(MeshDeviceFixture, AliasDFBAgreedGroupResize) {
     program.impl().set_dfb_alias(id_a, id_b);
 
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(device);
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     const uint32_t addr_a0 = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
     EXPECT_EQ(addr_a0, program.impl().get_dataflow_buffer(id_b)->uniform_alloc_addr())
@@ -751,7 +748,7 @@ TEST_F(MeshDeviceFixture, AliasDFBAgreedGroupResize) {
         {.dfb_id = id_b, .entry_size = 1024u, .num_entries = 8u},  // 8192
     };
     EXPECT_NO_THROW(program.impl().apply_dfb_size_overrides(overrides));
-    program.impl().allocate_dataflow_buffers(device);
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     auto dfb_a = program.impl().get_dataflow_buffer(id_a);
     auto dfb_b = program.impl().get_dataflow_buffer(id_b);
@@ -764,20 +761,19 @@ TEST_F(MeshDeviceFixture, AliasDFBAgreedGroupResize) {
         << "Trailing DFB_C must follow the resized (8192 B) alias group footprint";
 }
 
-TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
+TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryAddressEquality) {
     const NodeCoord node{0, 0};
     constexpr uint32_t kEntrySize   = 512;
     constexpr uint32_t kNumEntries  = 8;
 
-    auto [spec, in_a, in_b, out_a, out_b, ring] = make_alias_borrowed_dfb_program_spec(
-        devices_.at(0), node, kEntrySize, kNumEntries);
+    auto [spec, in_a, in_b, out_a, out_b, ring] =
+        make_alias_borrowed_dfb_program_spec(this->device(), node, kEntrySize, kNumEntries);
 
-    Program program = MakeProgramFromSpec(*devices_.at(0), spec);
+    Program program = MakeProgramFromSpec(this->device(), spec);
 
-    IDevice* device = devices_.at(0)->get_devices()[0];
-    detail::CompileProgram(device, program);
+    program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(device);
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     auto rtas = [&]() {
         return MakeRuntimeArgsForSingleNode(
@@ -814,8 +810,7 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
 
     const uint32_t addr_borrowed = program.impl().get_dataflow_buffer(id_borrowed)->uniform_alloc_addr();
     const uint32_t addr_alias    = program.impl().get_dataflow_buffer(id_alias)->uniform_alloc_addr();
-    const uint32_t ring_addr     =
-        static_cast<uint32_t>(ring.mesh_buffer().get_reference_buffer()->address());
+    const uint32_t ring_addr = static_cast<uint32_t>(ring.mesh_buffer().address());
 
     EXPECT_EQ(addr_borrowed, ring_addr)
         << "dfb_borrowed must resolve to the ring tensor's L1 address";
@@ -828,15 +823,15 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
         addr_borrowed, addr_alias, ring_addr);
 }
 
-TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
+TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
     const NodeCoord node{0, 0};
     constexpr uint32_t kEntrySize  = 512;
     constexpr uint32_t kNumEntries = 8;
 
-    auto [spec, in_a, in_b, out_a, out_b, ring] = make_alias_borrowed_dfb_program_spec(
-        devices_.at(0), node, kEntrySize, kNumEntries);
+    auto [spec, in_a, in_b, out_a, out_b, ring] =
+        make_alias_borrowed_dfb_program_spec(this->device(), node, kEntrySize, kNumEntries);
 
-    Program program = MakeProgramFromSpec(*devices_.at(0), spec);
+    Program program = MakeProgramFromSpec(this->device(), spec);
 
     auto rtas = [&]() {
         return MakeRuntimeArgsForSingleNode(
@@ -872,19 +867,18 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
     auto input_a = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words);
     auto input_b = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words);
 
-    detail::WriteToBuffer(*in_a.mesh_buffer().get_reference_buffer(), input_a);
-    detail::WriteToBuffer(*in_b.mesh_buffer().get_reference_buffer(), input_b);
+    slow_dispatch::WriteToBuffer(in_a.mesh_buffer(), input_a);
+    slow_dispatch::WriteToBuffer(in_b.mesh_buffer(), input_b);
 
-    if (devices_.at(0)->arch() == ARCH::QUASAR) {
+    if (this->device().arch() == ARCH::QUASAR) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    IDevice* device = devices_.at(0)->get_devices()[0];
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_a, result_b;
-    detail::ReadFromBuffer(*out_a.mesh_buffer().get_reference_buffer(), result_a);
-    detail::ReadFromBuffer(*out_b.mesh_buffer().get_reference_buffer(), result_b);
+    slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);
+    slow_dispatch::ReadFromBuffer(out_b.mesh_buffer(), result_b);
 
     EXPECT_EQ(result_a, input_a)
         << "Phase A (dfb_borrowed) data did not round-trip correctly";

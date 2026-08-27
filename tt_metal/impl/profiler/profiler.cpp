@@ -20,6 +20,7 @@
 #include <stack>
 #include <tracy/TracyTTDevice.hpp>
 #include <tt_metal.hpp>
+#include "tt_metal_profiler.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -122,6 +123,8 @@ NOCDebugEvent make_noc_debug_event(
     int8_t src_x = static_cast<int8_t>(src_core.x);
     int8_t src_y = static_cast<int8_t>(src_core.y);
     switch (event.noc_xfer_type) {
+        case EMD::NocEventType::READ_WITH_STATE: [[fallthrough]];
+        case EMD::NocEventType::READ_WITH_STATE_AND_TRID: [[fallthrough]];
         case EMD::NocEventType::READ:
             return NOCDebugEvent(NocReadEvent{
                 trailer.getDstAddr(),
@@ -134,6 +137,9 @@ NOCDebugEvent make_noc_debug_event(
                 src_y,
                 event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::WRITE_: [[fallthrough]];
+        case EMD::NocEventType::WRITE_WITH_TRID: [[fallthrough]];
+        case EMD::NocEventType::WRITE_WITH_STATE: [[fallthrough]];
+        case EMD::NocEventType::WRITE_WITH_TRID_WITH_STATE: [[fallthrough]];
         case EMD::NocEventType::WRITE_MULTICAST: [[fallthrough]];
         case EMD::NocEventType::SEMAPHORE_SET_MULTICAST: [[fallthrough]];
         case EMD::NocEventType::SEMAPHORE_SET_REMOTE: {
@@ -141,6 +147,13 @@ NOCDebugEvent make_noc_debug_event(
                                 event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_REMOTE;
             bool is_mcast = event.noc_xfer_type == EMD::NocEventType::WRITE_MULTICAST ||
                             event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_MULTICAST;
+            // Stateful writes program their destination core in an earlier WRITE_SET_STATE / WRITE_WITH_TRID_SET_STATE
+            // call, so the dst_x/dst_y recorded on this event are the placeholder (0,0), not a real destination. Flag
+            // that so the write-to-locked check resolves the real destination core (and size) from the tracked write
+            // state (see NOCDebugState::handle_write_set_state_event) instead of these placeholder fields. The
+            // destination address itself is real here -- the with-state call records dst_local_l1_addr.
+            bool has_valid_dst = event.noc_xfer_type != EMD::NocEventType::WRITE_WITH_STATE &&
+                                 event.noc_xfer_type != EMD::NocEventType::WRITE_WITH_TRID_WITH_STATE;
             return NOCDebugEvent(NocWriteEvent{
                 trailer.getSrcAddr(),
                 trailer.getDstAddr(),
@@ -155,17 +168,94 @@ NOCDebugEvent make_noc_debug_event(
                 is_semaphore,
                 is_mcast,
                 event.mcast_end_dst_x,
-                event.mcast_end_dst_y});
+                event.mcast_end_dst_y,
+                /*has_source_buffer=*/true,
+                has_valid_dst});
         }
-        case EMD::NocEventType::READ_BARRIER_END:
+        case EMD::NocEventType::WRITE_INLINE:
+            // An inline dword write: a small write whose value is an immediate register, so it carries no L1
+            // source buffer. Modeled as a write (tracked for the unflushed-at-end and write-to-locked checks and
+            // released by a write barrier) but with has_source_buffer=false so the source-reuse and
+            // counter-monotonicity checks are skipped (there is no source data, and no usable counter snapshot).
+            return NOCDebugEvent(NocWriteEvent{
+                trailer.getSrcAddr(),
+                trailer.getDstAddr(),
+                event.getNumBytes(),
+                static_cast<uint32_t>(trailer.counter_value),
+                src_x,
+                src_y,
+                event.dst_x,
+                event.dst_y,
+                static_cast<bool>(event.posted),
+                event.noc_type == EMD::NocType::NOC_1,
+                /*is_semaphore=*/false,
+                /*is_mcast=*/false,
+                event.mcast_end_dst_x,
+                event.mcast_end_dst_y,
+                /*has_source_buffer=*/false,
+                /*has_valid_dst=*/true});
+        case EMD::NocEventType::WRITE_SET_STATE: [[fallthrough]];
+        case EMD::NocEventType::WRITE_WITH_TRID_SET_STATE:
+            // A stateful-write set-state: it programs the destination core (and, for the non-trid variant, the size)
+            // that later WRITE_WITH_STATE / WRITE_WITH_TRID_WITH_STATE writes reuse. Those writes record their own
+            // destination core as a placeholder, so the host tracks this event and resolves the real destination from
+            // it (see handle_write_set_state_event). num_bytes is the programmed size for WRITE_SET_STATE and 0 for
+            // the trid variant (whose size arrives at the with-state call). Stateful writes are unicast.
+            return NOCDebugEvent(NocWriteSetStateEvent{
+                trailer.getDstAddr(),
+                event.getNumBytes(),
+                src_x,
+                src_y,
+                event.dst_x,
+                event.dst_y,
+                /*is_mcast=*/false,
+                event.mcast_end_dst_x,
+                event.mcast_end_dst_y,
+                static_cast<uint8_t>(event.noc_type == EMD::NocType::NOC_1)});
+        case EMD::NocEventType::READ_BARRIER_END: [[fallthrough]];
+        case EMD::NocEventType::READ_BARRIER_WITH_TRID:
+            // READ_BARRIER_WITH_TRID is folded in with READ_BARRIER_END: a future per-trid model could treat it
+            // differently, but for now the debug model tracks reads by address, not trid, so a trid read barrier is
+            // treated as a full read barrier (may under-report a same-address read racing across different trids,
+            // but never false-positives).
             return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::WRITE_BARRIER_END: [[fallthrough]];
+        case EMD::NocEventType::WRITE_BARRIER_END:
+            // A regular write barrier waits for outstanding non-posted writes only.
+            TT_ASSERT(!event.posted);
+            return NOCDebugEvent(
+                NocWriteFlushEvent{src_x, src_y, /*posted=*/false, event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::WRITE_FLUSH:
-            // This event is only being emitted from noc_async_writes_flushed which is non posted
-            // event.posted should always be false; if true, data was corrupted during read
+            // A write flush: non-posted (noc_async_writes_flushed) clears the non-posted pending set; posted
+            // (noc_async_posted_writes_flushed) clears the posted pending set. The posted flag selects which.
+            return NOCDebugEvent(NocWriteFlushEvent{
+                src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::WRITE_FLUSH_WITH_TRID: [[fallthrough]];
+        case EMD::NocEventType::WRITE_BARRIER_WITH_TRID:
             TT_ASSERT(!event.posted);
             return NOCDebugEvent(NocWriteFlushEvent{
                 src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::FULL_BARRIER:
+            return NOCDebugEvent(NocFullBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::SEMAPHORE_INC: [[fallthrough]];
+        case EMD::NocEventType::SEMAPHORE_INC_MULTICAST: {
+            // A remote atomic increment (unicast or multicast). It has no source buffer (immediate increment value)
+            // and does not advance the NIU write counter, so it is modeled distinctly from a write. For the
+            // multicast variant dst_x/dst_y are the rectangle start and mcast_end_dst_x/y the end.
+            bool is_mcast = event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_INC_MULTICAST;
+            return NOCDebugEvent(NocSemaphoreIncEvent{
+                trailer.getDstAddr(),
+                src_x,
+                src_y,
+                event.dst_x,
+                event.dst_y,
+                static_cast<bool>(event.posted),
+                event.noc_type == EMD::NocType::NOC_1,
+                is_mcast,
+                event.mcast_end_dst_x,
+                event.mcast_end_dst_y});
+        }
+        case EMD::NocEventType::ATOMIC_BARRIER:
+            return NOCDebugEvent(NocAtomicBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
         default: return NOCDebugEvent(UnknownNocEvent{});
     }
 }
@@ -867,8 +957,14 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     // handle dst coordinates correctly for different NocEventType
                     if (local_noc_event.dst_x == -1 || local_noc_event.dst_y == -1 ||
                         local_noc_event.noc_xfer_type == EMD::NocEventType::READ_WITH_STATE ||
-                        local_noc_event.noc_xfer_type == EMD::NocEventType::WRITE_WITH_STATE) {
-                        // DO NOT emit destination coord; it isn't meaningful
+                        local_noc_event.noc_xfer_type == EMD::NocEventType::READ_WITH_STATE_AND_TRID ||
+                        local_noc_event.noc_xfer_type == EMD::NocEventType::WRITE_WITH_STATE ||
+                        local_noc_event.noc_xfer_type == EMD::NocEventType::WRITE_WITH_TRID_WITH_STATE) {
+                        // DO NOT emit destination coord; it isn't meaningful. A with-state transfer only carries the
+                        // low address word (the hardware keeps the destination coordinates in the command buffer
+                        // programmed by the earlier set-state), so dst_x/dst_y here are the placeholder (0,0) and
+                        // translating them would report core (0,0) as the destination. The trid variants were
+                        // previously missing from this list and emitted exactly that bogus coordinate.
 
                     } else if (local_noc_event.noc_xfer_type == EMD::NocEventType::WRITE_MULTICAST) {
                         auto phys_start_coord = translateNocCoordinatesToNoc0(
@@ -1974,6 +2070,7 @@ void DeviceProfiler::readTsData16BMarkerData(
     ZoneScoped;
 
     nlohmann::json meta_data;
+    [[maybe_unused]] std::optional<NOCDebugEvent> noc_debug_event;
 #if defined(TRACY_ENABLE)
     if ((timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK) == kernel_profiler::NOC_TRACING_STATIC_ID) {
         using EMD = KernelProfilerNocEventMetadata;
@@ -2010,11 +2107,8 @@ void DeviceProfiler::readTsData16BMarkerData(
             const CoreCoord virtual_core =
                 soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED);
             // NOLINTEND
-            noc_debug_state->push_event(
-                device_id,
-                timestamp,
-                get_processor_id(risc_type),
-                make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer()));
+            noc_debug_event =
+                make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer());
         }
     }
 #endif
@@ -2046,6 +2140,19 @@ void DeviceProfiler::readTsData16BMarkerData(
     if (!new_marker_inserted) {
         return;
     }
+
+#if defined(TRACY_ENABLE)
+    // Emit the NOC-debug event exactly once per genuine device event. The profiler re-parses undrained profiler
+    // buffers many times per run (periodic debug-dump polls + force reads + the Tracy marker pass); the persistent
+    // marker set (device_markers_per_core_risc_map) deduplicates those re-reads, so pushing only when the marker was
+    // newly inserted guarantees each event reaches the NOCDebugState once. This mirrors how readDeviceMarkerData
+    // handles scoped-lock events (its push sits after the same new_marker_inserted early-out).
+    if (noc_debug_event.has_value()) {
+        MetalContext::instance(context_id)
+            .noc_debug_state()
+            ->push_event(device_id, timestamp, get_processor_id(risc_type), *noc_debug_event);
+    }
+#endif
 
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
@@ -2861,7 +2968,16 @@ void DeviceProfiler::pollDebugDumpResults(
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
                 if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
                     (is_eth && risc_type != tracy::RiscType::ERISC) ||
-                    (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                    (!is_eth && risc_type == tracy::RiscType::ERISC) ||
+                    // WH/BH and Quasar RiscTypes occupy disjoint enum ranges, and the Quasar DRAM profiler
+                    // buffer is unsupported for now.
+                    (static_cast<uint8_t>(risc_type) >= static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) &&
+                     static_cast<uint8_t>(risc_type) <= static_cast<uint8_t>(tracy::RiscType::QUASAR_NEO3_TRISC3))) {
+                    continue;
+                }
+
+                // TODO: Intentionally skipping Quasar for now.
+                if (risc_type > tracy::RiscType::NONE) {
                     continue;
                 }
 
@@ -2985,7 +3101,16 @@ void DeviceProfiler::pollDebugDumpResults(
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
                 if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
                     (is_eth && risc_type != tracy::RiscType::ERISC) ||
-                    (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                    (!is_eth && risc_type == tracy::RiscType::ERISC) ||
+                    // WH/BH and Quasar RiscTypes occupy disjoint enum ranges, and the Quasar DRAM profiler
+                    // buffer is unsupported for now.
+                    (static_cast<uint8_t>(risc_type) >= static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) &&
+                     static_cast<uint8_t>(risc_type) <= static_cast<uint8_t>(tracy::RiscType::QUASAR_NEO3_TRISC3))) {
+                    continue;
+                }
+
+                // TODO: Intentionally skipping Quasar for now.
+                if (risc_type > tracy::RiscType::NONE) {
                     continue;
                 }
 

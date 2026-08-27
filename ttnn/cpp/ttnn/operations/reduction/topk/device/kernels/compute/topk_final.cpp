@@ -89,6 +89,14 @@ void kernel_main() {
         // The reader kernel manages input_cb_index/index_cb_index, while compute
         // operations require separate staging buffers for in-place bitonic operations.
 
+        // Re-establish datacopy unpack state for the values gather. At ht==0
+        // init_sfpu covers this, but at ht>=1 the state left by the previous
+        // iteration's transpose_and_pack(index_transposed...) is TRANSPOSE
+        // mode with the INDEX (UInt16/UInt32) SRCA format; the bare copy_tile
+        // below would unpack the bf16 gathered values as garbage (silicon:
+        // fabricated ~1e38 values in every ht>=1 row).
+        reconfig_data_format_srca(input_dfb_index);
+        copy_tile_to_dst_init_short_with_dt(index_transposed_dfb_index, input_dfb_index);
         pack_reconfig_data_format(input_transposed_dfb_index);
         // Copy all received value tiles from local cores to transposed staging buffer
         for (uint32_t wt = 0; wt < Wt; wt++) {
