@@ -9,6 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/set.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
@@ -237,12 +238,15 @@ void bind_pipeline_builder(nb::module_& mod) {
         "resolve_graph_layout",
         [](const std::vector<tt::tt_fabric::EdgeInputTuple>& edges,
            const std::vector<std::vector<tt::tt_fabric::ChipTuple>>& submesh_chips,
-           const std::map<std::string, uint32_t>& node_chip_counts) -> tt::tt_fabric::GraphLayoutResult {
-            return tt::tt_fabric::resolve_graph_layout(edges, submesh_chips, node_chip_counts);
+           const std::map<std::string, uint32_t>& node_chip_counts,
+           const std::set<std::string>& nodes_requiring_distinct_endpoints) -> tt::tt_fabric::GraphLayoutResult {
+            return tt::tt_fabric::resolve_graph_layout(
+                edges, submesh_chips, node_chip_counts, nodes_requiring_distinct_endpoints);
         },
         nb::arg("edges"),
         nb::arg("submesh_chips"),
         nb::arg("node_chip_counts") = std::map<std::string, uint32_t>{},
+        nb::arg("nodes_requiring_distinct_endpoints") = std::set<std::string>{},
         R"(
             Auto-discover the physical layout of a pipeline graph.
 
@@ -262,6 +266,10 @@ void bind_pipeline_builder(nb::module_& mod) {
                                so e.g. a 4x2 stage cannot land on a 1x2 submesh. Nodes
                                absent from the map are unconstrained; an empty map (default)
                                disables the shape filter.
+                nodes_requiring_distinct_endpoints: Optional set of multi-chip node names
+                               whose incoming and outgoing links must use different local
+                               chips. The constraint is solved together with submesh and
+                               physical-link placement.
 
             Returns:
                 GraphLayoutResult with physical coords for every edge and the H2D/D2H

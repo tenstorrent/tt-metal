@@ -59,31 +59,17 @@ struct InternalChip {
     uint32_t row, col;
 };
 
-// Physical direct-link info between a pair of submeshes.
-// All valid ethernet link pairs are collected so that deconfliction can
-// pick an alternative when the first-found pair causes entry == exit on
-// the same chip for a forwarding stage.
+// Physical direct-link info between a pair of submeshes. All real links are
+// retained so endpoint capabilities can participate in global assignment.
 struct ConnectionInfo {
-    struct LinkPair {
-        uint32_t exit_row, exit_col;    // chip in submesh i that sends toward j
-        uint32_t entry_row, entry_col;  // chip in submesh j that receives from i
-    };
-    std::vector<LinkPair> links;  // all valid direct ethernet links, first = primary
-
-    // Convenience: whether any link exists (replaces old has-value check).
-    bool empty() const { return links.empty(); }
-
-    // Primary link coords (backward-compatible accessors).
-    uint32_t exit_row() const { return links[0].exit_row; }
-    uint32_t exit_col() const { return links[0].exit_col; }
-    uint32_t entry_row() const { return links[0].entry_row; }
-    uint32_t entry_col() const { return links[0].entry_col; }
+    std::vector<PipelineEndpointLink> links;  // all valid direct ethernet links, first = primary
 };
 
 using ConnectionKey = std::pair<size_t, size_t>;  // (submesh_i, submesh_j)
+using EdgeLinkAssignment = std::vector<PipelineEndpointLink>;
 
 /// Discover all direct ethernet links between every ordered pair of submeshes.
-/// All valid link pairs are collected (not just the first) to enable deconfliction.
+/// All valid link pairs are collected (not just the first) for constrained assignment.
 std::map<ConnectionKey, ConnectionInfo> discover_connections(const std::vector<std::vector<InternalChip>>& chips) {
     std::map<ConnectionKey, ConnectionInfo> connections;
     size_t n = chips.size();
@@ -115,6 +101,32 @@ std::map<ConnectionKey, ConnectionInfo> discover_connections(const std::vector<s
         }
     }
     return connections;
+}
+
+/// Select one real physical link for every graph edge while enforcing endpoint
+/// capabilities. The edge order and each ConnectionInfo::links order are stable,
+/// making the first satisfying assignment deterministic.
+std::optional<EdgeLinkAssignment> assign_edge_links(
+    const std::vector<EdgeInputTuple>& edges,
+    const std::map<std::string, size_t>& node_to_sub,
+    const std::map<ConnectionKey, ConnectionInfo>& connections,
+    const std::vector<std::vector<InternalChip>>& chips,
+    const std::set<std::string>& nodes_requiring_distinct_endpoints) {
+    std::vector<std::vector<PipelineEndpointLink>> edge_candidates;
+    edge_candidates.reserve(edges.size());
+    for (const auto& [src, dst, _] : edges) {
+        auto connection_it = connections.find({node_to_sub.at(src), node_to_sub.at(dst)});
+        if (connection_it == connections.end()) {
+            return std::nullopt;
+        }
+        edge_candidates.push_back(connection_it->second.links);
+    }
+    std::map<std::string, uint32_t> assigned_node_chip_counts;
+    for (const auto& [node, submesh_idx] : node_to_sub) {
+        assigned_node_chip_counts[node] = static_cast<uint32_t>(chips[submesh_idx].size());
+    }
+    return select_pipeline_endpoint_links(
+        edges, edge_candidates, assigned_node_chip_counts, nodes_requiring_distinct_endpoints);
 }
 
 /// Kahn's topological sort on non-loopback edges. Returns node names in stage order.
@@ -164,7 +176,8 @@ std::map<std::string, size_t> assign_submeshes(
     const std::map<ConnectionKey, ConnectionInfo>& connections,
     size_t num_submeshes,
     const std::map<std::string, uint32_t>& node_chip_counts,
-    const std::vector<std::vector<InternalChip>>& chips) {
+    const std::vector<std::vector<InternalChip>>& chips,
+    const std::set<std::string>& nodes_requiring_distinct_endpoints) {
     // Build reverse-lookup: dst -> [src] for non-loopback edges
     std::map<std::string, std::vector<std::string>> parents;
     for (const auto& [src, dst, is_lb] : edges) {
@@ -189,7 +202,8 @@ std::map<std::string, size_t> assign_submeshes(
                     return false;
                 }
             }
-            return true;
+            return assign_edge_links(edges, node_to_sub, connections, chips, nodes_requiring_distinct_endpoints)
+                .has_value();
         }
         const auto& node = stage_order[idx];
 
@@ -259,20 +273,100 @@ std::map<std::string, size_t> assign_submeshes(
     };
 
     if (!solve(0)) {
-        throw std::runtime_error(
-            "resolve_graph_layout: no valid submesh assignment found — "
-            "physical connectivity (and per-node shape, if constrained) does not "
-            "match the graph topology");
+        std::string message =
+            "resolve_graph_layout: no valid submesh and physical-link assignment found — "
+            "physical connectivity and per-node shape do not match the graph topology";
+        if (!nodes_requiring_distinct_endpoints.empty()) {
+            message +=
+                ", or no topology-valid assignment gives distinct ingress/egress chips for required "
+                "multi-chip stages [";
+            bool first = true;
+            for (const auto& node : nodes_requiring_distinct_endpoints) {
+                message += (first ? "" : ", ") + node;
+                first = false;
+            }
+            message +=
+                "]. Check stage orientation, submesh ordering, and whether each constrained turn has a second "
+                "physical boundary link";
+        }
+        throw std::runtime_error(message);
     }
     return node_to_sub;
 }
 
 }  // anonymous namespace
 
+std::optional<std::vector<PipelineEndpointLink>> select_pipeline_endpoint_links(
+    const std::vector<EdgeInputTuple>& edges,
+    const std::vector<std::vector<PipelineEndpointLink>>& edge_candidates,
+    const std::map<std::string, uint32_t>& assigned_node_chip_counts,
+    const std::set<std::string>& nodes_requiring_distinct_endpoints) {
+    if (edges.size() != edge_candidates.size()) {
+        throw std::invalid_argument("select_pipeline_endpoint_links: each edge must have one candidate list");
+    }
+
+    std::map<std::string, std::vector<size_t>> incoming_edges;
+    std::map<std::string, std::vector<size_t>> outgoing_edges;
+    for (size_t edge_idx = 0; edge_idx < edges.size(); ++edge_idx) {
+        const auto& [src, dst, is_loopback] = edges[edge_idx];
+        if (!is_loopback) {
+            incoming_edges[dst].push_back(edge_idx);
+        }
+        outgoing_edges[src].push_back(edge_idx);
+    }
+
+    auto endpoints_are_valid = [&](const std::vector<PipelineEndpointLink>& assignment, size_t assigned_count) {
+        for (const auto& node : nodes_requiring_distinct_endpoints) {
+            auto count_it = assigned_node_chip_counts.find(node);
+            if (count_it == assigned_node_chip_counts.end() || count_it->second <= 1) {
+                continue;
+            }
+            auto in_it = incoming_edges.find(node);
+            auto out_it = outgoing_edges.find(node);
+            if (in_it == incoming_edges.end() || out_it == outgoing_edges.end()) {
+                continue;
+            }
+            for (size_t in_idx : in_it->second) {
+                for (size_t out_idx : out_it->second) {
+                    if (in_idx >= assigned_count || out_idx >= assigned_count) {
+                        continue;
+                    }
+                    const auto& in_link = assignment[in_idx];
+                    const auto& out_link = assignment[out_idx];
+                    if (in_link.entry_row == out_link.exit_row && in_link.entry_col == out_link.exit_col) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    };
+
+    std::vector<PipelineEndpointLink> assignment(edges.size());
+    std::function<bool(size_t)> solve = [&](size_t edge_idx) {
+        if (edge_idx == edges.size()) {
+            return endpoints_are_valid(assignment, assignment.size());
+        }
+        for (const auto& link : edge_candidates[edge_idx]) {
+            assignment[edge_idx] = link;
+            if (endpoints_are_valid(assignment, edge_idx + 1) && solve(edge_idx + 1)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    if (!solve(0)) {
+        return std::nullopt;
+    }
+    return assignment;
+}
+
 GraphLayoutResult resolve_graph_layout(
     const std::vector<EdgeInputTuple>& edges,
     const std::vector<std::vector<ChipTuple>>& submesh_chips,
-    const std::map<std::string, uint32_t>& node_chip_counts) {
+    const std::map<std::string, uint32_t>& node_chip_counts,
+    const std::set<std::string>& nodes_requiring_distinct_endpoints) {
     // ------------------------------------------------------------------
     // 0. Convert chip tuples to internal representation
     // ------------------------------------------------------------------
@@ -314,111 +408,25 @@ GraphLayoutResult resolve_graph_layout(
     // ------------------------------------------------------------------
     // 4. Assign submeshes to nodes via backtracking
     // ------------------------------------------------------------------
-    auto node_to_sub = assign_submeshes(stage_order, edges, connections, num_submeshes, node_chip_counts, chips);
+    auto node_to_sub = assign_submeshes(
+        stage_order, edges, connections, num_submeshes, node_chip_counts, chips, nodes_requiring_distinct_endpoints);
 
     // ------------------------------------------------------------------
     // 5. Resolve physical coords for every edge
     // ------------------------------------------------------------------
+    auto link_assignment =
+        assign_edge_links(edges, node_to_sub, connections, chips, nodes_requiring_distinct_endpoints);
+    if (!link_assignment.has_value()) {
+        throw std::runtime_error(
+            "resolve_graph_layout: internal error: selected submesh assignment has no valid physical-link "
+            "assignment");
+    }
     std::vector<ResolvedEdge> resolved_edges;
     resolved_edges.reserve(edges.size());
-    for (const auto& [src, dst, is_lb] : edges) {
-        size_t si = node_to_sub.at(src);
-        size_t sj = node_to_sub.at(dst);
-        auto it = connections.find({si, sj});
-        if (it == connections.end()) {
-            throw std::runtime_error(
-                "resolve_graph_layout: no direct ethernet link between submesh " + std::to_string(si) + " (" + src +
-                ") and submesh " + std::to_string(sj) + " (" + dst + ")");
-        }
-        const auto& c = it->second;
-        resolved_edges.push_back({src, dst, is_lb, c.exit_row(), c.exit_col(), c.entry_row(), c.entry_col()});
-    }
-
-    // ------------------------------------------------------------------
-    // 5.5. Deconflict same-chip entry/exit for forwarding stages.
-    //
-    // A forwarding stage i has both an entry chip (where data arrives from
-    // stage i-1) and an exit chip (where data leaves to stage i+1).  If
-    // the topology resolver assigned the same physical chip to both roles,
-    // two persistent BRISC kernels would be dispatched to the same core,
-    // causing the second generic_op to block forever.
-    //
-    // When this happens, scan the full list of valid ethernet links for the
-    // exit edge and pick an alternative link whose exit chip differs from
-    // the entry chip.  The corresponding entry chip on the next stage is
-    // updated in the same step (they are a physically connected pair).
-    // ------------------------------------------------------------------
-    for (size_t i = 1; i < stage_order.size(); ++i) {
-        size_t curr_sub = node_to_sub.at(stage_order[i]);
-
-        // Find the resolved entry edge for this stage (non-loopback, dst == stage_order[i]).
-        // Keep the edge itself: in a FORK graph the topological stage_order interleaves the
-        // branches, so stage_order[i-1] is NOT this stage's predecessor — the entry edge's
-        // own source is (that's what the connection lookup below must use).
-        ResolvedEdge* entry_re = nullptr;
-        for (auto& re : resolved_edges) {
-            if (!re.is_loopback && re.dst == stage_order[i]) {
-                entry_re = &re;
-                break;
-            }
-        }
-        if (entry_re == nullptr) {
-            continue;  // stage 0 — no entry edge
-        }
-        uint32_t entry_row = entry_re->entry_row;
-        uint32_t entry_col = entry_re->entry_col;
-
-        // Find the resolved exit edge for this stage (src == stage_order[i], any kind).
-        ResolvedEdge* exit_re = nullptr;
-        for (auto& re : resolved_edges) {
-            if (re.src == stage_order[i]) {
-                exit_re = &re;
-                break;
-            }
-        }
-        if (!exit_re) {
-            continue;  // no exit edge (shouldn't happen in a pipeline)
-        }
-
-        if (exit_re->exit_row == entry_row && exit_re->exit_col == entry_col) {
-            // Conflict: find an alternative link for the exit edge.
-            size_t next_sub = node_to_sub.at(exit_re->dst);
-            const auto& exit_links = connections.at({curr_sub, next_sub}).links;
-            bool resolved = false;
-            for (const auto& lp : exit_links) {
-                if (lp.exit_row != entry_row || lp.exit_col != entry_col) {
-                    exit_re->exit_row = lp.exit_row;
-                    exit_re->exit_col = lp.exit_col;
-                    exit_re->entry_row = lp.entry_row;
-                    exit_re->entry_col = lp.entry_col;
-                    resolved = true;
-                    break;
-                }
-            }
-            if (!resolved) {
-                // No alternative exit link — try changing the entry edge instead. Use the
-                // entry edge's ACTUAL source submesh (not stage_order[i-1], which is the
-                // wrong branch in an interleaved fork topological order).
-                size_t prev_sub = node_to_sub.at(entry_re->src);
-                const auto& entry_links = connections.at({prev_sub, curr_sub}).links;
-                for (const auto& lp : entry_links) {
-                    if (lp.entry_row != exit_re->exit_row || lp.entry_col != exit_re->exit_col) {
-                        entry_re->exit_row = lp.exit_row;
-                        entry_re->exit_col = lp.exit_col;
-                        entry_re->entry_row = lp.entry_row;
-                        entry_re->entry_col = lp.entry_col;
-                        resolved = true;
-                        break;
-                    }
-                }
-                if (!resolved) {
-                    throw std::runtime_error(
-                        "resolve_graph_layout: stage " + std::to_string(i) + " (" + stage_order[i] +
-                        ") has only one chip at both the entry and exit "
-                        "boundary — cannot deconflict entry/exit on the same chip");
-                }
-            }
-        }
+    for (size_t edge_idx = 0; edge_idx < edges.size(); ++edge_idx) {
+        const auto& [src, dst, is_lb] = edges[edge_idx];
+        const auto& link = (*link_assignment)[edge_idx];
+        resolved_edges.push_back({src, dst, is_lb, link.exit_row, link.exit_col, link.entry_row, link.entry_col});
     }
 
     // ------------------------------------------------------------------
@@ -488,6 +496,13 @@ GraphLayoutResult resolve_graph_layout(
     result.d2h_exit_row = d2h_row;
     result.d2h_exit_col = d2h_col;
     return result;
+}
+
+GraphLayoutResult resolve_graph_layout(
+    const std::vector<EdgeInputTuple>& edges,
+    const std::vector<std::vector<ChipTuple>>& submesh_chips,
+    const std::map<std::string, uint32_t>& node_chip_counts) {
+    return resolve_graph_layout(edges, submesh_chips, node_chip_counts, {});
 }
 
 }  // namespace tt::tt_fabric

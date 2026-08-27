@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -37,6 +38,24 @@ using ChipTuple = std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>;
 
 /// Input edge: (src_name, dst_name, is_loopback).
 using EdgeInputTuple = std::tuple<std::string, std::string, bool>;
+
+/// One direct physical-link candidate for a graph edge, in submesh-local coordinates.
+struct PipelineEndpointLink {
+    uint32_t exit_row = 0;
+    uint32_t exit_col = 0;
+    uint32_t entry_row = 0;
+    uint32_t entry_col = 0;
+
+    bool operator==(const PipelineEndpointLink&) const = default;
+};
+
+/// Deterministically select one physical-link candidate per edge while enforcing
+/// distinct endpoint capabilities. Primarily exposed for focused solver tests.
+std::optional<std::vector<PipelineEndpointLink>> select_pipeline_endpoint_links(
+    const std::vector<EdgeInputTuple>& edges,
+    const std::vector<std::vector<PipelineEndpointLink>>& edge_candidates,
+    const std::map<std::string, uint32_t>& assigned_node_chip_counts,
+    const std::set<std::string>& nodes_requiring_distinct_endpoints);
 
 /// Physical coordinates discovered for one directed edge.
 struct ResolvedEdge {
@@ -83,8 +102,19 @@ struct GraphLayoutResult {
 ///                      different mesh just because ethernet connectivity allows it.
 ///                      Nodes absent from the map are unconstrained.  An empty map
 ///                      disables the shape filter entirely (legacy behavior).
+/// @param nodes_requiring_distinct_endpoints Node names whose incoming and outgoing
+///                      pipeline links must terminate on different local chips when
+///                      the assigned submesh has more than one chip. The constraint
+///                      participates in submesh and physical-link assignment.
 /// @returns             GraphLayoutResult with physical coords for every edge and
 ///                      unclaimed H2D/D2H chip coords in stage-0's submesh.
+GraphLayoutResult resolve_graph_layout(
+    const std::vector<EdgeInputTuple>& edges,
+    const std::vector<std::vector<ChipTuple>>& submesh_chips,
+    const std::map<std::string, uint32_t>& node_chip_counts,
+    const std::set<std::string>& nodes_requiring_distinct_endpoints);
+
+/// Backward-compatible overload for callers that do not require endpoint constraints.
 GraphLayoutResult resolve_graph_layout(
     const std::vector<EdgeInputTuple>& edges,
     const std::vector<std::vector<ChipTuple>>& submesh_chips,

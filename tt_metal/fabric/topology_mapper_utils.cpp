@@ -48,6 +48,18 @@ std::vector<PinningConstraint> get_galaxy_fixed_asic_position_pinnings_for_mesh(
     MeshId mesh_id, const tt::tt_metal::distributed::MeshShape& mesh_shape, bool hard_pin_node_0, bool nw_corner_only) {
     std::vector<PinningConstraint> pinning_groups;
 
+    // A single-node mesh has no orientation and cannot fold, so corner pinning carries no
+    // information for it -- and it is actively harmful: it would force the lone chip onto a tray
+    // corner (asic_location==1), and on a galaxy a tray corner is adjacent only to chips inside its
+    // own tray, so an inter-mesh path THROUGH that mesh becomes unplaceable. Leave it unpinned and
+    // let the solver place it wherever the graph needs.
+    //
+    // Needed by models whose per-stage TP is 1 (DeepSeek-V4-Flash: 43 decoder layers at 2 per chip
+    // plus an 8-chip bookend is 30 of a 32-chip galaxy, so a decoder stage is one chip).
+    if (mesh_shape[0] * mesh_shape[1] <= 1) {
+        return pinning_groups;
+    }
+
     // Sub-galaxy slices: pin only the NW corner (node 0) to any tray-corner ASIC (asic_location==1 on
     // trays 1..4). The host-rank partition may land on any tray, so tray 1 alone is unsatisfiable.
     if (nw_corner_only) {

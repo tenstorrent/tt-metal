@@ -708,7 +708,25 @@ def as_tensor(
             f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
         )
         pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-        ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
+        # LOCAL, not the DISTRIBUTED_GATHER default.
+        #
+        # DISTRIBUTED_GATHER runs a WORLD host all_gather + a WORLD barrier
+        # (ttnn/core/tensor/serialization.cpp). This call site is a per-rank cache
+        # MISS, which is NOT a collective context: in a pipeline-parallel model each
+        # rank builds only its own stage's weights, so only some ranks ever reach
+        # here. The ranks that do then block forever in a barrier the others never
+        # enter, and because every participant takes the `rank() != 0` early-return,
+        # no rank writes the file either -- the cache can never populate, so the
+        # deadlock repeats on every run.
+        #
+        # Measured on a 4-rank DeepSeek-V4-Flash pipeline: the two decoder ranks hung
+        # in MPIContext::barrier under dump_tensor_flatbuffer while the embedding and
+        # LM-head ranks sat at the post-setup barrier.
+        #
+        # LOCAL makes each rank write its own copy. Ranks that replicate a weight
+        # write identical bytes to the same path, which the atomic temp+rename in
+        # dump_tensor_flatbuffer_impl makes safe (last writer wins, never torn).
+        ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor, ttnn.DumpTensorMode.LOCAL)
         if device is not None:
             tensor = tensor.to(device, memory_config)
         return tensor

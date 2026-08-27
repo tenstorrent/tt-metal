@@ -69,12 +69,29 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
         }
     }
 
-    FILE* output_file = fopen(file_name.c_str(), "wb");
+    // Write to a PER-PROCESS temp path and rename into place at the end. Under
+    // DumpTensorMode::LOCAL every rank writes its own copy, and ranks that
+    // replicate a weight target the SAME cache path with identical bytes -- two
+    // fopen("wb") on one path would interleave and leave a torn file that a later
+    // load_tensor_flatbuffer reads as garbage. rename(2) is atomic within a
+    // filesystem, so a concurrent writer can only ever be last-one-wins, never
+    // partial. The temp name carries the pid so two writers never share it.
+    const std::string temp_file_name = file_name + ".tmp." + std::to_string(::getpid());
+    FILE* output_file = fopen(temp_file_name.c_str(), "wb");
     TT_FATAL(
-        output_file != nullptr, "Cannot open \"{}\" for writing: errno={} \"{}\"", file_name, errno, strerror(errno));
-    auto cleanup = ttsl::make_cleanup([f = output_file, &file_name]() {
+        output_file != nullptr,
+        "Cannot open \"{}\" for writing: errno={} \"{}\"",
+        temp_file_name,
+        errno,
+        strerror(errno));
+    bool committed = false;
+    auto cleanup = ttsl::make_cleanup([f = output_file, &temp_file_name, &committed]() {
         if (f && fclose(f) != 0) {
-            log_warning(tt::LogAlways, "Failed to close \"{}\"", file_name);
+            log_warning(tt::LogAlways, "Failed to close \"{}\"", temp_file_name);
+        }
+        // Never leave a temp file behind if we threw before the rename.
+        if (!committed) {
+            ::unlink(temp_file_name.c_str());
         }
     });
 
@@ -88,16 +105,26 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
     builder.Finish(tensor_offset);
 
     const uint64_t header_size = builder.GetSize();
-    safe_fwrite_bytes(&header_size, sizeof(header_size), output_file, file_name, "tensor header size");
-    safe_fwrite_bytes(builder.GetBufferPointer(), header_size, output_file, file_name, "tensor header");
+    safe_fwrite_bytes(&header_size, sizeof(header_size), output_file, temp_file_name, "tensor header size");
+    safe_fwrite_bytes(builder.GetBufferPointer(), header_size, output_file, temp_file_name, "tensor header");
 
     for (const auto& buffer : buffers) {
         auto buffer_view = buffer.view_bytes();
         TT_FATAL(!buffer_view.empty(), "Unexpected empty buffer during tensor serialization");
-        safe_fwrite_bytes(buffer_view.data(), buffer_view.size(), output_file, file_name, "tensor data");
+        safe_fwrite_bytes(buffer_view.data(), buffer_view.size(), output_file, temp_file_name, "tensor data");
     }
 
-    TT_FATAL(fflush(output_file) == 0, "Failed to flush \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
+    TT_FATAL(
+        fflush(output_file) == 0, "Failed to flush \"{}\": errno={} \"{}\"", temp_file_name, errno, strerror(errno));
+    // Atomically publish. Only now is the path safe for a concurrent reader.
+    TT_FATAL(
+        ::rename(temp_file_name.c_str(), file_name.c_str()) == 0,
+        "Failed to rename \"{}\" -> \"{}\": errno={} \"{}\"",
+        temp_file_name,
+        file_name,
+        errno,
+        strerror(errno));
+    committed = true;
 
     if (mode == DumpTensorMode::DISTRIBUTED_GATHER) {
         const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();

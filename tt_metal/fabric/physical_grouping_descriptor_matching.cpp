@@ -1096,6 +1096,34 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 // now so downstream consumes it directly without re-deriving the intermediate node pairing.
                 committed.mesh_node_to_asic_position =
                     compose_mesh_node_to_asic_position_from_pgd_match(committed, match.mapping.target_to_global);
+                // Degenerate single-node mesh (required_nodes is 0 for a [1,1] device topology --
+                // the adjacency graph is edge-derived, so a lone node produces no graph at all).
+                // target_to_global is produced by an injective
+                // EDGE-PRESERVING solve, so a 1-node MGD mesh (zero edges) yields an empty
+                // correspondence, hence an empty pinning, hence the mesh is silently skipped by
+                // the rank-bound PGD pinning enrichment ("assigned pinnings to N-1/N") and
+                // multi-mesh mapping then fails. The correspondence is unambiguous in this case
+                // -- one MGD node, one PGD ASIC -- so compose it directly. Guarded on exactly one
+                // ASIC_LOCATION item so this cannot fire for a 1-node mesh that matched a larger
+                // grouping, where the choice would NOT be unambiguous.
+                //
+                // Needed by any model whose per-stage TP is 1 (e.g. DeepSeek-V4-Flash: 43 decoder
+                // layers at 2 per chip plus an 8-chip bookend is 30 of a 32-chip galaxy, so a
+                // decoder stage cannot be wider than one chip).
+                if (committed.mesh_node_to_asic_position.empty() && required_nodes <= 1) {
+                    const GroupingItemInfo* only_asic = nullptr;
+                    std::size_t asic_item_count = 0;
+                    for (const auto& item : committed.items) {
+                        if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
+                            only_asic = &item;
+                            ++asic_item_count;
+                        }
+                    }
+                    if (asic_item_count == 1 && only_asic != nullptr) {
+                        committed.mesh_node_to_asic_position.emplace(
+                            0, tt::tt_metal::ASICPosition{only_asic->tray_id, only_asic->asic_location});
+                    }
+                }
                 return committed;
             };
 

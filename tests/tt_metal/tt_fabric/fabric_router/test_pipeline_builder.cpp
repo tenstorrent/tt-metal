@@ -21,11 +21,9 @@
 ///
 /// The resolved layout is then validated the way the silicon pipeline relies on it:
 /// active fabric eth channels on every socket chip, and a direct PSD ethernet link +
-/// matching fabric hop per edge.  A chip MAY serve as more than one socket endpoint —
-/// including a stage whose entry and exit land on the same chip — because blaze's
-/// PipelineBlock places a colliding exit-send kernel on SECOND_PIPELINE_CORE_COORD (a
-/// second core on that chip, see blaze/models/pipeline_block.py).  Same-chip / reused
-/// socket endpoints are therefore valid and are NOT rejected here.
+/// matching fabric hop per edge. By default a chip MAY serve as more than one socket
+/// endpoint because PipelineBlock can use a second pipeline core. Resource-constrained
+/// stages opt into the distinct-endpoint capability tested below.
 
 #include <gtest/gtest.h>
 
@@ -211,9 +209,7 @@ std::optional<std::string> validate_pipeline_builder_graph_layout_errors(
         return fmt::format("D2H exit {} has no active fabric ethernet channels", d2h_fn);
     }
 
-    // Same-chip entry/exit per stage is intentionally allowed: PipelineBlock moves the
-    // exit-send kernel to SECOND_PIPELINE_CORE_COORD (blaze/models/pipeline_block.py), so
-    // the two kernels never share a core. No distinct entry/exit chip requirement.
+    // This generic fixture uses the default capability, so same-chip entry/exit remains valid.
 
     return std::nullopt;
 }
@@ -226,7 +222,74 @@ std::string describe_layouts(const std::vector<SubmeshLayout>& layouts) {
     return desc;
 }
 
+std::vector<EdgeInputTuple> solver_test_ring_edges(std::size_t num_stages) { return build_ring_edges(num_stages); }
+
+void expect_closed_physical_ring(
+    const std::vector<EdgeInputTuple>& edges,
+    const std::vector<std::vector<PipelineEndpointLink>>& candidates,
+    const std::vector<PipelineEndpointLink>& selected) {
+    ASSERT_EQ(selected.size(), edges.size());
+    ASSERT_EQ(candidates.size(), edges.size());
+    for (std::size_t i = 0; i < selected.size(); ++i) {
+        EXPECT_NE(std::find(candidates[i].begin(), candidates[i].end(), selected[i]), candidates[i].end());
+        const auto& [src, dst, is_loopback] = edges[i];
+        if (i + 1 < edges.size()) {
+            EXPECT_EQ(dst, std::get<0>(edges[i + 1]));
+            EXPECT_FALSE(is_loopback);
+        } else {
+            EXPECT_TRUE(is_loopback);
+            EXPECT_EQ(dst, std::get<0>(edges.front()));
+        }
+        (void)src;
+    }
+}
+
 }  // namespace
+
+TEST(PipelineEndpointLinkSolver, FourStagePreservesDeterministicPreferredLinks) {
+    const auto edges = solver_test_ring_edges(4);
+    const std::vector<std::vector<PipelineEndpointLink>> candidates = {
+        {{0, 1, 0, 0}}, {{0, 1, 0, 1}}, {{0, 0, 0, 1}}, {{0, 0, 0, 0}}};
+    const std::map<std::string, uint32_t> chip_counts = {{"s0", 2}, {"s1", 2}, {"s2", 2}, {"s3", 2}};
+
+    const auto first = select_pipeline_endpoint_links(edges, candidates, chip_counts, {"s1", "s2"});
+    const auto second = select_pipeline_endpoint_links(edges, candidates, chip_counts, {"s1", "s2"});
+
+    ASSERT_TRUE(first.has_value());
+    ASSERT_TRUE(second.has_value());
+    EXPECT_EQ(*first, *second);
+    EXPECT_EQ(*first, (std::vector<PipelineEndpointLink>{{0, 1, 0, 0}, {0, 1, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 0}}));
+    expect_closed_physical_ring(edges, candidates, *first);
+}
+
+TEST(PipelineEndpointLinkSolver, SixStageUsesSecondVerticalLinkForDistinctDecoderEndpoints) {
+    const auto edges = solver_test_ring_edges(6);
+    const std::vector<std::vector<PipelineEndpointLink>> candidates = {
+        {{0, 1, 0, 0}}, {{0, 1, 0, 1}}, {{0, 1, 0, 1}, {0, 0, 0, 0}}, {{0, 0, 0, 1}}, {{0, 0, 0, 0}}, {{0, 0, 0, 0}}};
+    const std::map<std::string, uint32_t> chip_counts = {
+        {"s0", 2}, {"s1", 2}, {"s2", 2}, {"s3", 2}, {"s4", 2}, {"s5", 2}};
+
+    const auto selected = select_pipeline_endpoint_links(edges, candidates, chip_counts, {"s2"});
+
+    ASSERT_TRUE(selected.has_value());
+    EXPECT_EQ((*selected)[1].entry_row, 0);
+    EXPECT_EQ((*selected)[1].entry_col, 1);
+    EXPECT_EQ((*selected)[2].exit_row, 0);
+    EXPECT_EQ((*selected)[2].exit_col, 0);
+    EXPECT_NE(
+        std::pair((*selected)[1].entry_row, (*selected)[1].entry_col),
+        std::pair((*selected)[2].exit_row, (*selected)[2].exit_col));
+    expect_closed_physical_ring(edges, candidates, *selected);
+}
+
+TEST(PipelineEndpointLinkSolver, ImpossibleDistinctEndpointTopologyFails) {
+    const auto edges = solver_test_ring_edges(4);
+    const std::vector<std::vector<PipelineEndpointLink>> candidates = {
+        {{0, 1, 0, 1}}, {{0, 1, 0, 0}}, {{0, 1, 0, 0}}, {{0, 1, 0, 0}}};
+    const std::map<std::string, uint32_t> chip_counts = {{"s0", 2}, {"s1", 2}, {"s2", 2}, {"s3", 2}};
+
+    EXPECT_FALSE(select_pipeline_endpoint_links(edges, candidates, chip_counts, {"s1"}).has_value());
+}
 
 // Resolve and validate the canonical blaze pipeline ring for whatever MGD is loaded:
 // one stage per host-rank submesh at its native shape, full loopback ring, single
