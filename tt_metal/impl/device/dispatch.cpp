@@ -69,7 +69,8 @@ DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_
 void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_params) {
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
 
-    DeviceCommandCalculator calculator;
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(dispatch_params.device));
+    DeviceCommandCalculator calculator(metal_ctx);
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         calculator.add_dispatch_wait();
     }
@@ -79,7 +80,7 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
 
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         const uint8_t offset_index = *dispatch_params.sub_device_ids[i];
@@ -172,7 +173,8 @@ void write_to_core_unchecked(
 
 void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params) {
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
-    DeviceCommandCalculator calculator;
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(dispatch_params.device));
+    DeviceCommandCalculator calculator(metal_ctx);
     for (uint32_t i = 0; i < num_worker_counters - 1; ++i) {
         calculator.add_dispatch_wait();
     }
@@ -183,7 +185,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
 
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     // We only need the write barrier + prefetch stall for the last wait cmd
     const uint32_t last_index = num_worker_counters - 1;

@@ -7,6 +7,7 @@ from .sft_trainer import SFTConfig, SFTTrainer
 from .grpo_trainer import (
     GRPOCompleter,
     GRPOConfig,
+    GRPOMonitor,
     GRPOTrainer,
     get_grpo_config,
 )

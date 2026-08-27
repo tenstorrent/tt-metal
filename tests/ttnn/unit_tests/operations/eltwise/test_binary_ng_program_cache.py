@@ -8,19 +8,29 @@ Unit tests for binary_ng program cache behavior.
 Tests target potential caching issues.
 The binary_ng operation uses a single ProgramFactory with caching based on:
 
-to_hash(): binary_op_type, lhs/rhs/post_activations, memory_config, get_dtype(),
-           compute_kernel_config, sub_core_grids, subtile_broadcast_type,
-           is_sfpu, is_quant_op, is_where_op
+operation_attributes_t::attribute_values(): binary_op_type, lhs/rhs/post_activations,
+           memory_config, get_dtype(), compute_kernel_config, sub_core_grids,
+           worker_grid, subtile_broadcast_type, is_sfpu, is_quant_op, is_where_op,
+           input_layout_a/b, output_layout, equal_nan, the shard volumes, and
+           c_tensor_shape_in_pages (the sharded output's tensor shape in pages on the accessor path)
 
-compute_program_hash(): attributes (via to_hash()), input tensor dtypes,
-                        input tensor memory_configs, shard_volumes
+tensor_args_t::to_hash(): input tensor dtypes and memory_configs, plus each
+           sharded input's tensor shape in pages (BufferDistributionSpec::tensor_shape_in_pages)
+
+The default compute_program_hash() combines both of the above.
 
 Fields correctly excluded from hash (handled by override_runtime_arguments):
-- logical_shape: not in compute_program_hash() by design - different logical
-  shapes share a cache entry and runtime arguments are updated accordingly
-- scalar.has_value(): not in to_hash(), but compute_program_hash branches
+- logical_shape: not in compute_program_hash() by design - differently-shaped
+  INTERLEAVED calls share a cache entry and runtime arguments are updated
+  accordingly. This does not extend to sharded calls, for two reasons that no
+  runtime re-application can repair: the native-vs-accessor regime is a
+  shape-dependent COMPILE-TIME decision (is_uneven -> is_native_L1_sharding ->
+  kernel defines), and on the accessor path the TensorAccessor's page geometry is
+  baked into the program. So sharded operands and sharded outputs each contribute
+  their tensor shape in pages to the key (issue #54138)
+- scalar.has_value(): not in attribute_values(), but compute_program_hash branches
   on input_tensor_b presence
-- input_dtype: not in to_hash(), but compute_program_hash includes input
+- input_dtype: not in attribute_values(), but compute_program_hash includes input
   tensor dtypes directly
 """
 
@@ -137,7 +147,7 @@ def test_ng_inplace_cache_reuse_different_shapes(device, isolate_program_cache, 
 def test_ng_inplace_cache_hit_sharded_readdresses(device, isolate_program_cache):
     """binary_ng in-place add on SHARDED tensors — the sharding mode SDXL exercised (silu) — driven
     through binary_ng's override_runtime_arguments cache-hit path. Repeated at the SAME shard config
-    (sharded binary_ng keys shard_volume into the hash, so a different shape would MISS, not hit) but
+    (a sharded operand's tensor shape in pages is in the key, so a different shape would MISS, not hit) but
     with freshly-allocated operands kept alive, so each cache HIT sees a DIFFERENT buffer address.
     binary_ng's tensor-backed CB / rt-arg addresses must be re-applied on the hit (no rebuild) or the
     result is stale."""
@@ -232,7 +242,7 @@ def test_ng_cache_mixed_inplace_outofplace_sharded(device, isolate_program_cache
     for i, inplace in enumerate([first_inplace, not first_inplace, first_inplace, not first_inplace]):
         ref, out = do(i, inplace)
         assert_with_pcc(ref, out, 0.999)
-    # Same shard config across all calls (sharded binary_ng keys shard_volume) → one shared cache entry.
+    # Same shard config AND same shape across all calls → identical tensor shape in pages → one shared cache entry.
     assert device.cache_entries_counter.total == 1
 
 
@@ -301,7 +311,7 @@ def test_ng_cache_miss_different_memory_configs(device, isolate_program_cache):
 
 def test_ng_cache_miss_different_subtile_broadcast(device, isolate_program_cache):
     """Different subtile broadcast types -> different cache entries.
-    subtile_broadcast_type is in to_hash() and depends on last-2-dim shapes."""
+    subtile_broadcast_type is in attribute_values() and depends on last-2-dim shapes."""
     # NONE: equal shapes
     torch_ref1, tt_out1 = run_binary_ng_op(device, ttnn.add, [1, 1, 32, 64], [1, 1, 32, 64], dtype=ttnn.float32)
     assert_with_pcc(torch_ref1, tt_out1, 0.9999)
@@ -344,7 +354,7 @@ def test_ng_cache_miss_different_output_dtypes(device, isolate_program_cache):
 
 def test_ng_scalar_vs_tensor_cache_differentiation(device, isolate_program_cache):
     """Scalar op vs tensor op -> different cache entries.
-    scalar.has_value() is not in to_hash(), but compute_program_hash()
+    scalar.has_value() is not in attribute_values(), but compute_program_hash()
     naturally differentiates because the scalar path excludes tensor_b
     from hash arguments while the tensor path includes it."""
     shape = [1, 1, 32, 64]
@@ -362,7 +372,7 @@ def test_ng_scalar_vs_tensor_cache_differentiation(device, isolate_program_cache
 
 def test_ng_cache_miss_different_sub_core_grids(device, isolate_program_cache):
     """Different sub_core_grids -> different cache entries.
-    sub_core_grids is in to_hash() and directly determines worker_grid."""
+    sub_core_grids is in attribute_values() and directly determines worker_grid."""
     shape = [1, 1, 32, 64]
 
     torch_a1 = torch.rand(shape, dtype=torch.float32)
@@ -392,7 +402,7 @@ def test_ng_cache_miss_different_sub_core_grids(device, isolate_program_cache):
 
 def test_ng_different_input_dtypes_same_output_dtype(device, isolate_program_cache):
     """Different input dtypes with same output dtype -> different cache entries.
-    input_dtype is not in to_hash(), but compute_program_hash() includes
+    input_dtype is not in attribute_values(), but compute_program_hash() includes
     input tensor dtypes directly, which compensates."""
     shape = [1, 1, 32, 64]
 
@@ -494,3 +504,221 @@ def test_ng_cache_correctness_broadcast_repeated(device, isolate_program_cache):
     for _ in range(3):
         torch_ref, tt_out = run_binary_ng_op(device, ttnn.add, shape_a, shape_b, dtype=ttnn.float32)
         assert_with_pcc(torch_ref, tt_out, 0.9999)
+
+
+# =============================================================================
+# Cache miss tests: shape state the key must carry on the SCALAR path
+# =============================================================================
+
+
+def test_ng_scalar_sharded_cache_miss_when_evenness_flips(device, isolate_program_cache):
+    """REGRESSION: the scalar overload must key on shape, because the native-vs-accessor regime is a
+    compile-time decision that flips with is_uneven and no runtime re-application can repair it.
+
+    ONE explicit ShardSpec held constant, so every other key field is identical across both calls. Only
+    the height changes, which flips evenness:
+
+        512 rows / shard height 64 -> 8 exact shards  -> even   -> native regime compiled
+        480 rows / shard height 64 -> 7 full + 1 of 32 -> uneven -> needs the accessor regime
+
+    Pre-fix this HUNG the device -- the reused native program busy-waits on an uneven shape, ignores
+    SIGINT and needs a card reset. Expect that, not a wrong answer, if it regresses.
+
+    Scope caveat: this does not isolate the shard-volume fix. `a` is sharded, so the shape in pages in
+    to_hash() separates these shapes too, and evenness and page count are correlated anyway (the shard
+    height is a whole number of tiles). It would pass with the shard-volume change reverted; it is an
+    end-to-end guard on the regime flip, not proof of what separates the entries."""
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))])
+    shard_spec = ttnn.ShardSpec(shard_grid, [64, 128], ttnn.ShardOrientation.ROW_MAJOR)
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    def scalar_add(shape, seed):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.add(tt_a, 1.5)
+        return a + 1.5, ttnn.to_torch(tt_c)
+
+    ref_even, out_even = scalar_add([1, 1, 512, 128], 0)
+    assert_with_pcc(ref_even, out_even, 0.999)
+
+    # Same ShardSpec, same dtype, same memory config, but this shape needs the accessor regime rather
+    # than the native one the first call compiled.
+    ref_uneven, out_uneven = scalar_add([1, 1, 480, 128], 1)
+    assert_with_pcc(ref_uneven, out_uneven, 0.999)
+
+    # Proves the key distinguished the two regimes rather than silently reusing the first program.
+    assert device.cache_entries_counter.total == 2
+
+
+def test_ng_sharded_output_cache_miss_across_page_counts(device, isolate_program_cache):
+    """REGRESSION (issue #54138): the OUTPUT side of the accessor-path shape collision.
+
+    Both inputs are interleaved and only the output is sharded, via an explicit memory_config. The
+    identical-shape branch of is_native_L1_sharding rejects DRAM inputs, so the native path declines and
+    the writer reaches the output through a TensorAccessor -- built over the output buffer with the same
+    ArgConfig::RuntimeTensorShape common arg that override_runtime_arguments never refreshes.
+
+    Nothing else in the key varies with the output's extent: the inputs are interleaved so their page
+    shapes in pages are absent, and attributes.memory_config carries the output's shard spec but not its shape.
+    Measured on Wormhole before the fix, small-then-big: the second call was a cache hit with 14693/16384
+    elements wrong.
+
+    This is more reachable than the input-side case, which needs an explicit ShardSpec on an input --
+    here the inputs are ordinary interleaved DRAM tensors and only memory_config is unusual."""
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_spec = ttnn.ShardSpec(core_grid, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
+    out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    def add_into_sharded(shape, seed):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        b = torch.rand(shape, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.add(tt_a, tt_b, memory_config=out_mem)
+        return a + b, ttnn.to_torch(tt_c)
+
+    ref_small, out_small = add_into_sharded([1, 1, 64, 128], 0)
+    assert_with_pcc(ref_small, out_small, 0.999)
+
+    ref_big, out_big = add_into_sharded([1, 1, 128, 128], 1)
+    assert_with_pcc(ref_big, out_big, 0.999)
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_ng_scalar_interleaved_memcfg_with_sharded_output_cache_miss(device, isolate_program_cache):
+    """REGRESSION: an explicit INTERLEAVED memory_config alongside a SHARDED preallocated output.
+
+    mem_config_actual falls back to the output tensor's config only when no explicit memory_config was
+    given, so this combination leaves it interleaved -- while compute_output_specs returns a supplied
+    output's spec verbatim, making the real output sharded. A guard that consulted only the input and
+    mem_config_actual therefore skipped recording the output's shape in pages, and the accessor-path
+    collision reopened on this path even though the general case was fixed.
+
+    Nothing requires the two to agree: the binary_ng invoke template forwards memory_config and
+    output_tensor to the prim independently, and validate_on_program_cache_miss does not cross-check
+    them. So the guard tests the output tensor separately."""
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_spec = ttnn.ShardSpec(core_grid, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
+    sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    def scalar_add_into(shape, seed):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_out = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded
+        )
+        with device.cache_entries_counter.measure():
+            # Interleaved memory_config, sharded output -- deliberately disagreeing.
+            tt_c = ttnn.add(tt_a, 1.5, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=tt_out)
+        return a + 1.5, ttnn.to_torch(tt_c)
+
+    ref_small, out_small = scalar_add_into([1, 1, 64, 128], 0)
+    assert_with_pcc(ref_small, out_small, 0.999)
+
+    ref_big, out_big = scalar_add_into([1, 1, 128, 128], 1)
+    assert_with_pcc(ref_big, out_big, 0.999)
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_ng_scalar_dram_sharded_cache_miss_across_page_counts(device, isolate_program_cache):
+    """REGRESSION: on the accessor path the cache key must carry each sharded operand's shape in pages.
+
+    A DRAM-sharded input takes that path, so with one ShardSpec held constant these two shapes share
+    every other key field while needing different accessor geometry:
+
+        [1,1, 64,128] -> 2 shards,  8 pages
+        [1,1,128,128] -> 4 shards, 16 pages
+
+    Pre-fix the second call was a cache hit returning PCC 0.179 with exactly half the output wrong.
+
+    ORDER MATTERS -- do not reverse these calls. Big-then-small passes vacuously, because every page id
+    of the smaller tensor already falls below the larger baked radix. Only small-then-big exposes it.
+
+    Requires the DRAM routing fix to reach the accessor at all; without it the config throws instead."""
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_spec = ttnn.ShardSpec(core_grid, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    def scalar_add(shape, seed):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.add(tt_a, 1.5)
+        return a + 1.5, ttnn.to_torch(tt_c)
+
+    ref_small, out_small = scalar_add([1, 1, 64, 128], 0)
+    assert_with_pcc(ref_small, out_small, 0.999)
+
+    # Cache HIT today: same ShardSpec and dtype, and the accessor path leaves the key's only
+    # shape-derived members unset, so nothing distinguishes 8 pages from 16.
+    ref_big, out_big = scalar_add([1, 1, 128, 128], 1)
+    assert_with_pcc(ref_big, out_big, 0.999)
+
+    assert device.cache_entries_counter.total == 2
+
+
+@pytest.mark.parametrize(
+    "out_dtype",
+    [
+        ttnn.bfloat16,
+        pytest.param(
+            ttnn.float32,
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="https://github.com/tenstorrent/tt-metal/issues/54138 -- ttnn.where with a preallocated "
+                "float32 output silently ignores the "
+                "predicate and returns t_true. Reproduces on a SINGLE call against a cold program cache, "
+                "so this is a plain correctness bug rather than the cache-key collision finding #3 "
+                "describes. Unfixed; see the docstring. strict so that fixing it fails here and forces "
+                "this marker to be removed rather than lingering as a silent XPASS.",
+            ),
+        ),
+    ],
+    ids=["out_bf16", "out_f32"],
+)
+def test_ng_where_scalar_preallocated_output_dtype(device, isolate_program_cache, out_dtype):
+    """Issue #54138 finding #3 predicted a CACHE-HIT defect: a caller-supplied output tensor reaches the
+    key only by proxy through attributes.dtype, which where_operation_with_scalar leaves as std::nullopt,
+    so get_dtype() collapses to the INPUT dtype and the real output dtype never enters the key. The
+    finding was tiered "Blocking (minor)" on the premise that "a single call with the odd value works
+    correctly" and only the cache hit goes wrong.
+
+    Measured on Wormhole, that premise does not hold. With a preallocated FLOAT32 output and bfloat16
+    inputs, a single call against a freshly-cleared program cache already returns the wrong answer --
+    2022 of 2048 elements mismatched, and the output is approximately t_true, i.e. the predicate is
+    dropped entirely. The bfloat16-output case is exact (0/2048) under the same conditions.
+
+    So this domain is broken with or without a cache, which by the issue's own cache-dependence test
+    makes it a report rather than a port blocker: adding the output dtype to the key would only give
+    each dtype its own separately-wrong program. Adding it also costs real cache reuse, because hashing
+    the output tensor's presence stops in-place and out-of-place calls from sharing one entry (it breaks
+    test_ng_cache_mixed_inplace_outofplace_interleaved). The underlying correctness bug must be fixed
+    first; only then is a key entry meaningful.
+
+    This test is parametrized so the passing bfloat16 case pins the behavior that DOES work, and the
+    xfail marks the float32 case that does not."""
+    shape = [1, 1, 32, 64]
+    torch.manual_seed(0)
+
+    pred = (torch.rand(shape) > 0.5).to(torch.bfloat16)
+    t_true = torch.rand(shape, dtype=torch.bfloat16)
+    scalar_false = 0.5
+
+    tt_pred = ttnn.from_torch(pred, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_true = ttnn.from_torch(t_true, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.float32), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    res = ttnn.where(tt_pred, tt_true, scalar_false, output_tensor=tt_out)
+
+    ref = torch.where(pred.bool(), t_true.float(), torch.full(shape, scalar_false))
+    assert_with_pcc(ref, ttnn.to_torch(res).float(), 0.999)

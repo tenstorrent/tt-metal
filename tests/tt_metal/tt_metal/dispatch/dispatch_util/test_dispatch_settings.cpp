@@ -20,16 +20,16 @@ namespace tt::tt_metal {
 
 static constexpr uint32_t default_l1_alignment = 16;
 
-TEST(DispatchSettingsTest, TestDispatchSettingsDefaultUnsupportedCoreType) {
+TEST(DispatchSettingsTest, CPU_TestDispatchSettingsDefaultUnsupportedCoreType) {
     const auto unsupported_core = CoreType::ARC;
     EXPECT_THROW(DispatchSettings(1, unsupported_core, false, false, default_l1_alignment, 4), std::runtime_error);
 }
 
-TEST(DispatchSettingsTest, TestDispatchSettingsInvalidPrefetchQEntrySize) {
+TEST(DispatchSettingsTest, CPU_TestDispatchSettingsInvalidPrefetchQEntrySize) {
     EXPECT_THROW(DispatchSettings(1, CoreType::WORKER, false, false, default_l1_alignment, 3), std::runtime_error);
 }
 
-TEST(DispatchSettingsTest, TestDispatchSettingsEq) {
+TEST(DispatchSettingsTest, CPU_TestDispatchSettingsEq) {
     const uint32_t hw_cqs = 2;
     DispatchSettings settings(hw_cqs, CoreType::WORKER, false, false, default_l1_alignment, 4);
     DispatchSettings settings_2 = settings;  // Copy
@@ -38,7 +38,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsEq) {
     EXPECT_NE(settings, settings_2);
 }
 
-TEST(DispatchSettingsTest, TestDispatchSettingsSetPrefetchDBuffer) {
+TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetPrefetchDBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_bytes = 0xcafe;
     const uint32_t expected_page_count =
@@ -49,7 +49,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetPrefetchDBuffer) {
     EXPECT_EQ(settings.prefetch_d_pages_, expected_page_count);
 }
 
-TEST(DispatchSettingsTest, TestDispatchSettingsSetPrefetchQBuffer) {
+TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetPrefetchQBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_entries = 0x1000;
     const uint32_t expected_buffer_bytes = expected_buffer_entries * 4;
@@ -60,7 +60,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetPrefetchQBuffer) {
     EXPECT_EQ(settings.prefetch_q_entry_size_bytes_, 4);
 }
 
-TEST(DispatchSettingsTest, TestDispatchSettingsSetPrefetchQBufferWith2ByteEntries) {
+TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetPrefetchQBufferWith2ByteEntries) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_entries = 0x1000;
     const uint32_t expected_buffer_bytes = expected_buffer_entries * 2;
@@ -71,7 +71,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetPrefetchQBufferWith2ByteEntrie
     EXPECT_EQ(settings.prefetch_q_entry_size_bytes_, 2);
 }
 
-TEST(DispatchSettingsTest, TestDispatchSettingsSetDispatchBuffer) {
+TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetDispatchBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_bytes = 0x2000;
     const uint32_t expected_page_count = expected_buffer_bytes / (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
@@ -81,7 +81,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetDispatchBuffer) {
     EXPECT_EQ(settings.dispatch_pages_, expected_page_count);
 }
 
-TEST(DispatchSettingsTest, TestDispatchSettingsSetDispatchSBuffer) {
+TEST(DispatchSettingsTest, CPU_TestDispatchSettingsSetDispatchSBuffer) {
     const uint32_t hw_cqs = 2;
     const uint32_t expected_buffer_bytes = 0x2000;
     const uint32_t expected_page_count =

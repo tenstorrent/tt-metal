@@ -9,60 +9,48 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 #include <stdint.h>
 
 void kernel_main() {
     // Compile time args
     // -----------------
-    constexpr uint32_t src_dfb_idx = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_dfb_idx = get_compile_time_arg_val(1);
+    constexpr auto src_page_size = get_arg(args::src_page_size);
 
-    constexpr uint32_t src_page_size = get_compile_time_arg_val(2);
-
-    constexpr uint32_t tile_height = get_compile_time_arg_val(4);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(5);
+    constexpr auto tile_height = get_arg(args::tile_height);
+    constexpr auto tile_width = get_arg(args::tile_width);
 
     // Input padded size (last two dims) in tiles
-    constexpr uint32_t input_height = get_compile_time_arg_val(6);
-    constexpr uint32_t input_width = get_compile_time_arg_val(7);
+    constexpr auto input_height = get_arg(args::input_height);
+    constexpr auto input_width = get_arg(args::input_width);
 
     // Input logical size (last two dims) in data elements
-    constexpr uint32_t logical_height = get_compile_time_arg_val(8);
-    constexpr uint32_t logical_width = get_compile_time_arg_val(9);
+    constexpr auto logical_height = get_arg(args::logical_height);
+    constexpr auto logical_width = get_arg(args::logical_width);
 
     // Size of all dims combined, excluding the last two dims.
-    constexpr uint32_t outer_dim_size = get_compile_time_arg_val(10);
+    constexpr auto outer_dim_size = get_arg(args::outer_dim_size);
 
-    constexpr bool reduce_all = (bool)get_compile_time_arg_val(11);
-    constexpr bool keepdim = (bool)get_compile_time_arg_val(12);
-
-    constexpr uint32_t num_c_time_args = 13;
-
-    // Runtime args
-    // ------------
-    const uint32_t src_base_addr = get_arg_val<uint32_t>(0);
-    const uint32_t dst_base_addr = get_arg_val<uint32_t>(1);
+    constexpr bool reduce_all = (bool)get_arg(args::reduce_all);
+    constexpr bool keepdim = (bool)get_arg(args::keepdim);
 
     // Tensor Accessors
     // ----------------
-    constexpr auto s_src_args = TensorAccessorArgs<num_c_time_args>();
-    constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
-
-    auto s_src = TensorAccessor(s_src_args, src_base_addr);
-    auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
+    auto s_src = TensorAccessor(tensor::src);
+    auto s_dst = TensorAccessor(tensor::dst);
 
     using dst_accessor_type = decltype(s_dst);
 
     Noc noc;
-    DataflowBuffer src_dfb(src_dfb_idx);
-    DataflowBuffer dst_dfb(dst_dfb_idx);
+    DataflowBuffer src_dfb(dfb::src);
+    DataflowBuffer dst_dfb(dfb::dst);
 
-    // CB for input data.
+    // DFB for input data.
     const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
-    constexpr DataFormat src_data_format = get_dataformat(src_dfb_idx);
+    constexpr DataFormat src_data_format = get_dataformat(dfb::src);
 
-    // CB for output data.
+    // DFB for output data.
     const uint32_t dst_dfb_addr = dst_dfb.get_write_ptr();
 
     auto default_val = get_default_value<src_data_format>();

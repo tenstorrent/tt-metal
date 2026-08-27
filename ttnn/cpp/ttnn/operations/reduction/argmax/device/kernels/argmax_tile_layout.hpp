@@ -34,7 +34,7 @@ struct InputContext {
     const uint32_t logical_width;
 
     const DataFormat data_format;
-    const uint32_t cb_addr;
+    const uint32_t dfb_addr;
 
     // Reminders for calculating padding offsets
     const uint32_t tile_h_rem;
@@ -61,7 +61,7 @@ struct InputContext {
         uint32_t f_h_rem,
         uint32_t f_w_rem,
         DataFormat format,
-        uint32_t l1_cb_addr) :
+        uint32_t l1_dfb_addr) :
         tile_height(tile_h),
         tile_width(tile_w),
         input_height(tiles_h),
@@ -69,7 +69,7 @@ struct InputContext {
         logical_height(data_h),
         logical_width(data_w),
         data_format(format),
-        cb_addr(l1_cb_addr),
+        dfb_addr(l1_dfb_addr),
         tile_h_rem(t_h_rem),
         tile_w_rem(t_w_rem),
         face_h_rem(f_h_rem),
@@ -87,18 +87,18 @@ struct OutputContext {
     uint32_t* const stack_ptr;
     const uint32_t stack_buffer_size;
 
-    const uint32_t output_cb_addr;
+    const uint32_t output_dfb_addr;
     const uint32_t write_out_count;
 
     OutputContext() = delete;
     OutputContext(const OutputContext&) = delete;
 
-    OutputContext(uint32_t* ptr, uint32_t size, uint32_t dst_cb_addr, uint32_t out_count) :
+    OutputContext(uint32_t* ptr, uint32_t size, uint32_t dst_dfb_addr, uint32_t out_count) :
         collected_count(0),
         output_page_id(0),
         stack_ptr(ptr),
         stack_buffer_size(size),
-        output_cb_addr(dst_cb_addr),
+        output_dfb_addr(dst_dfb_addr),
         write_out_count(out_count) {}
 };
 
@@ -210,7 +210,7 @@ void process_input_tile(
     uint32_t& rows_processed) {
     const bool has_padding = ctx.has_padding;
     const DataFormat src_data_format = ctx.data_format;
-    auto src_ptr = get_tt_l1_ptr_based_on_data_format<format>(ctx.cb_addr);
+    auto src_ptr = get_tt_l1_ptr_based_on_data_format<format>(ctx.dfb_addr);
 
     rows_processed = 0;
 
@@ -300,7 +300,7 @@ void collect_row_major_output(uint32_t new_values[], uint32_t count, OutputConte
     }
 
     auto* stack_ptr = ctx.stack_ptr;
-    auto* cb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.output_cb_addr);
+    auto* dfb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.output_dfb_addr);
 
     for (uint32_t idx = 0; idx < count; idx++) {
         uint32_t write_index = curr_collected + idx;
@@ -308,8 +308,8 @@ void collect_row_major_output(uint32_t new_values[], uint32_t count, OutputConte
             // Accumulate into the on stack array
             stack_ptr[write_index] = new_values[idx];
         } else {
-            // Write directly into the output CB
-            cb_ptr[write_index] = new_values[idx];
+            // Write directly into the output DFB
+            dfb_ptr[write_index] = new_values[idx];
         }
     }
 
@@ -331,24 +331,24 @@ void write_to_output(const Noc& noc, AccessorType& output_accessor, OutputContex
     uint32_t collected_count = output_ctx.collected_count;
     uint32_t output_page_id = output_ctx.output_page_id;
 
-    auto dst_cb_addr = output_ctx.output_cb_addr;
-    CoreLocalMem<uint32_t> dst_cb_mem(dst_cb_addr);
+    auto dst_dfb_addr = output_ctx.output_dfb_addr;
+    CoreLocalMem<uint32_t> dst_dfb_mem(dst_dfb_addr);
 
     uint32_t sent_count = 0;
     while (collected_count > 0) {
         // When keepdim is true, argmax values are accumulated in an on-stack buffer.
-        // Otherwise, argmax values are accumulated directly in the output CB.
+        // Otherwise, argmax values are accumulated directly in the output DFB.
         if constexpr (keepdim) {
             auto* stack_ptr = output_ctx.stack_ptr;
-            auto* dst_cb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_cb_addr);
-            // Copy one page of output data into the output CB.
+            auto* dst_dfb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_dfb_addr);
+            // Copy one page of output data into the output DFB.
             for (uint32_t idx = 0; idx < output_page_elements; idx++) {
-                dst_cb_ptr[idx] = stack_ptr[sent_count + idx];
+                dst_dfb_ptr[idx] = stack_ptr[sent_count + idx];
             }
         }
 
         const uint32_t write_size = output_page_elements * sizeof(uint32_t);
-        noc.async_write(dst_cb_mem, output_accessor, write_size, {.offset_bytes = 0}, {.page_id = output_page_id});
+        noc.async_write(dst_dfb_mem, output_accessor, write_size, {.offset_bytes = 0}, {.page_id = output_page_id});
 
         sent_count += output_page_elements;
         collected_count -= output_page_elements;

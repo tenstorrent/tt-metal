@@ -1018,7 +1018,13 @@ def test_reshape_rm_nonclean_misaligned_last_dim(device, input_shape, output_sha
     [
         ((48, 65), (24, 130)),  # dest_page=260B — multi-slot staging
         # Issue #50191 width: 8 fixed slots would exceed L1; factory must shrink.
-        ((200002, 1), (2, 100001)),
+        # The dest page drives that (dest_slot_size_bytes = ((200002 - 1) & MASK_64) + 80 =
+        # 200080, so 8 slots is 1,600,640 B against 1,499,136 B of L1), so the source only needs
+        # to supply the same total in whole pages: 22 x 9091
+        # keeps the 2 active cores and the non-clean alignment but drops the source page count
+        # from 200002 to 22.  The old (200002, 1) form spent 754 s under ttsim on two-byte page
+        # transactions for the same bytes (#53228).
+        ((22, 9091), (2, 100001)),
     ],
     ids=["dest_page_260B", "dest_page_200002B_issue_width"],
 )
