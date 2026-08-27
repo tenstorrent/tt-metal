@@ -308,3 +308,20 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+
+# Reuse the shared test PCH (gtest + heavy tt-metalium headers) for all targets in this dir.
+foreach(
+    _fabric_test_target
+    IN
+    ITEMS
+        fabric_unit_tests
+        test_physical_discovery
+        test_system_health_smoke
+        test_fabric_smoke
+        test_tt_fabric
+        bench_unicast
+        test_addrgen_write
+        test_bandwidth_telemetry_validation
+)
+    target_precompile_headers(${_fabric_test_target} REUSE_FROM metal_test_pch)
+endforeach()
