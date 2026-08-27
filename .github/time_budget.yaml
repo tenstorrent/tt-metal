@@ -358,7 +358,7 @@ models:
   unit:
     wh_galaxy_perf: 10
   unit_tier1:
-    wh_llmbox: 275 # TODO: narrow with the dit-encoders timeout once CI reports real timings
+    wh_llmbox: 140
     wh_n150: 110
     wh_galaxy: 235
     wh_galaxy_perf: 45
