@@ -136,10 +136,12 @@ constexpr std::uint32_t LREG_MASK  = p_sfpu::LREG6;
 // Four distinct LREGs for pipelined per-slot data values in BCAST_COL.
 // They must be mutually distinct AND distinct from LREG_BCAST/LREG_TMP/LREG_MASK
 // so that the 4 binops can be issued back-to-back without inter-op NOPs.
-constexpr std::uint32_t LREG_DATA0 = p_sfpu::LREG1;
-constexpr std::uint32_t LREG_DATA1 = p_sfpu::LREG3;
-constexpr std::uint32_t LREG_DATA2 = p_sfpu::LREG4;
-constexpr std::uint32_t LREG_DATA3 = p_sfpu::LREG5;
+constexpr std::uint32_t LREG_DATA0          = p_sfpu::LREG1;
+constexpr std::uint32_t LREG_DATA1          = p_sfpu::LREG3;
+constexpr std::uint32_t LREG_DATA2          = p_sfpu::LREG4;
+constexpr std::uint32_t LREG_DATA3          = p_sfpu::LREG5;
+constexpr std::uint32_t LREG_SCALAR_MEAN    = p_sfpu::LREG6;
+constexpr std::uint32_t LREG_SCALAR_INV_STD = p_sfpu::LREG7;
 
 // SFPSHFT2 Mod1 encoding: rotate right by 1 within each 8-lane sub-vector.
 constexpr std::uint32_t SFPSHFT2_MOD1_SUBVEC_SHFLROR1 = 3;
@@ -506,12 +508,7 @@ inline void _broadcast_scalar_from_dest_(std::uint32_t scalar_addr)
 }
 
 inline void _process_scalar_normalize_row_band_(
-    std::uint32_t mean_scalar_addr,
-    std::uint32_t inv_std_scalar_addr,
-    std::uint32_t left_face_addr,
-    std::uint32_t right_face_addr,
-    std::uint32_t data_tile_offset,
-    std::uint32_t out_tile_offset)
+    std::uint32_t left_face_addr, std::uint32_t right_face_addr, std::uint32_t data_tile_offset, std::uint32_t out_tile_offset)
 {
     constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
     const std::uint32_t slot0      = left_face_addr;
@@ -524,18 +521,16 @@ inline void _process_scalar_normalize_row_band_(
     TT_SFPLOAD(LREG_DATA2, IM, ADDR_MOD_7, data_tile_offset + slot2);
     TT_SFPLOAD(LREG_DATA3, IM, ADDR_MOD_7, data_tile_offset + slot3);
 
-    _broadcast_scalar_from_dest_(mean_scalar_addr);
-    TTI_SFPMOV(0, LREG_BCAST, LREG_TMP, 1 /* SFPMOV_MOD1_NEGATE */);
+    TTI_SFPMOV(0, LREG_SCALAR_MEAN, LREG_TMP, 1 /* SFPMOV_MOD1_NEGATE */);
     TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA0, 0);
     TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA1, 0);
     TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA2, 0);
     TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA3, 0);
 
-    _broadcast_scalar_from_dest_(inv_std_scalar_addr);
-    TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
-    TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
-    TTI_SFPMUL(LREG_DATA2, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA2, 0);
-    TTI_SFPMUL(LREG_DATA3, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA3, 0);
+    TTI_SFPMUL(LREG_DATA0, LREG_SCALAR_INV_STD, p_sfpu::LCONST_0, LREG_DATA0, 0);
+    TTI_SFPMUL(LREG_DATA1, LREG_SCALAR_INV_STD, p_sfpu::LCONST_0, LREG_DATA1, 0);
+    TTI_SFPMUL(LREG_DATA2, LREG_SCALAR_INV_STD, p_sfpu::LCONST_0, LREG_DATA2, 0);
+    TTI_SFPMUL(LREG_DATA3, LREG_SCALAR_INV_STD, p_sfpu::LCONST_0, LREG_DATA3, 0);
 
     TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_7, out_tile_offset + slot0);
     TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_7, out_tile_offset + slot1);
@@ -551,15 +546,23 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
     const std::uint32_t inv_std_addr = dst_index_inv_std * DEST_TILE_SIZE_RAW;
     const std::uint32_t out_base     = dst_index_out * DEST_TILE_SIZE_RAW;
 
+    // The statistics are scalar and invariant across all eight row bands.
+    // Broadcast each once and retain the vectors in the otherwise-unused
+    // LREG6/LREG7 for the complete tile traversal.
+    _broadcast_scalar_from_dest_(mean_addr);
+    TTI_SFPMOV(0, LREG_BCAST, LREG_SCALAR_MEAN, 0);
+    _broadcast_scalar_from_dest_(inv_std_addr);
+    TTI_SFPMOV(0, LREG_BCAST, LREG_SCALAR_INV_STD, 0);
+
     for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++)
     {
         const std::uint32_t band_off = band * ROW_BAND_STRIDE;
-        _process_scalar_normalize_row_band_(mean_addr, inv_std_addr, FACE0_BASE + band_off, FACE1_BASE + band_off, data_base, out_base);
+        _process_scalar_normalize_row_band_(FACE0_BASE + band_off, FACE1_BASE + band_off, data_base, out_base);
     }
     for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++)
     {
         const std::uint32_t band_off = band * ROW_BAND_STRIDE;
-        _process_scalar_normalize_row_band_(mean_addr, inv_std_addr, FACE2_BASE + band_off, FACE3_BASE + band_off, data_base, out_base);
+        _process_scalar_normalize_row_band_(FACE2_BASE + band_off, FACE3_BASE + band_off, data_base, out_base);
     }
 }
 

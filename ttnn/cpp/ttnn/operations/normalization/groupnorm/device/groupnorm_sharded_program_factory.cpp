@@ -785,30 +785,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         "otherwise the DEST accumulator is bfloat16 and intermediate/accumulated results are silently "
         "rounded to bf16.");
 
-    // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
-    // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode).
-    // The welford_groupnorm_sharded_v2 kernel feeds both c_0 (non-TILIZE_IN) and c_1
-    // (TILIZE_IN) through both transpose_tile (welford intake) and sub_tiles_bcast_scalar
-    // (final (x - mean) normalization). The FPU consumer means neither CB can carry the flag
-    // directly. The workaround is the multi-buffer-index aliasing pattern: register
-    // c_29 as a second buffer index on c_0's SRAM and c_31 on c_1's, set
-    // UnpackToDestFp32 on the alias indices, and have the kernel read the welford intake
-    // transpose via the alias (UnpackToDest fp32 path preserves the full 23-bit mantissa into
-    // DEST for the SFPU welford) while keeping the final-stage sub_tiles_bcast_scalar on the
-    // primary index (Default mode, SrcA path).
-    //
-    // Other FP32 CBs were considered and rejected because, even though they pass through an
-    // unpack-to-DEST-capable op, the next consumer is a pack into a CB whose downstream
-    // reader is an FPU op reading via SrcA, which truncates to TF32 regardless of what
-    // was preserved in DEST. Setting the flag would incur the cost without improving precision:
-    //   - cb_xmm (c_2): the (x - mean) intermediate. copy_tile into DEST then pack to cb_x;
-    //     cb_x is read by add_tiles (FPU on SrcA) for accumulation.
-    //   - cb_x (c_13): accumulates (x - mean) results across groups via repeated add_tiles,
-    //     each of which reads cb_x via SrcA (truncating to TF32) before producing the next
-    //     FP32 sum. The final stored value does carry one add_tiles step's worth of FP32
-    //     precision, so an UnpackToDestFp32 alias on the final copy_tile would
-    //     preserve ~ one mantissa-bit step beyond TF32, but the accumulated TF32
-    //     errors from previous iteration dominate, so the gain doesn't justify the overhead.
+    // Float32 two-pass statistics and final normalization both need full-mantissa values in DEST.
+    // Register c_29/c_31 as UnpackToDestFp32 aliases of the input CBs so transpose_tile can consume
+    // them during statistics and the fused SFPU normalizer can consume them during finalization.
+    // The primary c_0/c_1 indices retain the default unpack mode for the non-FP32 FPU fallback.
+    // c_20/c_21 similarly alias the mean and inverse-standard-deviation state consumed by the
+    // fused finalizer; no intermediate (x - mean) CB is required on that path.
     const bool welford_fp32_alias = use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
     const bool fp32_sfpu_normalizer = welford_fp32_alias;
     constexpr uint32_t ex_global_fp32_alias_index = tt::CBIndex::c_20;

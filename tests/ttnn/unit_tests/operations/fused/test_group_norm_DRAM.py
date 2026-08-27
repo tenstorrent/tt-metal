@@ -36,13 +36,16 @@ def test_group_norm_statistics_mode_validation(expect_error):
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-def test_group_norm_fp32_large_offset_DRAM(device):
+@pytest.mark.parametrize("has_affine", [False, True], ids=["plain", "affine"])
+def test_group_norm_fp32_large_offset_DRAM(device, has_affine):
     """The FP32 finalizer must not truncate x and mean to TF32 before subtraction."""
     torch.manual_seed(7)
     N, C, HW, num_groups = 1, 64, 32, 2
     x = 1_000_000.0 + 128.0 * (torch.rand((N, 1, HW, C), dtype=torch.float32) - 0.5)
+    weight = torch.linspace(0.75, 1.25, C, dtype=torch.float32) if has_affine else None
+    bias = torch.linspace(-0.25, 0.25, C, dtype=torch.float32) if has_affine else None
     reference = torch.nn.functional.group_norm(
-        x.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW), num_groups
+        x.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW), num_groups, weight=weight, bias=bias
     ).permute(0, 2, 3, 1)
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -59,9 +62,23 @@ def test_group_norm_fp32_large_offset_DRAM(device):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    if has_affine:
+        [gamma, beta] = ttnn.dram_group_norm_params_from_torch(
+            [weight, bias],
+            C,
+            num_groups,
+            device,
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            return_mask=False,
+            dtype=ttnn.float32,
+        )
+    else:
+        gamma = beta = None
     output = ttnn.group_norm(
         input_tensor,
         num_groups=num_groups,
+        weight=gamma,
+        bias=beta,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         core_grid=ttnn.CoreGrid(y=1, x=1),
         dtype=ttnn.float32,

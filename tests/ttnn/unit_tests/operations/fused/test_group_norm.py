@@ -221,13 +221,20 @@ def test_group_norm_stable_stats_translation_stability(device, base, amplitude):
     assert pcc > 0.9995
 
 
-def test_group_norm_sharded_fp32_large_offset(device):
+@pytest.mark.parametrize("has_affine", [False, True], ids=["plain", "affine"])
+def test_group_norm_sharded_fp32_large_offset(device, has_affine):
     """Sharded FP32 normalization must retain low-order input variation."""
     torch.manual_seed(7)
     N, C, H, W, num_groups = 1, 256, 1, 256, 16
     grid = ttnn.CoreGrid(y=1, x=1)
     x = 1_000_000.0 + 128.0 * (torch.rand((N, C, H, W), dtype=torch.float32) - 0.5)
-    reference = torch.nn.functional.group_norm(x, num_groups).permute(0, 2, 3, 1).reshape(N, 1, H * W, C)
+    weight = torch.linspace(0.75, 1.25, C, dtype=torch.float32) if has_affine else None
+    bias = torch.linspace(-0.25, 0.25, C, dtype=torch.float32) if has_affine else None
+    reference = (
+        torch.nn.functional.group_norm(x, num_groups, weight=weight, bias=bias)
+        .permute(0, 2, 3, 1)
+        .reshape(N, 1, H * W, C)
+    )
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -244,6 +251,23 @@ def test_group_norm_sharded_fp32_large_offset(device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     input_mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, grid.y, ttnn.bfloat8_b), device)
+    if has_affine:
+        gamma = ttnn.from_torch(
+            ttnn.create_group_norm_weight_bias_rm(weight, C, grid.y),
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        beta = ttnn.from_torch(
+            ttnn.create_group_norm_weight_bias_rm(bias, C, grid.y),
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        gamma = beta = None
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     shard_spec = ttnn.ShardSpec(shard_grid, (H * W, C), ttnn.ShardOrientation.COL_MAJOR)
     memory_config = ttnn.MemoryConfig(
@@ -256,6 +280,8 @@ def test_group_norm_sharded_fp32_large_offset(device):
         input_tensor,
         num_groups=num_groups,
         input_mask=input_mask,
+        weight=gamma,
+        bias=beta,
         memory_config=memory_config,
         core_grid=grid,
         dtype=ttnn.float32,

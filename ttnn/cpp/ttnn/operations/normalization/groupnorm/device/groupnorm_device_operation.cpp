@@ -73,6 +73,10 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+    TT_FATAL(
+        !(args.use_welford && a.device()->arch() == tt::ARCH::QUASAR),
+        "group_norm with use_welford=True is not supported on Quasar; the two-pass SFPU implementation currently "
+        "supports Wormhole and Blackhole only.");
     if (a.layout() == Layout::TILE) {
         TT_FATAL(
             tile_height == tt::constants::TILE_HEIGHT && tile_width == tt::constants::TILE_WIDTH,

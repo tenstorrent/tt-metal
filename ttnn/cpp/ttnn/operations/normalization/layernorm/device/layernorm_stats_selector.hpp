@@ -68,6 +68,9 @@ constexpr StatisticsBackend select_interleaved_statistics_backend(
     if (!requested_use_welford) {
         return StatisticsBackend::TILE_REDUCTION;
     }
+    if (arch == tt::ARCH::QUASAR) {
+        return StatisticsBackend::TILE_REDUCTION;
+    }
     // RMSNorm does not execute the Welford calculation, but its existing
     // Welford-configured route has distinct kernel and CB requirements.
     if (arch != tt::ARCH::BLACKHOLE || rms_norm || input_is_row_major) {
@@ -80,6 +83,9 @@ constexpr StatisticsBackend select_interleaved_statistics_backend(
 constexpr StatisticsBackend select_sharded_statistics_backend(
     bool requested_use_welford, tt::ARCH arch, bool is_pre_all_gather, bool is_post_all_gather) {
     if (!requested_use_welford) {
+        return StatisticsBackend::TILE_REDUCTION;
+    }
+    if (arch == tt::ARCH::QUASAR) {
         return StatisticsBackend::TILE_REDUCTION;
     }
     if (arch == tt::ARCH::BLACKHOLE && !is_pre_all_gather && !is_post_all_gather) {

@@ -573,6 +573,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 template <
     uint32_t dfb_in,
     uint32_t dfb_x_welford,
+    uint32_t dfb_in_fp32,
     bool welford_fp32_alias,
     bool fp32_sfpu_finalizer,
     uint32_t input_dst,
@@ -584,6 +585,7 @@ template <
 void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     DataflowBuffer dfb_in_obj(dfb_in);
     DataflowBuffer dfb_x_welford_obj(dfb_x_welford);
+    DataflowBuffer dfb_in_fp32_obj(dfb_in_fp32);
 
     constexpr uint32_t last_tile_rows = W % tile_width;
     constexpr bool is_last_tile_full = last_tile_rows == 0;
@@ -605,6 +607,12 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             dfb_x_welford_obj.wait_front(block.full_block_size());
         } else {
             dfb_in_obj.wait_front(block.full_block_size());
+        }
+        if constexpr (fp32_sfpu_finalizer) {
+            // The finalizer's input alias shares SRAM with dfb_in but has independent FIFO
+            // pointers. Consume its first-pass entry here so the second-pass entry identifies
+            // the tiles re-read for normalization rather than stale first-pass storage.
+            dfb_in_fp32_obj.wait_front(block.full_block_size());
         }
 
         uint32_t block_n = 0;
@@ -649,6 +657,9 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
         if constexpr (welford_fp32_alias) {
             dfb_x_welford_obj.pop_front(block.full_block_size());
+        }
+        if constexpr (fp32_sfpu_finalizer) {
+            dfb_in_fp32_obj.pop_front(block.full_block_size());
         }
         dfb_in_obj.pop_front(block.full_block_size());
     }

@@ -190,20 +190,26 @@ def test_layer_norm_welford_fp32_residual_large_offset(device, rows, width):
 
 
 @pytest.mark.parametrize(
-    "rows,width,has_residual,has_affine",
+    "rows,width,has_residual,has_gamma,has_beta",
     [
-        pytest.param(32, 64, False, False, id="compact_plain"),
-        pytest.param(32, 2880, True, True, id="residual_affine"),
+        pytest.param(32, 64, False, False, False, id="compact_plain"),
+        pytest.param(32, 64, False, True, False, id="compact_gamma"),
+        pytest.param(32, 64, False, False, True, id="compact_beta"),
+        pytest.param(64, 2880, False, True, True, id="affine_multi_row_tile"),
+        pytest.param(32, 2880, True, False, False, id="residual_plain"),
+        pytest.param(32, 2880, True, True, False, id="residual_gamma"),
+        pytest.param(32, 2880, True, False, True, id="residual_beta"),
+        pytest.param(32, 2880, True, True, True, id="residual_affine"),
     ],
 )
-def test_layer_norm_welford_fp32_finalizer_large_offset(device, rows, width, has_residual, has_affine):
+def test_layer_norm_welford_fp32_finalizer_large_offset(device, rows, width, has_residual, has_gamma, has_beta):
     """All FP32 finalizer variants must retain variation below a shared offset."""
     torch.manual_seed(37)
     base = 1_000_000.0
     torch_input = base + 64.0 * torch.randn((rows, width), dtype=torch.float32)
     torch_residual = base + 64.0 * torch.randn((rows, width), dtype=torch.float32) if has_residual else None
-    torch_weight = torch.linspace(0.75, 1.25, width, dtype=torch.float32) if has_affine else None
-    torch_bias = torch.linspace(-0.25, 0.25, width, dtype=torch.float32) if has_affine else None
+    torch_weight = torch.linspace(0.75, 1.25, width, dtype=torch.float32) if has_gamma else None
+    torch_bias = torch.linspace(-0.25, 0.25, width, dtype=torch.float32) if has_beta else None
 
     reference_input = torch_input.to(torch.float64)
     if torch_residual is not None:

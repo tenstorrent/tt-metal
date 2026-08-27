@@ -305,6 +305,10 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 if (program_config.use_welford) {
                     TT_FATAL(
+                        a.device()->arch() != tt::ARCH::QUASAR,
+                        "LayerNorm with use_welford=True is not supported on Quasar; the two-pass SFPU implementation "
+                        "currently supports Wormhole and Blackhole only.");
+                    TT_FATAL(
                         operation_attributes.norm_type != LayerNormType::RMSNORM,
                         "Welford's algorithm is not supported for RMSNorm");
                 }
@@ -313,6 +317,10 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
                 }
             } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
                 if (program_config.use_welford) {
+                    TT_FATAL(
+                        a.device()->arch() != tt::ARCH::QUASAR,
+                        "LayerNorm with use_welford=True is not supported on Quasar; the two-pass SFPU implementation "
+                        "currently supports Wormhole and Blackhole only.");
                     TT_FATAL(
                         operation_attributes.norm_type != LayerNormType::RMSNORM,
                         "Welford's algorithm is not supported for RMSNorm");
