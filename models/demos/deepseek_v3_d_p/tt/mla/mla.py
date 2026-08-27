@@ -379,8 +379,14 @@ class ttMLA:
         rope_scaling = getattr(config, "rope_scaling", None) or {}
         rope_factor = rope_scaling.get("factor")
 
+        # Not every YaRN model folds the mscale amplitude into the softmax scale. Mistral Small 4
+        # carries a full YaRN block (factor=128) but its own implementation uses the bare
+        # qk_head_dim**-0.5 and reports attention_scaling = 1.0, so no mscale is applied anywhere.
+        # Applying DeepSeek's correction anyway multiplies the attention logits by mscale^2 (2.2058
+        # at factor=128): no crash, just a wrong softmax temperature. Absent (-> False) on every
+        # other variant, so those paths are byte-identical.
         self.scale = self.qk_head_dim**-0.5
-        if rope_factor is not None and rope_factor > 1.0:
+        if rope_factor is not None and rope_factor > 1.0 and not getattr(config, "mla_disable_yarn_mscale", False):
             mscale = rope_scaling["mscale"]
             mscale = 0.1 * mscale * math.log(rope_factor) + 1.0
             self.scale = self.scale * mscale * mscale

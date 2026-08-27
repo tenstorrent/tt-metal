@@ -349,6 +349,81 @@ def _dequantize_pack_quantized_state_dict(
     return out
 
 
+def is_per_tensor_fp8(quantization_config: Any) -> bool:
+    """True for fp8 checkpoints scaled per tensor rather than per [128,128] block.
+
+    Signature is ``quant_method == "fp8"`` with **no** ``weight_block_size`` (Mistral Small 4 ships
+    `null`). The block-wise dequantizer cannot express this: it asserts
+    ``tensor.ndim == inv_scale.ndim`` and a block shape of matching rank, and per-tensor scales are
+    rank-0 scalars (dense) or ``[E, 1, 1]`` (stacked experts).
+    """
+    if not isinstance(quantization_config, dict):
+        return False
+    if quantization_config.get("quant_method") != "fp8":
+        return False
+    return not quantization_config.get("weight_block_size")
+
+
+def _scale_to(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """``(tensor * scale).to(dtype)``, without promoting the whole tensor to fp32 at once.
+
+    A stacked-expert weight is huge -- Mistral's ``mlp.experts.gate_up_proj`` is
+    [128, 4096, 4096] = 2.1G elements -- so the one-expression form costs ~21 GB of transient
+    host RAM (8.6 fp32 input + 8.6 fp32 product + 4.3 bf16 output) for a single tensor, on a
+    box that loads these layer by layer precisely to stay within RAM. When the scale has one
+    entry per leading slice, fill the output slice by slice instead: same arithmetic, same
+    result, but the fp32 transient is one expert (67 MB) rather than the whole stack.
+    """
+    if scale.ndim == tensor.ndim and tensor.ndim > 0 and tensor.shape[0] > 1:
+        out = torch.empty(tensor.shape, dtype=dtype)
+        for i in range(tensor.shape[0]):
+            out[i] = (tensor[i].float() * scale[i].float()).to(dtype)
+        return out
+    return (tensor.float() * scale.float()).to(dtype).contiguous()
+
+
+def _dequantize_per_tensor_fp8_state_dict(
+    state_dict: Mapping[str, torch.Tensor],
+    dtype: torch.dtype = torch.bfloat16,
+) -> dict[str, torch.Tensor]:
+    """Dequantize per-tensor fp8 weights: ``w = w_fp8.float() * scale_inv``.
+
+    Handles both scale ranks the format uses, with one expression, because torch broadcasting
+    already does the right thing:
+
+      * dense weights -- rank-0 scalar scale against an ``[out, in]`` weight;
+      * stacked experts -- ``[E, 1, 1]`` scale against an ``[E, out, in]`` weight, i.e. one scale
+        per expert.
+
+    ``*_activation_scale`` entries are inputs to a static activation-quantization scheme, not weight
+    scales; they are dropped rather than emitted as weights.
+    """
+    out: dict[str, torch.Tensor] = {}
+    n_dequantized = 0
+    for name in sorted(state_dict.keys()):
+        if name.endswith("_scale_inv") or name.endswith("activation_scale"):
+            continue
+        tensor = state_dict[name]
+        if tensor is None:
+            raise ValueError(f"Expected tensor {name} to exist in state_dict but it was None")
+        scale = state_dict.get(f"{name}_scale_inv")
+        if scale is None:
+            if tensor.dtype == torch.float8_e4m3fn:
+                raise ValueError(f"Found float8 tensor '{name}' without matching inverse scale '{name}_scale_inv'.")
+            out[name] = tensor.to(dtype).contiguous() if tensor.is_floating_point() else tensor.clone()
+            continue
+        if scale.ndim not in (0, tensor.ndim):
+            raise ValueError(
+                f"per-tensor fp8 scale for '{name}' has ndim {scale.ndim}; expected 0 (one scale per "
+                f"tensor) or {tensor.ndim} (one per leading slice), tensor shape {tuple(tensor.shape)}"
+            )
+        out[name] = _scale_to(tensor, scale, dtype)
+        n_dequantized += 1
+    if n_dequantized:
+        logger.info(f"per-tensor fp8: dequantized {n_dequantized} weight tensor(s)")
+    return out
+
+
 def dequantize_state_dict(
     state_dict: Mapping[str, torch.Tensor],
     hf_config: Any,
@@ -356,13 +431,15 @@ def dequantize_state_dict(
 ) -> dict[str, torch.Tensor]:
     """Dequantize an HF (sub-)state_dict for the d_p pipeline.
 
-    Kimi K2.6's compressed-tensors pack-quantized INT4 weights are dequantized locally; every
-    other checkpoint (DeepSeek fp8 block-wise) is delegated unchanged to the shared deepseek_v3
-    dequantizer.
+    Three schemes are in play: Kimi K2.6's compressed-tensors pack-quantized INT4, Mistral Small 4's
+    per-tensor fp8, and DeepSeek's block-wise fp8 (delegated unchanged to the shared deepseek_v3
+    dequantizer).
     """
     quant_cfg = _get_quantization_config_dict(hf_config)
     if is_pack_quantized_int4(quant_cfg):
         return _dequantize_pack_quantized_state_dict(state_dict, quant_cfg, dtype=dtype)
+    if is_per_tensor_fp8(quant_cfg):
+        return _dequantize_per_tensor_fp8_state_dict(state_dict, dtype=dtype)
     return _fp8_dequantize_state_dict(state_dict, hf_config, dtype)
 
 
@@ -442,3 +519,16 @@ def convert_state_dict(
         "quantized; dequantizing weights."
     )
     return dequantize_state_dict(state_dict, hf_config, dtype)
+
+
+def token_normalized(t: torch.Tensor) -> torch.Tensor:
+    """Per-token RMS-normalized copy: each position's feature vector divided by its own RMS.
+
+    Raw PCC on late-layer hidden states of a model with massive activations (an attention-sink
+    effect: a few channels carry values orders of magnitude larger than the rest) is dominated by
+    those channels and measures almost nothing about the other thousands. Normalizing PER TOKEN --
+    not globally -- makes the metric insensitive to them while still catching a genuine regression,
+    because a real error moves the whole feature vector rather than rescaling it.
+    """
+    x = t.float()
+    return x / x.pow(2).mean(dim=-1, keepdim=True).clamp_min(1e-12).sqrt()
