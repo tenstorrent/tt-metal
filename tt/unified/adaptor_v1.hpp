@@ -45,6 +45,7 @@
 // which is what lets a shared source chain CT-arg offsets.
 
 #include <cstdint>
+#include <type_traits>
 
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
 #include "api/compute/common.h"
@@ -87,6 +88,19 @@
 struct TensorAccessor {
     template <typename Args>
     constexpr TensorAccessor(Args, uint32_t) {}
+
+    // The Metal 2.0 spelling: TensorAccessor(tensor::name), built from a binding token
+    // rather than an args block and a base address. A compute projection still never
+    // dereferences one -- it only carries it through a statement shared with the
+    // data-movement projections -- so this stand-in takes the token and ignores it, the
+    // same way the two-argument form above ignores its arguments.
+    //
+    // Constrained so it cannot out-compete the copy constructor for a non-const
+    // TensorAccessor lvalue, which is the standard hazard of a one-argument template
+    // constructor: the template would deduce an exact match where the copy constructor
+    // needs a qualification conversion.
+    template <typename Token, typename = std::enable_if_t<!std::is_same<std::decay_t<Token>, TensorAccessor>::value>>
+    constexpr explicit TensorAccessor(Token) {}
 
     // Present so a custom load/store routine compiles here; see below.
     std::uint64_t get_noc_addr(uint32_t, uint32_t = 0, uint8_t = 0) const {
