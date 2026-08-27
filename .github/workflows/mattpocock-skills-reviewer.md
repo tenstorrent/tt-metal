@@ -35,6 +35,9 @@ pre-agent-steps:
         COMMENT_COUNT=$(jq 'length' /tmp/gh-aw/agent/pr-review-comments.json)
         echo "Cache hit: using pre-fetched PR data for head ${CURRENT_HEAD_SHA} (${LINES} diff lines, ${COMMENT_COUNT} review comments)"
       else
+        # The restored cache may carry a partiality marker written for an
+        # earlier head; this fetch decides afresh.
+        rm -f /tmp/gh-aw/agent/pr-diff.partial
         set +e
         gh pr diff "$PR_NUMBER" --repo "$EXPR_GITHUB_REPOSITORY" \
             --exclude '**/*.lock.yml' \
@@ -45,8 +48,37 @@ pre-agent-steps:
         DIFF_EXIT=$?
         set -e
         if [ $DIFF_EXIT -ne 0 ]; then
-          echo "::error::gh pr diff failed (exit $DIFF_EXIT): $(cat /tmp/gh-aw/agent/pr-diff.err)" >&2
-          exit 1
+          # GitHub's .diff media type refuses a PR above 300 changed files with
+          # HTTP 406 (`PullRequest.diff too_large`). The --exclude flags cannot
+          # prevent that: gh filters client side, after the API has already
+          # declined to serve the diff. Rebuild a partial patch from the
+          # per-file API instead -- it paginates and carries a `patch` per file
+          # -- so a wide PR gets a bounded review rather than failing the run.
+          # Every other failure (auth, network, deleted PR) is a real error and
+          # still takes the job down.
+          if grep -qiE 'too_large|exceeded the maximum number of files' /tmp/gh-aw/agent/pr-diff.err; then
+            echo "::warning::PR diff exceeds the diff API's 300-file limit; rebuilding a partial patch from the files API"
+            set +e
+            gh api --paginate "repos/$EXPR_GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" \
+              --jq '.[] | select(.patch != null)
+                    | select(.filename | test("(\\.lock\\.yml$|(^|/)(generated|dist|build)/)") | not)
+                    | "diff --git a/\(.filename) b/\(.filename)\n--- a/\(.filename)\n+++ b/\(.filename)\n\(.patch)"' \
+              > /tmp/gh-aw/agent/pr-diff.full 2>/tmp/gh-aw/agent/pr-diff.err
+            FILES_EXIT=$?
+            set -e
+            if [ $FILES_EXIT -ne 0 ]; then
+              echo "::error::could not rebuild the PR diff from the files API (exit $FILES_EXIT): $(cat /tmp/gh-aw/agent/pr-diff.err)" >&2
+              exit 1
+            fi
+            # Partial by construction: the files API caps at 3000 files and
+            # carries no `patch` for binary or rename-only entries. Tell the
+            # agent, so a bounded review cannot read as an exhaustive one.
+            printf '%s\n' "The diff API refused this PR (HTTP 406, over 300 changed files). The patch was rebuilt from the per-file API: binary and rename-only entries carry no hunks and are absent, the file list caps at 3000 files, and the patch is capped at ${PR_DIFF_MAX_LINES} lines. Treat this review as bounded, not exhaustive, and say so." \
+              > /tmp/gh-aw/agent/pr-diff.partial
+          else
+            echo "::error::gh pr diff failed (exit $DIFF_EXIT): $(cat /tmp/gh-aw/agent/pr-diff.err)" >&2
+            exit 1
+          fi
         fi
         head -n "${PR_DIFF_MAX_LINES}" /tmp/gh-aw/agent/pr-diff.full > /tmp/gh-aw/agent/pr-diff.patch
         LINES=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)
@@ -74,6 +106,13 @@ max-daily-ai-credits: 10000
 if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
 "on":
   pull_request:
+    # Base branch, not head. Without this the reviewer fired on every base --
+    # including main -> stable merge-forward PRs, whose thousands of files the
+    # diff API refuses outright (HTTP 406), failing the run before the agent
+    # started. Stacked PRs onto feature branches are reviewed when their parent
+    # lands on main.
+    branches:
+    - main
     paths-ignore:
     - "*.md"
     - docs/**
@@ -161,11 +200,14 @@ PR data and the diff (excluding lock files and common generated/build artifacts)
 cat /tmp/gh-aw/agent/pr-meta.json             # fields: number, title, body, headRefName, additions, deletions, changedFiles, files
 cat /tmp/gh-aw/agent/pr-diff.patch            # full unified diff of all changed files
 cat /tmp/gh-aw/agent/pr-review-comments.json  # existing review comments (each: id, path, line, body, user) — use to avoid duplication
+cat /tmp/gh-aw/agent/pr-diff.partial 2>/dev/null  # present only when the patch is incomplete
 ```
 
 Do **not** call `gh pr diff`, `gh pr view`, or `get_review_comments` inside the agent — the data is already available on disk.
 
 If the pre-fetched patch has 2000 lines, treat it as potentially truncated and focus your review on the highest-impact changed files. The 2000-line cap is intentional to keep token usage bounded on very large PRs; if important context appears missing, explicitly call that out in your review.
+
+If `pr-diff.partial` exists, the diff API refused this PR outright and the patch was rebuilt file by file, so entire files may be missing rather than just trailing lines. Treat the review as bounded and state the reason given in that file.
 
 ### Step 2: Read Available Skills
 
