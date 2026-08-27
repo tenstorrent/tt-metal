@@ -91,6 +91,12 @@ _UPSTREAM_ACT = {
 }
 
 
+# Re-run any case in this file with the routed-expert hybrid dispatch forced on:
+#   MOE_HYBRID_TOKEN_THRESHOLD=768 pytest ...
+# The hybrid must not move PCC, so it is a knob on the existing matrix rather than a new axis.
+_HYBRID_THRESHOLD_OVERRIDE = os.environ.get("MOE_HYBRID_TOKEN_THRESHOLD")
+
+
 def run_model(
     variant,
     config,
@@ -403,6 +409,9 @@ def run_model(
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
         routed_expert_activation=routed_activation,
+        routed_expert_hybrid_token_threshold=(
+            None if _HYBRID_THRESHOLD_OVERRIDE is None else int(_HYBRID_THRESHOLD_OVERRIDE)
+        ),
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation=shared_activation,
