@@ -62,6 +62,11 @@ def test_moe_fused_situ_glu_3584x3072_rm_bf16_bfp4(device, weight_scale):
             (gate_up_memory_config, gate_up_memory_config, down_memory_config),
         )
     ]
+    # The composite takes DRAM-interleaved weights only, and `weight_memory_configs` has no
+    # interleaved path — it is the fused op's ND placement helper. A second upload of the SAME host
+    # tensors keeps the cross-check honest: bfp4 quantization is placement-independent, so both ops
+    # see identical values.
+    interleaved_weights = [_to_device(weight, ttnn.bfloat4_b, ttnn.TILE_LAYOUT, device) for weight in host_weights]
 
     counts_host = torch.zeros(384, dtype=torch.int32)
     counts_host[GLOBAL_EXPERT_ID] = COUNT
@@ -91,9 +96,9 @@ def test_moe_fused_situ_glu_3584x3072_rm_bf16_bfp4(device, weight_scale):
         offsets,
         counts,
         expert_ids,
-        [weights[0]],
-        [weights[1]],
-        [weights[2]],
+        [interleaved_weights[0]],
+        [interleaved_weights[1]],
+        [interleaved_weights[2]],
         COUNT,
         activation=ttnn.RoutedExpertActivation.SituGlu,
     )
@@ -112,17 +117,9 @@ def test_moe_fused_situ_glu_3584x3072_rm_bf16_bfp4(device, weight_scale):
     assert_with_pcc(actual, composite_actual, pcc=0.999)
 
 
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_tensix_config": ttnn.FabricTensixConfig.MUX,
-        }
-    ],
-    indirect=True,
-)
+# No fabric: this op is single-device and `mesh_device` is only a device handle here, so a fabric
+# config buys nothing and its tensix-mux bring-up fails outright on a multi-card host.
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
 @pytest.mark.parametrize(
