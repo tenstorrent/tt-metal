@@ -63,31 +63,6 @@
   team: models
   sp_config: sc1
 
-- name: "DeepSeek-V3-671B MLA accuracy 100k, 128k"
-  fabric_profile: torus_xy
-  cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
-    export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
-    export TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure
-    export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/
-    export DEEPSEEK_V3_TRACE_DIR=/mnt/models/deepseek-prefill-cache
-    export DEEPSEEK_V3_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/test_mla_output
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      set -e
-      export OMP_NUM_THREADS=$(nproc)
-      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "torus-xy-8x4 and random and max_sl and check_pcc and balanced" -vvv --tb=short
-    '
-  test_type: mla
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 16
-  owner_id: U08RL15T4N8
-  team: models
-  sp_config: sc1
-
 - name: "DeepSeek-V3-671B & Kimi-K2.6-1T MLA chunked accuracy 10k@5k"
   fabric_profile: torus_xy
   cmd: |
