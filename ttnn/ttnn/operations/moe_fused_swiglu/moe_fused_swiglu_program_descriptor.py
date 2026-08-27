@@ -99,6 +99,8 @@ KERNEL_CT_ORDER = {
         "NEED_START",
         "READ_X_AT_OFFSET",
         "START_PAGE",
+        "MIN_ACTIVE_TOKENS",
+        "MAX_ACTIVE_TOKENS",
         "CB_X_IN",
         "CB_X_TILES",
         "CB_X_STAGE",
@@ -629,6 +631,9 @@ def create_program_descriptor(
         "DEST_LIMIT": geo.DEST_AUTO_LIMIT_TILES,
         "M_T_MAX": input_m_tiles,
         "EXPERTS_PER_CHIP": 1,
+        # This descriptor builds a one-expert program; the hybrid band is a C++-op feature.
+        "MIN_ACTIVE_TOKENS": 0,
+        "MAX_ACTIVE_TOKENS": 0xFFFFFFFF,
         "X_PAGE": int(input_tensor.buffer_page_size()),
         "X_SLICE": x_stick_slice,
         "COUNTS_PAGE": max(int(counts.buffer_aligned_page_size()), dram_align),

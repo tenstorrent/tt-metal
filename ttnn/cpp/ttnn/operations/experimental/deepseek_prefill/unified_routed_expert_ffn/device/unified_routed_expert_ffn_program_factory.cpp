@@ -668,6 +668,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // X_RM_ELEM_BYTES — byte size of one row-major x element (x is bf16 in
         // the row-major path).
         tt::datum_size(tt::DataFormat::Float16_b),
+        // Active-token band. Experts outside it are dropped like a zero count, so a
+        // hybrid dispatch can hand this op one load regime and moe_fused_swiglu the other
+        // over the SAME counts vector. Wide open by default.
+        op.min_active_tokens,
+        op.max_active_tokens,
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -736,6 +741,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         in0_block_w_gu,                       // 17
         K_gate_tiles,                         // 18
         static_cast<uint32_t>(up_mode == 2),  // 19 writer_split_up
+        op.min_active_tokens,                 // 20
+        op.max_active_tokens,                 // 21
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start, then up (UP_SPLIT).
@@ -799,6 +806,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // matmul over the last K-block's tail padding tiles (zero-activated)
         // instead of computing dead MACs.
         K_down_tiles,
+        op.min_active_tokens,
+        op.max_active_tokens,
     };
     std::unordered_map<std::string, uint32_t> compute_named_args = {
         // Row-major bf16 x staging (x_is_row_major only); tilize input CB.

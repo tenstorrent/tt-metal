@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <tuple>
 #include <vector>
@@ -79,10 +80,24 @@ struct UnifiedRoutedExpertFfnParams {
 
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("m_tiles", "experts_per_chip", "x_is_row_major", "activation", "fuse_bias");
+    // Active-token band this op owns. An expert whose count falls outside it is dropped
+    // like a zero count, which is how a hybrid dispatch splits the experts between this op
+    // and moe_fused_swiglu over ONE shared counts vector -- no masked tensors, no host sync.
+    // Compile-time in the kernels, so it belongs to the program-cache key.
+    uint32_t min_active_tokens = 0;
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "m_tiles",
+        "experts_per_chip",
+        "x_is_row_major",
+        "activation",
+        "fuse_bias",
+        "min_active_tokens",
+        "max_active_tokens");
     auto attribute_values() const {
-        return std::forward_as_tuple(m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias);
+        return std::forward_as_tuple(
+            m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias, min_active_tokens, max_active_tokens);
     }
 };
 
