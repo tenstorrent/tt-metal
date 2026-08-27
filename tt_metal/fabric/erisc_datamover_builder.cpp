@@ -556,17 +556,11 @@ void append_worker_to_fabric_edm_sender_rt_args(
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
-void append_worker_to_fabric_edm_sender_rt_args(
-    chan_id_t eth_channel,
-    size_t sender_worker_terminate_semaphore_id,
-    size_t sender_worker_buffer_index_semaphore_id,
-    std::vector<uint32_t>& args_out) {
-    const std::vector<uint32_t> values = {
-        eth_channel,
-        static_cast<uint32_t>(sender_worker_terminate_semaphore_id),
-        static_cast<uint32_t>(sender_worker_buffer_index_semaphore_id)};
-    args_out.reserve(args_out.size() + values.size());
-    std::ranges::copy(values, std::back_inserter(args_out));
+// VC0 (Tensix worker) path. The connection table is indexed by eth channel and holds the
+// worker teardown semaphore and producer cursor as storage, so the kernel derives both
+// addresses itself -- the channel is the only thing that has to be passed.
+void append_worker_to_fabric_edm_sender_rt_args(chan_id_t eth_channel, std::vector<uint32_t>& args_out) {
+    args_out.push_back(eth_channel);
 }
 
 // TODO: will be deprecated. non device init fabric case

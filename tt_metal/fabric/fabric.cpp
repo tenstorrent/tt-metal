@@ -195,37 +195,43 @@ void append_fabric_connection_rt_args(
 
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
 
-    uint32_t worker_teardown_semaphore_id;
-    uint32_t worker_buffer_index_semaphore_id;
-    uint32_t worker_flow_control_semaphore_id;
+    uint32_t worker_teardown_semaphore_id = 0;
+    uint32_t worker_buffer_index_semaphore_id = 0;
+    uint32_t worker_flow_control_semaphore_id = 0;
 
-    if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
-        auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
-        TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
-        worker_teardown_semaphore_id = teardown_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_teardown_semaphore_id,
-            .core_type = core_type,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
+    // Only the non-WORKER (VC2 / ethernet dispatch) path needs these as program semaphores.
+    // A Tensix worker is on VC0, where teardown and the producer cursor are storage in the
+    // per-channel connection table and the kernel addresses them directly, so allocating
+    // here would burn two of that core's 16 slots for values nothing reads.
+    if (core_type != CoreType::WORKER) {
+        if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
+            auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
+            TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
+            worker_teardown_semaphore_id = teardown_sem_id_opt.value();
+            worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_teardown_semaphore_id,
+                .core_type = core_type,
+                .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
 
-        auto buffer_index_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
-        TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
-        worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_buffer_index_semaphore_id,
-            .core_type = core_type,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
-    } else {
-        worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
-        worker_buffer_index_semaphore_id =
-            tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
+            auto buffer_index_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
+            TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
+            worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
+            worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_buffer_index_semaphore_id,
+                .core_type = core_type,
+                .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
+        } else {
+            worker_teardown_semaphore_id =
+                tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
+            worker_buffer_index_semaphore_id =
+                tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
+        }
     }
 
     if (core_type == CoreType::WORKER) {
-        append_worker_to_fabric_edm_sender_rt_args(
-            fabric_router_channel, worker_teardown_semaphore_id, worker_buffer_index_semaphore_id, worker_args);
+        append_worker_to_fabric_edm_sender_rt_args(fabric_router_channel, worker_args);
 #if defined(TT_METAL_USE_EMULE)
         // Record (src_chip, worker_core, forwarding_direction, neighbor_chip) for the emule teleport's 1D
         // dst resolution. Called per connection in fwd-then-bwd order (matches the kernel's read order).
