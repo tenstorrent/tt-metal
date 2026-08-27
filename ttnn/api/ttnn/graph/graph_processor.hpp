@@ -86,6 +86,26 @@ public:
 
     void track_program(tt::tt_metal::Program* program, const tt::tt_metal::IDevice* device) override;
 
+    void track_program_execution(
+        uint32_t device_id,
+        uint64_t sub_device_manager_id,
+        uint8_t sub_device_id,
+        const tt::tt_metal::CoreRangeSet& worker_core_ranges,
+        uint64_t runtime_id,
+        uint32_t global_call_count,
+        uint64_t program_id,
+        uint8_t command_queue_id);
+
+    static void track_cross_thread_program_execution(
+        uint32_t device_id,
+        uint64_t sub_device_manager_id,
+        uint8_t sub_device_id,
+        const tt::tt_metal::CoreRangeSet& worker_core_ranges,
+        uint64_t runtime_id,
+        uint32_t global_call_count,
+        uint64_t program_id,
+        uint8_t command_queue_id);
+
     void track_function_start(
         std::string_view function_name, std::span<tt::tt_metal::TrackedArgument> input_parameters) override;
 
@@ -113,6 +133,8 @@ private:
     std::shared_ptr<ProcessorHooks> hook;
 
     std::mutex mutex;
+    static std::mutex active_processors_mutex;
+    static std::vector<GraphProcessor*> active_processors;
     RunMode run_mode = RunMode::NORMAL;
     std::stack<node_id> current_op_id;
     std::unordered_map<std::int64_t, node_id> buffer_id_to_counter;

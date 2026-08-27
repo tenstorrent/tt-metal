@@ -28,7 +28,7 @@ import graph_report
 # Now import ttnn for device tests
 import ttnn
 
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0, skip_for_slow_dispatch
 
 
 @pytest.fixture
@@ -84,6 +84,10 @@ _SQLITE_TABLES_WITH_RANK = (
     "devices",
     "operations",
     "operation_arguments",
+    "sub_device_managers",
+    "sub_devices",
+    "operation_executions",
+    "execution_sub_devices",
     "tensors",
     "device_tensors",
     "buffers",
@@ -112,6 +116,96 @@ def _assert_nonempty_tables_rank_equals(cursor, expected_rank: int) -> None:
             assert (
                 rmin == rmax == expected_rank
             ), f"table {table}: expected rank {expected_rank} on all {cnt} row(s), got min={rmin} max={rmax}"
+
+
+class TestSubDeviceExecutionImport:
+    @staticmethod
+    def _report_with_program_execution():
+        worker_core_ranges = [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.add"},
+                "connections": [2],
+                "input_tensors": [],
+                "arguments": ["SubDeviceId(0)"],
+            },
+            {
+                "counter": 2,
+                "node_type": "program_execution",
+                "params": {
+                    "device_id": 17,
+                    "physical_device_id": 17,
+                    "sub_device_manager_id": 7,
+                    "sub_device_id": 1,
+                    "worker_core_ranges": json.dumps(worker_core_ranges),
+                    "runtime_id": 3,
+                    "global_call_count": (3 << 10) | 17,
+                    "program_id": 42,
+                    "command_queue_id": 0,
+                },
+                "connections": [1],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.add"},
+                "connections": [],
+                "duration_ns": 1000,
+            },
+            {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        return _make_report(graph, devices=[{"device_id": 17}]), worker_core_ranges
+
+    def test_imports_authoritative_program_execution_and_topology(self, tmp_path):
+        report, expected_ranges = self._report_with_program_execution()
+        conn, cursor = _import_to_db(report, tmp_path)
+        try:
+            manager = cursor.execute(
+                "SELECT device_id, physical_device_id, sub_device_manager_id, rank FROM sub_device_managers"
+            ).fetchone()
+            assert manager == (0, 17, 7, 0)
+
+            sub_device = cursor.execute(
+                "SELECT device_id, physical_device_id, sub_device_manager_id, sub_device_id, "
+                "worker_core_ranges, rank FROM sub_devices"
+            ).fetchone()
+            assert sub_device[:4] == (0, 17, 7, 1)
+            assert json.loads(sub_device[4]) == expected_ranges
+            assert sub_device[5] == 0
+
+            execution = cursor.execute(
+                "SELECT o.name, e.operation_id, e.device_id, e.physical_device_id, e.runtime_id, "
+                "e.global_call_count, e.program_id, e.command_queue_id, x.sub_device_manager_id, x.sub_device_id "
+                "FROM operation_executions e "
+                "JOIN operations o ON o.operation_id = e.operation_id AND o.rank = e.rank "
+                "JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank"
+            ).fetchone()
+            assert execution == ("ttnn.add", 1, 0, 17, 3, (3 << 10) | 17, 42, 0, 7, 1)
+            assert cursor.execute("SELECT value FROM operation_arguments WHERE operation_id = 1").fetchone() == (
+                "SubDeviceId(0)",
+            )
+        finally:
+            conn.close()
+
+    def test_old_report_without_execution_nodes_creates_empty_compatible_tables(self, tmp_path):
+        report = _make_report([{"counter": 0, "node_type": "capture_start", "params": {}, "connections": []}])
+        conn, cursor = _import_to_db(report, tmp_path)
+        try:
+            for table in (
+                "sub_device_managers",
+                "sub_devices",
+                "operation_executions",
+                "execution_sub_devices",
+            ):
+                assert cursor.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+            assert cursor.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'").fetchone() == (
+                "3.4",
+            )
+        finally:
+            conn.close()
 
 
 class TestImportReportMultiFileOperationIds:
@@ -2256,6 +2350,66 @@ class TestGraphCaptureToFile:
         assert "graph" in report
         assert "version" in report
         assert report["graph"] == captured_graph
+
+    @skip_for_slow_dispatch()
+    @pytest.mark.skipif(not is_wormhole_b0(), reason="Sub-device graph-report coverage targets Wormhole")
+    def test_sub_device_execution_metadata_round_trip(self, device, tmp_report_dir):
+        report_path = tmp_report_dir / "sub_device_report.json"
+        db_dir = tmp_report_dir / "db"
+        sub_device_0_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        sub_device_1_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 4))})
+        manager = device.create_sub_device_manager(
+            [ttnn.SubDevice([sub_device_0_cores]), ttnn.SubDevice([sub_device_1_cores])],
+            3200,
+        )
+        device.load_sub_device_manager(manager)
+        device.set_sub_device_stall_group([ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
+
+        try:
+            torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+            lhs = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+            rhs = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+            with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config("enable_logging", True):
+                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+                try:
+                    _ = ttnn.add(lhs, rhs, sub_device_id=ttnn.SubDeviceId(1))
+                    ttnn.synchronize_device(device)
+                finally:
+                    captured_graph = ttnn.graph.end_graph_capture_to_file(report_path)
+        finally:
+            device.reset_sub_device_stall_group()
+            device.clear_loaded_sub_device_manager()
+            device.remove_sub_device_manager(manager)
+
+        execution_nodes = [node for node in captured_graph if node.get("node_type") == "program_execution"]
+        assert len(execution_nodes) == 1
+        params = execution_nodes[0]["params"]
+        assert params["sub_device_id"] == 1
+        assert json.loads(params["worker_core_ranges"]) == [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
+        assert params["global_call_count"] == (params["runtime_id"] << 10) | params["physical_device_id"]
+        assert params["command_queue_id"] == 0
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        with sqlite3.connect(db_path) as conn:
+            execution = conn.execute(
+                "SELECT e.physical_device_id, e.runtime_id, e.global_call_count, e.command_queue_id, "
+                "x.sub_device_manager_id, x.sub_device_id, s.worker_core_ranges "
+                "FROM operation_executions e "
+                "JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank "
+                "JOIN sub_devices s ON s.device_id = x.device_id "
+                "AND s.sub_device_manager_id = x.sub_device_manager_id "
+                "AND s.sub_device_id = x.sub_device_id AND s.rank = x.rank"
+            ).fetchone()
+        assert execution[:6] == (
+            params["physical_device_id"],
+            params["runtime_id"],
+            params["global_call_count"],
+            0,
+            params["sub_device_manager_id"],
+            1,
+        )
+        assert json.loads(execution[6]) == [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
 
     def test_report_contains_device_info(self, device, tmp_report_dir):
         """Test that report contains device information."""

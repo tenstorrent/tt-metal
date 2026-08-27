@@ -232,7 +232,8 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
 # 3.2 - git hash and remote URL in report_metadata (#43830)
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
-DATABASE_SCHEMA_VERSION = "3.3"
+# 3.4 - normalized sub-device topology and operation/program execution associations
+DATABASE_SCHEMA_VERSION = "3.4"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
@@ -531,6 +532,62 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             name text,
             value text,
             rank int NOT NULL DEFAULT 0
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sub_device_managers (
+            device_id int,
+            physical_device_id int,
+            sub_device_manager_id int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(device_id, sub_device_manager_id, rank)
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sub_devices (
+            device_id int,
+            physical_device_id int,
+            sub_device_manager_id int,
+            sub_device_id int,
+            worker_core_ranges text,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(device_id, sub_device_manager_id, sub_device_id, rank)
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS operation_executions (
+            execution_id int,
+            operation_id int,
+            device_id int,
+            physical_device_id int,
+            runtime_id int,
+            global_call_count int,
+            program_id int,
+            command_queue_id int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(execution_id, rank)
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS execution_sub_devices (
+            execution_id int,
+            device_id int,
+            sub_device_manager_id int,
+            sub_device_id int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(execution_id, device_id, sub_device_manager_id, sub_device_id, rank)
         )
     """
     )
@@ -1025,6 +1082,10 @@ def import_graph(
     stack_traces_batch = []
     operations_batch = []
     operation_arguments_batch = []
+    sub_device_managers_batch = []
+    sub_devices_batch = []
+    operation_executions_batch = []
+    execution_sub_devices_batch = []
     input_tensors_batch = []
     output_tensors_batch = []
     tensors_batch = []
@@ -1236,6 +1297,38 @@ def import_graph(
 
             operation_id = base_operation_id + operation_counter
             operations_batch.append((operation_id, name, duration_s, rank))
+
+            for execution_node in current_op_nodes:
+                if execution_node.get("node_type") != "program_execution":
+                    continue
+                execution_params = execution_node.get("params") or {}
+                execution_id = base_operation_id + int(execution_node.get("counter", 0))
+                device_id = int(execution_params["device_id"])
+                physical_device_id = int(execution_params.get("physical_device_id", device_id))
+                manager_id = int(execution_params["sub_device_manager_id"])
+                sub_device_id = int(execution_params["sub_device_id"])
+                worker_core_ranges = execution_params.get("worker_core_ranges", "[]")
+                if not isinstance(worker_core_ranges, str):
+                    worker_core_ranges = json.dumps(worker_core_ranges)
+
+                sub_device_managers_batch.append((device_id, physical_device_id, manager_id, rank))
+                sub_devices_batch.append(
+                    (device_id, physical_device_id, manager_id, sub_device_id, worker_core_ranges, rank)
+                )
+                operation_executions_batch.append(
+                    (
+                        execution_id,
+                        operation_id,
+                        device_id,
+                        physical_device_id,
+                        int(execution_params["runtime_id"]),
+                        int(execution_params["global_call_count"]),
+                        int(execution_params["program_id"]),
+                        int(execution_params["command_queue_id"]),
+                        rank,
+                    )
+                )
+                execution_sub_devices_batch.append((execution_id, device_id, manager_id, sub_device_id, rank))
 
             if start_node:
                 graph_counter_to_op_id[start_node["counter"]] = operation_id
@@ -1688,6 +1781,26 @@ def import_graph(
         cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?, ?, ?)""", stack_traces_rows)
     if operations_batch:
         cursor.executemany("""INSERT OR REPLACE INTO operations VALUES (?, ?, ?, ?)""", operations_batch)
+    if sub_device_managers_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO sub_device_managers VALUES (?, ?, ?, ?)""",
+            sub_device_managers_batch,
+        )
+    if sub_devices_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO sub_devices VALUES (?, ?, ?, ?, ?, ?)""",
+            sub_devices_batch,
+        )
+    if operation_executions_batch:
+        cursor.executemany(
+            """INSERT OR REPLACE INTO operation_executions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            operation_executions_batch,
+        )
+    if execution_sub_devices_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO execution_sub_devices VALUES (?, ?, ?, ?, ?)""",
+            execution_sub_devices_batch,
+        )
     if operation_arguments_batch:
         cursor.executemany("""INSERT INTO operation_arguments VALUES (?, ?, ?, ?)""", operation_arguments_batch)
     if input_tensors_batch:
@@ -1759,6 +1872,9 @@ def import_graph(
 
     return {
         "operations": len(operations_batch),
+        "operation_executions": len(operation_executions_batch),
+        "sub_device_managers": len(set(sub_device_managers_batch)),
+        "sub_devices": len(set(sub_devices_batch)),
         "tensors": len(tensors_batch),
         "device_tensors": len(device_tensors_batch),
         "buffers": len(buffers_batch),

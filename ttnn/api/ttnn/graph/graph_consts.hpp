@@ -32,8 +32,16 @@ constexpr auto kCoreRangeSet = "core_range_set";
 constexpr auto kGloballyAllocated = "globally_allocated";
 constexpr auto kBorrowsMemory = "borrows_memory";
 constexpr auto kDeviceId = "device_id";
+constexpr auto kPhysicalDeviceId = "physical_device_id";
 constexpr auto kDurationNs = "duration_ns";
 constexpr auto kMaxSizePerBank = "max_size_per_bank";
+constexpr auto kSubDeviceManagerId = "sub_device_manager_id";
+constexpr auto kSubDeviceId = "sub_device_id";
+constexpr auto kWorkerCoreRanges = "worker_core_ranges";
+constexpr auto kRuntimeId = "runtime_id";
+constexpr auto kGlobalCallCount = "global_call_count";
+constexpr auto kProgramId = "program_id";
+constexpr auto kCommandQueueId = "command_queue_id";
 
 // node names
 constexpr auto kNodeBuffer = "buffer";
@@ -49,6 +57,7 @@ constexpr auto kNodeFunctionStart = "function_start";
 constexpr auto kNodeFunctionEnd = "function_end";
 constexpr auto kNodeCaptureStart = "capture_start";
 constexpr auto kNodeCaptureEnd = "capture_end";
+constexpr auto kNodeProgramExecution = "program_execution";
 // levelized graph keys
 constexpr auto kInEdges = "in_edges";
 constexpr auto kOutEdges = "out_edges";

@@ -210,6 +210,31 @@ void enqueue_mesh_workload(
 
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
+    const auto active_manager_id = mesh_device->get_active_sub_device_manager_id();
+    if (active_manager_id != mesh_device->get_default_sub_device_manager_id()) {
+        const auto sub_device_ids = workload.determine_sub_device_ids(mesh_device);
+        TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
+        const auto sub_device_id = *sub_device_ids.begin();
+        const auto worker_core_ranges =
+            mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
+        const auto command_queue_id = static_cast<uint8_t>(mesh_device->mesh_command_queue().id());
+        for (const auto& [device_range, program] : workload.get_programs()) {
+            for (const auto* physical_device : mesh_device->get_view().get_devices(device_range)) {
+                const auto global_call_count = tt::tt_metal::detail::EncodePerDeviceProgramID(
+                    static_cast<uint32_t>(runtime_id), physical_device->id(), false);
+                ttnn::graph::GraphProcessor::track_cross_thread_program_execution(
+                    physical_device->id(),
+                    *active_manager_id,
+                    *sub_device_id,
+                    worker_core_ranges,
+                    runtime_id,
+                    global_call_count,
+                    program.get_id(),
+                    command_queue_id);
+            }
+        }
+    }
+
     TracyOpMeshWorkload(
         mesh_device,
         workload,

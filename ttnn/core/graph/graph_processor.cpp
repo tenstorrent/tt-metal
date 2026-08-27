@@ -50,10 +50,17 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
         ttnn::graph::kAddress,
         ttnn::graph::kTensorId,
         ttnn::graph::kDeviceId,
+        ttnn::graph::kPhysicalDeviceId,
         ttnn::graph::kBufferType,
         ttnn::graph::kPageSize,
         ttnn::graph::kNumCores,
         ttnn::graph::kMaxSizePerBank,
+        ttnn::graph::kSubDeviceManagerId,
+        ttnn::graph::kSubDeviceId,
+        ttnn::graph::kRuntimeId,
+        ttnn::graph::kGlobalCallCount,
+        ttnn::graph::kProgramId,
+        ttnn::graph::kCommandQueueId,
     };
     nlohmann::json params_json;
     for (const auto& [key, value] : data.params) {
@@ -151,6 +158,8 @@ std::string get_mesh_coordinate_mapping_content() {
 namespace ttnn::graph {
 
 std::atomic<bool> GraphProcessor::capture_detailed_buffer_tracing_{false};
+std::mutex GraphProcessor::active_processors_mutex;
+std::vector<GraphProcessor*> GraphProcessor::active_processors;
 
 void GraphProcessor::enable_detailed_buffer_tracing() { capture_detailed_buffer_tracing_ = true; }
 
@@ -425,6 +434,71 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_
 
     for (const auto& cb : program->circular_buffers()) {
         track_allocate_cb(cb->core_ranges(), 0, cb->size(), cb->globally_allocated(), device);
+    }
+}
+
+void GraphProcessor::track_program_execution(
+    uint32_t device_id,
+    uint64_t sub_device_manager_id,
+    uint8_t sub_device_id,
+    const tt::tt_metal::CoreRangeSet& worker_core_ranges,
+    uint64_t runtime_id,
+    uint32_t global_call_count,
+    uint64_t program_id,
+    uint8_t command_queue_id) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    if (current_op_id.empty()) {
+        return;
+    }
+
+    nlohmann::json ranges = nlohmann::json::array();
+    for (const auto& range : worker_core_ranges.ranges()) {
+        ranges.push_back(
+            {{"start", {{"x", range.start_coord.x}, {"y", range.start_coord.y}}},
+             {"end", {{"x", range.end_coord.x}, {"y", range.end_coord.y}}}});
+    }
+
+    const node_id counter = graph.size();
+    graph.push_back(Vertex{
+        .counter = counter,
+        .node_type = kNodeProgramExecution,
+        .params =
+            {
+                {kDeviceId, std::to_string(device_id)},
+                {kPhysicalDeviceId, std::to_string(device_id)},
+                {kSubDeviceManagerId, std::to_string(sub_device_manager_id)},
+                {kSubDeviceId, std::to_string(sub_device_id)},
+                {kWorkerCoreRanges, ranges.dump()},
+                {kRuntimeId, std::to_string(runtime_id)},
+                {kGlobalCallCount, std::to_string(global_call_count)},
+                {kProgramId, std::to_string(program_id)},
+                {kCommandQueueId, std::to_string(command_queue_id)},
+            },
+        .connections = {current_op_id.top()},
+        .stacking_level = static_cast<int>(current_op_id.size()) - 1});
+    graph[current_op_id.top()].connections.push_back(counter);
+}
+
+void GraphProcessor::track_cross_thread_program_execution(
+    uint32_t device_id,
+    uint64_t sub_device_manager_id,
+    uint8_t sub_device_id,
+    const tt::tt_metal::CoreRangeSet& worker_core_ranges,
+    uint64_t runtime_id,
+    uint32_t global_call_count,
+    uint64_t program_id,
+    uint8_t command_queue_id) {
+    const std::lock_guard<std::mutex> lock(active_processors_mutex);
+    for (auto* processor : active_processors) {
+        processor->track_program_execution(
+            device_id,
+            sub_device_manager_id,
+            sub_device_id,
+            worker_core_ranges,
+            runtime_id,
+            global_call_count,
+            program_id,
+            command_queue_id);
     }
 }
 
@@ -911,14 +985,32 @@ void GraphProcessor::clean_hook() {
     }
 }
 
-GraphProcessor::~GraphProcessor() { clean_hook(); }
+GraphProcessor::~GraphProcessor() {
+    {
+        const std::lock_guard<std::mutex> lock(active_processors_mutex);
+        std::erase(active_processors, this);
+    }
+    clean_hook();
+}
 
 void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::NORMAL) {
-    tt::tt_metal::GraphTracker::instance().push_processor(std::make_shared<GraphProcessor>(mode));
+    auto processor = std::make_shared<GraphProcessor>(mode);
+    {
+        const std::lock_guard<std::mutex> lock(active_processors_mutex);
+        active_processors.push_back(processor.get());
+    }
+    tt::tt_metal::GraphTracker::instance().push_processor(std::move(processor));
 }
 
 nlohmann::json GraphProcessor::end_graph_capture() {
-    auto res = tt::tt_metal::GraphTracker::instance().get_processors().back()->end_capture();
+    auto* processor =
+        dynamic_cast<GraphProcessor*>(tt::tt_metal::GraphTracker::instance().get_processors().back().get());
+    TT_ASSERT(processor != nullptr, "Current processor is not a GraphProcessor");
+    {
+        const std::lock_guard<std::mutex> lock(active_processors_mutex);
+        std::erase(active_processors, processor);
+    }
+    auto res = processor->end_capture();
     tt::tt_metal::GraphTracker::instance().pop_processor();
     return res;
 }
@@ -929,6 +1021,11 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
 
     auto* processor = dynamic_cast<GraphProcessor*>(processors.back().get());
     TT_ASSERT(processor != nullptr, "Current processor is not a GraphProcessor");
+
+    {
+        const std::lock_guard<std::mutex> lock(active_processors_mutex);
+        std::erase(active_processors, processor);
+    }
 
     // Finalize the graph, then build the report via the shared get_report() path
     auto graph_json = processor->end_capture();
