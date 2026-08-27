@@ -713,7 +713,7 @@ jobs:
                         "description": "Select model to test (filters rows strictly by model-name in tests/pipeline_reorg/blackhole_e2e_tests.yaml; use \"all\" to run every row including untagged)",
                         "enum": [
                           "all",
-                          "deepseek_prefill"
+                          "disaggregated_prefill"
                         ],
                         "type": "string"
                       },
@@ -747,8 +747,8 @@ jobs:
                         "description": "Select e2e tests to run: all tests, or one test id",
                         "enum": [
                           "all",
-                          "bh-lb-deepseek-prefill-perf",
-                          "bh-qb2-deepseek-d2d-socket-sync"
+                          "bh-lb-disaggregated-prefill-perf",
+                          "bh-qb2-disaggregated-prefill-d2d-socket-sync"
                         ],
                         "type": "string"
                       }
