@@ -50,8 +50,7 @@ ALWI void logaddexp_binary_tile_init() {
     // is the program-constant load in calculate_sfpu_logaddexp_init. There is no
     // SfpuType::logaddexp — naming one here fails to compile the first time a kernel
     // instantiates this init.
-    MATH((SFPU_BINARY_INIT_FN(
-        add1, sfpu::calculate_sfpu_logaddexp_init, (DST_ACCUM_MODE))));
+    MATH((SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_logaddexp_init, (DST_ACCUM_MODE))));
 }
 
 }  // namespace ckernel

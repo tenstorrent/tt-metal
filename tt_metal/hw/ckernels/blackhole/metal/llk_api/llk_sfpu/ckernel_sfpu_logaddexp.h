@@ -24,8 +24,7 @@ namespace ckernel::sfpu {
 // the two inputs plus max, difference, exponential and result at once, does not fit:
 // the SFPI compiler reports "cannot store sfpu register (register spill)".
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_sfpu_logaddexp(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];

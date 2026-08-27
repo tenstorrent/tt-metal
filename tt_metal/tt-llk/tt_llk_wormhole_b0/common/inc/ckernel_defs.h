@@ -342,7 +342,7 @@ enum class BinaryOp : std::uint8_t
     REMAINDER_INT32  = 40,
     REMAINDER_UINT32 = 41,
     FMOD_INT32       = 42,
-    LOGADDEXP       = 43,
+    LOGADDEXP        = 43,
 };
 
 enum class PackMode : std::uint8_t
