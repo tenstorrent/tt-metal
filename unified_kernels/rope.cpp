@@ -42,15 +42,15 @@
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t chunk = get_named_compile_time_arg_val("chunk");
+    constexpr uint32_t chunk = get_arg(args::chunk);
 
-    constexpr uint32_t kCbX = get_named_compile_time_arg_val("cb_x");
-    constexpr uint32_t kCbCos = get_named_compile_time_arg_val("cb_cos");
-    constexpr uint32_t kCbSin = get_named_compile_time_arg_val("cb_sin");
-    constexpr uint32_t kCbM = get_named_compile_time_arg_val("cb_m");
-    constexpr uint32_t kCbRot = get_named_compile_time_arg_val("cb_rot");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
-    [[maybe_unused]] constexpr uint32_t num_chunks = get_named_compile_time_arg_val("num_chunks");
+    constexpr uint32_t kCbX = get_arg(args::cb_x);
+    constexpr uint32_t kCbCos = get_arg(args::cb_cos);
+    constexpr uint32_t kCbSin = get_arg(args::cb_sin);
+    constexpr uint32_t kCbM = get_arg(args::cb_m);
+    constexpr uint32_t kCbRot = get_arg(args::cb_rot);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    [[maybe_unused]] constexpr uint32_t num_chunks = get_arg(args::num_chunks);
     const uint32_t chunk_begin = get_arg(args::chunk_begin);
     const uint32_t chunk_count = get_arg(args::chunk_count);
 

@@ -59,14 +59,15 @@
 //                              (second NOC, overlapped), 0 on ttsim
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t kCbIn0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t kCbIn1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t kCbAcc = get_named_compile_time_arg_val("cb_acc");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbIn0 = get_arg(args::cb_in0);
+    constexpr uint32_t kCbIn1 = get_arg(args::cb_in1);
+    constexpr uint32_t kCbAcc = get_arg(args::cb_acc);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
 
     const u::LogicalCoord me = u::LogicalCoord::this_core();
     const uint32_t out_block = me.y * MM_GRID_W + me.x;

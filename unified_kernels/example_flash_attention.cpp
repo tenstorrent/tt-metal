@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
@@ -16,24 +17,24 @@ using Vec = u::reduce_shape<Scores, kRows>;
 using Out = u::Shape<2, 2>;
 
 void kernel_main() {
-    constexpr uint32_t kCbQ = get_named_compile_time_arg_val("cb_q");
-    constexpr uint32_t kCbK = get_named_compile_time_arg_val("cb_k");
-    constexpr uint32_t kCbV = get_named_compile_time_arg_val("cb_v");
-    constexpr uint32_t kCbOnes = get_named_compile_time_arg_val("cb_ones");
-    constexpr uint32_t kCbScaler = get_named_compile_time_arg_val("cb_scaler");
-    constexpr uint32_t kCbScores = get_named_compile_time_arg_val("cb_scores");
-    constexpr uint32_t kCbChunkMax = get_named_compile_time_arg_val("cb_chunk_max");
-    constexpr uint32_t kCbProb = get_named_compile_time_arg_val("cb_prob");
-    constexpr uint32_t kCbChunkSum = get_named_compile_time_arg_val("cb_chunk_sum");
-    constexpr uint32_t kCbNewMax = get_named_compile_time_arg_val("cb_new_max");
-    constexpr uint32_t kCbCorrection = get_named_compile_time_arg_val("cb_correction");
-    constexpr uint32_t kCbRescaled = get_named_compile_time_arg_val("cb_rescaled");
-    constexpr uint32_t kCbWeightedV = get_named_compile_time_arg_val("cb_weighted_v");
-    constexpr uint32_t kCbReciprocal = get_named_compile_time_arg_val("cb_reciprocal");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t kCbMax = get_named_compile_time_arg_val("cb_max");
-    constexpr uint32_t kCbSum = get_named_compile_time_arg_val("cb_sum");
-    constexpr uint32_t kCbAcc = get_named_compile_time_arg_val("cb_acc");
+    constexpr uint32_t kCbQ = get_arg(args::cb_q);
+    constexpr uint32_t kCbK = get_arg(args::cb_k);
+    constexpr uint32_t kCbV = get_arg(args::cb_v);
+    constexpr uint32_t kCbOnes = get_arg(args::cb_ones);
+    constexpr uint32_t kCbScaler = get_arg(args::cb_scaler);
+    constexpr uint32_t kCbScores = get_arg(args::cb_scores);
+    constexpr uint32_t kCbChunkMax = get_arg(args::cb_chunk_max);
+    constexpr uint32_t kCbProb = get_arg(args::cb_prob);
+    constexpr uint32_t kCbChunkSum = get_arg(args::cb_chunk_sum);
+    constexpr uint32_t kCbNewMax = get_arg(args::cb_new_max);
+    constexpr uint32_t kCbCorrection = get_arg(args::cb_correction);
+    constexpr uint32_t kCbRescaled = get_arg(args::cb_rescaled);
+    constexpr uint32_t kCbWeightedV = get_arg(args::cb_weighted_v);
+    constexpr uint32_t kCbReciprocal = get_arg(args::cb_reciprocal);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kCbMax = get_arg(args::cb_max);
+    constexpr uint32_t kCbSum = get_arg(args::cb_sum);
+    constexpr uint32_t kCbAcc = get_arg(args::cb_acc);
 
     const auto q_acc = TensorAccessor(tensor::q));
     const auto k_acc = TensorAccessor(tensor::k));

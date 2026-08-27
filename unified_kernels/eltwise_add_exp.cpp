@@ -26,16 +26,17 @@
 // No runtime args: the tensors are bound, so their addresses ride with the accessors.
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t num_blocks = get_named_compile_time_arg_val("num_blocks");
-    constexpr uint32_t tiles_per_block = get_named_compile_time_arg_val("tiles_per_block");
+    constexpr uint32_t num_blocks = get_arg(args::num_blocks);
+    constexpr uint32_t tiles_per_block = get_arg(args::tiles_per_block);
 
-    constexpr uint32_t kCbIn0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t kCbIn1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbIn0 = get_arg(args::cb_in0);
+    constexpr uint32_t kCbIn1 = get_arg(args::cb_in1);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
 
     u::compute_init(kCbIn0, kCbOut);
 
