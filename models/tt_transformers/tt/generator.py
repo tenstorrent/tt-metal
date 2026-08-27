@@ -1856,10 +1856,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # A model that does not declare async decode never has that lag, so the keep
         # could only adopt a stale token from an earlier request whose position happens
         # to coincide. model_capabilities lives on the vLLM adapter subclass.
-        _async_ok = getattr(self, "model_capabilities", {}).get("supports_async_decode", True)
+        supports_async_decode = getattr(self, "model_capabilities", {}).get("supports_async_decode", True)
         if (
             on_device_sampling
-            and _async_ok
+            and supports_async_decode
             and (reset_batch or mode_switched)
             and enable_trace
             and self.trace_inputs_decode[on_device_sampling]
