@@ -316,10 +316,7 @@ def test_catalog_columns_are_in_db_schema():
 
 
 def test_counter_metric_columns_are_in_db_schema():
-    # Drive the real emitter rather than the schema's own constants, so this
-    # fails if export_metrics ever names a column differently. One zone entry
-    # exports the raw value, two export mean/std, and both forms must be in the
-    # published table or a --enable-perf-counters run dies in the writer.
+    # Drives the real emitter, not the schema's constants, so a rename fails here.
     schema_names = {c.name for c in DB_SCHEMA} | DROPPED_COLUMNS
     unknown = set()
     for run_type in sorted(RUN_TYPE_NAMES):

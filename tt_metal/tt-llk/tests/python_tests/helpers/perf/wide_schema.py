@@ -58,11 +58,8 @@ _TIMING_COLUMNS = [
 ]
 
 
-# Counter-derived metric columns, same formula-driven treatment as timing. Both
-# names export_metrics can use are enumerated: the raw value when a run type ran
-# once, mean/std when it ran >=2 times. Run types are listed rather than taken
-# from the frozenset because the schema fixes column order; the assert keeps the
-# two in step.
+# Both names export_metrics can use: the raw value for a single run, mean/std for
+# two or more. Listed rather than taken from the frozenset because order matters.
 _METRIC_RUN_TYPES = (
     "L1_TO_L1",
     "UNPACK_ISOLATE",
