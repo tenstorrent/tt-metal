@@ -47,6 +47,15 @@ def cleanup_cache():
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
         ),
+        # Blackhole accepts 32-device meshes only, so neither shape above runs on the galaxy and every
+        # row there skips -- returning rc=0, which reads as coverage in a diff. This row is the one
+        # that executes on Blackhole, and so the only one that covers mistral_small_4 at all.
+        pytest.param(
+            (8, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-8x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )

@@ -785,9 +785,9 @@ def test_kimi_prefill_block(
 #     renormalize router. Running DEVICE_FP32 here would apply a sigmoid affinity and silently
 #     produce wrong routing weights -- no crash, and invisible to an MLA-only test.
 #
-# Random weights only for now: the adapter carries supports_pretrained=False and no TTNN weight cache
-# has been populated, so a pretrained row would skip rather than fail. Add ("pretrained") once a cache
-# exists -- and check `passed` vs `skipped`, since a skip reads as success in the summary.
+# The adapter now carries supports_pretrained=True, so the pretrained row RUNS rather than skipping --
+# matching the deepseek/kimi siblings. It needs the checkpoint and a TTNN weight cache staged; without
+# the cache it rebuilds in-job. Check `passed` vs `skipped`, since a skip reads as success.
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
@@ -821,7 +821,7 @@ def test_kimi_prefill_block(
 @pytest.mark.parametrize("num_iterations", [1, 2, 5], ids=["iter1", "iter2", "iter5"])
 @pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 targets the Blackhole galaxy")
 @pytest.mark.timeout(900)
-@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
+@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 def test_mistral4_prefill_block(
     variant,
     config_only,

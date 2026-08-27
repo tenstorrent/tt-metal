@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     GATE_KEY_PREFIX_DEEPSEEK,
@@ -65,7 +66,22 @@ GATE_MODELS = {
     "gpt_oss_120b": GptOss120BConfig,
     "dsv4_pro": DeepSeekV4ProConfig,
     "dsv4_flash": DeepSeekV4FlashConfig,
+    "mistral_small_4": MistralSmall4Config,
 }
+
+# Gates whose router has NO correction bias. create_gate_weights always synthesizes a random one, and
+# with a nonzero bias the GPT_* path validates GPT-OSS routing (top-k on BIASED logits) rather than
+# Mistral's softmax -> top-k -> renormalize. Zeroing it makes the two coincide, which is the whole
+# reason Mistral can reuse the GPT modes: Mistral's checkpoint carries only mlp.gate.weight.
+_BIAS_FREE_GATES = {"mistral_small_4"}
+
+
+def _zero_bias_if_bias_free(gate_model: str, gate_w: dict) -> dict:
+    """Zero the correction bias for bias-free routers, so the golden matches the real model."""
+    if gate_model in _BIAS_FREE_GATES:
+        gate_w["e_score_correction_bias"] = torch.zeros_like(gate_w["e_score_correction_bias"])
+    return gate_w
+
 
 # Per-chip sequence every gate case runs at. Must be passed at construction: TtMoEGateConfig keeps
 # only the tuned matmul configs keyed to sp_dim, so assigning it afterwards drops to default tiling.
@@ -260,6 +276,12 @@ REGULAR_GATE_CASES = [
     pytest.param("gpt_oss_120b", GateComputeMode.GPT_DEVICE, id="gpt_oss_120b-gpt_device"),
     pytest.param("dsv4_pro", GateComputeMode.DEVICE_FP32, id="dsv4_pro-device_fp32"),
     pytest.param("dsv4_flash", GateComputeMode.DEVICE_FP32, id="dsv4_flash-device_fp32"),
+    # Mistral's router is softmax -> top-4 -> renormalize, which is the GPT-OSS rule: softmax is
+    # monotonic, so top-k on logits equals top-k on softmax, and renormalizing the selected k equals
+    # softmaxing them. The sigmoid device gate cannot express it (moe_grouped_topk.cpp's
+    # parse_score_func takes only sigmoid/sqrtsoftplus), which is why the adapter picks GPT_DEVICE.
+    pytest.param("mistral_small_4", GateComputeMode.GPT_HOST, id="mistral_small_4-gpt_host"),
+    pytest.param("mistral_small_4", GateComputeMode.GPT_DEVICE, id="mistral_small_4-gpt_device"),
 ]
 
 
@@ -499,6 +521,7 @@ def test_forward_pass(
     gate_w = _try_load_real_gate_weights(gate_model, config.n_routed_experts, config.dim) if use_real_weights else None
     if gate_w is None:
         gate_w = create_gate_weights(config.n_routed_experts, config.dim)
+    gate_w = _zero_bias_if_bias_free(gate_model, gate_w)
 
     # The real gate input is a DeepSeek-V3 prefill trace, so it is only meaningful for that model.
     use_real = gate_model == "deepseek_v3" and use_real_weights
@@ -696,6 +719,7 @@ def test_forward_pass_interleaved(mesh_device, num_links, topology, gate_model, 
     # Scaling the dim to EMB_SIZE / 4 puts every model off its real router's width, so the checkpoint
     # weights cannot be loaded here and the golden is built from seeded synthetic weights instead.
     gate_w = create_gate_weights(config.n_routed_experts, config.dim)
+    gate_w = _zero_bias_if_bias_free(gate_model, gate_w)
     torch_input = _make_gate_input(config, config.sp_dim * n_sp_devices, allow_real_input=False)
     reference_logits = torch_input @ gate_w["weight"].T
     reference_topk_indices, reference_topk_scores = _reference_topk(
