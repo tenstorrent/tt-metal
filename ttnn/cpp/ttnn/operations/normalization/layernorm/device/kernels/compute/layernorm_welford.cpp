@@ -404,8 +404,10 @@ void kernel_main() {
                 DataflowBuffer& dfb_outg_obj = dfb_out_obj;
 #endif
                 mul_bcast_rows_init(dfb_fusion, dfb_gamma);
-                dfb_gamma_obj.wait_front(
-                    block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
+                if (ncht == 0) {
+                    // Gamma remains at the CB front for every subsequent row.
+                    dfb_gamma_obj.wait_front(block.start() + block.full_block_size());
+                }
                 dfb_fusion_obj.wait_front(block.full_block_size());
                 tile_regs_acquire();
                 for (auto i : block.local()) {
@@ -434,8 +436,10 @@ void kernel_main() {
 #endif
 
                 add_bcast_rows_init(dfb_fusion, dfb_beta);
-                dfb_beta_obj.wait_front(
-                    block.start() + block.full_block_size());  // TODO: optimization - only wait on first ht
+                if (ncht == 0) {
+                    // Beta remains at the CB front for every subsequent row.
+                    dfb_beta_obj.wait_front(block.start() + block.full_block_size());
+                }
                 dfb_fusion_obj.wait_front(block.full_block_size());
                 tile_regs_acquire();
                 for (auto i : block.local()) {
