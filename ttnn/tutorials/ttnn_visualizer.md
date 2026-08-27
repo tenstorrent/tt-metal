@@ -112,6 +112,7 @@ Each configuration option has a specific purpose:
 * **enable_graph_report** (if *report_name* is set) - Enable to visualize the graph after every operation.
 * **enable_detailed_tensor_report** (if *report_name* is set) - Enable to visualize the values of input and output tensors of every operation.
 * **enable_comparison_mode** (if *report_name* is set) - Enable to test the output of operations against their golden implementation.
+* **enable_torch_tracer** (*optional*) - Enable the legacy Python torch tracer (`ttnn.tracer`). Not needed for any of the reports above, and it wraps incoming `torch.Tensor` arguments in a subclass that cannot be converted to a `ttnn.Tensor` of a different dtype, so leave it off unless you specifically want the traced torch graph.
 
 > [NOTE]
 > This config file corresponds to the recommended setup in TT-NN Visualizer docs, feel free to adjust it to your needs.
