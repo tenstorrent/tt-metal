@@ -15,7 +15,7 @@ import ttnn
 import torch
 from typing import Optional, List, Dict, Any
 
-from .tt_spatial_cross_attention import TTSpatialCrossAttention
+from .tt_spatial_cross_attention import TTSpatialCrossAttention, build_rebatch_plan
 from .tt_temporal_self_attention import TTTemporalSelfAttention
 from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
 from ..reference.point_sampling_3d_2d import generate_reference_points
@@ -127,6 +127,7 @@ class TTBEVFormerLayer:
         reference_points_3d=None,
         reference_points_cam=None,
         bev_mask=None,
+        rebatch_plan=None,
         **kwargs,
     ):
         """
@@ -145,6 +146,7 @@ class TTBEVFormerLayer:
             reference_points_3d: 3D reference points [B, num_queries, D, 3]
             reference_points_cam: Camera reference points [num_cams, B, num_queries, D, 2]
             bev_mask: Validity mask for camera projections [num_cams, B, num_queries, D]
+            rebatch_plan: Prebuilt spatial-cross-attention rebatch geometry, shared by every layer
 
         Returns:
             Updated BEV features [B, num_queries, embed_dims]
@@ -195,6 +197,7 @@ class TTBEVFormerLayer:
             query_pos=bev_pos,
             reference_points_cam=reference_points_cam,
             bev_mask=bev_mask,
+            rebatch_plan=rebatch_plan,
             spatial_shapes=spatial_shapes,
             level_start_index=level_start_index,
             **kwargs,
@@ -469,6 +472,16 @@ class TTBEVFormerEncoder:
                 device=self.device,
             )
 
+        # The spatial-cross-attention rebatch is decided entirely by the camera projection, which is
+        # the same for every layer, so resolve it once here. That keeps the bev_mask readback and
+        # the whole reference-point rebatch off the layer loop instead of repeating them num_layers
+        # times.
+        rebatch_plan = (
+            build_rebatch_plan(reference_points_cam, bev_mask, self.embed_dims, self.device)
+            if bev_mask is not None
+            else None
+        )
+
         if use_signpost:
             signpost(header="BEVEncoder Reference Points Complete")
 
@@ -493,6 +506,7 @@ class TTBEVFormerEncoder:
                 reference_points_3d=reference_points_3d,
                 reference_points_cam=reference_points_cam,
                 bev_mask=bev_mask,
+                rebatch_plan=rebatch_plan,
                 **kwargs,
             )
             if use_signpost:

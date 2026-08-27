@@ -43,6 +43,18 @@ stage re-measured through the same harness with the same signposts, so the delta
 −2198.2 ms of host gap. The balance has flipped: kernel is now 76% of wall clock, and 623 ms of that
 is the two deformable-attention calls.
 
+### Encoder-level changes
+
+Some work is per-forward rather than per-layer, so the layer harness cannot show it and these rows
+cannot join the table above — different harness, different metric.
+
+| # | change | encoder wall (6 layers) | Δ | report |
+|--:|---|---:|---:|---|
+| 2 | rebatch plan resolved once per forward | **4290.9 ms** median | −94.6 ms (−2.2%) | [02](perf_reports/02-rebatch-plan-hoisted.md) |
+
+Encoder wall clock is end-to-end host time over 11 iterations, not a profiled figure. The median and
+minimum for stage 2 disagree by a factor of three, so read it as **~1–2%**.
+
 ## Where the baseline time is
 
 | region | ops | kernel | gap |

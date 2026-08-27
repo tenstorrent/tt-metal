@@ -15,7 +15,7 @@ Numbers quoted below as *cost* come from the baseline profile
 | [1](#candidate-1--host-round-trips) | remove host round-trips from SCA | gap | **1917 ms** (62% of wall) | — | — | partly landed |
 | [1a](#1a-rebatch-and-scatter-back-on-device) | rebatch + scatter-back on device | gap | **−2171.9 ms wall (−71%)** | L | med | **landed — [01](perf_reports/01-sca-rebatch-on-device.md)** |
 | [1b](#1b-bound-max_len-statically) | bound `max_len` statically | gap, trace | +129 ms kernel to unlock −218 ms gap | M | high | **[rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len)** |
-| [1c](#1c-hoist-index-computation-above-the-layer-loop) | index computation once per frame, not per layer | gap | ÷6 at encoder level | S | low | todo |
+| [1c](#1c-hoist-index-computation-above-the-layer-loop) | rebatch plan once per frame, not per layer | gap | −94.6 ms encoder wall (−2.2%) | S | low | **landed — [02](perf_reports/02-rebatch-plan-hoisted.md)** |
 | [1d](#1d-per-call-constant-uploads) | move to `__init__` what is frame-invariant | gap | small, every layer | S | none | todo |
 | [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | up to 613 ms | M | med | todo |
 | [3](#candidate-3--tile-padding-waste) | kill tile padding on degenerate dims | kernel | ~60 ms | M | low | todo |
@@ -89,16 +89,19 @@ the memory ceiling and most of the per-row cost.
 
 ### 1c. Hoist index computation above the layer loop
 
-The index set is **frame-dependent but not layer-dependent**. `bev_mask` comes from
-`point_sampling_3d_to_2d`, i.e. it depends on `lidar2img`: it changes per frame, but it is identical
-across all encoder layers within a frame. `reference_points_cam` and `bev_mask` are already computed
-once per forward above the layer loop ([tt_encoder.py:464](../tt/tt_encoder.py#L464)) — but SCA
-re-derives `indexes`, `max_len` and `valid_indices` from that mask inside **every** layer.
+**Landed** — [stage 02](perf_reports/02-rebatch-plan-hoisted.md), −94.6 ms encoder wall (−2.2%,
+read as ~1–2%: the encoder is measured end-to-end, not profiled). No numerical change.
 
-Hoisting that derivation to the encoder and passing it down means **one host sync per frame instead
-of six**, and leaves each layer's SCA fully device-side. No static bound, no correctness risk, no
-MSDA blow-up. The layer harness cannot show this win (it runs one layer); it is worth 6× at encoder
-level, and it is the pragmatic alternative to 1b.
+More was invariant than this entry originally claimed: not just the index derivation but the
+**entire reference-point rebatch**, which never touches `query`. Six identical gathers were being
+computed and discarded. What remains per layer is only the query gather. Five of six `bev_mask`
+readbacks are gone and the layer loop no longer contains one — the structural result, worth more
+than the 2%.
+
+Why it is available at all: `bev_mask` depends on `lidar2img`, so it changes per frame but is
+identical across all encoder layers within a frame, and the encoder already computes it once above
+the layer loop ([tt_encoder.py](../tt/tt_encoder.py#L464)). Everything SCA derives from it is
+therefore per-forward work that was being repeated per layer.
 
 ### 1d. Per-call constant uploads
 
@@ -223,12 +226,13 @@ reporting upstream.
 
 ## Candidate 5 — trace capture
 
-Blocked on 1b specifically: trace capture needs shapes that are static across replays, and `max_len`
-is the one shape that is not. 1b is [rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len), so 5
-is parked with it — the two only make sense together, and together they are worth ~10% of layer wall
-clock, less than candidates 2 and 4 on their own. 1a and 1c remove the transfers but not the sync that decides the
-shape. Once no host readback decides a downstream shape, the layer becomes trace-capturable and
-**all** remaining op-to-op gap collapses — 2416 ms per layer at baseline.
+Trace capture needs shapes that are static across replays, and `rebatch_len` is the one shape that is
+not — it is redecided every frame. 1a and 1c removed the transfers and moved the last readback out of
+the layer loop, but neither makes that shape constant; only 1b would, and 1b is
+[rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len) on its own terms.
+
+So 5 is parked with it. Together they are worth the 218 ms of per-layer gap that stage 01 left,
+minus 1b's own cost — around 10% of layer wall clock, less than candidates 2 and 4 on their own.
 
 Both perf harnesses document the current blocker in their module docstrings; update them when it
 lifts.
@@ -240,8 +244,7 @@ lifts.
 1. ~~**1a**~~ — landed, −2171.9 ms.
 2. ~~**1b**~~ — [rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len): costs more than
    half of what it unlocks, and candidate 2 owns the memory ceiling that caps it.
-3. **1c** — hoist the index derivation to the encoder: one sync per frame instead of six. Pure
-   refactor, no op risk.
+3. ~~**1c**~~ — landed, −94.6 ms encoder wall.
 4. **1d** — move to `__init__` what is genuinely frame-invariant.
 5. **4** — one op, 113 ms, cheap to try.
 6. **2** — the big kernel lever; 613 ms of kernel is the two MSDA calls. Measure the fused op at TSA
