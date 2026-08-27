@@ -841,7 +841,29 @@ def test_qwen3_32b_galaxy_one_layer_prefill_2048_8x4_qwen3_32b_b1_s2048(mesh_dev
 
 
 def _reference_decode_stages(hf: Any, tokens: torch.Tensor, position: int) -> dict[str, torch.Tensor]:
-    """Return HF's own tensors at each boundary the device graph crosses."""
+    """Return HF's own tensors at each boundary the device graph crosses.
+
+    **``hidden_states[-1]`` is the output of the model's *final norm*, not of the
+    last decoder layer.** transformers 5.12.1's `Qwen3Model.forward` runs
+    ``hidden_states = self.norm(hidden_states)`` before the output-hidden-states
+    hook collects the last entry, so for a one-layer model ``hidden_states[1]``
+    is ``norm(layer0_output)`` - verified on the real checkpoint: it is PCC 1.0
+    against ``hf.model.norm(layer0_output)`` and only 0.9178 against the layer
+    output itself, with ``|max|`` 79 against the layer's 18.
+
+    Reading it as "after layer 0" mislabels two boundaries at once: the residual
+    stream gets compared against a normalized reference (0.918) and the final
+    norm against the norm applied *twice* (0.766), while the device is correct on
+    both. Those were exactly the two low readings this bisection reported before
+    the labels were fixed, and the cross-comparison that found it is still here.
+    So the layer output is taken from its own forward hook, and the final norm
+    from ``hidden_states[-1]``.
+
+    The same mislabelling is in the Llama bisection this file was ported from,
+    where the resulting 0.979 and 0.990 are recorded as a bfloat16 residual
+    floor. They are not; that package is out of scope here and the finding is in
+    the handoff.
+    """
 
     layer = hf.model.layers[0]
     captured: dict[str, torch.Tensor] = {}
@@ -858,6 +880,7 @@ def _reference_decode_stages(hf: Any, tokens: torch.Tensor, position: int) -> di
         layer.self_attn.register_forward_hook(capture("attention out")),
         layer.post_attention_layernorm.register_forward_hook(capture("ff norm")),
         layer.mlp.register_forward_hook(capture("mlp out")),
+        layer.register_forward_hook(capture("after layer 0")),
     ]
     try:
         out = hf(input_ids=tokens, use_cache=True, output_hidden_states=True)
@@ -873,8 +896,8 @@ def _reference_decode_stages(hf: Any, tokens: torch.Tensor, position: int) -> di
         "residual after attention": (embedded + captured["attention out"])[0, position],
         "ff norm": captured["ff norm"][0, position],
         "mlp out": captured["mlp out"][0, position],
-        "after layer 0": out.hidden_states[1].float()[0, position],
-        "final norm": hf.model.norm(out.hidden_states[1])[0].float()[position],
+        "after layer 0": captured["after layer 0"][0, position],
+        "final norm": out.hidden_states[-1].float()[0, position],
         "logits": out.logits.float()[0, position],
     }
 
@@ -1040,13 +1063,11 @@ def test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128(mesh_device: t
             _report_quantized_pcc(stages["after layer 0"], after_layer[0], "decode after layer 0 user 0")
             _report_quantized_pcc(stages["final norm"], normed_host[0], "decode final norm user 0")
             _report_quantized_pcc(stages["attention out"], attention_host[0], "decode attention out user 0")
-            # And the cross-comparison. The magnitudes line up one step apart -
-            # the device's final norm peaks near the reference's *residual* -
-            # so ask directly whether the two outputs of
-            # `RMSNorm2D.decode_forward` are being read in the wrong order here.
-            # If they are, the low readings are this test's defect and not the
-            # model's; the logits, which are computed from `normed`, already say
-            # the model is right.
+            # The cross-comparison that found the mislabelling described in
+            # `_reference_decode_stages`, kept because it is what would find the
+            # next one: if the residual and the normed output are ever read from
+            # the wrong references again, these two lines cross the readings and
+            # one of them comes back high.
             _report_pcc(stages["final norm"], after_layer[0], "probe cross reference final norm vs device residual")
             _report_pcc(stages["after layer 0"], normed_host[0], "probe cross reference after layer 0 vs device normed")
             print(
