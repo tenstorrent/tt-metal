@@ -280,6 +280,25 @@ def _pick_parent_shape_for_submesh(system_shape: tuple[int, int], requested_shap
     )
 
 
+def _host_is_galaxy_cluster() -> bool | None:
+    """Whether this host is a Galaxy, or None when the cluster type cannot be determined.
+
+    ttnn.cluster.get_cluster_type() returns a ClusterType that fingerprints the hardware
+    directly, which _allowed_req_shapes_for_system documents as the robust alternative to
+    inferring the system from a mesh-shape tuple. Note that a hand-wired 32-chip rig
+    reports CUSTOM rather than GALAXY, so it is not matched here.
+    """
+    try:
+        galaxy_cluster_types = {
+            ttnn.cluster.ClusterType.GALAXY,
+            ttnn.cluster.ClusterType.TG,
+            ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+        }
+        return ttnn.cluster.get_cluster_type() in galaxy_cluster_types
+    except Exception:
+        return None
+
+
 @pytest.fixture(scope="module")
 def skip_on_galaxy_system():
     """Skip a module whose meshes are 1D-only when the host system is a Galaxy.
@@ -291,12 +310,8 @@ def skip_on_galaxy_system():
     test_auto_compose.py deliberately exercises 1D shapes on a Galaxy.
 
     Queried at fixture setup rather than collection time: probing the device while
-    collecting has deadlocked nested-pytest runs before.
+    collecting has deadlocked nested-pytest runs before. An indeterminate cluster type
+    does not skip; the mesh fixture makes the call instead.
     """
-    try:
-        sys_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())  # type: ignore[attr-defined]
-    except Exception:
-        # Unable to determine the system; let the mesh fixture make the call instead.
-        return
-    if sys_shape[0] * sys_shape[1] > 8:
-        pytest.skip(f"1D module suites are T3K-targeted; system mesh is {sys_shape}")
+    if _host_is_galaxy_cluster():
+        pytest.skip("1D module suites are T3K-targeted; host cluster type is a Galaxy")
