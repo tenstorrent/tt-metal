@@ -91,7 +91,7 @@ The suite is self-contained: references are computed live in-process from the ch
 (no golden files needed) — it needs only the checkpoint and a device.
 
 ```bash
-# Run all tests (11 tests)
+# Run all tests
 pytest models/experimental/xtts_v2/tests/
 
 # Individual blocks
@@ -99,6 +99,9 @@ pytest models/experimental/xtts_v2/tests/test_cond_pcc.py       # Block 1
 pytest models/experimental/xtts_v2/tests/test_speaker_pcc.py    # Block 2
 pytest models/experimental/xtts_v2/tests/test_gpt_decode_pcc.py # Block 3 (traced decode)
 pytest models/experimental/xtts_v2/tests/test_hifigan_pcc.py    # Block 4
+
+# Per-stage timings and RTF, gated against per-stage ceilings
+pytest models/experimental/xtts_v2/tests/test_perf.py
 ```
 
 ## Performance
@@ -114,8 +117,9 @@ Measured on Wormhole N150 (warm, program cache + trace in place):
 
 End to end at seed 0, with a 5.4 s reference clip: 2.31 s of audio in 0.56 s (**4.1x
 real-time**), 10.77 s in 2.53 s (**4.3x**), 25.63 s in 6.08 s (**4.2x**). One-time warmup
-(program compiles + trace captures) takes ~27 s with a hot kernel JIT cache, longer on a
-first-ever run when kernels build from scratch.
+(program compiles + trace captures) takes ~40 s with a hot kernel JIT cache, longer on a
+first-ever run when kernels build from scratch. It compiles every prefill length and every
+vocoder bucket, so no request pays a compile at request time.
 
 ## Known limitations
 
