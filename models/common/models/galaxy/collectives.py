@@ -72,18 +72,38 @@ def _ccl_tracing() -> bool:
 
 
 def _ccl_shape_note(name: str, tensor: Any) -> str:
-    """Describe a tensor the way a CCL page-count fault would need it described."""
+    """Describe a tensor the way a CCL shard-fill fault needs it described.
 
+    The two numbers that matter are the tiles the tensor *has* and the tiles its
+    shard spec *claims*, because `all_reduce_async`'s reduction kernel waits for a
+    full shard on every output core:
+
+        cb_in.wait_front(num_blocks * block_num_tiles);   // ring_size * shard
+
+    so a tensor whose tile count is less than `cores * shard_tiles` leaves the last
+    core waiting forever, with no abort and no traceback (D-B19). Printing both
+    side by side makes that visible at a glance instead of after a gdb dump: the
+    line that named D-B19 read `tiles=501 spec_tiles=504`.
+
+    `tensor.buffer().num_pages()` is not reachable from Python, so the tile counts
+    are derived from the logical shape and the shard spec rather than read off the
+    buffer.
+    """
+
+    tile = 32
+    shape = tuple(tensor.shape)
+    tiles = (shape[-1] // tile) * (shape[-2] // tile) if len(shape) >= 2 else 0
     try:
         spec = tensor.memory_config().shard_spec
-        shard = f"shard={tuple(spec.shape)} cores={spec.grid.num_cores()}"
+        cores = spec.grid.num_cores()
+        shard_shape = tuple(spec.shape)
+        spec_tiles = cores * (shard_shape[-1] // tile) * (shard_shape[-2] // tile)
+        placement = f"shard={shard_shape} cores={cores} spec_tiles={spec_tiles}"
+        fill = "" if spec_tiles == tiles else "  <- SHARDS NOT FULL"
     except BaseException:
-        shard = "shard=interleaved"
-    try:
-        pages = tensor.buffer().num_pages()
-    except BaseException:
-        pages = "?"
-    return f"{name}: logical={tuple(tensor.shape)} {shard} pages={pages}"
+        placement = "shard=interleaved"
+        fill = ""
+    return f"{name}: logical={shape} tiles={tiles} {placement}{fill}"
 
 
 def _ccl_trace(message: str) -> None:
