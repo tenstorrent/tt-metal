@@ -10,7 +10,7 @@
 // filled 0-column" and "C[h,w] = A[h,w] + B[w]"), so the mapping is established by
 // numbers rather than by reading.
 //
-// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+// Compile-time args, all named, plus a cb_<name> per buffer:
 //   block height in tiles
 //   block width in tiles
 //
@@ -43,10 +43,10 @@ void kernel_main() {
     constexpr uint32_t ht = get_named_compile_time_arg_val("ht");
     constexpr uint32_t wt = get_named_compile_time_arg_val("wt");
 
-    constexpr uint32_t kCbBlock = TT_U_CB(block);
-    constexpr uint32_t kCbVec = TT_U_CB(vec);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
-    constexpr uint32_t kCbTmp = TT_U_CB(tmp);
+    constexpr uint32_t kCbBlock = get_named_compile_time_arg_val("cb_block");
+    constexpr uint32_t kCbVec = get_named_compile_time_arg_val("cb_vec");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbTmp = get_named_compile_time_arg_val("cb_tmp");
 
     u::compute_init(kCbBlock, kCbOut);
 

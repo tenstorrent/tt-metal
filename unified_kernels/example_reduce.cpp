@@ -12,11 +12,11 @@ using Partial = u::reduce_shape<In, kAxis>;
 using Gathered = u::Shape<kNumCores * Partial::rows, Partial::cols>;
 
 void kernel_main() {
-    constexpr uint32_t kCbIn = TT_U_CB(in);
-    constexpr uint32_t kCbScaler = TT_U_CB(scaler);
-    constexpr uint32_t kCbPartial = TT_U_CB(partial);
-    constexpr uint32_t kCbGathered = TT_U_CB(gathered);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbIn = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t kCbScaler = get_named_compile_time_arg_val("cb_scaler");
+    constexpr uint32_t kCbPartial = get_named_compile_time_arg_val("cb_partial");
+    constexpr uint32_t kCbGathered = get_named_compile_time_arg_val("cb_gathered");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
 
     const auto in = TensorAccessor(tensor::in));
     const auto out = TensorAccessor(tensor::out));

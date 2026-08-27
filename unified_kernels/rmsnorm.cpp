@@ -13,7 +13,7 @@
 // case the axis has to be DECLARED for: against a Shape<Ht, 1> block, both Axis::Both and
 // Axis::Rows want a Shape<1, 1> vector, so no shape could tell them apart.
 //
-// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+// Compile-time args, all named, plus a cb_<name> per buffer:
 //   rows in tiles
 //   cols in tiles
 //
@@ -26,15 +26,15 @@
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t kCbX = TT_U_CB(x);
-    constexpr uint32_t kCbW = TT_U_CB(w);
-    constexpr uint32_t kCbEps = TT_U_CB(eps);
-    constexpr uint32_t kCbInvN = TT_U_CB(inv_n);
-    constexpr uint32_t kCbSq = TT_U_CB(sq);
-    constexpr uint32_t kCbMean = TT_U_CB(mean);
-    constexpr uint32_t kCbRsqrt = TT_U_CB(rsqrt);
-    constexpr uint32_t kCbNormed = TT_U_CB(normed);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbX = get_named_compile_time_arg_val("cb_x");
+    constexpr uint32_t kCbW = get_named_compile_time_arg_val("cb_w");
+    constexpr uint32_t kCbEps = get_named_compile_time_arg_val("cb_eps");
+    constexpr uint32_t kCbInvN = get_named_compile_time_arg_val("cb_inv_n");
+    constexpr uint32_t kCbSq = get_named_compile_time_arg_val("cb_sq");
+    constexpr uint32_t kCbMean = get_named_compile_time_arg_val("cb_mean");
+    constexpr uint32_t kCbRsqrt = get_named_compile_time_arg_val("cb_rsqrt");
+    constexpr uint32_t kCbNormed = get_named_compile_time_arg_val("cb_normed");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
     // ht is the ROW-CHUNK height, not the whole tensor's: rows are normalised
     // independently -- each one's RMS depends on that row alone -- so the tensor is walked
     // in chunks of ht rows and only ht*wt tiles are ever resident. Which chunks this core

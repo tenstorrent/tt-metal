@@ -25,9 +25,9 @@ namespace u = tt::unified;
 void kernel_main() {
     constexpr uint32_t tiles = get_named_compile_time_arg_val("tiles");
 
-    constexpr uint32_t kCbA = TT_U_CB(a);
-    constexpr uint32_t kCbB = TT_U_CB(b);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbA = get_named_compile_time_arg_val("cb_a");
+    constexpr uint32_t kCbB = get_named_compile_time_arg_val("cb_b");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
 
     const auto a_acc = TensorAccessor(tensor::a));
     const auto b_acc = TensorAccessor(tensor::b));

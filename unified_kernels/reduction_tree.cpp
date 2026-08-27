@@ -18,7 +18,7 @@
 //   in_ht, in_wt             this core's block is in_ht x in_wt tiles
 //   num_cores_y              cores in a column: the gather's height, and so the
 //                            number of writers row 0 collects
-//   cb_<name> per buffer, read by TT_U_CB
+//   cb_<name> per buffer
 //
 // No runtime args: the tensors are bound, so their addresses ride along with the
 // accessors.
@@ -56,11 +56,11 @@ void kernel_main() {
     // stage-1 results, which the gather has laid out as num_cores_y x in_wt.
     constexpr auto kAxis = u::ReduceAxis::Rows;
 
-    constexpr uint32_t kCbIn0 = TT_U_CB(in0);
-    constexpr uint32_t kCbTmp0 = TT_U_CB(tmp0);
-    constexpr uint32_t kCbTmp1 = TT_U_CB(tmp1);
-    constexpr uint32_t kCbScaler = TT_U_CB(scaler);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbIn0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t kCbTmp0 = get_named_compile_time_arg_val("cb_tmp0");
+    constexpr uint32_t kCbTmp1 = get_named_compile_time_arg_val("cb_tmp1");
+    constexpr uint32_t kCbScaler = get_named_compile_time_arg_val("cb_scaler");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
 
     u::compute_init(kCbIn0, kCbOut);
 
