@@ -217,8 +217,8 @@ jobs:
             echo "relevant changed line or contiguous right-side range, with file/line fallback."
             echo
             echo "Keep all worktrees read-only. Never use Write/Edit or temporary files. Use"
-            echo "Bash only for one direct gh api command, the intake agent's one complete"
-            echo "gh pr diff call, or an allowlisted read-only"
+            echo "Bash only for one direct gh api command, the intake agent's one gh pr view"
+            echo "metadata call, one complete gh pr diff call, or an allowlisted read-only"
             echo "git diff/show/log/rev-parse command per call, with no pipes, redirects, shell"
             echo "composition, substitution, or inline environment assignment. Never run"
             echo "find / or read Claude execution/tool-result files. Repeat these constraints"
@@ -265,7 +265,7 @@ jobs:
           # no effort argument). gh is used for both PR inspection and posting.
           claude_args: |
             --effort ${{ inputs.effort || 'max' }}
-            --allowedTools "Agent,Task,Read,Grep,Glob,Skill,Bash(gh api:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git show:*),Bash(git log:*),Bash(git rev-parse:*),mcp__deepwiki__*,mcp__atlassian__*,mcp__glean_default__*"
+            --allowedTools "Agent,Task,Read,Grep,Glob,Skill,Bash(gh api:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git show:*),Bash(git log:*),Bash(git rev-parse:*),mcp__deepwiki__*,mcp__atlassian__*,mcp__glean_default__*"
             --max-turns 150
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md

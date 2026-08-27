@@ -50,10 +50,11 @@ contains review orchestration and MUST NOT be used as the source of PR code.
   only under `B`. Never read repository implementation from the checkout root,
   another branch, a Claude execution file, or a tool-result cache.
 - Use Read, Grep, and Glob for files under `H`, `B`, and `K`. Use Bash only for
-  one direct, single-line `gh api` command, the intake agent's one complete
-  `gh pr diff` call, or one read-only `git diff`, `git show`, `git log`, or
-  `git rev-parse` command per tool call. Outside intake, scope diffs to a relevant
-  changed path and use the exact comparison-base/head SHAs. Never run `find /`.
+  one direct, single-line `gh api` command, the intake agent's one `gh pr view`
+  metadata call, one complete `gh pr diff` call, or one read-only `git diff`,
+  `git show`, `git log`, or `git rev-parse` command per tool call. Outside intake,
+  scope diffs to a relevant changed path and use the exact comparison-base/head
+  SHAs. Never run `find /`.
 - Run read-only git commands directly from the orchestration checkout root, whose
   object database contains both exact commits. A valid diff starts literally
   with `git diff COMPARISON_BASE_SHA HEAD_SHA -- CHANGED_PATH`. Never prepend
