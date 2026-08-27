@@ -27,7 +27,6 @@ from unified_harness import make_cb, unified_program
 
 KERNEL = "unified_kernels/mcast_share.cpp"
 TILE = 32
-CB_A, CB_B, CB_OUT0, CB_OUT1 = 0, 1, 16, 17
 
 
 def run(device, grid_h=8, grid_w=8, tiles=2, rounds=8, share_pair=False, skew=0, seed=0, dynamic_noc=False):
@@ -48,21 +47,15 @@ def run(device, grid_h=8, grid_w=8, tiles=2, rounds=8, share_pair=False, skew=0,
     core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_w - 1, grid_h - 1))])
     cores = [ttnn.CoreCoord(x, y) for y in range(grid_h) for x in range(grid_w)]
 
-    ct_args = []
-    for t in (tin, tout0, tout1):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
+        nodes=core_ranges,
         cbs=[
             make_cb(CB_A, core_ranges, num_pages=tiles),
             make_cb(CB_B, core_ranges, num_pages=tiles),
             make_cb(CB_OUT0, core_ranges, num_pages=tiles),
             make_cb(CB_OUT1, core_ranges, num_pages=tiles),
         ],
-        compile_time_args=ct_args,
         named_compile_time_args=[
             ("tiles", tiles),
             ("rounds", rounds),
