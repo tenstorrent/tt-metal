@@ -1153,6 +1153,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
         compute_kernel_config,
         output_dtype);
     per_core_N = per_core_M;
+    per_core_M = std::min(per_core_M, Mt);
+    per_core_N = std::min(per_core_N, Nt);
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     num_blocks_y = (Mt - 1) / per_core_M + 1;
@@ -1292,10 +1294,24 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
             uint32_t out_block_h = per_core_M;
             uint32_t out_block_w = per_core_N;
-            out_subblock_h = 4;
-            out_subblock_w = 2;
-            if (out_subblock_w != per_core_N) {
-                out_subblock_h = 1;
+            const bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
+            auto subblock_hw =
+                bmm_op_utils::get_matmul_subblock_params(per_core_M, per_core_N, false, false, fp32_dest_acc_en);
+            out_subblock_h = std::get<0>(subblock_hw);
+            out_subblock_w = std::get<1>(subblock_hw);
+            // Sharded output additionally requires out_subblock_w == per_core_N or out_subblock_h == 1.
+            if (out_subblock_h != 1 and out_subblock_w != per_core_N) {
+                for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+                    out_subblock_h = std::get<0>(subblock_hw);
+                    out_subblock_w = std::get<1>(subblock_hw);
+                    if (fp32_dest_acc_en and (out_subblock_h * out_subblock_w) > 4) {
+                        continue;
+                    }
+                    if ((out_subblock_h == 1 or out_subblock_w == per_core_N) and per_core_M % out_subblock_h == 0 and
+                        per_core_N % out_subblock_w == 0) {
+                        break;
+                    }
+                }
             }
             if (all_dram_interleaved) {
                 in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1)
@@ -1318,8 +1334,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 out_block_w = mutlti_dim_per_core_factor[1];
                 in0_block_w = mutlti_dim_per_core_factor[2];
 
-                bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
-                auto subblock_hw =
+                subblock_hw =
                     bmm_op_utils::get_matmul_subblock_params(out_block_h, out_block_w, false, false, fp32_dest_acc_en);
                 out_subblock_h = std::get<0>(subblock_hw);
                 out_subblock_w = std::get<1>(subblock_hw);
@@ -1335,7 +1350,10 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 .per_core_N = per_core_N,
                 .transpose_mcast = transpose_mcast,
                 .fused_activation = std::nullopt,
-                .fuse_batch = false,
+                // Sharded out CB cannot hold a batch loop. Fold A's batch into M when B is
+                // unbatched (fuse_batch requires B batch == 1).
+                .fuse_batch = mem_config.is_sharded() and get_batch_size(a_shape_padded) > 1 and
+                              get_batch_size(b_shape_padded) == 1,
             };
         }
     }

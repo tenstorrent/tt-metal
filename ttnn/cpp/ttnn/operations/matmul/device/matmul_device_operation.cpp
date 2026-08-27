@@ -2567,7 +2567,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                          ProgramConfigType,
                                          operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
                     const auto M =
-                        operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
+                        operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
                     const auto N = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;

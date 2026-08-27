@@ -62,6 +62,9 @@ target_precompile_headers(
         # Volatile TTNN headers — only for targets that actually include these
         <ttnn/device_operation.hpp>
         <ttnn/operation.hpp>
+        # Profiling shows distributed.hpp reaching many op TUs (via types.hpp/
+        # global_circular_buffer.hpp) at ~1.4s per parse; precompile it too.
+        <tt-metalium/distributed.hpp>
 )
 target_link_libraries(
     ttnn_pch_full

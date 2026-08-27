@@ -11,7 +11,6 @@ on:
         options:
           - all
           - dits
-          - deepseek
           - tttv2 modules
           - qwen3_vl
       platform:

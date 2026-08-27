@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "sfpi.h"
 
 namespace ckernel
@@ -93,7 +95,23 @@ sfpi_inline sfpi::vFloat _reciprocal_compat_(const sfpi::vFloat in)
     v_endif;
 
     // Set newly denormalized exponent to result exponent field
-    return setexp(result, new_exp);
+    sfpi::vFloat out = sfpi::setexp(result, new_exp);
+
+    // Pole guard for in == 0, which the exponent-difference arithmetic above misses: it lands
+    // on 126 - exexp(0) = 254, a finite 1.7e38, where an infinity needs 255. The
+    // v_if(new_exp < 0) block guards only the opposite, underflow end. Issue #52930.
+    //
+    // Two constraints on the form. It has to run after the setexp, which would otherwise
+    // overwrite the exponent field that makes the value an infinity. And it has to compare
+    // setsgn(in, 0) rather than a bare in == 0.0F, because SFPSETCC is not specified for
+    // negative zero (VectorUnit.md) and leaves -0.0 at 1.7e38; clearing the sign is what
+    // brings -0.0 into the guard, after which the caller-side v_if(in < 0.0) re-signs it.
+    v_if (sfpi::setsgn(in, 0) == 0.0F)
+    {
+        out = std::numeric_limits<float>::infinity();
+    }
+    v_endif;
+    return out;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en>

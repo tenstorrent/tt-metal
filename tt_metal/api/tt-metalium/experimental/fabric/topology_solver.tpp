@@ -1114,6 +1114,10 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     // Build indexed constraint representation
     ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
 
+    // Solve the constraints faithfully with the configured engine (SAT or DFS, chosen by problem size). Constraints
+    // are honored as given -- in particular a HARD host-group cap (set_max_same_rank_groups_used) either holds or the
+    // solve fails; the solver never silently drops it. Deciding to relax an infeasible cap is the caller's policy
+    // (topology_mapper_utils retries the inter-mesh mapping without the cap).
     MappingResult<TargetNode, GlobalNode> result;
     if (topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global)) {
         SatSearchEngine<TargetNode, GlobalNode> sat_engine;
@@ -2051,6 +2055,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
     }
 
     minimize_same_rank_groups_used = constraints.minimize_same_rank_groups_used();
+    max_same_rank_groups_used = constraints.max_same_rank_groups_used();
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -2778,8 +2783,35 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
 
     size_t target_idx = selection.target_idx;
 
+    // Hard host-group cap (max_same_rank_groups_used): the mapping may occupy at most k distinct same-rank global
+    // groups (host partitions). Build the set of groups already occupied by the current partial mapping once per
+    // node; a candidate whose group is NEW is only allowed if that keeps the occupied count <= k. This mirrors the
+    // SAT backend's at-most-k occupancy constraint so both backends honor the cap. (Built only when the cap is
+    // active; empty otherwise.)
+    const size_t host_group_cap = constraint_data.max_same_rank_groups_used;
+    const auto& global_to_host = constraint_data.global_to_same_rank_group;
+    const bool host_cap_active = host_group_cap > 0 && !global_to_host.empty();
+    std::set<int> occupied_host_groups;
+    if (host_cap_active) {
+        for (int g : state_.mapping) {
+            if (g >= 0 && static_cast<size_t>(g) < global_to_host.size()) {
+                const int grp = global_to_host[static_cast<size_t>(g)];
+                if (grp >= 0) {
+                    occupied_host_groups.insert(grp);
+                }
+            }
+        }
+    }
+
     // Try each candidate in order (best first)
     for (size_t global_idx : selection.candidates) {
+        // Hard host-group cap: skip a candidate that would open a NEW host group beyond the cap.
+        if (host_cap_active && global_idx < global_to_host.size()) {
+            const int grp = global_to_host[global_idx];
+            if (grp >= 0 && !occupied_host_groups.contains(grp) && occupied_host_groups.size() >= host_group_cap) {
+                continue;  // would exceed at-most-k occupied host groups
+            }
+        }
         // Check local consistency (edges to already-mapped neighbors)
         if (!ConsistencyChecker::check_local_consistency(
                 target_idx, global_idx, graph_data, state_.mapping, validation_mode)) {

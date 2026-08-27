@@ -679,7 +679,15 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // -----------------------------------------------------------------------
     // Dataflow buffers.
     // -----------------------------------------------------------------------
-    const auto scalar_face = FaceGeometry{.face_r_dim = 1, .num_faces = 4};
+    //  Reduce scaler (srcB) face geometry. num_faces MUST be 1, not 4: the reduce-col strided
+    // tilize unpacks srcB with a single UNPACR1_FACE and NO L1 increment (TT_OP_UNPACR1_FACE_INC(0,0,0,0,...)
+    // in llk_unpack_reduce_col_tilizeA_strided.h), so it re-reads the same one scalar face regardless of the
+    // face count -- z=1 and z=4 are byte-identical. num_faces=4 built an illegal (x=16, y=1, z=4) buffer
+    // descriptor (a 2x2 face grid, face_r_dim=1) that trips validate_buffer_desc's "y_dim must be 16 when
+    // z_dim is 4" (ckernel_trisc_common.h). num_faces=1 gives the (x=16, y=1, z=1) descriptor the LLK
+    // documents as the expected srcB scaler layout, which validates with the assert enabled. (srcA keeps its
+    // full 32x32 4-face geometry below -- that operand genuinely needs it.)
+    const auto scalar_face = FaceGeometry{.face_r_dim = 1, .num_faces = 1};
     const uint32_t window_size_hw = kernel_h * kernel_w;
     // WORKAROUND (Quasar): the input-CB tile's face_r_dim feeds both the reduce tensor-shape and the
     // TDMA buffer-descriptor y_dim, and Quasar LLK restricts both to powers of 2 <= 16

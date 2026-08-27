@@ -17,6 +17,10 @@
   cmd: |
     export TT_METAL_WATCHER=15
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    # CPU-only (<10s, no device, no weights): guards the warm-weight-cache marker semantics
+    # (variant-qualified markers, fail-closed unverifiable variants, sidecar single-load) that
+    # every tt_transformers e2e leg depends on. See #45400.
+    pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
@@ -736,6 +740,42 @@
       timeout: 10
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: DeepSeek-V3 unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    export MESH_DEVICE=T3K
+    fail=0
+    pytest --timeout 60 --durations=0 models/demos/deepseek_v3/tests/unit || fail=1
+    pytest --durations=0 models/demos/deepseek_v3/tests/test_rms_norm.py || fail=1
+    exit $fail
+  model: deepseek-v3
+  model_family: DeepSeek
+  skus:
+    wh_llmbox:
+      timeout: 22
+      tier: 1
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+
+- name: DeepSeek-V3 module unit tests (host-side)
+  cmd: |
+    unset TT_METAL_WATCHER
+    export MESH_DEVICE=N150
+    pytest --durations=0 models/demos/deepseek_v3/tests -m t3k_compat \
+      --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
+      --ignore=models/demos/deepseek_v3/tests/test_cache_specs_harness.py
+  model: deepseek-v3
+  model_family: DeepSeek
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 1
+  owner_id: U04N3GWH8F9 # Kartik Paigwar
   team: models
 
 - name: GPT-OSS-120B (disaggregated prefill) unit tests
