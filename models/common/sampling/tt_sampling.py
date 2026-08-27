@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
-import os
 import sys
 
 import torch
@@ -542,22 +541,6 @@ class TTSampling(LightweightModule):
             sub_core_grids=self.sub_core_grids,
         )
 
-    def _no_persist_gather(self):
-        """Drop persistent buffers for the sampling gathers (so the CCL barrier engages).
-
-        TT_SAMPLING_NO_PERSIST=1 forces it on; TT_SAMPLING_NO_PERSIST_TOGGLE=<path> reads the
-        arm from a file each call, so ONE server instance can alternate barrier-on/barrier-off.
-        Cross-restart A/Bs are worthless here -- failure rate varies ~10x between instances.
-        """
-        path = os.environ.get("TT_SAMPLING_NO_PERSIST_TOGGLE")
-        if path:
-            try:
-                with open(path) as fh:
-                    return fh.read().strip().startswith("1")
-            except OSError:
-                pass
-        return bool(os.environ.get("TT_SAMPLING_NO_PERSIST"))
-
     def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None):
         """
         Flexible all-gather that works across different CCL implementations.
@@ -573,19 +556,8 @@ class TTSampling(LightweightModule):
                 "memory_config": memory_config,
                 "num_links": num_links,
             }
-            # TT_SAMPLING_NO_PERSIST=1: drop the persistent buffer for the sampling gathers.
-            # llama_ccl.line_all_gather allocates the barrier semaphore ONLY when
-            # persistent_buffer is None (llama_ccl.py:1297), and both all-gather program
-            # factories gate the barrier on `barrier_semaphore.has_value() && !using_persistent
-            # _buffers`. SAMPLING_VALUES/SAMPLING_INDICES are always preallocated, so these two
-            # gathers always run WITHOUT the barrier -- and the barrier is what stops a remote
-            # device from STARTING to write a buffer a peer is still reading (out_ready_sem only
-            # covers completion). An earlier attempt to force the barrier while KEEPING the
-            # persistent buffer was inert on device for exactly that gating reason; dropping the
-            # buffer is the inverse, and the only way to make the barrier engage from Python.
             if self._line_all_gather_supports_buffer_key and buffer_key is not None:
-                if not self._no_persist_gather():
-                    line_all_gather_kwargs["buffer_key"] = buffer_key
+                line_all_gather_kwargs["buffer_key"] = buffer_key
             return self._line_all_gather(tensor, **line_all_gather_kwargs)
 
         return ttnn.all_gather(
@@ -1088,7 +1060,7 @@ class TTSampling(LightweightModule):
         sampling_values = self._adjust_values_for_tiebreak(
             topk_values_gathered_bf16_interleaved, topk_global_indices_interleaved
         )
-        # E4: seed immediately before the draw. The tie-break's int32 ops run on the
+        # Seed immediately before the draw. The tie-break's int32 ops run on the
         # SFPU (use_sfpu_reduce_path admits INT32 MIN/MAX/SUM) on the same sub-core grid,
         # and rand_tile's PRNG/LREG state is programmed by manual_seed -- so any SFPU work
         # between seeding and drawing can perturb the draw. The original's fp32 tie-break
