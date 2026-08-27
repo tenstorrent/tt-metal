@@ -5,6 +5,8 @@
 // Implementation file for reduce_helpers_compute.hpp
 // Do not include directly - include reduce_helpers_compute.hpp instead
 
+#include <cmath>
+
 #include "api/compute/add_int_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_api.h"
@@ -21,11 +23,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/dfb_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
-
-// sqrtf() delegates its finite calculation to this routine. Calling it directly
-// avoids linking newlib's errno/reentrancy state into the size-constrained TRISCs;
-// managed reduce factors are asserted positive before reaching it.
-extern "C" float __ieee754_sqrtf(float);
 
 namespace compute_kernel_lib {
 
@@ -329,7 +326,7 @@ template <
 ALWI void reduce_accumulate_via_add(
     ReduceInputBlockShape shape,
     ReduceInputMemoryLayout input_memory_layout,
-    ReducePartialScaler partial_scaler,
+    ReduceScaler partial_scaler,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op) {
     const uint32_t Ht = shape.rows, Wt = shape.cols, NC = shape.batches;
@@ -750,17 +747,17 @@ struct ManagedReduceScalerState {
     PoolType pool_type = PoolType::SUM;
     ManagedReduceScalerMode mode = ManagedReduceScalerMode::OneAxisFull;
     uint32_t reduce_factor = 0;
-    uint32_t valid_reduce_dim_elements = 0;
+    uint32_t partial_elements = 0;
     uint32_t tile_count = 0;
 
     ALWI bool matches(
         PoolType requested_pool_type,
         ManagedReduceScalerMode requested_mode,
         uint32_t requested_reduce_factor,
-        uint32_t requested_valid_elements,
+        uint32_t requested_partial_elements,
         uint32_t requested_tile_count) const {
         return initialized && pool_type == requested_pool_type && mode == requested_mode &&
-               reduce_factor == requested_reduce_factor && valid_reduce_dim_elements == requested_valid_elements &&
+               reduce_factor == requested_reduce_factor && partial_elements == requested_partial_elements &&
                tile_count == requested_tile_count;
     }
 };
@@ -776,10 +773,10 @@ ALWI ManagedReduceScalerState& managed_reduce_scaler_state() {
 }
 
 template <ReduceDim reduce_dim>
-ALWI ManagedReduceScalerMode managed_reduce_scaler_mode(bool uses_partial) {
+ALWI ManagedReduceScalerMode managed_reduce_scaler_mode(bool use_partial) {
     if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
         return ManagedReduceScalerMode::BothAxesFull;
-    } else if (!uses_partial) {
+    } else if (!use_partial) {
         // Full REDUCE_ROW and REDUCE_COL scaler tiles have identical contents.
         return ManagedReduceScalerMode::OneAxisFull;
     } else if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
@@ -801,34 +798,13 @@ ALWI uint32_t reduce_axis_tile_count(ReduceInputBlockShape input_block_shape) {
     }
 }
 
-template <uint32_t scaler_dfb_id, ReduceDim reduce_dim>
-ALWI uint32_t managed_reduce_factor(ReduceInputBlockShape input_block_shape, uint32_t valid_reduce_dim_elements) {
-    constexpr uint32_t tile_r_dim = get_tile_r_dim<scaler_dfb_id>();
-    constexpr uint32_t tile_c_dim = get_tile_c_dim<scaler_dfb_id>();
-    const uint32_t reduce_axis_tiles = reduce_axis_tile_count<reduce_dim>(input_block_shape);
-
-    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
-        return reduce_axis_tiles * tile_r_dim * tile_c_dim;
-    } else {
-        return (reduce_axis_tiles - 1) * (reduce_dim == ReduceDim::REDUCE_COL ? tile_r_dim : tile_c_dim) +
-               valid_reduce_dim_elements;
-    }
-}
-
-template <PoolType pool_type, ReduceDim reduce_dim>
-ALWI uint32_t calculate_managed_reduce_scaler_bits(uint32_t reduce_factor) {
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor>
+ALWI constexpr uint32_t calculate_managed_reduce_scaler_bits() {
     float scaler_f = 1.0f;
     if constexpr (pool_type == PoolType::AVG) {
-        ASSERT(reduce_factor > 0);
         if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
             // REDUCE_SCALAR applies the scaler once per reduced axis, so use 1/sqrt(N).
-            if (__builtin_constant_p(reduce_factor)) {
-                // __builtin_sqrtf is constant-folded when the caller supplies a compile-time shape.
-                // Keep the explicit IEEE implementation for genuinely runtime-shaped reductions.
-                scaler_f = 1.0f / __builtin_sqrtf(static_cast<float>(reduce_factor));
-            } else {
-                scaler_f = 1.0f / __ieee754_sqrtf(static_cast<float>(reduce_factor));
-            }
+            scaler_f = 1.0f / sqrtf(static_cast<float>(reduce_factor));
         } else {
             scaler_f = 1.0f / static_cast<float>(reduce_factor);
         }
@@ -870,35 +846,27 @@ ALWI void write_managed_reduce_scaler_tile(
     scaler_dfb.push_back(onetile);
 }
 
-template <uint32_t scaler_dfb_id, PoolType pool_type, ReduceDim reduce_dim>
-ALWI void ensure_managed_reduce_scaler(ReduceInputBlockShape input_block_shape, ReducePartialScaler partial_scaler) {
+template <uint32_t scaler_dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor>
+ALWI void ensure_managed_reduce_scaler(ReduceInputBlockShape input_block_shape, ReduceScaler partial_scaler) {
+    static_assert(reduce_factor > 0, "reduce_factor must be greater than zero");
+
     constexpr uint32_t tile_r_dim = get_tile_r_dim<scaler_dfb_id>();
     constexpr uint32_t tile_c_dim = get_tile_c_dim<scaler_dfb_id>();
     constexpr uint32_t full_dim = reduce_dim == ReduceDim::REDUCE_COL ? tile_r_dim : tile_c_dim;
 
     ASSERT(partial_scaler.is_compute_owned());
-    const uint32_t valid_reduce_dim_elements = partial_scaler.effective_valid_elements(full_dim);
-    ASSERT(valid_reduce_dim_elements > 0);
-    ASSERT(valid_reduce_dim_elements <= full_dim);
+    ASSERT(partial_scaler.partial_elements < full_dim);
+    ASSERT(partial_scaler.use_partial == (partial_scaler.partial_elements != 0));
     if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
-        ASSERT(valid_reduce_dim_elements == full_dim);
+        ASSERT(partial_scaler.partial_elements == 0);
     }
 
     const uint32_t reduce_axis_tiles = reduce_axis_tile_count<reduce_dim>(input_block_shape);
-    const uint32_t tile_count = partial_scaler.scaler_tile_count(reduce_axis_tiles, full_dim);
-    const ManagedReduceScalerMode mode =
-        managed_reduce_scaler_mode<reduce_dim>(valid_reduce_dim_elements != full_dim);
-    const uint32_t reduce_factor = [&]() -> uint32_t {
-        if constexpr (pool_type == PoolType::AVG) {
-            return managed_reduce_factor<scaler_dfb_id, reduce_dim>(input_block_shape, valid_reduce_dim_elements);
-        } else {
-            // SUM and MAX always use the identity scaler, regardless of the number of reduced elements.
-            return 1;
-        }
-    }();
+    const uint32_t tile_count = partial_scaler.scaler_tile_count(reduce_axis_tiles);
+    const ManagedReduceScalerMode mode = managed_reduce_scaler_mode<reduce_dim>(partial_scaler.use_partial);
 
     ManagedReduceScalerState& state = managed_reduce_scaler_state<scaler_dfb_id>();
-    if (state.matches(pool_type, mode, reduce_factor, valid_reduce_dim_elements, tile_count)) {
+    if (state.matches(pool_type, mode, reduce_factor, partial_scaler.partial_elements, tile_count)) {
         return;
     }
 
@@ -917,7 +885,7 @@ ALWI void ensure_managed_reduce_scaler(ReduceInputBlockShape input_block_shape, 
     })
 
     PACK({
-        const uint32_t scaler_bits = calculate_managed_reduce_scaler_bits<pool_type, reduce_dim>(reduce_factor);
+        constexpr uint32_t scaler_bits = calculate_managed_reduce_scaler_bits<pool_type, reduce_dim, reduce_factor>();
         if (state.initialized && state.tile_count == 1) {
             // Publish a dummy tile for UNPACK to consume, advancing both empty-queue cursors.
             constexpr uint32_t onetile = 1;
@@ -929,7 +897,7 @@ ALWI void ensure_managed_reduce_scaler(ReduceInputBlockShape input_block_shape, 
             write_managed_reduce_scaler_tile<scaler_dfb_id, reduce_dim>(scaler_dfb, scaler_bits, full_dim);
         }
         write_managed_reduce_scaler_tile<scaler_dfb_id, reduce_dim>(
-            scaler_dfb, scaler_bits, valid_reduce_dim_elements);
+            scaler_dfb, scaler_bits, partial_scaler.use_partial ? partial_scaler.partial_elements : full_dim);
     })
 
     state = {
@@ -937,7 +905,7 @@ ALWI void ensure_managed_reduce_scaler(ReduceInputBlockShape input_block_shape, 
         pool_type,
         mode,
         reduce_factor,
-        valid_reduce_dim_elements,
+        partial_scaler.partial_elements,
         tile_count,
     };
 }
@@ -1086,6 +1054,7 @@ template <
     ReduceFp32Mode fp32_mode,
     ReduceAlgorithm algorithm,
     ReduceWithinTile within_tile,
+    uint32_t reduce_factor,
     typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce(
@@ -1093,13 +1062,10 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op,
-    ReducePartialScaler partial_scaler) {
+    ReduceScaler partial_scaler) {
     // Int32 MAX and Accurate fp32 SUM/MAX route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
-    constexpr uint32_t scaler_tile_r_dim = get_tile_r_dim<scaler_dfb_id>();
-    constexpr uint32_t scaler_tile_c_dim = get_tile_c_dim<scaler_dfb_id>();
-    constexpr uint32_t scaler_full_dim = reduce_dim == ReduceDim::REDUCE_COL ? scaler_tile_r_dim : scaler_tile_c_dim;
     // =============================================================================
     // Static Assertions (compile-time validation)
     // =============================================================================
@@ -1142,7 +1108,7 @@ ALWI void reduce(
     constexpr ReduceAlgorithm resolved_algorithm =
         (algorithm == ReduceAlgorithm::Auto) ? ReduceAlgorithm::ReduceTile : algorithm;
     if constexpr (resolved_algorithm == ReduceAlgorithm::AccumulateViaAdd) {
-        const bool uses_partial = partial_scaler.uses_partial(scaler_full_dim);
+        const bool use_partial = partial_scaler.use_partial;
         static_assert(
             reduce_type == PoolType::SUM || reduce_type == PoolType::AVG,
             "AccumulateViaAdd computes SUM, or standalone AVG for tile-aligned input (1/N derived from "
@@ -1186,20 +1152,20 @@ ALWI void reduce(
         // scaler_dfb). REDUCE_SCALAR can be partial in BOTH axes at once (a single row/col mask can't express
         // the corner), so it is rejected — use ReduceTile.
         if constexpr (reduce_type == PoolType::AVG) {
-            ASSERT(!uses_partial);
+            ASSERT(!use_partial);
         }
         if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
-            ASSERT(!uses_partial);
+            ASSERT(!use_partial);
         }
         // Skip + partial is a contradiction: use_partial requests a lane mask along an axis whose inputs are
         // already collapsed. Reject it rather than pretend the mask did useful work.
         if constexpr (within_tile == ReduceWithinTile::Skip) {
-            ASSERT(!uses_partial);
+            ASSERT(!use_partial);
         }
         // AccumulateViaAdd needs no reduce scaler. Its optional ragged-input mask remains a
         // reader-owned compatibility path for now; compute-owned partial masks will be folded into
         // this lifecycle separately from scaler tiles.
-        ASSERT(!partial_scaler.is_compute_owned() || !uses_partial);
+        ASSERT(!partial_scaler.is_compute_owned() || !use_partial);
         // Cross-call Accumulate + partial is supported for ROW/COL (the masked last tile folds into each
         // chunk's sum via fold_partial_last). SCALAR partial is rejected above (622-ish) regardless of accumulate.
         // row_stride (a WIDER resident block, padded rows) is honored for ROW/COL indexed reduces — the
@@ -1269,16 +1235,16 @@ ALWI void reduce(
     const uint32_t num_batches = input_block_shape.batches;
 
     const uint32_t reduce_axis_tiles = detail::reduce_axis_tile_count<reduce_dim>(input_block_shape);
-    const bool uses_partial = partial_scaler.uses_partial(scaler_full_dim);
+    const bool use_partial = partial_scaler.use_partial;
     if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
-        ASSERT(!uses_partial);
+        ASSERT(!use_partial);
     }
     if constexpr (is_sfpu) {
-        ASSERT(!uses_partial);
+        ASSERT(!use_partial);
     } else if (partial_scaler.is_compute_owned()) {
-        UNPACK((detail::ensure_managed_reduce_scaler<scaler_dfb_id, reduce_type, reduce_dim>(
+        UNPACK((detail::ensure_managed_reduce_scaler<scaler_dfb_id, reduce_type, reduce_dim, reduce_factor>(
             input_block_shape, partial_scaler)));
-        PACK((detail::ensure_managed_reduce_scaler<scaler_dfb_id, reduce_type, reduce_dim>(
+        PACK((detail::ensure_managed_reduce_scaler<scaler_dfb_id, reduce_type, reduce_dim, reduce_factor>(
             input_block_shape, partial_scaler)));
     }
 
@@ -1321,7 +1287,7 @@ ALWI void reduce(
     // SFPU folds do not read scaler tiles. FPU/GMPOOL waits for either the reader-owned
     // layout or the compute-owned layout ensured above.
     if constexpr (!is_sfpu) {
-        scaler_dfb.wait_front(partial_scaler.scaler_tile_count(reduce_axis_tiles, scaler_full_dim));
+        scaler_dfb.wait_front(partial_scaler.scaler_tile_count(reduce_axis_tiles));
     }
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
@@ -1452,7 +1418,7 @@ ALWI void reduce(
                     } else {
                         // Last W-tile picks up the partial scaler when one was prepared by the reader.
                         const uint32_t scaler_idx =
-                            (wt == Wt - 1) ? partial_scaler.partial_scaler_idx(reduce_axis_tiles, scaler_full_dim) : 0;
+                            (wt == Wt - 1) ? partial_scaler.partial_scaler_idx(reduce_axis_tiles) : 0;
                         if constexpr (waits_per_tile(input_policy)) {
                             // One-at-a-time: wait/pop per tile
                             input_dfb.wait_front(onetile);
@@ -1556,7 +1522,7 @@ ALWI void reduce(
                     uint32_t dst_idx = get_dst_index(accumulate);
                     // Last H-tile picks up the partial scaler when one was prepared by the reader.
                     [[maybe_unused]] const uint32_t scaler_idx =
-                        (ht == Ht - 1) ? partial_scaler.partial_scaler_idx(reduce_axis_tiles, scaler_full_dim) : 0;
+                        (ht == Ht - 1) ? partial_scaler.partial_scaler_idx(reduce_axis_tiles) : 0;
                     for (uint32_t i = wt; i < chunk_end; ++i) {
                         if constexpr (is_sfpu) {
                             const bool is_first_tile = detail::sfpu_is_first_tile(ht, accumulate);
@@ -1664,7 +1630,7 @@ ALWI void reduce_mean(
     uint32_t n_reduced,
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
-    ReducePartialScaler partial_scaler) {
+    ReduceScaler partial_scaler) {
     ASSERT(n_reduced > 0);
     // 1/N as float bits for mul_unary_tile. N is the caller's true reduced-element count; the kernel never
     // derives it from tile geometry. The multiply lands in a finalize post_reduce_op, which reduce() runs

@@ -64,6 +64,22 @@ ALWI auto make_accumulation(uint32_t iteration) {
 
 template <uint32_t output_cb, uint32_t call_valid_elements>
 ALWI void run_reduce_call(uint32_t iteration) {
+    constexpr uint32_t call_partial_elements =
+        call_valid_elements == tt::constants::TILE_WIDTH ? 0 : call_valid_elements;
+    constexpr uint32_t scaler_tile_r_dim = compute_kernel_lib::get_tile_r_dim<cb_scaler>();
+    constexpr uint32_t scaler_tile_c_dim = compute_kernel_lib::get_tile_c_dim<cb_scaler>();
+    constexpr uint32_t reduce_axis_tiles = REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW   ? cols
+                                           : REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL ? rows
+                                                                                          : rows * cols;
+    constexpr uint32_t full_reduce_dim =
+        REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL ? scaler_tile_r_dim : scaler_tile_c_dim;
+    constexpr uint32_t call_reduce_factor =
+        REDUCE_OP != ckernel::PoolType::AVG
+            ? 1
+            : (REDUCE_DIM == ckernel::ReduceDim::REDUCE_SCALAR
+                   ? reduce_axis_tiles * scaler_tile_r_dim * scaler_tile_c_dim
+                   : (reduce_axis_tiles - 1) * full_reduce_dim +
+                         (call_partial_elements != 0 ? call_partial_elements : full_reduce_dim));
     const auto accumulation = make_accumulation<(num_calls > 1)>(iteration);
 #ifdef REDUCE_POST_MULTIPLIER_BITS
     const PostReduceMultiply post_reduce_op{};
@@ -84,12 +100,14 @@ ALWI void run_reduce_call(uint32_t iteration) {
             REDUCE_INPUT_POLICY,
             REDUCE_RECONFIG_MODE,
             REDUCE_FP32_MODE,
-            REDUCE_ALGORITHM>(
+            REDUCE_ALGORITHM,
+            compute_kernel_lib::ReduceWithinTile::Collapse,
+            call_reduce_factor>(
             shape,
             layout,
             accumulation,
             post_reduce_op,
-            compute_kernel_lib::ReducePartialScaler::from_valid_elements(call_valid_elements));
+            compute_kernel_lib::ReduceScaler::compute_managed(call_partial_elements));
     }
 
     constexpr bool helper_pops_input =

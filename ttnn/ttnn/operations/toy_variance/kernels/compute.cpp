@@ -60,8 +60,7 @@ void kernel_main() {
     // For non-tile-aligned W: select the partial scaler tile (idx 1) on the
     // last W-tile. Only the LAST block holds that tile, so the partial scaler
     // is passed on the last block and ::none() on every earlier one.
-    constexpr auto partial_scaler =
-        HAS_PARTIAL_W ? ckl::ReducePartialScaler::with_partial() : ckl::ReducePartialScaler::none();
+    constexpr auto partial_scaler = HAS_PARTIAL_W ? ckl::ReduceScaler::with_partial() : ckl::ReduceScaler::none();
 
     // ---------- Pass 1: streaming mean ----------
     // Scaler = 1/N (with partial-scaler-zeroed padded positions) converts SUM
@@ -73,7 +72,7 @@ void kernel_main() {
             ckl::ReduceInputMemoryLayout::contiguous(),
             ckl::Accumulate::at(cb_mean, b),
             ckl::NoOp{},
-            is_last ? partial_scaler : ckl::ReducePartialScaler::none());
+            is_last ? partial_scaler : ckl::ReduceScaler::none());
     }
 
     // ---------- Pass 2: streaming variance via (x - mean)^2 ----------
@@ -102,7 +101,7 @@ void kernel_main() {
         // partial scaler and — for std-dev — the sqrt finalizer, which the
         // reduce runs in DST after the final accumulation, before pack.
         const bool is_last = (b + 1 == NUM_BLOCKS);
-        const auto block_scaler = is_last ? partial_scaler : ckl::ReducePartialScaler::none();
+        const auto block_scaler = is_last ? partial_scaler : ckl::ReduceScaler::none();
 
         if constexpr (COMPUTE_STD_DEV) {
             if (is_last) {
