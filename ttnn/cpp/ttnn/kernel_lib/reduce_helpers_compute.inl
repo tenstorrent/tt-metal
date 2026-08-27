@@ -797,17 +797,6 @@ ALWI ManagedReduceScalerMode managed_reduce_scaler_mode(bool use_partial) {
     }
 }
 
-template <ReduceDim reduce_dim>
-ALWI uint32_t reduce_axis_tile_count(ReduceInputBlockShape input_block_shape) {
-    if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
-        return input_block_shape.cols;
-    } else if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
-        return input_block_shape.rows;
-    } else {
-        return input_block_shape.rows * input_block_shape.cols;
-    }
-}
-
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor>
 ALWI constexpr uint32_t calculate_managed_reduce_scaler_bits() {
     float scaler_f = 1.0f;
@@ -857,7 +846,7 @@ ALWI void write_managed_reduce_scaler_tile(
 }
 
 template <uint32_t scaler_dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor>
-ALWI void ensure_managed_reduce_scaler(ReduceInputBlockShape input_block_shape, ReduceScaler partial_scaler) {
+ALWI void ensure_managed_reduce_scaler(ReduceScaler partial_scaler) {
     static_assert(reduce_factor > 0, "reduce_factor must be greater than zero");
 
     constexpr uint32_t tile_r_dim = get_tile_r_dim<scaler_dfb_id>();
@@ -871,8 +860,7 @@ ALWI void ensure_managed_reduce_scaler(ReduceInputBlockShape input_block_shape, 
         ASSERT(partial_scaler.partial_elements == 0);
     }
 
-    const uint32_t reduce_axis_tiles = reduce_axis_tile_count<reduce_dim>(input_block_shape);
-    const uint32_t tile_count = partial_scaler.scaler_tile_count(reduce_axis_tiles);
+    const uint32_t tile_count = partial_scaler.scaler_tile_count();
     const ManagedReduceScalerMode mode = managed_reduce_scaler_mode<reduce_dim>(partial_scaler.use_partial);
 
     ManagedReduceScalerState& state = managed_reduce_scaler_state<scaler_dfb_id>();
@@ -1247,7 +1235,6 @@ ALWI void reduce(
     const uint32_t Wt = input_block_shape.cols;
     const uint32_t num_batches = input_block_shape.batches;
 
-    const uint32_t reduce_axis_tiles = detail::reduce_axis_tile_count<reduce_dim>(input_block_shape);
     const bool use_partial = partial_scaler.use_partial;
     if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
         ASSERT(!use_partial);
@@ -1256,9 +1243,9 @@ ALWI void reduce(
         ASSERT(!use_partial);
     } else if (partial_scaler.is_compute_owned()) {
         UNPACK((detail::ensure_managed_reduce_scaler<scaler_dfb_id, reduce_type, reduce_dim, reduce_factor>(
-            input_block_shape, partial_scaler)));
+            partial_scaler)));
         PACK((detail::ensure_managed_reduce_scaler<scaler_dfb_id, reduce_type, reduce_dim, reduce_factor>(
-            input_block_shape, partial_scaler)));
+            partial_scaler)));
     }
 
     DataflowBuffer input_dfb(input_dfb_id);
@@ -1300,7 +1287,7 @@ ALWI void reduce(
     // SFPU folds do not read scaler tiles. FPU/GMPOOL waits for either the reader-owned
     // layout or the compute-owned layout ensured above.
     if constexpr (!is_sfpu) {
-        scaler_dfb.wait_front(partial_scaler.scaler_tile_count(reduce_axis_tiles));
+        scaler_dfb.wait_front(partial_scaler.scaler_tile_count());
     }
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
@@ -1430,8 +1417,7 @@ ALWI void reduce(
                         }
                     } else {
                         // Last W-tile picks up the partial scaler when one was prepared by the reader.
-                        const uint32_t scaler_idx =
-                            (wt == Wt - 1) ? partial_scaler.partial_scaler_idx(reduce_axis_tiles) : 0;
+                        const uint32_t scaler_idx = (wt == Wt - 1) ? partial_scaler.partial_scaler_idx() : 0;
                         if constexpr (waits_per_tile(input_policy)) {
                             // One-at-a-time: wait/pop per tile
                             input_dfb.wait_front(onetile);
@@ -1535,7 +1521,7 @@ ALWI void reduce(
                     uint32_t dst_idx = get_dst_index(accumulate);
                     // Last H-tile picks up the partial scaler when one was prepared by the reader.
                     [[maybe_unused]] const uint32_t scaler_idx =
-                        (ht == Ht - 1) ? partial_scaler.partial_scaler_idx(reduce_axis_tiles) : 0;
+                        (ht == Ht - 1) ? partial_scaler.partial_scaler_idx() : 0;
                     for (uint32_t i = wt; i < chunk_end; ++i) {
                         if constexpr (is_sfpu) {
                             const bool is_first_tile = detail::sfpu_is_first_tile(ht, accumulate);

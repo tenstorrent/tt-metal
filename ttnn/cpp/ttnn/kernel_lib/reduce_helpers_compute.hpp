@@ -322,10 +322,8 @@ struct ReduceInputBlockShape {
  *   along the reduced dimension; n == 0 means there is no partial tile. The `reduce_factor` template argument
  *   to reduce() is the total number of elements reduced into each output and defaults to 1. reduce() creates,
  *   reuses, replaces, and synchronizes the required scaler tiles. A full reduction needs one tile; a ragged
- *   multi-tile needs a full tile followed by a partial tile; a one-tile ragged reduction needs only the partial
- *   tile.
- *   The scaler DFB therefore needs two entries if a ragged multi-tile reduction is possible, and
- *   one entry otherwise.
+ *   reduction uses a [full, partial] pair, with the partial scaler at index 1.
+ *   The scaler DFB therefore needs two entries if a ragged reduction is possible, and one otherwise.
  *
  * - Reader-owned compatibility: `none()`, `with_partial()`, and `only_partial()` retain the
  *   existing contracts for kernels whose dataflow thread prepares scaler or mask tiles. These
@@ -366,27 +364,13 @@ struct ReduceScaler {
     static constexpr ReduceScaler with_partial() { return {true, 1, false, 0}; }
     static constexpr ReduceScaler only_partial() { return {true, 0, false, 0}; }
     static constexpr ReduceScaler compute_managed(std::uint32_t partial_elements = 0) {
-        return {partial_elements != 0, 0, true, partial_elements};
+        return {partial_elements != 0, partial_elements != 0 ? 1u : 0u, true, partial_elements};
     }
 
     constexpr bool is_compute_owned() const { return manage_scaler; }
 
-    // Reader-owned compatibility accessors.
     constexpr std::uint32_t scaler_tile_count() const { return partial_tile_idx + 1; }
     constexpr std::uint32_t partial_scaler_idx() const { return partial_tile_idx; }
-
-    // Ownership-aware accessors. A compute-owned one-tile ragged reduction stores its partial
-    // scaler at index 0; a multi-tile ragged reduction stores [full, partial].
-    constexpr std::uint32_t scaler_tile_count(std::uint32_t reduce_axis_tiles) const {
-        if (!manage_scaler) {
-            return scaler_tile_count();
-        }
-        return use_partial && reduce_axis_tiles > 1 ? 2 : 1;
-    }
-
-    constexpr std::uint32_t partial_scaler_idx(std::uint32_t reduce_axis_tiles) const {
-        return scaler_tile_count(reduce_axis_tiles) - 1;
-    }
 };
 
 /**
@@ -544,7 +528,7 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  * Pass ReduceScaler::compute_managed() to let reduce() own the scaler DFB. It will
  * calculate, create, reuse, replace, and synchronize scaler tiles as needed. Reader-owned legacy
  * modes still require the scaler DFB to be populated before reduce() is called. A compute-owned
- * scaler DFB needs two entries if a ragged multi-tile reduction is possible, and one otherwise.
+ * scaler DFB needs two entries if a ragged reduction is possible, and one otherwise.
  *
  * INPUT POLICIES: See ReduceInputPolicy enum for detailed mode descriptions.
  * - Use BulkWaitBulkPop for optimal performance when wait/pop are symmetric with ReduceInputBlockShape.
