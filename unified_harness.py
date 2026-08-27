@@ -2,24 +2,26 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host harness for running unified kernels through ``ttnn.generic_op``.
+"""Host harness for running unified kernels through a Metal 2.0 ProgramSpec.
 
-A unified kernel is ONE source file that describes a whole Tensix pipeline. The
-trick that makes it work on today's API is that ``ttnn.generic_op`` takes a
-*list* of ``KernelDescriptor``s, and nothing requires them to point at different
-files. So we emit three descriptors from one source:
+A unified kernel is ONE source file that describes a whole Tensix pipeline. What makes that
+work is that a ProgramSpec takes a set of KernelSpecs and nothing requires them to point at
+different files, so we emit three from one source:
 
-    reader   DataMovementConfigDescriptor(RISCV_1)   -> COMPILE_FOR_NCRISC
-    writer   DataMovementConfigDescriptor(RISCV_0)   -> COMPILE_FOR_BRISC
-    compute  ComputeConfigDescriptor()               -> UCK_CHLKC_{UNPACK,MATH,PACK}
+    dm0      DataMovementGen1Config(RISCV_0)  -> COMPILE_FOR_BRISC   -> DM thread 0
+    dm1      DataMovementGen1Config(RISCV_1)  -> COMPILE_FOR_NCRISC  -> DM thread 1
+    compute  ComputeGen1Config()              -> UCK_CHLKC_{UNPACK,MATH,PACK}
 
-No per-thread defines are passed from here. Metal already emits a thread
-identity define for every kernel build, and ``unified_metal.hpp`` derives the
-projection from it -- so the host side stays ignorant of the mechanism.
+No per-thread defines are passed from here. Metal already emits a thread identity define for
+every kernel build and tt/unified/adaptor_v1.hpp derives the projection from it, so the host
+stays ignorant of the mechanism.
 
-All three descriptors get *identical* compile-time and runtime args, because
-they are the same source reading the same arg indices. That uniform arg schema
-is a property of the model, not a limitation of the harness.
+All three get IDENTICAL compile-time args, runtime-argument schemas and tensor bindings,
+because they are the same source reading the same names. That uniform schema is a property of
+the model, not a limitation of the harness.
+
+The descriptor path this used to build (ttnn.generic_op + ProgramDescriptor) is gone; see
+unified_metal2_spec.md for what the move bought and what it cost.
 """
 
 import os
@@ -48,189 +50,6 @@ DTYPE_TILE_BYTES = {
 # [ready0, sent0, ready1, sent1, copy0, copy1] -- tt/unified/api.h derives every id
 # from the base, so the two groups must stay in this order.
 MCAST_SEMAPHORES = 6
-
-
-# Appended after the last runtime argument on every core. A kernel that names the count it
-# expects then catches a launcher passing the wrong number -- the failure that has hung this
-# device three times. Must match u::kRuntimeArgSentinel in tt/unified/api.h.
-RUNTIME_ARG_SENTINEL = 0x5EA15EA1
-
-
-def make_runtime_args(cores, values):
-    """A RuntimeArgs over `cores`, with the sentinel appended.
-
-    `values` is either one flat sequence, used on every core, or a dict keyed by
-    CoreCoord for per-core args (a multicast sender needs to know it is the
-    sender, and each core needs its own output slice).
-    """
-    args = ttnn.RuntimeArgs()
-    if isinstance(values, dict):
-        for core in cores:
-            args[core.x][core.y] = list(values[core]) + [RUNTIME_ARG_SENTINEL]
-    else:
-        for core in cores:
-            args[core.x][core.y] = list(values) + [RUNTIME_ARG_SENTINEL]
-    return args
-
-
-def make_cb(cb_index, core_ranges, dtype=ttnn.bfloat16, num_pages=2):
-    """A double-buffered CB by default: `num_pages` pages of one tile each."""
-    page_size = DTYPE_TILE_BYTES[dtype]
-    return ttnn.CBDescriptor(
-        total_size=num_pages * page_size,
-        core_ranges=core_ranges,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb_index, data_format=dtype, page_size=page_size)],
-    )
-
-
-def make_semaphore(sem_id, core_ranges, initial_value=0, core_type=None):
-    """Reserve semaphore slot `sem_id` on every core in `core_ranges`.
-
-    `sem_id` is an INPUT, not an index into the list you pass to
-    unified_program(): the runtime honours SemaphoreDescriptor.id directly
-    (program.cpp add_semaphore). It defaults to 0 in the descriptor, so two
-    semaphores built without distinct ids silently land on the same slot. The
-    kernel passes the matching id to u::Semaphore.
-
-    Host-side allocation is the point: every core resolves an id to the same L1
-    offset, independent of which RISC is running, and the runtime stamps
-    initial_value on every launch. A kernel-owned counter gets neither.
-    """
-    return ttnn.SemaphoreDescriptor(
-        id=sem_id,
-        core_type=core_type if core_type is not None else ttnn.CoreType.WORKER,
-        core_ranges=core_ranges,
-        initial_value=initial_value,
-    )
-
-
-def unified_program(
-    *,
-    kernel_source,
-    core_ranges,
-    cores,
-    cbs,
-    compile_time_args,
-    runtime_args,
-    named_compile_time_args=None,
-    reader_processor=ttnn.DataMovementProcessor.RISCV_1,
-    writer_processor=ttnn.DataMovementProcessor.RISCV_0,
-    semaphores=None,
-    defines=None,
-    math_fidelity=ttnn.MathFidelity.HiFi4,
-    math_approx_mode=False,
-    dynamic_noc=False,
-):
-    """Build a ProgramDescriptor that compiles ONE source for all five threads.
-
-    Args:
-        kernel_source: path to the unified kernel, relative to TT_METAL_HOME.
-        core_ranges: ttnn.CoreRangeSet the program runs on.
-        cores: the individual CoreCoords, for per-core runtime args.
-        cbs: list of ttnn.CBDescriptor.
-        compile_time_args: list of ints, shared by all three descriptors. Positional, and
-            what TensorAccessorArgs consumes -- a contiguous block whose length depends on
-            each tensor's layout, which a name cannot express.
-        named_compile_time_args: list of (name, value), also shared. Every SCALAR belongs
-            here: a name that does not exist is a build failure, and keeping scalars out of
-            the positional list is what stops the accessor offsets drifting. See
-            unified_named_args_spec.md.
-        runtime_args: list of ints, shared by all three descriptors.
-        reader_processor / writer_processor: which RISC-V runs which DM role.
-            Metal's convention is RISCV_1 for readers, RISCV_0 for writers.
-        semaphores: optional list of ttnn.SemaphoreDescriptor (see make_semaphore).
-            Four more are appended for the multicast handshake, above your ids.
-        defines: optional extra (name, value) pairs, applied to all three.
-        math_fidelity / math_approx_mode: compute config for the TRISCs.  The
-            metal defaults (HiFi4, exact) are the most accurate and the slowest;
-            HiFi2 halves the FPU passes per bfloat16 matmul and approx mode
-            picks the cheap SFPU transcendentals.
-        dynamic_noc: put both data-movement kernels in DM_DYNAMIC_NOC. Only needed to let
-            a thread issue on a NOC other than its own -- in the default DM_DEDICATED_NOC
-            that is a device hang, not a slowdown. Costs ~2.7% when unused, so leave it off.
-    """
-    # Reserve the multicast handshake semaphores: two per DM thread, placed ABOVE
-    # any id the caller used so their choices stay unconstrained. Their base goes
-    # to the kernel as a define; tt/unified/api.h derives each thread's ids from
-    # it. Six slots out of NUM_SEMAPHORES = 16.
-    user_semaphores = list(semaphores or [])
-    mcast_sem_base = 1 + max((s.id for s in user_semaphores), default=-1)
-    all_semaphores = user_semaphores + [
-        make_semaphore(mcast_sem_base + i, core_ranges, initial_value=0) for i in range(MCAST_SEMAPHORES)
-    ]
-    # The core grid, so synchronize_cores() can default to the whole program.
-    # Bounding box, not num_cores: a barrier addresses a rectangle.
-    bbox = core_ranges.bounding_box()
-    grid_h = bbox.end.y - bbox.start.y + 1
-    grid_w = bbox.end.x - bbox.start.x + 1
-
-    # Whether the cores FILL that bounding box. core_block(12) is eight cores in row 0 and
-    # four in row 1, whose box is 2x8 -- so a barrier derived from the box would address
-    # four cores that were never launched and wait on them forever. Defining this only when
-    # the two agree is what makes the no-region synchronize_cores() a compile error rather
-    # than a hang; see unified_api_hazards.md.
-    grid_exact = core_ranges.num_cores() == grid_h * grid_w
-
-    defines = (
-        list(defines or [])
-        + [
-            ("TT_UNIFIED_MCAST_SEM_BASE", str(mcast_sem_base)),
-            ("TT_UNIFIED_CORE_GRID_H", str(grid_h)),
-            ("TT_UNIFIED_CORE_GRID_W", str(grid_w)),
-        ]
-        + ([("TT_UNIFIED_CORE_GRID_EXACT", "1")] if grid_exact else [])
-    )
-
-    shared = dict(
-        kernel_source=kernel_source,
-        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=core_ranges,
-        compile_time_args=list(compile_time_args),
-        named_compile_time_args=list(named_compile_time_args or []),
-        defines=defines,
-        compiler_include_paths=UNIFIED_INCLUDE_PATHS,
-    )
-
-    # DM_DEDICATED_NOC tracks issued reads in a per-RISC software counter and compares it
-    # against the per-core hardware response register, so it is only correct while exactly
-    # one RISC issues on a given NOC. DM_DYNAMIC_NOC keeps those counters in shared L1 and
-    # sums both RISCs', which is what lets two RISCs share a NOC and still barrier
-    # correctly. Metal requires every DM kernel on a core to agree on the mode, so this is
-    # per-program, not per-call. See unified_explicit_noc_spec.md.
-    noc_mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC if dynamic_noc else ttnn.NOC_MODE.DM_DEDICATED_NOC
-
-    kernels = [
-        # reader. `noc` must be set explicitly: DataMovementConfig defaults it to
-        # RISCV_0_default (= NOC 0) regardless of processor, so leaving it out puts
-        # BOTH data-movement kernels on NOC 0. That costs the second NOC's
-        # bandwidth, and it makes the end-of-kernel NOC-idle asserts in brisck.cc
-        # cross-talk: NOC_INDEX is emitted from this field (kernel.cpp:252), so
-        # BRISC would check NOC 0's read counters against its own issued count and
-        # trip on reads NCRISC issued.
-        ttnn.KernelDescriptor(
-            **shared,
-            runtime_args=make_runtime_args(cores, runtime_args),
-            config=ttnn.DataMovementConfigDescriptor(
-                processor=reader_processor, noc=ttnn.NOC.RISCV_1_default, noc_mode=noc_mode
-            ),
-        ),
-        # writer
-        ttnn.KernelDescriptor(
-            **shared,
-            runtime_args=make_runtime_args(cores, runtime_args),
-            config=ttnn.DataMovementConfigDescriptor(
-                processor=writer_processor, noc=ttnn.NOC.RISCV_0_default, noc_mode=noc_mode
-            ),
-        ),
-        # compute (fans out to TRISC 0/1/2)
-        ttnn.KernelDescriptor(
-            **shared,
-            runtime_args=make_runtime_args(cores, runtime_args),
-            config=ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, math_approx_mode=math_approx_mode),
-        ),
-    ]
-
-    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=all_semaphores, cbs=list(cbs))
 
 
 def single_core():
@@ -364,6 +183,9 @@ def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_pages=2):
 # place to read it from.
 _RE_STORAGE = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*(\w+)\s*\)")
 _RE_CB_NAMED = re.compile(r"(\w+)\s*=\s*get_arg\(\s*args::cb_(\w+)\s*\)")
+# A Storage built straight from the argument rather than through a named constant:
+#   u::Storage<S> s1(get_arg(args::cb_s1));
+_RE_STORAGE_INLINE = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*get_arg\(\s*args::cb_(\w+)\s*\)\s*\)")
 _RE_PRODUCED = re.compile(
     r"(?:u::Block[\w<>: ]*|u::RetainedBlock[\w<>: ]*|auto)\s+(\w+)\s*=\s*(\w+)\.(?:store|accumulate)\("
 )
@@ -432,6 +254,8 @@ def derive_roles(kernel_source, defines):
     for var, cb in _RE_STORAGE.findall(src):
         if cb in cb_const:
             storages[var] = cb_const[cb]
+    for var, name in _RE_STORAGE_INLINE.findall(src):
+        storages[var] = name
     # Block variable -> every Storage it could have come from. A name is reused across
     # preprocessor branches (`u::Block result` in each), so this is one-to-many rather than
     # one-to-one, and every candidate gets the role: they all drain the same way.

@@ -19,14 +19,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, unified_program
+from unified_harness import dfb, run_unified_spec, unified_program_spec
 
 KERNEL = "unified_kernels/example_matmul.cpp"
 TILE = 32
 GRID_H, GRID_W, K_BLOCKS = 2, 2, 2
 RT, CT, KT = 2, 2, 2
-
-CB_A, CB_B, CB_BIAS, CB_OUT, CB_PARTIALS = 0, 1, 2, 16, 24
 
 
 def to_device(device, t):
@@ -72,26 +70,22 @@ def main():
         core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GRID_W - 1, GRID_H - 1))])
         cores = [ttnn.CoreCoord(x, y) for y in range(GRID_H) for x in range(GRID_W)]
 
-        compile_time_args = []
-        for t in (ta, tb, tbias, tout):
-            compile_time_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-
-        program = unified_program(
+        tensors = {"a": ta, "b": tb, "bias": tbias, "out": tout}
+        spec = unified_program_spec(
             kernel_source=KERNEL,
-            core_ranges=core_ranges,
-            cores=cores,
-            cbs=[
-                make_cb(CB_A, core_ranges, num_pages=2 * RT * KT),
-                make_cb(CB_B, core_ranges, num_pages=2 * KT * CT),
-                make_cb(CB_BIAS, core_ranges, num_pages=CT),
-                make_cb(CB_OUT, core_ranges, num_pages=RT * CT),
-                make_cb(CB_PARTIALS, core_ranges, num_pages=RT * CT),
+            nodes=core_ranges,
+            dfbs=[
+                dfb("a", 2 * RT * KT),
+                dfb("b", 2 * KT * CT),
+                dfb("bias", CT),
+                dfb("out", RT * CT),
+                dfb("partials", RT * CT),
             ],
-            compile_time_args=compile_time_args,
-            runtime_args=[t.buffer_address() for t in (ta, tb, tbias, tout)],
+            tensors=tensors,
+            name="example_matmul",
         )
-
-        out = ttnn.generic_op([ta, tb, tbias, tout], program)
+        run_unified_spec(device, spec, tensors)
+        out = tout
         got = ttnn.to_torch(out).to(torch.float32)[0, 0]
     finally:
         ttnn.close_device(device)

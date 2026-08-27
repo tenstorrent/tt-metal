@@ -36,11 +36,11 @@ void kernel_main() {
     constexpr uint32_t kCbSum = get_arg(args::cb_sum);
     constexpr uint32_t kCbAcc = get_arg(args::cb_acc);
 
-    const auto q_acc = TensorAccessor(tensor::q));
-    const auto k_acc = TensorAccessor(tensor::k));
-    const auto v_acc = TensorAccessor(tensor::v));
-    const auto ones_acc = TensorAccessor(tensor::ones));
-    const auto out = TensorAccessor(tensor::out));
+    const auto q_acc = TensorAccessor(tensor::q);
+    const auto k_acc = TensorAccessor(tensor::k);
+    const auto v_acc = TensorAccessor(tensor::v);
+    const auto ones_acc = TensorAccessor(tensor::ones);
+    const auto out = TensorAccessor(tensor::out);
 
     u::matmul_init<Queries, KeysTransposed>(kCbQ, kCbK, kCbOut);
 

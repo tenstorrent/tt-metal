@@ -33,7 +33,7 @@ from loguru import logger
 UNDERSIZED_CB = """
 import sys; sys.path.insert(0, ".")
 import torch, ttnn
-from unified_harness import make_cb, unified_program
+from unified_harness import dfb, run_unified_spec, unified_program_spec
 import example_reduce as er
 torch.manual_seed(0)
 rows = er.NUM_CORES * er.IN_HT * er.TILE
@@ -44,17 +44,15 @@ try:
     tout = er.to_device(d, torch.full([er.TILE, er.IN_WT * er.TILE], float("nan")))
     cr = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, er.NUM_CORES - 1))])
     cores = [ttnn.CoreCoord(0, y) for y in range(er.NUM_CORES)]
-    cta = []
-    for t in (tx, tout):
-        cta.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    prog = unified_program(kernel_source=er.KERNEL, core_ranges=cr, cores=cores,
-        cbs=[make_cb(er.CB_IN, cr, num_pages=er.IN_HT * er.IN_WT - 1),
-             make_cb(er.CB_SCALER, cr, num_pages=1),
-             make_cb(er.CB_PARTIAL, cr, num_pages=er.IN_WT),
-             make_cb(er.CB_GATHERED, cr, num_pages=er.NUM_CORES * er.IN_WT),
-             make_cb(er.CB_OUT, cr, num_pages=er.IN_WT)],
-        compile_time_args=cta, runtime_args=[t.buffer_address() for t in (tx, tout)])
-    ttnn.generic_op([tx, tout], prog)
+    tensors = {"in": tx, "out": tout}
+    spec = unified_program_spec(kernel_source=er.KERNEL, nodes=cr,
+        dfbs=[dfb("in", er.IN_HT * er.IN_WT - 1),   # ONE PAGE SHORT: the point of the test
+              dfb("scaler", 1),
+              dfb("partial", er.IN_WT),
+              dfb("gathered", er.NUM_CORES * er.IN_WT),
+              dfb("out", er.IN_WT)],
+        tensors=tensors)
+    run_unified_spec(d, spec, tensors)
     print("ACCEPTED")
 finally:
     ttnn.close_device(d)
@@ -66,7 +64,7 @@ finally:
 NON_RECTANGULAR_BARRIER = """
 import sys; sys.path.insert(0, ".")
 import torch, ttnn
-from unified_harness import core_block, make_cb, unified_program
+from unified_harness import core_block, dfb, run_unified_spec, unified_program_spec
 import test_unified_reduction as rt
 cr, cores = core_block(12)
 d = ttnn.open_device(device_id=0)
@@ -77,30 +75,30 @@ try:
                          dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=d, memory_config=dram)
     tout = ttnn.from_torch(torch.zeros([1, 1, 4 * 32, wt * 32], dtype=torch.bfloat16),
                            dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=d, memory_config=dram)
-    cta = [1, ht, wt, grid_h]
-    for t in (ta, ta, tout):
-        cta.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    prog = unified_program(kernel_source="unified_kernels/reduction_tree.cpp",
-        core_ranges=cr, cores=cores,
-        cbs=[make_cb(rt.CB_IN0, cr, num_pages=ht * wt), make_cb(rt.CB_TMP0, cr, num_pages=wt),
-             make_cb(rt.CB_TMP1, cr, num_pages=wt * grid_h), make_cb(rt.CB_SCALER, cr, num_pages=1),
-             make_cb(rt.CB_OUT, cr, num_pages=wt)],
-        compile_time_args=cta,
-        runtime_args=[ta.buffer_address(), ta.buffer_address(), tout.buffer_address()])
-    ttnn.generic_op([ta, ta, tout], prog)
+    tensors = {"in0": ta, "out": tout}
+    spec = unified_program_spec(kernel_source="unified_kernels/reduction_tree.cpp", nodes=cr,
+        dfbs=[dfb("in0", ht * wt), dfb("tmp0", wt), dfb("tmp1", wt * grid_h),
+              dfb("scaler", 1), dfb("out", wt)],
+        tensors=tensors,
+        named_compile_time_args=[("num_blocks", 1), ("in_ht", ht), ("in_wt", wt), ("num_cores_y", grid_h)])
+    run_unified_spec(d, spec, tensors)
     print("ACCEPTED")
 finally:
     ttnn.close_device(d)
 """
 
-# A launcher that passes one runtime argument too few -- the mistake that hung this device
-# three times. The kernel then reads a loop bound from a slot nobody filled and spins. The
-# harness appends a sentinel after the last argument and the kernel names the count it
-# expects, so a short list puts the sentinel somewhere else and the check fires.
+# A launcher that supplies one runtime argument and not the other -- the mistake that hung
+# this device three times, when the list was positional and the kernel read a loop bound from
+# a slot nobody filled.
+#
+# It cannot hang any more, and that is the point of keeping the case. The arguments are NAMED,
+# so a missing one is not a garbage read at some offset -- it is a name in the kernel's schema
+# with no value supplied, which metal refuses at SetProgramRunArgs before anything is
+# dispatched. The sentinel this suite used to check for is gone with the hazard it guarded.
 SHORT_RUNTIME_ARGS = """
 import sys; sys.path.insert(0, ".")
 import torch, ttnn
-from unified_harness import core_block, make_cb, unified_program
+from unified_harness import core_block, dfb, run_unified_spec, unified_program_spec
 import test_unified_binary as bn
 d = ttnn.open_device(device_id=0)
 try:
@@ -110,17 +108,15 @@ try:
                                  layout=ttnn.TILE_LAYOUT, device=d, memory_config=dram)
     ta, tb, tout = mk(), mk(), mk()
     cr, cores = core_block(1)
-    cta = []
-    for t in (ta, tb, tout):
-        cta.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    prog = unified_program(
-        kernel_source=bn.KERNEL, core_ranges=cr, cores=cores,
-        cbs=[make_cb(bn.CB_IN0, cr, num_pages=8), make_cb(bn.CB_IN1, cr, num_pages=8),
-             make_cb(bn.CB_OUT, cr, num_pages=8)],
-        compile_time_args=cta,
+    tensors = {"in0": ta, "in1": tb, "out": tout}
+    spec = unified_program_spec(
+        kernel_source=bn.KERNEL, nodes=cr,
+        dfbs=[dfb("in0", 8), dfb("in1", 8), dfb("out", 8)],
+        tensors=tensors,
         named_compile_time_args=[("num_blocks", 2), ("tiles_per_block", 2)],
-        runtime_args=[ta.buffer_address(), tb.buffer_address(), tout.buffer_address(), 0])
-    ttnn.generic_op([ta, tb, tout], prog)
+        runtime_arg_names=["block_begin", "block_count"])
+    # block_count is declared and never supplied.
+    run_unified_spec(d, spec, tensors, runtime_args={"block_begin": 0}, nodes=cores)
     print("ACCEPTED")
 finally:
     ttnn.close_device(d)
@@ -136,10 +132,12 @@ finally:
 CASES = [
     ("circular buffer smaller than the block", UNDERSIZED_CB, True, "tripped an assert"),
     ("no-region barrier on a non-rectangular grid", NON_RECTANGULAR_BARRIER, False, "static assertion failed"),
-    # "tripped assert" rather than "tripped an assert": the watcher's per-core detail line
-    # ("NCRISC tripped an assert on line N") goes to the watcher log, and what reaches the
-    # host here is its summary. Matching what it actually prints, not what it might.
-    ("one runtime argument too few", SHORT_RUNTIME_ARGS, True, "tripped assert"),
+    # No watcher needed any more, and no assert: this is refused on the HOST, before a kernel
+    # runs at all. Worth noting what metal's check actually is, since it is weaker than the
+    # naming suggests -- program_run_args.cpp compares the COUNT supplied against the count
+    # declared, so it catches a missing argument without saying which one. Still the whole
+    # difference between a refusal and a garbage loop bound.
+    ("one runtime argument too few", SHORT_RUNTIME_ARGS, False, "named_rta_names"),
 ]
 
 TIMEOUT_S = 240

@@ -27,13 +27,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import dfb, run_unified_spec, single_core, unified_program_spec
 
 KERNEL = "unified_kernels/passcost.cpp"
 
 TILE = 32
-CB_IN, CB_VEC, CB_OUT = 0, 8, 16
-CB_SCRATCH = range(1, 8)
 
 DEFINE = {"copy": None, "bcast": "PC_BCAST", "matmul": "PC_MATMUL", "alt": "PC_ALT", "reduce": "PC_REDUCE"}
 # name -> defines, for the FPU-vs-SFPU binary comparison.
@@ -92,20 +90,18 @@ def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2, fide
 
     two_operand = mode in ("bcast", "matmul", "alt") or mode in BIN
     tensors = [ta, tv, tout] if two_operand else [ta, tout]
-    ct_args = []
     named_ct_args = [("rows", rows), ("cols", cols)]
-    for t in tensors:
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    rt_args = [t.buffer_address() for t in tensors]
 
     # The vector CB holds the broadcast operand, or the 1x1 reduce scaler.
     vec_pages = rows if mode in ("bcast", "alt") else (rows * cols if mode == "matmul" or mode in BIN else 1)
-    cbs = [
-        make_cb(CB_IN, core_ranges, num_pages=buffering * rows * cols),
-        make_cb(CB_VEC, core_ranges, num_pages=buffering * vec_pages),
-        make_cb(CB_OUT, core_ranges, num_pages=buffering * rows * out_cols),
+    dfbs = [
+        dfb("in", buffering * rows * cols),
+        dfb("vec", buffering * vec_pages),
+        dfb("out", buffering * rows * out_cols),
     ]
-    cbs += [make_cb(cb, core_ranges, num_pages=buffering * rows * cols) for cb in CB_SCRATCH]
+    # One scratch buffer per intermediate pass, whether or not this shape uses them all --
+    # the kernel declares all seven Storages unconditionally.
+    dfbs += [dfb(f"s{i}", buffering * rows * cols) for i in range(1, 8)]
 
     defines = [("PASSES", str(passes))]
     if mode in BIN:
@@ -113,19 +109,21 @@ def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2, fide
     elif DEFINE[mode]:
         defines.append((DEFINE[mode], "1"))
 
-    program = unified_program(
+    # `vec` is bound on every shape: the kernel names tensor::vec whether or not the pass
+    # chain reads it.
+    bound = {"in": ta, "vec": tv, "out": tout}
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=cbs,
-        compile_time_args=ct_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
+        tensors=bound,
         named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
         defines=defines,
+        name="passcost",
         **(fidelity or {}),
     )
-
-    out = ttnn.generic_op(tensors, program)
+    run_unified_spec(device, spec, bound)
+    out = tout
     got = ttnn.to_torch(out).to(torch.float32)
     af, vf = a.to(torch.float32), v.to(torch.float32)
 

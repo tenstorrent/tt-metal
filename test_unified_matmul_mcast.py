@@ -21,7 +21,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, unified_program
+from unified_harness import dfb, run_unified_spec, unified_program_spec
 
 KERNEL = "unified_kernels/matmul_mcast.cpp"
 TILE = 32
@@ -50,12 +50,11 @@ def run(device, grid_h=2, grid_w=2, rt=2, ct=2, kt=2, k_blocks=1, mode="dst", in
     spec = unified_program_spec(
         kernel_source=KERNEL,
         nodes=core_ranges,
-        cbs=[
-            make_cb(CB_IN0, core_ranges, num_pages=rt * kt),
-            make_cb(CB_IN1, core_ranges, num_pages=kt * ct),
-            # Partials, exactly one block: L1 mode relies on push/pop wrapping it.
-            make_cb(CB_ACC, core_ranges, num_pages=rt * ct),
-            make_cb(CB_OUT, core_ranges, num_pages=rt * ct),
+        dfbs=[
+            dfb("in0", rt * kt),
+            dfb("in1", kt * ct),
+            dfb("acc", rt * ct),
+            dfb("out", rt * ct),
         ],
         tensors={"in0": ta, "in1": tb, "out": tout},
         defines=[

@@ -19,8 +19,8 @@ void kernel_main() {
     constexpr uint32_t kCbGathered = get_arg(args::cb_gathered);
     constexpr uint32_t kCbOut = get_arg(args::cb_out);
 
-    const auto in = TensorAccessor(tensor::in));
-    const auto out = TensorAccessor(tensor::out));
+    const auto in = TensorAccessor(tensor::in);
+    const auto out = TensorAccessor(tensor::out);
 
     u::compute_init(kCbIn, kCbOut);
 

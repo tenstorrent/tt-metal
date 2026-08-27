@@ -20,7 +20,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import dfb, run_unified_spec, single_core, unified_program_spec
 
 KERNEL = "unified_kernels/custom_compute.cpp"
 TILE = 32
@@ -45,13 +45,13 @@ def run(device, tiles=4, seed=0):
     spec = unified_program_spec(
         kernel_source=KERNEL,
         nodes=core_ranges,
-        cbs=[
-            make_cb(CB_A, core_ranges, num_pages=tiles),
-            make_cb(CB_B, core_ranges, num_pages=tiles),
-            make_cb(CB_OUT, core_ranges, num_pages=tiles),
+        dfbs=[
+            dfb("a", tiles),
+            dfb("b", tiles),
+            dfb("out", tiles),
         ],
         named_compile_time_args=[("tiles", tiles)],
-        runtime_args=[t.buffer_address() for t in (ta, tb, tout)],
+        tensors={"a": ta, "b": tb, "out": tout},
     )
 
     run_unified_spec(device, spec, {"a": ta, "b": tb, "out": tout})

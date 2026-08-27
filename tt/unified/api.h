@@ -777,33 +777,6 @@ inline constexpr bool kCoreGridExact = true;
 inline constexpr bool kCoreGridExact = false;
 #endif
 
-// ---------------------------------------------------------------------------
-// Runtime-argument sentinel
-//
-// The runtime-argument list is positional and untyped, and it is a contract living
-// in the kernel and in EVERY launcher of it with nothing to check the two agree.
-// Adding one argument to a kernel has hung this device three times -- the kernel
-// reads a loop bound out of a slot nobody filled, runs for a garbage number of
-// iterations, and there is no compile error and no assert.
-//
-// So the harness appends this word after the last argument on every core, and a
-// kernel names the count it expects. A launcher passing too few or too many puts
-// the sentinel somewhere else, and the check fails at a source line instead.
-//
-// It catches a COUNT mismatch, which is the failure that actually happened, three
-// times. It does not catch two arguments of the right number in the wrong ORDER --
-// that needs names, which the runtime path cannot express today; see
-// unified_named_args_spec.md.
-// ---------------------------------------------------------------------------
-
-inline constexpr uint32_t kRuntimeArgSentinel = 0x5EA15EA1u;
-
-// `Count` is how many runtime arguments the kernel reads, so the sentinel is at
-// index Count. Assertion-only, and asserts are off unless the watcher or
-// LIGHTWEIGHT_KERNEL_ASSERTS is set -- run_unified_tests.sh turns them on.
-template <uint32_t Count>
-inline void check_runtime_args();
-
 // Two bfloat16 1.0 values in one 32-bit word -- the scaler a SUM reduction wants.
 // A float32 CB would want a single 0x3F800000 instead.
 inline constexpr uint32_t kReduceScalerOne = 0x3F803F80u;
