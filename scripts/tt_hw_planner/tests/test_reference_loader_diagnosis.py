@@ -24,6 +24,8 @@ def _wrapped(inner: BaseException, outer_msg: str) -> BaseException:
         return exc
 
 
+FLUX_TARGET = "diffusers.models.transformers.transformer_flux2"
+
 FLUX_OUTER = (
     "Failed to import diffusers.models.transformers.transformer_flux2 because of "
     "the following error (look up to see its traceback):\n"
@@ -32,8 +34,19 @@ FLUX_OUTER = (
 )
 
 
-def test_wrapped_missing_submodule_reports_upgrade_not_downgrade() -> None:
-    """The exact FLUX failure: installed package, missing submodule."""
+def test_wrapped_missing_submodule_reports_upgrade_not_downgrade(monkeypatch) -> None:
+    """The exact FLUX failure: installed package, missing submodule.
+
+    THE ABSENCE IS STUBBED, not borrowed from the interpreter. This asked the real environment
+    whether diffusers provides transformer_flux2, so it only tested anything on a machine whose
+    diffusers predates that module -- and stopped testing anything the moment 0.38.0 landed here,
+    where the submodule EXISTS and the code correctly declines to call it missing. The scenario is
+    "installed package, missing submodule"; that has to be stated, not hoped for.
+    """
+    import importlib.util as _ilu
+
+    _real = _ilu.find_spec
+    monkeypatch.setattr(_ilu, "find_spec", lambda n, *a, **k: None if n == FLUX_TARGET else _real(n, *a, **k))
     out = _reference_loader_next_steps(
         "black-forest-labs/FLUX.2-klein-9B", _wrapped(KeyError("flash_attn"), FLUX_OUTER), None
     )

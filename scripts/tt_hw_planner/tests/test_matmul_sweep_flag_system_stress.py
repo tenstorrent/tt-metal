@@ -231,7 +231,18 @@ def _stub_sweep_root(tmp_path, entries):
         "    entries = json.loads(os.environ['SWEEP_ENTRIES'])\n"
         "    if kw.get('case') is None:\n"
         "        entries = []            # the issue #14 behaviour: no case -> nothing enumerated\n"
-        "    out = {'ok': True, 'shapes': len(entries), 'seeded': len(entries), 'entries': entries}\n"
+        # THE REAL SUMMARIZE() SHAPE. This stub emitted only `entries`, which is the format
+        # _warm_start_for was FIXED to stop reading -- matmul_sweep.py writes `seeds` (shape nested
+        # under row["shape"], fidelity/dtype at top level) and `table` (shape flat, winner under
+        # row["best"]). A stub in the old shape meant the chain test asserted delivery against a
+        # table the resolver cannot read, so it has been failing since that fix. `entries` is kept
+        # because the counts above are asserted from it.
+        "    seeds = [{'shape': {'m': e['m'], 'k': e['k'], 'n': e['n']},\n"
+        "              'fidelity': e['fidelity'], 'dtype': e['dtype']} for e in entries]\n"
+        "    table = [{'m': e['m'], 'k': e['k'], 'n': e['n'],\n"
+        "              'best': {'fidelity': e['fidelity'], 'dtype': e['dtype']}} for e in entries]\n"
+        "    out = {'ok': True, 'shapes': len(entries), 'seeded': len(entries),\n"
+        "           'entries': entries, 'seeds': seeds, 'table': table}\n"
         "    open(kw['out_path'], 'w').write(json.dumps(out))\n"
         "    return out\n"
     )

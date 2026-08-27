@@ -23,6 +23,7 @@ This wires optimize to the EXISTING resolver -- no new mapping, no second source
 import sys
 from pathlib import Path
 
+import os
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -116,12 +117,23 @@ def test_no_mesh_defaults_to_single_chip(monkeypatch):
     assert os.environ.get("MESH_DEVICE") == "P150"
 
 
-@pytest.mark.parametrize("bad", ["nonsense-box", "", "P150x99"])
-def test_unknown_box_never_raises(monkeypatch, bad):
-    """A bad --box must not abort optimize before it starts -- leave MESH_DEVICE unset and let the
-    run proceed exactly as it does today."""
+@pytest.mark.parametrize("bad", ["nonsense-box", "P150x99"])
+def test_unknown_box_refuses_loudly(monkeypatch, bad):
+    """CONTRACT CHANGED 2026-08-14 (475a4b6d60, "an unknown --box fails loudly instead of setting
+    nothing"). This asserted the opposite -- that a bad --box is swallowed and the run proceeds --
+    and was never updated, so it has been failing since. A name that does not resolve must not pass
+    quietly: the operator asked for a specific board and silence left the model loading a default
+    one. The box names are a closed set, so an unrecognised one is a typo, not a variant."""
     monkeypatch.delenv("MESH_DEVICE", raising=False)
-    _resolve()(_Args(box=bad, mesh="1x1"))
+    with pytest.raises((SystemExit, KeyError)):  # allow-pytest.raises
+        _resolve()(_Args(box=bad, mesh="1x1"))
+    assert os.environ.get("MESH_DEVICE") is None, "a refused box must not leave MESH_DEVICE set"
+
+
+def test_an_absent_box_is_not_an_unknown_one(monkeypatch):
+    """No --box at all is a legitimate way to run; only a NAME that fails to resolve is refused."""
+    monkeypatch.delenv("MESH_DEVICE", raising=False)
+    _resolve()(_Args(box="", mesh="1x1"))
 
 
 @pytest.mark.parametrize("bad", ["", "xx", "1", "1x", "ax1", "1x1x1", None])
