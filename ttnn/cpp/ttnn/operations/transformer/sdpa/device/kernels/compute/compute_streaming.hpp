@@ -1919,7 +1919,9 @@ template <
     bool is_causal_sdpa = false,
     bool use_attention_sink = false,
     uint32_t cb_attention_sink = INVALID_CB,
-    bool use_provided_mask = false>
+    bool use_provided_mask = false,
+    bool use_windowed_narrowing = false,
+    uint32_t cb_windowed_k_range = INVALID_CB>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -2014,6 +2016,16 @@ void sdpa_standard_v2(
                     k_loop_end = limit < k_num_chunks ? limit : k_num_chunks;
                 }
             }
+        }
+        // Windowed K-range narrowing: this Q chunk's [k_lo, k_hi) comes from the reader's ctrl CB —
+        // read via the UNPACK mailbox so all three TRISCs agree. The reader streams exactly this many
+        // K/V chunks and the writer produces exactly this many mask chunks; disagreement deadlocks.
+        if constexpr (use_windowed_narrowing) {
+            CircularBuffer cb_k_range_obj(cb_windowed_k_range);
+            cb_k_range_obj.wait_front(1);
+            k_loop_start = ckernel::read_tile_value(cb_windowed_k_range, 0, 0);
+            k_loop_end = ckernel::read_tile_value(cb_windowed_k_range, 0, 1);
+            cb_k_range_obj.pop_front(1);
         }
 
         auto call_step = [&](auto profiling_tag,
