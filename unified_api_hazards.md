@@ -115,11 +115,78 @@ without a marker are mechanisms the headers document as the caller's responsibil
     one core sharing a pair, even waited out of order, have nothing to cross: the second
     handshake cannot begin until the first returned.
 
-    The real hazard is cross-core role interference, exactly as the code comments say:
-    core (1,0) incrementing (0,0)'s ready counter for the COLUMN collective while (0,0) is
-    still counting ROW receivers, since per-core sequential is not grid-wide sequential.
-    (0,0) waits for EQUALITY, so its wait is satisfied by the wrong increments and it
-    broadcasts into a buffer a receiver has not freed.
+    ### The mechanism, in one line
+
+    **The ready counter counts; it does not identify.** An increment means "some core freed
+    a buffer", not "the core you are waiting for freed its buffer". One counter per
+    collective is enough because only that collective's receivers can increment it. Share
+    one counter between two collectives with DIFFERENT RECTANGLES and a sender can be
+    released by a core that is not in its rectangle at all.
+
+    Note what this is NOT: nothing overlaps locally. Every core runs its two collectives
+    strictly sequentially, each fully waited. The misuse is per-core (one pair, two
+    rectangles) while the damage lands on a different core, which is why a per-core
+    "is an async operation in flight" flag cannot see it and a per-core RECTANGLE claim can.
+
+    ### Sequence of events
+
+    A 2x2 grid, so `num_dests = volume - 1 = 1` and the arithmetic is trivial. The two
+    rectangles `matmul_blocked` builds per core:
+
+        row{ yx(me.y, 0), hw(1, GRID_W) }   // my row,    sender is (me.y, 0)
+        col{ yx(0, me.x), hw(GRID_H, 1) }   // my column, sender is (0, me.x)
+
+    | core | row role | col role |
+    |---|---|---|
+    | **(0,0)** | **SENDER** of row 0 | **SENDER** of col 0 |
+    | (0,1) | receiver, increments (0,0) | SENDER of col 1 |
+    | (1,0) | SENDER of row 1 | receiver, **increments (0,0)** |
+    | (1,1) | receiver, increments (1,0) | receiver, increments (0,1) |
+
+    Sharing a pair gives (0,0) ONE counter fed by (0,1) for the row and (1,0) for the
+    column -- two different cores, two different collectives. Call it `C`. The skew has
+    made (0,1) slow; (1,0) and (1,1) are fast.
+
+    1. k=0 finishes. (0,1) enters the delay STILL HOLDING k=0's `a`/`w`: their
+       `cb_pop_front` runs at the end of the iteration scope, which it has not reached.
+    2. (1,0) and (1,1) finish k=0 and enter k=1.
+    3. (1,0) runs k=1's ROW collective -- sender of row 1, waits for (1,1), broadcasts.
+       Fast, and does not touch (0,0).
+    4. (1,0) runs k=1's COL collective -- receiver of col 0: `inc_remote((0,0))`.
+       **C: 0 -> 1.** It then blocks in `data_sent.wait(1)`.
+    5. (0,0) runs k=1's ROW collective -- sender, `num_dests == 1`, so
+       `receivers_ready.wait(1)` reads **C == 1 and MATCHES**. But that 1 came from (1,0),
+       which is not in row 0's rectangle. (0,1) -- the only core (0,0) is actually waiting
+       for -- is still delayed and has freed nothing.
+    6. (0,0) broadcasts anyway: `set(0)`, read barrier, `noc_async_write_multicast` of
+       k=1's A-block into row 0, i.e. **into (0,1)'s buffer, which still holds k=0's data
+       (0,1) has not read or popped.** THIS IS THE CORRUPTION. At depth 1 there is no spare
+       slot so it overwrites live data; at depth 2 it lands in the other slot harmlessly,
+       which is exactly why the default masks it.
+    7. (0,0) sets and broadcasts `data_sent`.
+    8. (0,1) finishes its delay, pops k=0, enters k=1's row collective, `inc_remote((0,0))`.
+       **C: 0 -> 1.**
+    9. (0,0) runs k=1's COL collective -- sender, `wait(1)` reads C == 1 and matches, **off
+       (0,1)'s ROW increment.** It broadcasts to (1,0), which is legitimately waiting, so
+       this part is fine.
+    10. Counts balance: two increments in, two waits satisfied, nothing spins forever.
+
+    **That is why it is silent.** The bookkeeping is self-consistent -- every increment is
+    consumed by some wait -- so no wait hangs. Only the PAIRING is wrong, and the single
+    consequence is step 6.
+
+    Two fixes, and why each works:
+
+    - **Distinct pairs**: two counters. Step 4 increments the COL counter, which (0,0)'s row
+      wait never reads, so step 5 blocks until (0,1) genuinely frees.
+    - **Same rectangle on one pair is safe**, which is the k-loop every iteration: a receiver
+      increments and IMMEDIATELY blocks on `data_sent.wait(1)` for that same round, so it can
+      never be more than one round ahead, and every increment on that counter comes from a
+      core the sender is genuinely waiting for.
+
+    And one more in the family: because the wait is for EQUALITY, the same sharing can also
+    produce a HANG rather than corruption if increments overshoot the target. Ours balanced,
+    so we got the silent version.
 
     **Twelve ordinary trials missed it and an adversarial one caught it**, which is the
     useful part. Sharing pair 0 across 2x2, 8x8 and 2x8 grids at depths 1 and 2 was
