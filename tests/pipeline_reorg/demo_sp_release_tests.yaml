@@ -156,32 +156,3 @@
       timeout: 15
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
-
-# ============================================================================
-# Wan 2.2 Tests (Galaxy)
-# ============================================================================
-
-- name: Galaxy Wan2.2 demo tests
-  cmd: |
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
-    pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500
-  model: wan22
-  skus:
-    wh_galaxy_perf:
-      timeout: 20
-  owner_id: U06UEFWB4P9
-  team: models
-
-- name: Galaxy DiT Wan2.2 model perf tests
-  cmd: |
-    export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-    pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "wh_4x8sp1tp0 and resolution_720p and t2v" --timeout=1200
-  model: wan22
-  skus:
-    wh_galaxy_perf:
-      timeout: 25
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: models
-  arch: wormhole_b0
-  save-perf-data: true
-  model-type: Wan2.2

@@ -393,7 +393,6 @@ models:
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
-    wh_galaxy_perf: 125
     bh_galaxy: 470
     bh_sc1: 488
     bh_sc1_high_power: 166
