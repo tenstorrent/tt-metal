@@ -1351,18 +1351,14 @@ static std::string resolve_kernel_source_path(const KernelSource& ksrc, std::vec
 }
 
 // A same-relative-path source in jit_hw is emule's implementation of a Metal file kernel.
-static std::string resolve_emule_kernel_source_shadow(const std::string& src_path) {
-    const char* metal_home = std::getenv("TT_METAL_HOME");
-    if (metal_home == nullptr || *metal_home == '\0') {
-        return src_path;
-    }
-
+static std::string resolve_emule_kernel_source_shadow(const std::string& src_path, ContextId context_id) {
     std::error_code ec;
     const auto source = std::filesystem::weakly_canonical(src_path, ec);
     if (ec) {
         return src_path;
     }
-    const auto root = std::filesystem::weakly_canonical(metal_home, ec);
+    const auto root =
+        std::filesystem::weakly_canonical(MetalContext::instance(context_id).rtoptions().get_root_dir(), ec);
     if (ec) {
         return src_path;
     }
@@ -1707,7 +1703,7 @@ static void collect_kernels(
             const auto& ksrc = kernel->kernel_source();
             std::string src_path = resolve_kernel_source_path(ksrc, inline_src_temps);
             if (ksrc.source_type_ == KernelSource::FILE_PATH) {
-                src_path = resolve_emule_kernel_source_shadow(src_path);
+                src_path = resolve_emule_kernel_source_shadow(src_path, impl.get_context_id());
             }
 
             // Thread each kernel's configured include roots into its JIT -I flags.
