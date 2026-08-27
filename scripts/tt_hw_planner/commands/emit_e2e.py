@@ -576,14 +576,18 @@ def _enumerate_task_heads(model_id: str) -> list:
         if tail == "" or tail == "Model" or tail.startswith("For"):
             has_gen = hasattr(obj, "generate")
             if has_gen or tail == "Model":
-                candidates.append((name, _class_to_task_slug(name, prefix_camel)))
+                candidates.append((name, _class_to_task_slug(name, prefix_camel), has_gen))
     seen = set()
     unique = []
-    for cls_name, slug in candidates:
+    for cls_name, slug, has_gen in candidates:
         if cls_name in seen:
             continue
         seen.add(cls_name)
-        unique.append({"class": cls_name, "task": slug})
+        # `generates` records whether THIS head exposes the framework's autoregressive
+        # generation contract. It is read off the class, never inferred from its name, so a
+        # renamed head still reports itself correctly. `_batch_prompt_block` uses it to pick
+        # which batching applies; existing callers read only `class`/`task` and are unaffected.
+        unique.append({"class": cls_name, "task": slug, "generates": bool(has_gen)})
     return unique
 
 
@@ -1671,7 +1675,15 @@ def _emit_e2e_phase_a(args) -> int:
         if (os.environ.get("E2E_REQUIRE_TRACE", "1") != "0" or os.environ.get("E2E_REQUIRE_ON_DEVICE", "1") != "0")
         else ""
     )
-    _batch_note = _batch_prompt_block(int(getattr(args, "batch", 1) or 1))
+    # Which batching applies is the model's property, not the flag's: hand the block the heads the
+    # model itself reports so it can pick the axis. Empty/failed discovery -> heads=None -> unchanged
+    # behaviour.
+    _batch_size = int(getattr(args, "batch", 1) or 1)
+    # An EMPTY list is a real answer, not a missing one: no discovered head exposes autoregressive
+    # generation, so the independent-sample axis applies. Passing None here instead would send exactly
+    # the models this fix is for back down the autoregressive path.
+    _batch_heads = _enumerate_task_heads(model_id) if _batch_size > 1 else None
+    _batch_note = _batch_prompt_block(_batch_size, heads=_batch_heads)
     build_prompt = _build_agent_prompt(
         model_id=model_id,
         demo_dir=demo_dir,
@@ -2100,30 +2112,78 @@ def _required_heads_block(model_id: str, all_tasks: bool) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _batch_prompt_block(batch: int) -> str:
-    """Builder instruction for a DECODE BATCH of B>1 independent streams. Empty for B<=1 (default,
-    unchanged single-stream behaviour). Batching fills the matmul tile rows -> aggregate throughput, not
-    per-token latency; the model must be an autoregressive decode that can carry a batch axis."""
-    if not batch or batch <= 1:
-        return ""
-    return f"""
-DECODE BATCH = {batch}. Emit the pipeline to run {batch} INDEPENDENT streams (utterances/prompts) at
-once, not one. A single stream wastes 31/32 of a 32-row matmul tile, so filling it with {batch} real
-streams raises AGGREGATE throughput ~{batch}x; per-stream latency is unchanged. Thread a leading batch
-dimension B={batch} through the WHOLE decode path and verify it end to end:
-  - decode step + every projection: activations are [B, ...] (M = B rows); ONE program feeds all B
-    streams -- do NOT python-loop over streams.
-  - KV-cache holds B independent sequences ([B, heads, C, head_dim]); PagedUpdateCache / decode-SDPA
-    index per-stream, one cache slot per batch row.
+# Axis-specific batching guidance. Which one applies is decided by the model's own discovered heads
+# (see `_batch_prompt_block`), never by a model or stage name.
+
+# The model exposes an autoregressive generation contract: B is the number of independent streams
+# sharing each generated step, and the per-step cache is what has to carry them.
+_BATCH_AUTOREGRESSIVE_AXIS = """  - every generated step and every projection: activations are [B, ...] (M = B rows).
+  - the per-step cache holds B independent sequences ([B, heads, C, head_dim]); the cache-update and
+    attention ops index per-stream, one cache slot per batch row.
+  - any post-processing head that turns the generated units into the final output runs over B (pad
+    per-sample lengths to a common length, or run per-sample) -- correct, not just shaped.
+"""
+
+# The model exposes no autoregressive generation contract: there is no per-step cache and no decode
+# tile, so B is a leading axis carried through whatever the model DOES iterate over. Discover that
+# iteration from the model rather than assuming one.
+_BATCH_INDEPENDENT_AXIS = """  - this model exposes NO autoregressive generation contract, so there is no per-step cache to index
+    and no decode tile to fill. Read the model's own iteration (whatever its forward loop repeats over)
+    and stack the {batch} samples on the LEADING axis through it -- one pass per iteration, all
+    {batch} samples together.
+  - every component the pipeline calls carries that leading axis: inputs, conditioning, position/index
+    tensors and outputs are all [B, ...].
+  - the per-sample inputs are INDEPENDENT (different prompts/seeds/conditions); they share only the
+    weights and the iteration count.
+"""
+
+# Invariants that hold for either axis. Shared so the two paths cannot drift apart.
+_BATCH_COMMON_RULES = """  - ONE program per step feeds all {batch} samples -- do NOT python-loop over samples.
   - collectives (all_gather / reduce_scatter) carry the batch dimension; batch is a SEPARATE axis from
     the TP-sharded weight axis -- do NOT shard on batch, and do NOT change the existing TP/mesh split.
-  - vocoder runs over B (pad per-stream conv lengths to a common length, or run per-stream) -- correct,
-    not just shaped.
-The PCC gate must pass for ALL {batch} streams: feed {batch} DISTINCT reference inputs and compare each
-stream to its OWN model.generate() golden. A pipeline that shape-supports B but emits {batch} identical
-outputs is WRONG. If the model is not an autoregressive decode that can batch, STOP and report it as a
-hole -- do NOT fake a batch axis.
+  - graduated stubs were PCC'd at B=1 and may hardcode a leading 1 in slice/reshape bounds. Where they
+    do, take that bound from the tensor itself (e.g. x.shape[0]) and re-verify the stub -- a hardcoded
+    1 SILENTLY DROPS samples 2..{batch} rather than failing.
+The PCC gate must pass for ALL {batch} samples: feed {batch} DISTINCT reference inputs and compare each
+sample to its OWN golden from the reference model. A pipeline that shape-supports B but emits {batch}
+identical outputs is WRONG. If the model genuinely has no axis over which {batch} independent samples
+can be batched, STOP and report it as a hole -- do NOT fake a batch axis.
 """
+
+
+def _batch_prompt_block(batch: int, *, heads: Optional[list] = None) -> str:
+    """Builder instruction for a batch of B>1 independent samples. Empty for B<=1 (default, unchanged
+    single-sample behaviour).
+
+    Which batching applies is a property of the MODEL, so it is read off `heads` -- the task heads
+    discovered by `_enumerate_task_heads`, each carrying whether it exposes the framework's
+    autoregressive generation contract. It is never inferred from a model, stage or class NAME.
+
+    Previously this emitted the autoregressive text unconditionally, for every model. A model with an
+    autoregressive head matched it and batched; a model without one (e.g. an iterative/diffusion
+    pipeline, which has no per-step cache and so no decode tile to fill) was handed instructions that
+    could not apply, hit the closing "STOP and report it as a hole" line, and emitted B=1 -- even
+    though batching B independent samples was perfectly possible for it. Both cases now get the
+    invariants; only the axis-specific guidance differs.
+
+    `heads` is optional and defaults to the previous behaviour, so existing call sites are unchanged.
+    """
+    if not batch or batch <= 1:
+        return ""
+    # None = no head list supplied (caller opted out) -> keep the historical autoregressive text.
+    # True/False = the heads themselves reported whether any exposes autoregressive generation.
+    autoregressive = None if heads is None else any(bool(h.get("generates")) for h in heads)
+    axis_note = (
+        _BATCH_AUTOREGRESSIVE_AXIS.format(batch=batch)
+        if autoregressive is not False
+        else _BATCH_INDEPENDENT_AXIS.format(batch=batch)
+    )
+    return f"""
+BATCH = {batch}. Emit the pipeline to process {batch} INDEPENDENT samples per call, not one. A single
+sample wastes 31/32 of a 32-row matmul tile, so filling it with {batch} real samples raises AGGREGATE
+throughput ~{batch}x; per-sample latency is unchanged. Thread a leading batch dimension B={batch}
+through the WHOLE path and verify it end to end:
+{axis_note}{_BATCH_COMMON_RULES.format(batch=batch)}"""
 
 
 def _build_agent_prompt(
