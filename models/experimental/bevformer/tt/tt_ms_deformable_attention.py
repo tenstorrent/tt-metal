@@ -50,8 +50,8 @@ def multi_scale_deformable_attn_ttnn(
             each feature map, has shape (num_levels, 2),
             last dimension 2 represent (h, w)
         sampling_grids (ttnn.Tensor): The location of sampling points, already
-            rescaled to grid_sample's [-1, 1] and in ROW_MAJOR, has shape
-            (bs, num_queries, num_heads, num_levels, num_points, 2),
+            rescaled to grid_sample's [-1, 1], head-major and in ROW_MAJOR, has
+            shape (bs, num_heads, num_queries, num_levels, num_points, 2),
             the last dimension 2 represent (x, y).
         attention_weights (ttnn.Tensor): The weight of sampling points used
             when calculate the attention, has shape
@@ -62,7 +62,7 @@ def multi_scale_deformable_attn_ttnn(
         ttnn.Tensor: Attended features with shape (bs, num_queries, embed_dims)
     """
     bs, _, num_heads, head_dim = value.shape
-    _, num_queries, num_heads, num_levels, num_points, _ = sampling_grids.shape
+    _, num_heads, num_queries, num_levels, num_points, _ = sampling_grids.shape
 
     if ENABLE_LOGGING:
         logger.info("MSDA Start")
@@ -84,16 +84,12 @@ def multi_scale_deformable_attn_ttnn(
     output = None
     for level, (H_, W_) in enumerate(value_spatial_shapes):
         # [bs, H_*W_, num_heads, head_dim] -> [bs*num_heads, H_, W_, head_dim]
-        value_l_ = ttnn.to_layout(value_list[level], layout=ttnn.ROW_MAJOR_LAYOUT)
-        value_l_ = ttnn.permute(value_l_, (0, 2, 1, 3))  # Move heads to dimension 1
+        value_l_ = ttnn.permute(value_list[level], (0, 2, 1, 3))  # Move heads to dimension 1
         value_l_ = ttnn.reshape(value_l_, (bs * num_heads, H_, W_, head_dim))
 
-        sampling_grid_l_ = sampling_grids[:, :, :, level, :, :]  # [bs, num_queries, num_heads, num_points, 2]
-        sampling_grid_l_ = ttnn.permute(
-            sampling_grid_l_, (0, 2, 1, 3, 4)
-        )  # [bs, num_heads, num_queries, num_points, 2]
+        # Already head-major, so the level slice is the fused op's grid up to a reshape.
         sampling_grid_l_ = ttnn.reshape(
-            sampling_grid_l_, (bs * num_heads, num_queries * num_points, 1, 2)
+            sampling_grids[:, :, :, level, :, :], (bs * num_heads, num_queries * num_points, 1, 2)
         )  # [N, H_out, W_out, 2] = [bs*num_heads, num_queries*num_points, 1, 2]
 
         attn_l_ = ttnn.reshape(attention_weights[:, :, :, level, :], (bs * num_heads, num_queries, num_points))
@@ -251,7 +247,13 @@ class TTMSDeformableAttention:
             zeros_like_value = ttnn.zeros_like(value)
             value = ttnn.where(mask, zeros_like_value, value)
 
-        value = ttnn.reshape(value, (bs, num_keys, self.num_heads, self.head_dim))
+        # Untilized before the head split, not after. Splitting embed_dims into
+        # (num_heads, head_dim) on a tiled tensor is a re-layout that pads num_heads to a full tile,
+        # and the core attention untilizes each level anyway — so the conversion is free here and
+        # the split becomes a view.
+        value = ttnn.reshape(
+            ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT), (bs, num_keys, self.num_heads, self.head_dim)
+        )
 
         if ENABLE_LOGGING:
             logger.info("MSDA Sampling Offset Generation")
@@ -313,9 +315,20 @@ class TTMSDeformableAttention:
 
             # Only now spell the axes out, and in ROW_MAJOR, where the degenerate trailing dims
             # cost nothing.
+            #
+            # Head-major, because the core attention slices a level per fused call and each slice
+            # would otherwise need its own permute. One permute over the whole tensor beats
+            # num_levels permutes over slices of it: at these sizes the per-call overhead dominates
+            # the bytes moved, so the small ones run two orders of magnitude below bandwidth.
+            sampling_grids = ttnn.to_layout(sampling_grids, ttnn.ROW_MAJOR_LAYOUT)
             sampling_grids = ttnn.reshape(
-                ttnn.to_layout(sampling_grids, ttnn.ROW_MAJOR_LAYOUT),
-                (bs, num_queries, self.num_heads, self.num_levels, self.num_points, 2),
+                sampling_grids,
+                (bs, num_queries, self.num_heads, self.num_levels * self.num_points * 2),
+            )
+            sampling_grids = ttnn.permute(sampling_grids, (0, 2, 1, 3))
+            sampling_grids = ttnn.reshape(
+                sampling_grids,
+                (bs, self.num_heads, num_queries, self.num_levels, self.num_points, 2),
             )
         else:
             raise ValueError(f"Reference points must have 2 dimensions, got {reference_points.shape[-1]}")
