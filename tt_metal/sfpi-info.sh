@@ -208,16 +208,25 @@ if ! [[ -d .git ]]; then
 fi
 echo | dupstderr
 echo "Fetching sfpi $sfpi_version ..." | dupstderr
+# sfpi_version is a tag for a release and a branch for a development toolchain.
+# Only the tag form can be fetched into refs/tags, so fall back to fetching it
+# as a branch and take whichever one arrived.
 (set -x
- git fetch --depth 1 origin "refs/tags/$sfpi_version:refs/tags/$sfpi_version"
- git fetch --depth 1 origin $sfpi_version
- git -c "advice.detachedHead=false" checkout $sfpi_version
+ git fetch --depth 1 origin "refs/tags/$sfpi_version:refs/tags/$sfpi_version" \
+     || git fetch --depth 1 origin "$sfpi_version"
+ git -c "advice.detachedHead=false" checkout FETCH_HEAD
  git submodule update --depth 1 --init --recursive)
 
 echo | dupstderr
 echo "Building ..." | dupstderr
 (set -x; rm -rf build)
-(set -x; scripts/build.sh --test-tt 2>&1)
+# --version, because build.sh otherwise names the toolchain from git describe,
+# which a branch checkout does not answer with the name the tarball copied out
+# below is looked up under.  --full, because the incremental base it would
+# otherwise reach for is a release artifact and a branch has none.  The gcc
+# testsuite is left to the toolchain's own CI: it needs dejagnu installed and
+# build.sh exits nonzero on any xfail drift.
+(set -x; scripts/build.sh --full --version="$sfpi_version" 2>&1)
 
 echo | dupstderr
 echo "Packaging ..." | dupstderr

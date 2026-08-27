@@ -4,23 +4,38 @@ SHELL ["/bin/bash", "-c"]
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 
+# autoconf through texinfo are what building the sfpi toolchain from source
+# needs; sfpi-info.sh BUILD names them and cannot install them itself.  They are
+# only used when sfpi-version carries no package hashes.
 RUN apt-get update -qq && apt-get install -qq -y --no-install-recommends \
+    autoconf \
+    automake \
+    bison \
     build-essential \
     curl \
     doxygen \
+    expect \
+    flex \
+    gawk \
     gh \
     git \
     jq \
     lcov \
+    libexpat1-dev \
+    libgmp-dev \
     libhwloc-dev \
+    libmpc-dev \
+    libmpfr-dev \
     libnsl2 \
     libyaml-cpp-dev \
     libzmq3-dev \
     linux-tools-generic \
+    patchutils \
     pkg-config \
     python3-pip \
     python3-wheel \
     software-properties-common \
+    texinfo \
     wget \
     zip && \
     apt-get clean && rm -rf /var/lib/apt/lists/*

@@ -71,23 +71,31 @@ main() {
         exit 0
     fi
 
-    if [[ -z $sfpi_hash ]] ; then
-	echo "[ERROR] SFPI $sfpi_version $sfpi_pkg package for $sfpi_arch $sfpi_dist is not available" >&2
-	exit 1
-    fi
-
-    # Download SFPI
-    echo "SFPI not present or out of date. Fetching version ${sfpi_version}..."
     local TEMP_DIR=$(mktemp -d)
-    if ! wget -q -P $TEMP_DIR --waitretry=5 --retry-connrefused "$sfpi_url/$sfpi_filename" ; then
-        echo "ERROR: Failed to download $sfpi_url/$sfpi_filename" >&2
-        exit 1
-    fi
-    if [ $(${sfpi_hashtype}sum -b "${TEMP_DIR}/$sfpi_filename" | cut -d' ' -f1) \
-	     != "$sfpi_hash" ] ; then
-	echo "[ERROR] SFPI $sfpi_filename ${sfpi_hashtype} mismatch" >&2
-	rm -rf $TEMP_DIR
-	exit 1
+    if [[ -z $sfpi_hash ]] ; then
+	# A development toolchain publishes no package, so build the branch that
+	# sfpi-version names.  BUILD leaves the tarball beside the source tree it
+	# is given, under the same name a download would have landed on.
+	echo "SFPI $sfpi_version has no $sfpi_pkg package. Building from source..."
+	if ! "$version_file" BUILD "$TEMP_DIR/sfpi-src" ; then
+	    echo "[ERROR] Failed to build SFPI $sfpi_version" >&2
+	    rm -rf $TEMP_DIR
+	    exit 1
+	fi
+    else
+	# Download SFPI
+	echo "SFPI not present or out of date. Fetching version ${sfpi_version}..."
+	if ! wget -q -P $TEMP_DIR --waitretry=5 --retry-connrefused "$sfpi_url/$sfpi_filename" ; then
+	    echo "ERROR: Failed to download $sfpi_url/$sfpi_filename" >&2
+	    rm -rf $TEMP_DIR
+	    exit 1
+	fi
+	if [ $(${sfpi_hashtype}sum -b "${TEMP_DIR}/$sfpi_filename" | cut -d' ' -f1) \
+		 != "$sfpi_hash" ] ; then
+	    echo "[ERROR] SFPI $sfpi_filename ${sfpi_hashtype} mismatch" >&2
+	    rm -rf $TEMP_DIR
+	    exit 1
+	fi
     fi
 
     # Remove old installation and extract the new one

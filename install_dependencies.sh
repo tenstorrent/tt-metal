@@ -420,11 +420,24 @@ install_sfpi() {
         echo "[ERROR] Unknown packaging system for $sfpi_dist" >&2
         exit 1
     fi
-    if [[ -z $sfpi_hash ]] ; then
-	echo "[ERROR] SFPI $sfpi_version $sfpi_pkg package for $sfpi_arch $sfpi_dist is not available" >&2
-	exit 1
-    fi
     local TEMP_DIR=$(mktemp -d)
+    if [[ -z $sfpi_hash ]] ; then
+	# A development toolchain publishes no package, so build the branch that
+	# sfpi-version names and unpack the tarball where the system one lives.
+	# BUILD leaves it beside the source tree it is given.
+	echo "[INFO] SFPI $sfpi_version has no $sfpi_pkg package. Building from source..."
+	eval local $($version_file SHELL txz)
+	if ! $version_file BUILD "$TEMP_DIR/sfpi-src" ; then
+	    echo "[ERROR] Failed to build SFPI $sfpi_version" >&2
+	    rm -rf $TEMP_DIR
+	    exit 1
+	fi
+	mkdir -p /opt/tenstorrent
+	rm -rf /opt/tenstorrent/sfpi
+	tar xJf "$TEMP_DIR/$sfpi_filename" -C /opt/tenstorrent
+	rm -rf $TEMP_DIR
+	return
+    fi
     wget -P $TEMP_DIR "$sfpi_url/$sfpi_filename"
     if [[ $(${sfpi_hashtype}sum -b "${TEMP_DIR}/$sfpi_filename" | cut -d' ' -f1) \
 	     != "$sfpi_hash" ]] ; then
