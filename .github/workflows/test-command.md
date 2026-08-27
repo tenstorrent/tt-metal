@@ -162,7 +162,119 @@ pre-agent-steps:
       printf '%s\n' "$HEAD_REF" > /tmp/gh-aw/agent/pr-head-ref.txt
       printf '%s\n' "$IS_FORK"  > /tmp/gh-aw/agent/pr-is-fork.txt
 
+      # Authoritative copies for the post-agent enforcement step, kept OUTSIDE the
+      # agent-writable mount. The agent sandbox mounts /tmp (and /tmp/gh-aw) rw with
+      # unrestricted bash, so the two files above are model context, not facts — a
+      # prompt-injected agent could rewrite them before the post-step reads them.
+      # ${RUNNER_TEMP}/gh-aw is mounted read-only into the sandbox and other
+      # ${RUNNER_TEMP} paths are not mounted at all, so a sibling directory there is
+      # host-owned for the whole job: written here (before the agent starts), read
+      # only by the enforcement post-step (after it exits).
+      FACTS_DIR="${RUNNER_TEMP:?}/gh-aw-facts"
+      mkdir -p "$FACTS_DIR"
+      printf '%s\n' "$HEAD_REF" > "$FACTS_DIR/pr-head-ref.txt"
+      printf '%s\n' "$IS_FORK"  > "$FACTS_DIR/pr-is-fork.txt"
+
       echo "PR #${PR_NUMBER}: head=${HEAD_REF} fork=${IS_FORK} files=$(wc -l < /tmp/gh-aw/agent/pr-files.txt) diff_lines=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)"
+
+# Deterministic enforcement of *The ref rule* (see the prompt below). The rule is
+# executed by a model, and a model can skip it: in run 32947659949 the agent omitted
+# `ref` on both of its dispatch calls (while correctly naming the PR branch in its
+# summary comment), and gh-aw's fallback chain silently dispatched them against
+# `main`. When a dispatch_workflow item carries no `ref`, gh-aw resolves one as
+# target-ref > GITHUB_HEAD_REF > GITHUB_REF; an `issue_comment` event sets neither of
+# the first two, so the fallback is always `refs/heads/main` — and `allowed-refs` is
+# only checked against *explicit* refs, so no safe-outputs configuration can make
+# that fallback fail (github/gh-aw dispatch_workflow.cjs). Until gh-aw fails closed
+# or resolves the PR head itself, close the gap on our side: after the agent runs,
+# rewrite the collected safe-output items so every dispatch_workflow item's `ref` is
+# the runner-resolved PR head branch — missing, wrong, or right, it becomes the fact
+# computed in the pre-agent step above.
+#
+# Placement is load-bearing: gh-aw emits post-steps after its "Ingest agent output"
+# step (which materializes /tmp/gh-aw/agent_output.json from the safe-outputs JSONL)
+# and before the artifact upload that the safe_outputs job downloads and dispatches
+# from — so the file rewritten here is exactly the one the dispatcher reads.
+#
+# The head-ref and fork facts are read from ${RUNNER_TEMP}/gh-aw-facts, which the
+# agent sandbox cannot write (see the pre-agent step): the /tmp/gh-aw copies exist
+# only as model context and are treated as untrusted here.
+post-steps:
+  - name: Enforce PR head ref on dispatch_workflow items
+    if: always()
+    run: |
+      set -euo pipefail
+      OUT=/tmp/gh-aw/agent_output.json
+      FACTS_DIR="${RUNNER_TEMP:?}/gh-aw-facts"
+      REF_FILE="$FACTS_DIR/pr-head-ref.txt"
+      FORK_FILE="$FACTS_DIR/pr-is-fork.txt"
+
+      # FAIL CLOSED. The agent artifact upload after this step runs
+      # `if: always()`, and the safe_outputs job runs whenever the agent job
+      # was not skipped — a failed agent job still gets its collected items
+      # dispatched. A plain `exit 1` here would therefore ship the
+      # un-rewritten items downstream and reopen the exact hole this step
+      # exists to close. Instead, any exit that is not an explicit success —
+      # including unexpected command failures under `set -euo pipefail` —
+      # first empties the item list: no dispatches, no comment, and a red
+      # step pointing at what broke.
+      neutralize() {
+        echo '{"items":[]}' > "$OUT" || true
+      }
+      finish_ok=0
+      trap '[ "$finish_ok" = 1 ] || { echo "::error::Ref enforcement did not complete; discarding all safe-output items." >&2; neutralize; }' EXIT
+
+      # gh-aw's placeholder step (which writes '{"items":[]}' when the agent
+      # produced nothing) runs before post-steps, so this file normally exists
+      # by now even on a no-dispatch run. Guard anyway: if it is absent there is
+      # nothing to enforce and nothing the safe_outputs job could dispatch.
+      if [ ! -s "$OUT" ]; then
+        echo "No agent output collected; nothing to enforce."
+        finish_ok=1
+        exit 0
+      fi
+
+      # Deterministic fork stop. `workflow_dispatch` only accepts refs that
+      # exist in this repository, and a fork's head branch name can *also*
+      # exist here by coincidence — forcing it would then green-light a run
+      # of the wrong code. The prompt already tells the agent to dispatch
+      # nothing for forks, but that rule is executed by a model; enforce it
+      # here by stripping every dispatch item while keeping the agent's
+      # explanatory comment. Anything other than a literal "false"
+      # (including a missing file) is treated as a fork.
+      IS_FORK="$(cat "$FORK_FILE" 2>/dev/null || echo unknown)"
+      if [ "$IS_FORK" != "false" ]; then
+        echo "PR is from a fork (pr-is-fork.txt: '$IS_FORK'); stripping all dispatch_workflow items."
+        jq '.items = [ .items[]? | select(.type != "dispatch_workflow") ]' "$OUT" > "$OUT.tmp"
+        mv "$OUT.tmp" "$OUT"
+        finish_ok=1
+        exit 0
+      fi
+
+      # The pre-agent step hard-fails the run before the agent ever starts if the
+      # head ref cannot be resolved, so an empty file here means something upstream
+      # changed shape — discard the items (via the EXIT trap) and fail loudly
+      # rather than let a dispatch fall back to main.
+      if [ ! -s "$REF_FILE" ]; then
+        echo "::error::pr-head-ref.txt is missing or empty; cannot enforce dispatch refs." >&2
+        exit 1
+      fi
+      HEAD_REF="$(cat "$REF_FILE")"
+      case "$HEAD_REF" in
+        ""|null|main|master|refs/heads/main|refs/heads/master)
+          echo "::error::Refusing to enforce dispatch ref '$HEAD_REF'." >&2
+          exit 1
+          ;;
+      esac
+
+      BEFORE="$(jq -c '[.items[]? | select(.type == "dispatch_workflow") | {workflow_name, ref: (.ref // "MISSING")}]' "$OUT")"
+      jq --arg ref "$HEAD_REF" \
+        '.items = [ .items[]? | if .type == "dispatch_workflow" then .ref = $ref else . end ]' \
+        "$OUT" > "$OUT.tmp"
+      mv "$OUT.tmp" "$OUT"
+      echo "dispatch_workflow refs as emitted by the agent: $BEFORE"
+      echo "All dispatch_workflow items now target: $HEAD_REF"
+      finish_ok=1
 
 safe-outputs:
   mentions: false
@@ -262,8 +374,8 @@ commented `/test` on a pull request. Your job is to decide **which optional CI p
 this change actually needs, on which hardware**, and launch exactly those against the
 PR's own branch.
 
-You are a triage agent, not a test author. You do not modify the PR, push commits, or
-comment on anything other than the PR that invoked you.
+You select and launch existing pipelines; you do not write tests. You do not modify the
+PR, push commits, or comment on anything other than the PR that invoked you.
 
 ## What the developer asked for
 
@@ -305,6 +417,10 @@ is not a branch, and dispatch rejects it. Dispatching anyway would either error 
 Post your comment explaining this, and point them at the Actions tab to run a pipeline by
 hand against a local copy of the branch if they need one. Then stop.
 
+A deterministic post-step strips any dispatch you emit for a fork PR (your comment still
+posts), so a mistake here cannot reach the dispatcher — but the comment you write must
+match that reality: never describe a pipeline as dispatched on a fork PR.
+
 ## Selection procedure
 
 1. **Read the changed-file list first.** Paths determine which subsystems and which
@@ -326,9 +442,14 @@ hand against a local copy of the branch if they need one. Then stop.
    catch a regression in what changed. Ask of each candidate: *if this change is broken,
    would this pipeline fail?* If you cannot answer yes, drop it.
 
-5. **Narrow each survivor to the relevant platforms** via its inputs (next section).
-   Running `runtime-unit-tests` across every SKU when only Blackhole code changed wastes
-   hours of scarce silicon.
+5. **Narrow each survivor to the relevant platforms _and suites_** via its inputs (next
+   section). Running `runtime-unit-tests` across every SKU when only Blackhole code
+   changed wastes hours of scarce silicon — and so does running the fabric and T3000
+   suites inside `sanity-tests` for a single-device op change.
+
+   Narrowing is not only about architecture. Several pipelines bundle independent test
+   suites behind their own toggles, and those default to *on*. Reach step 6 with an
+   explicit answer for each survivor: which suites can this change actually break?
 
 6. **Respect the cap of 8.** If more than 8 look justified, you are almost certainly
    being too broad — re-cut to the highest-signal ones and note in your comment what you
@@ -338,7 +459,7 @@ hand against a local copy of the branch if they need one. Then stop.
 
 | Pipeline | Hardware | Reach for it when |
 |---|---|---|
-| `sanity-tests` | WH + BH + simulator | Broad, cheap first signal on core `tt_metal/` or `ttnn/` changes |
+| `sanity-tests` | WH + BH + simulator | First-line signal on core `tt_metal/` or `ttnn/` changes. Bundles seven independent suites — select them, do not take the default of all seven |
 | `blackhole-e2e-tests` | Blackhole (P150/P300/BH QuietBox) | Anything under a `blackhole/` path or BH-specific HAL/SoC descriptor |
 | `galaxy-sanity`, `galaxy-health` | Galaxy (WH/BH) | Quick Galaxy-reachability check before committing to the heavier Galaxy suites |
 | `galaxy-unit-tests`, `galaxy-integration-tests`, `galaxy-e2e-tests` | Galaxy | Fabric, CCL, multi-device, or large-mesh code paths |
@@ -401,8 +522,37 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   pipelines, both defaulting to `all`. If the change touches one model, name it. SKU
   values carry a human-readable suffix — use the option string exactly as written
   (e.g. `wh_n150 (N150)`, `bh_p150 (P150)`).
+- **Suite and board toggles: `run-<something>` booleans that default to `true`.** Three
+  pipelines bundle independent suites this way, and taking the defaults runs all of them:
+
+  | Pipeline | Toggles (all default `true`) |
+  |---|---|
+  | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests` |
+  | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
+  | `pipeline-select-profiler` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler`, `run-t3k-profiler` |
+
+  The names say what each covers, so map them the same way you mapped paths to pipelines:
+  a single-device `ttnn` op change reaches `run-ttnn-sanity-tests` and `run-ops-sanity-tests`
+  and does **not** reach fabric, T3000, UMD, or multi-card. Set the ones it cannot reach to
+  `false`. Leaving all seven on is the same mistake as dispatching seven pipelines when one
+  would do — it is just hidden inside a single dispatch.
+
+- **Do not touch inputs that change behaviour rather than scope.** `mlperf-read-only`,
+  `mlperf-write-access`, `upload_results`, `skip_on_timeout`, `build-inplace-wheel`,
+  `enable-watcher`, `enable-llk-asserts`, and `run_triage_tests` are not narrowing knobs;
+  flipping them changes what the run *does* or where it writes, not how much of it runs.
+  Leave them alone.
 - Leave `platform`, `build-type`, and `enable-lto` at their defaults unless the change is
   specifically about a build configuration.
+
+### Consistency check before you dispatch
+
+Read back the reason you are about to write for each pipeline. **If your reason says a
+subsystem is not reachable by this change, no input you are passing may still enable it.**
+Saying "nothing multi-chip or fabric is reachable here" and then dispatching with
+`run-fabric-sanity-tests` and `run-t3000-sanity-tests` left at their defaults contradicts
+your own analysis and spends shared silicon on it. Either narrow the inputs to match the
+reason, or widen the reason to admit why you kept the suite on.
 
 > **Maintenance note (for humans, not the agent).** Because those schemas are baked into
 > `test-command.lock.yml` at compile time, they are a *snapshot*. If an allowlisted
@@ -425,12 +575,48 @@ tested none of their code, which is worse than no result at all.
 Copy the branch name from that file verbatim. Do not reconstruct it from the PR title, the
 comment, or your memory of the diff. Never dispatch `main`, `master`, or a release branch.
 
+A deterministic post-step also rewrites the `ref` of every dispatch you emit to the
+contents of that file before anything is dispatched, so an omitted or mistyped `ref`
+cannot actually reach `main` — but that backstop is not a reason to skip the rule. Your
+summary comment quotes the ref, and it must match what actually runs.
+
 ## Reporting
 
-Post exactly one comment. Keep it short enough to read at a glance:
+Post exactly one comment. Open it with exactly this heading, verbatim:
 
-- **What you dispatched** — one row per pipeline: a status badge (below), the platform
-  narrowing you applied, and a one-line reason.
+```
+### `/test` — dispatched pipelines
+```
+
+Do not reword it per run — a stable heading is what makes these comments scannable when
+several land on the same PR. In particular do not describe this as "triage": that word is
+heavily overloaded in this repo (CI triage, issue triage, `run_triage_tests`) and it is not
+what this comment is. It is a record of what was launched.
+
+Then keep the body short enough to read at a glance:
+
+- **What you dispatched** — a table with exactly these three columns, one row per
+  dispatched pipeline:
+
+  | Pipeline | Inputs | Reason |
+  |---|---|---|
+  | the **badge**, built from the template below — *never* the bare pipeline name | `key: value, …`, or `defaults` | one line |
+
+  **Column 1 is a badge image.** The badge already renders the pipeline's name, so a plain
+  name in that column is strictly worse than a badge: it throws away the live status and
+  the link, which are the entire reason the column exists. If you are about to write
+  `` `sanity-tests` `` there, stop — you have dropped the badge; build it from the template
+  under *Status badges* instead.
+
+  **Column 2 is the exact inputs you supplied**, verbatim as `key: value`, comma-separated,
+  in a code span — not a prose summary like "Blackhole only". A reader has no other way to
+  find out what a dispatched run was scoped to: `workflow_dispatch` inputs are not shown on
+  the run page, so if this cell does not say it, the information is gone. Where you
+  deliberately left a suite off, that `false` is the most useful thing in the row — it is
+  the record of a decision, and the reviewer's chance to catch you having narrowed too far.
+
+  If you passed nothing, write `defaults` — and be aware that for the pipelines with suite
+  toggles above, `defaults` means *everything*, which is rarely what you intended.
 - **The ref** every dispatch targeted, stated explicitly so it is auditable.
 - **What you deliberately skipped** and why, when a reader might expect it — especially
   anything you dropped to stay under the cap of 8.
@@ -440,8 +626,9 @@ Post exactly one comment. Keep it short enough to read at a glance:
 
 ### Status badges
 
-Emit one badge per dispatched pipeline, linked to that pipeline's runs filtered to this
-branch. Substituting the workflow's **filename** and the branch from `pr-head-ref.txt`:
+The badge **goes in column 1 of the table above** — it is not a separate section, and not a
+caption. Build one per dispatched pipeline, linked to that pipeline's runs filtered to this
+branch, substituting the workflow's **filename** and the branch from `pr-head-ref.txt`:
 
 ```
 [![](${{ github.server_url }}/${{ github.repository }}/actions/workflows/<file>.yaml/badge.svg?branch=<branch>)](${{ github.server_url }}/${{ github.repository }}/actions/workflows/<file>.yaml?query=branch:<branch>)
@@ -466,6 +653,11 @@ For the same reason a badge may read **"no status"** for the first minute or so,
 run is created — and if that pipeline ran on this branch previously, it will briefly show
 that older result instead. Add one line under the table saying badges go live shortly after
 posting, so nobody reads a cold badge as a failure to launch.
+
+That caveat line is a caption for the badges. **Only include it if the table actually
+contains badges** — printing "badges go live shortly" above a table of plain pipeline names
+tells the reader to wait for something that is never going to appear, and is how a dropped
+badge column disguises itself as a slow one.
 
 Close by noting that these are optional pipelines: they do not gate the PR, and a failure
 here means the change needs another look, not that the PR is blocked from merging.

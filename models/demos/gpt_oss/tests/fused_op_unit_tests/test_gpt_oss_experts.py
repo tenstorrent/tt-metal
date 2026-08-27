@@ -27,6 +27,8 @@ import pandas as pd
 import pytest
 import torch
 from loguru import logger
+from transformers import GptOssConfig
+from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
 
 import ttnn
 from models.common.utility_functions import comp_pcc, profiler
@@ -82,7 +84,7 @@ DEVICE_PERF_TARGETS_US = {}
 def gpt_oss_experts_reference(
     hidden_states: torch.Tensor,
     router_indices: torch.Tensor,
-    routing_weights: torch.Tensor,
+    topk_expert_weights: torch.Tensor,
     reference_experts,
 ) -> torch.Tensor:
     """PyTorch reference implementation for gpt_oss_experts.
@@ -92,7 +94,7 @@ def gpt_oss_experts_reference(
     Args:
         hidden_states: Input tensor [batch, seq_len, hidden_size]
         router_indices: Expert indices per token [batch * seq_len, num_experts_per_tok]
-        routing_weights: Routing weights (sparse) [batch * seq_len, num_experts]
+        topk_expert_weights: Routing weights [batch * seq_len, num_experts_per_tok]
         reference_experts: HuggingFace GptOss experts module
 
     Returns:
@@ -100,15 +102,43 @@ def gpt_oss_experts_reference(
     """
     # Convert to float32 for reference computation (HuggingFace model uses float32 weights)
     hidden_states_fp32 = hidden_states.float()
-    routing_weights_fp32 = routing_weights.float()
+    hidden_states_flat = hidden_states_fp32.reshape(-1, hidden_states_fp32.shape[-1])
+    topk_expert_weights_fp32 = topk_expert_weights.float()
 
     with torch.no_grad():
         output = reference_experts(
-            hidden_states_fp32,
+            hidden_states_flat,
             router_indices=router_indices,
-            routing_weights=routing_weights_fp32,
+            routing_weights=topk_expert_weights_fp32,
         )
-    return output
+    return output.reshape(hidden_states_fp32.shape)
+
+
+def test_gpt_oss_experts_reference_preserves_decode_shape():
+    config = GptOssConfig(hidden_size=32, intermediate_size=16, num_local_experts=8, num_experts_per_tok=4)
+    reference_experts = GptOssExperts(config)
+    for parameter in reference_experts.parameters():
+        torch.nn.init.normal_(parameter, mean=0.0, std=0.02)
+
+    hidden_states = torch.randn(16, 1, config.hidden_size, dtype=torch.bfloat16)
+    router_indices = torch.stack(
+        [torch.randperm(config.num_local_experts)[: config.num_experts_per_tok] for _ in range(16)]
+    )
+    topk_expert_weights = torch.rand(16, config.num_experts_per_tok)
+    topk_expert_weights /= topk_expert_weights.sum(dim=-1, keepdim=True)
+
+    output = gpt_oss_experts_reference(
+        hidden_states,
+        router_indices,
+        topk_expert_weights,
+        reference_experts,
+    )
+
+    assert output.shape == hidden_states.shape, (
+        f"Reference experts output shape {tuple(output.shape)} does not match "
+        f"hidden-states shape {tuple(hidden_states.shape)}"
+    )
+    assert torch.isfinite(output).all(), "Reference experts output contains non-finite values"
 
 
 def gpt_oss_experts_ttnn(
@@ -123,6 +153,8 @@ def gpt_oss_experts_ttnn(
     combine_config: AllToAllCombineConfig,
     program_config: ThroughputProgramConfig,
     mesh_device,
+    mesh_config,
+    ccl_manager,
 ) -> ttnn.Tensor:
     """TTNN implementation for gpt_oss_experts.
 
@@ -156,6 +188,8 @@ def gpt_oss_experts_ttnn(
         combine_config,
         program_config,
         mesh_device,
+        mesh_config=mesh_config,
+        ccl_manager=ccl_manager,
     )
 
 
@@ -403,6 +437,8 @@ def _run_experts_test(
     program_cache_enabled: bool,
     use_real_weights: bool,
     step_prefix: str,
+    mesh_config,
+    ccl_manager,
 ):
     """Run the full experts fused op test."""
 
@@ -438,7 +474,7 @@ def _run_experts_test(
 
     # Create reference experts and get weights (same weights for both models)
     reference_experts, state_dict = _create_reference_experts_and_weights(config, num_experts)
-    ref_output = gpt_oss_experts_reference(hidden_states, router_indices, routing_weights, reference_experts)
+    ref_output = gpt_oss_experts_reference(hidden_states, router_indices, topk_weights_dense, reference_experts)
 
     # Create TTNN configs
     num_devices = mesh_device.get_num_devices()
@@ -523,6 +559,8 @@ def _run_experts_test(
         combine_config,
         program_config,
         mesh_device,
+        mesh_config,
+        ccl_manager,
     )
 
     # Convert output to torch
@@ -578,6 +616,8 @@ def _run_experts_test(
             combine_config,
             program_config,
             mesh_device,
+            mesh_config,
+            ccl_manager,
         )
 
     # Device performance measurement mode (when env var is set)
@@ -761,6 +801,8 @@ def test_gpt_oss_experts(
         program_cache_enabled,
         use_real_weights,
         f"gpt_oss_experts_{mode}_seq{seq_len}",
+        setup["mesh_config"],
+        setup["ccl_manager"],
     )
 
     logger.info(f"Test passed with PCC: {pcc}")

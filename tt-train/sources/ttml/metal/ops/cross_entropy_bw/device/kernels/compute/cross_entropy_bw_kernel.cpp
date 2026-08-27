@@ -29,6 +29,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);  // rows to process in this kernel
 constexpr uint32_t block_size = get_compile_time_arg_val(1);         // size of block
@@ -223,8 +224,11 @@ void calculate_sum_exp_x() {
         sub_binary_tile_init();
         sub_binary_tile(working_register, max_value_register, working_register);  // subtract max value from each tile
 
-        exp_tile_init<false>();
-        exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
+        // exp via the shared SDPA path: on Blackhole this dispatches to the hand-scheduled
+        // TTI exp (~3x cheaper on the SFPU than the generic accurate exp_tile at bf16
+        // output precision); on Wormhole it falls back to the same accurate sfpi exp.
+        sdpa_exp_tile_init();
+        sdpa_exp_tile(working_register);  // calculate exp for each tile in tile register
 
         if constexpr (do_mask_w) {
             if (col + 1 == Wt) {
@@ -287,8 +291,8 @@ void calculate_sum_exp_x() {
             sub_binary_tile(
                 working_register, max_value_register, working_register);  // subtract max value from each tile
 
-            exp_tile_init<false>();
-            exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
+            sdpa_exp_tile_init();
+            sdpa_exp_tile(working_register);  // calculate exp for each tile in tile register
 
             if constexpr (do_mask_w) {
                 if (col + 1 == Wt) {
@@ -418,8 +422,8 @@ void kernel_main() {
                     /* tile_idx */ 0,
                     /* register idx */ block_idx);
 
-                exp_tile_init<false>();
-                exp_tile</* approx */ false>(block_idx);  // calculate exp for each tile in tile register
+                sdpa_exp_tile_init();
+                sdpa_exp_tile(block_idx);  // calculate exp for each tile in tile register
 
                 mul_binary_tile_init();
                 mul_binary_tile(block_idx, sum_exp_register, block_idx);  // multiply by scaler

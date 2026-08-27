@@ -52,10 +52,10 @@ void read_cq_memory_for_dump(
     ChipId mmio_device_id,
     uint16_t channel,
     const SystemMemoryManager& sysmem_manager) {
-    auto& cluster = MetalContext::instance().get_cluster();
+    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
+    auto& cluster = metal_ctx.get_cluster();
     if (sysmem_manager.is_dram_backed()) {
-        const uint32_t dram_channel = MetalContext::instance()
-                                          .device_manager()
+        const uint32_t dram_channel = metal_ctx.device_manager()
                                           ->get_active_device(mmio_device_id)
                                           ->allocator_impl()
                                           ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
@@ -157,7 +157,7 @@ void wait_for_program_vector_to_arrive_and_compare_to_host_program_vector(
 }
 
 // Returns the number of bytes taken up by this dispatch command (including header).
-uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream& cq_file) {
+uint32_t dump_dispatch_cmd(MetalContext& metal_ctx, CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream& cq_file) {
     uint32_t stride = sizeof(CQDispatchCmd);  // Default stride is just the command
     CQDispatchCmdId cmd_id = cmd->base.cmd_id;
 
@@ -245,7 +245,7 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                     num_sub_devices,
                     fmt::join(workers_per_sub_device, workers_per_sub_device + num_sub_devices, ", "));
                 stride += num_sub_devices * sizeof(uint32_t);
-                const uint32_t alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+                const uint32_t alignment = metal_ctx.hal().get_alignment(HalMemType::HOST);
                 stride = ((stride + alignment - 1) / alignment) * alignment;
                 break;
             }
@@ -268,9 +268,8 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
 }
 
 // Returns the number of bytes taken up by this prefetch command (including header).
-uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream& iq_file) {
-    uint32_t stride =
-        MetalContext::instance().hal().get_alignment(HalMemType::HOST);  // Default stride matches alignment.
+uint32_t dump_prefetch_cmd(MetalContext& metal_ctx, CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream& iq_file) {
+    uint32_t stride = metal_ctx.hal().get_alignment(HalMemType::HOST);  // Default stride matches alignment.
     CQPrefetchCmdId cmd_id = cmd->base.cmd_id;
 
     if (cmd_id < CQ_PREFETCH_CMD_MAX_COUNT) {
@@ -367,10 +366,9 @@ void print_progress_bar(float progress, bool init = false) {
 
 void dump_completion_queue_entries(
     std::ofstream& cq_file, SystemMemoryManager& sysmem_manager, SystemMemoryCQInterface& cq_interface) {
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
-        sysmem_manager.get_device_id());
+    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
+    ChipId mmio_device_id = metal_ctx.get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
+    uint16_t channel = metal_ctx.get_cluster().get_assigned_channel_for_device(sysmem_manager.get_device_id());
     uint32_t completion_write_ptr =
         get_cq_completion_wr_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
         << 4;
@@ -422,7 +420,7 @@ void dump_completion_queue_entries(
                 }
                 cq_file << std::endl;
             }
-            uint32_t stride = dump_dispatch_cmd(cmd, page_addr, cq_file);
+            uint32_t stride = dump_dispatch_cmd(metal_ctx, cmd, page_addr, cq_file);
             // Completion Q is page-aligned
             uint32_t cmd_pages =
                 (stride + DispatchSettings::TRANSFER_PAGE_SIZE - 1) / DispatchSettings::TRANSFER_PAGE_SIZE;
@@ -465,10 +463,9 @@ void dump_completion_queue_entries(
 
 void dump_issue_queue_entries(
     std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, SystemMemoryCQInterface& cq_interface) {
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
-        sysmem_manager.get_device_id());
+    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
+    ChipId mmio_device_id = metal_ctx.get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
+    uint16_t channel = metal_ctx.get_cluster().get_assigned_channel_for_device(sysmem_manager.get_device_id());
     // TODO: Issue Q read ptr is not prefetcly updated 0 try to read it out from chip on dump?
     uint32_t issue_read_ptr =
         get_cq_issue_rd_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size()) << 4;
@@ -495,7 +492,7 @@ void dump_issue_queue_entries(
         first_page_addr + DispatchSettings::TRANSFER_PAGE_SIZE - 1;  // To track offset of latest page read out
     read_cq_memory_for_dump(
         read_data.data(), read_data.size(), first_page_addr, mmio_device_id, channel, sysmem_manager);
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = metal_ctx.hal();
     for (uint32_t offset = 0; offset < issue_q_bytes;) {  // offset increments at end of loop
         uint32_t curr_addr = issue_q_base_addr + offset;
         uint32_t page_offset = curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE;
@@ -532,7 +529,7 @@ void dump_issue_queue_entries(
                 iq_file << std::endl;
             }
 
-            uint32_t cmd_stride = dump_prefetch_cmd(cmd, curr_addr, iq_file);
+            uint32_t cmd_stride = dump_prefetch_cmd(metal_ctx, cmd, curr_addr, iq_file);
 
             // Check for a bad stride (happen to have a valid cmd_id, overwritten values, etc.)
             if (cmd_stride + offset >= issue_q_bytes || cmd_stride == 0 ||
@@ -571,7 +568,7 @@ void dump_issue_queue_entries(
                     if (dispatch_cmd->base.cmd_id < CQ_DISPATCH_CMD_MAX_COUNT) {
                         iq_file << "  ";
                         uint32_t dispatch_cmd_stride =
-                            dump_dispatch_cmd(dispatch_cmd, issue_q_base_addr + dispatch_offset, iq_file);
+                            dump_dispatch_cmd(metal_ctx, dispatch_cmd, issue_q_base_addr + dispatch_offset, iq_file);
                         dispatch_offset += dispatch_cmd_stride;
                         iq_file << std::endl;
                     } else {
@@ -609,10 +606,9 @@ void dump_command_queue_raw_data(
     SystemMemoryManager& sysmem_manager,
     SystemMemoryCQInterface& cq_interface,
     cq_queue_t queue_type) {
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
-        sysmem_manager.get_device_id());
+    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
+    ChipId mmio_device_id = metal_ctx.get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
+    uint16_t channel = metal_ctx.get_cluster().get_assigned_channel_for_device(sysmem_manager.get_device_id());
 
     // The following variables depend on completion Q vs issue Q
     uint32_t write_ptr, read_ptr, base_addr, bytes_to_read = 0;

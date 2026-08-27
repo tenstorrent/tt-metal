@@ -29,10 +29,11 @@ What the number excludes, verified on an 8x4 galaxy (warm caches, 58 programs x 
 Recalibrating: set ``_EXPECTED_NS = None`` and the test measures and logs without gating, printing
 the value to set it back to. Do that on any box whose baseline you need to re-cut.
 
-Two limits carried over from the tracy version:
+One limit carried over from the tracy version:
 
-  * Measures the SiLU path, not the checkpoint's SiTU-GLU (#51335), so this baseline moves when
-    that kernel lands.
+  * ``_EXPECTED_NS`` was cut before the shared expert moved off SiLU. It now measures the
+    checkpoint's SiTU-GLU on every FFN site, where the shared expert's single fused multiply
+    becomes a softcap/sigmoid/multiply chain, so the baseline is stale until re-cut.
 """
 
 import os
@@ -148,6 +149,7 @@ def test_kimi_k3_moe_perf_galaxy(variant, config_only, mesh_device, device_param
         shared_hidden_dim=KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
         latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
+        shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
         measure=measure,
     )
 
