@@ -688,49 +688,29 @@ inline constexpr uint32_t kMcastSemBase = 0;
 #endif
 
 // ---------------------------------------------------------------------------
-// TT_U_CB -- a buffer's slot, checked
+// Buffer slots
 //
-//     u::Storage<Block1D> in_storage(TT_U_CB(in));
+//     constexpr uint32_t kCbIn = get_named_compile_time_arg_val("cb_in");
+//     u::Storage<Block1D> in_storage(kCbIn);
 //
-// The host names its dataflow buffers; a kernel needs their SLOT NUMBERS, and cannot get
-// them from the `dfb::` binding tokens the way a single-projection kernel would. A token is
-// emitted only into the kernels that bind that buffer (genfiles.cpp:129), a buffer's two
-// endpoint roles are both spoken for, and a unified kernel declares every Storage on every
-// projection -- so `dfb::out` does not exist on the build that only reads `in`, and the
-// token spelling does not compile. See unified_metal2_spec.md 7.1.
+// A kernel cannot get its buffers' slot numbers from the `dfb::` binding tokens the way a
+// single-projection kernel would. A token is emitted only into the kernels that bind that
+// buffer (genfiles.cpp:129), a buffer's two endpoint roles are both spoken for, and a
+// unified kernel declares every Storage on every projection -- so `dfb::out` does not exist
+// on the build that only reads `in`. See unified_metal2_spec.md 7.1.
 //
-// So the slot arrives as a compile-time VALUE, named `cb_<name>`, which the harness predicts
-// from metal's allocator rule (lowest free slot, declaration order). This macro reads it.
+// So the slot arrives as a named compile-time VALUE, exactly like every other scalar the
+// kernel is given, under the name `cb_<buffer>`. The harness predicts it from metal's
+// allocator rule (lowest free slot, declaration order) and unified_program_spec() documents
+// that prediction.
 //
-// A prediction wants checking, and the tokens turn out to be exactly the right instrument
-// for that even though they cannot do the naming: wherever one EXISTS it reports what the
-// host really assigned. So on the compute projection -- the one projection that binds every
-// buffer, inputs as consumer and outputs as producer -- the value is routed through
-// checked_slot(), which fails the build if the two disagree. On the other four the macro
-// expands to the value alone, and `dfb::name` never reaches the compiler at all: it is not
-// in the replacement list, so it is never looked up.
-//
-// One line per buffer, and the same line it replaced -- a kernel used to say
-// `constexpr uint32_t kCbIn = 0;` and now says `constexpr uint32_t kCbIn = TT_U_CB(in);`.
+// The prediction is not separately checked, and the reason it need not be is that all five
+// projections read the SAME value: a wrong one has every thread agreeing on a buffer the
+// host allocated to something else, which is a hang or wrong data on the first run rather
+// than anything silent. That is unlike the endpoint ROLES, which really are silent when
+// wrong on Gen1 -- see derive_roles() in unified_harness.py, which is why those are read off
+// the kernel rather than restated.
 // ---------------------------------------------------------------------------
-
-template <uint32_t Predicted, uint32_t Assigned>
-constexpr uint32_t checked_slot() {
-    static_assert(
-        Predicted == Assigned,
-        "a dataflow buffer's predicted slot does not match the id the host assigned. The "
-        "harness derives slots from declaration order (metal's lowest-free-slot rule); either "
-        "that no longer holds, or this kernel's buffers are declared in a different order than "
-        "the launcher's.");
-    return Predicted;
-}
-
-#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-#define TT_U_CB(name) \
-    ::tt::unified::checked_slot<get_named_compile_time_arg_val("cb_" #name), static_cast<uint32_t>(dfb::name)>()
-#else
-#define TT_U_CB(name) get_named_compile_time_arg_val("cb_" #name)
-#endif
 
 // Under Metal 2.0 the base is a PREDICTION, and this is where it gets checked.
 //

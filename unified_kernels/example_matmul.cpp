@@ -14,11 +14,11 @@ using Out = u::Shape<2, 2>;
 using Bias = u::Shape<1, 2>;
 
 void kernel_main() {
-    constexpr uint32_t kCbA = TT_U_CB(a);
-    constexpr uint32_t kCbB = TT_U_CB(b);
-    constexpr uint32_t kCbBias = TT_U_CB(bias);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
-    constexpr uint32_t kCbPartials = TT_U_CB(partials);
+    constexpr uint32_t kCbA = get_named_compile_time_arg_val("cb_a");
+    constexpr uint32_t kCbB = get_named_compile_time_arg_val("cb_b");
+    constexpr uint32_t kCbBias = get_named_compile_time_arg_val("cb_bias");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbPartials = get_named_compile_time_arg_val("cb_partials");
 
     const auto a = TensorAccessor(tensor::a));
     const auto b = TensorAccessor(tensor::b));

@@ -19,7 +19,7 @@
 //            cb_push(out), cb_pop(in1), cb_pop(in0)
 //   BRISC    cb_wait(out) -> noc_write x N -> cb_pop(out)
 //
-// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+// Compile-time args, all named, plus a cb_<name> per buffer:
 //   num_blocks
 //   tiles_per_block
 //
@@ -33,9 +33,9 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_named_compile_time_arg_val("num_blocks");
     constexpr uint32_t tiles_per_block = get_named_compile_time_arg_val("tiles_per_block");
 
-    constexpr uint32_t kCbIn0 = TT_U_CB(in0);
-    constexpr uint32_t kCbIn1 = TT_U_CB(in1);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbIn0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t kCbIn1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
 
     u::compute_init(kCbIn0, kCbOut);
 

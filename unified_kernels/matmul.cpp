@@ -17,7 +17,7 @@
 //            pack the RT*CT subblock, push cb_out
 //   BRISC    drain cb_out (RT*CT tiles)
 //
-// Compile-time args: a cb_<name> per buffer, which TT_U_CB reads.
+// Compile-time args: a cb_<name> per buffer.
 //
 // No runtime args: the tensors are bound, so their addresses ride with the accessors.
 
@@ -52,11 +52,11 @@ constexpr uint32_t kIn1Tiles = MM_KT_DIM * MM_CT_DIM;
 constexpr uint32_t kOutTiles = MM_RT_DIM * MM_CT_DIM;
 
 void kernel_main() {
-    constexpr uint32_t kCbIn0 = TT_U_CB(in0);
-    constexpr uint32_t kCbIn1 = TT_U_CB(in1);
-    constexpr uint32_t kCbBias = TT_U_CB(bias);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
-    constexpr uint32_t kCbAcc = TT_U_CB(acc);
+    constexpr uint32_t kCbIn0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t kCbIn1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t kCbBias = get_named_compile_time_arg_val("cb_bias");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbAcc = get_named_compile_time_arg_val("cb_acc");
 #if defined(MM_BIAS)
     // Last, so a build without MM_BIAS sees exactly the layout it always did.
 #endif

@@ -23,7 +23,7 @@
 // The whole rotation then lands in one SFPU pass: `x * cos + rot * sin` is a four-leaf
 // tree, the deepest in this model so far.
 //
-// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+// Compile-time args, all named, plus a cb_<name> per buffer:
 //   tiles per chunk (at most 8)
 //   chunks
 //
@@ -44,12 +44,12 @@ namespace u = tt::unified;
 void kernel_main() {
     constexpr uint32_t chunk = get_named_compile_time_arg_val("chunk");
 
-    constexpr uint32_t kCbX = TT_U_CB(x);
-    constexpr uint32_t kCbCos = TT_U_CB(cos);
-    constexpr uint32_t kCbSin = TT_U_CB(sin);
-    constexpr uint32_t kCbM = TT_U_CB(m);
-    constexpr uint32_t kCbRot = TT_U_CB(rot);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbX = get_named_compile_time_arg_val("cb_x");
+    constexpr uint32_t kCbCos = get_named_compile_time_arg_val("cb_cos");
+    constexpr uint32_t kCbSin = get_named_compile_time_arg_val("cb_sin");
+    constexpr uint32_t kCbM = get_named_compile_time_arg_val("cb_m");
+    constexpr uint32_t kCbRot = get_named_compile_time_arg_val("cb_rot");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
     [[maybe_unused]] constexpr uint32_t num_chunks = get_named_compile_time_arg_val("num_chunks");
     const uint32_t chunk_begin = get_arg(args::chunk_begin);
     const uint32_t chunk_count = get_arg(args::chunk_count);

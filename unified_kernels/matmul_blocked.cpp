@@ -39,7 +39,7 @@
 //   TRISC    matmul per k-block into the accumulator, then the mt x nt block in subblocks
 //   BRISC    drain cb_out (mt * nt tiles) per output block
 //
-// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+// Compile-time args, all named, plus a cb_<name> per buffer:
 //   mt          rows per M-block, in tiles
 //   ktot        K in tiles
 //   ntot        N in tiles
@@ -98,10 +98,10 @@ void kernel_main() {
     constexpr uint32_t kt = get_named_compile_time_arg_val("kt");
     constexpr uint32_t nt = get_named_compile_time_arg_val("nt");
 
-    constexpr uint32_t kCbIn = TT_U_CB(in);
-    constexpr uint32_t kCbWo = TT_U_CB(wo);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
-    constexpr uint32_t kCbAcc = TT_U_CB(acc);
+    constexpr uint32_t kCbIn = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t kCbWo = get_named_compile_time_arg_val("cb_wo");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbAcc = get_named_compile_time_arg_val("cb_acc");
 
     static_assert(kt > 0 && ktot % kt == 0, "the k-block width must divide K");
     static_assert(nt > 0 && ntot % nt == 0, "the output-column block width must divide N");

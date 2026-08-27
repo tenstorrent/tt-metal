@@ -10,8 +10,8 @@
 // torch -- a chain that silently dropped a link would still match torch on the
 // op that survived.
 //
-// Compile-time args, all named: num_blocks, tiles_per_block, and a cb_<name> per buffer
-// that TT_U_CB reads. No runtime args at all -- the tensors are BOUND, so their addresses
+// Compile-time args, all named: num_blocks, tiles_per_block, and a cb_<name> per buffer.
+// No runtime args at all -- the tensors are BOUND, so their addresses
 // ride along with the accessors rather than being passed and counted.
 //
 // Defines: one of UN_SQRT, UN_RSQRT, UN_EXP, UN_CHAIN; recip is the default.
@@ -36,8 +36,8 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_named_compile_time_arg_val("num_blocks");
     constexpr uint32_t tiles_per_block = get_named_compile_time_arg_val("tiles_per_block");
 
-    constexpr uint32_t kCbIn = TT_U_CB(in);
-    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbIn = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
 
     u::compute_init(kCbIn, kCbOut);
 
