@@ -33,6 +33,19 @@ struct MatmulInputs {
     std::vector<Tensor> input_tensors;                                // a,b, weights
     std::vector<std::optional<const Tensor>> optional_input_tensors;  // bias
     std::vector<std::optional<Tensor>> optional_output_tensors;       // output
+    // Opt-in fused greedy-argmax epilogue for the DRAM-sharded matmul path
+    // (Blackhole only). Preallocated UINT32 ROW_MAJOR INTERLEAVED tensor of
+    // shape [1, 1, num_dram_banks, 64]: page w receives worker w's per-row
+    // (global_col_index, bf16_value_bits) pairs — word 2*r is the winning
+    // GLOBAL column index for output row r under bfloat16_greater's
+    // sign-magnitude total order with the smallest-index tie-break, word
+    // 2*r+1 the winning value's raw bf16 bits (init 0xFF80 = -inf for rows
+    // that were never updated). The scan runs on the pack RISC's RVV unit in
+    // the pack shadow of the matmul and only covers the LOGICAL width of
+    // in1, so padded-vocab tail columns never participate (the -inf mask add
+    // callers run today is unnecessary). Providing this tensor turns the
+    // fusion ON; the plain path is untouched when it is nullopt.
+    std::optional<Tensor> fused_argmax_partials = std::nullopt;
 };
 
 }  // namespace ttnn::prim

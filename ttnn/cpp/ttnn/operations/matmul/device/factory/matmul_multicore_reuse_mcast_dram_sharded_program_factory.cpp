@@ -15,6 +15,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -75,8 +76,16 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     bool skip_compute,
     bool skip_in0_mcast,
     bool skip_write_back,
-    bool row_broadcast_bias) {
+    bool row_broadcast_bias,
+    // Fused greedy-argmax epilogue (opt-in, Blackhole): preallocated UINT32 partials tensor
+    // ([1,1,num_dram_banks,64]) + the LOGICAL extent of the scan (valid output columns in
+    // tiles / valid output rows). nullopt => byte-identical to the plain path.
+    ttsl::optional_reference<const tt::tt_metal::MeshTensor> fused_argmax_partials = {},
+    uint32_t fused_argmax_valid_n_tiles = 0,
+    uint32_t fused_argmax_valid_rows = 0) {
     using namespace tt;
+
+    const bool fused_argmax = fused_argmax_partials.has_value();
 
     ttsl::optional_reference<const tt::tt_metal::MeshTensor> bias;
     if (bias_tensor.has_value()) {
@@ -339,6 +348,15 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
     }
 
+    // Fused argmax: one 64-word partials page per worker (32 rows x (index, value bits)).
+    constexpr uint32_t fused_argmax_partials_page_bytes = 64 * sizeof(uint32_t);
+    if (fused_argmax) {
+        // Bias is excluded by validation, so these sit at fixed compile-time-arg indices 9 (page
+        // size) and 10.. (accessor args) — the kernel parses them there under FUSED_ARGMAX.
+        in1_sender_writer_compile_time_args.push_back(fused_argmax_partials_page_bytes);
+        tt::tt_metal::TensorAccessorArgs(*fused_argmax_partials).append_to(in1_sender_writer_compile_time_args);
+    }
+
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_define;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
@@ -374,6 +392,13 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     mm_kernel_defines["MATMUL_DRAM_SHARDED"] = "1";
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
+    }
+    if (fused_argmax) {
+        // Pack-RISC RVV argmax scan of the freshly packed output tiles (compute kernel) +
+        // per-worker partials write-out (in1 sender/writer kernel). The compute kernel opts
+        // into TRISC2 RVV codegen below (ComputeConfigDescriptor::enable_trisc2_rvv).
+        mm_kernel_defines["FUSED_ARGMAX"] = "1";
+        mm_kernel_in1_sender_writer_defines["FUSED_ARGMAX"] = "1";
     }
 
     const uint32_t num_compute_cores = all_cores_in_rect_grid.num_cores();
@@ -426,6 +451,9 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         {"cb_out", tt::CBIndex::c_4},
         {"cb_out_reshard", tt::CBIndex::c_6},
     };
+    if (fused_argmax) {
+        in1_sender_writer_kernel_desc.named_compile_time_args.push_back({"cb_argmax_partials", tt::CBIndex::c_7});
+    }
     in1_sender_writer_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
 
@@ -491,6 +519,9 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             named_compile_args.push_back({"activation_param1", params.param1});
             named_compile_args.push_back({"activation_param2", params.param2});
         }
+        if (fused_argmax) {
+            named_compile_args.push_back({"cb_argmax_partials", tt::CBIndex::c_7});
+        }
         compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
     }
     compute_kernel_desc.config = ComputeConfigDescriptor{
@@ -498,6 +529,9 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
+        // Fused argmax runs its scan on the pack RISC's vector unit: compile this kernel's
+        // TRISC2 TU with Zve32f (no effect on the plain matmul, which never sets this).
+        .enable_trisc2_rvv = fused_argmax,
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -604,6 +638,20 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             .page_size = output_single_tile_size,
             .tile = output_tile_desc});
         cb_desc.tensor = &out_tensor;
+        desc.cbs.push_back(std::move(cb_desc));
+    }
+
+    // CB 7: fused-argmax partials staging (one 256B page: 32 rows x (index, value bits) u32
+    // pairs). Raw-produced by the pack RISC after the scan finishes, drained by the in1
+    // sender/writer with plain dataflow calls (the proven raw-producer / llk-consumer pairing).
+    if (fused_argmax) {
+        CBDescriptor cb_desc;
+        cb_desc.total_size = fused_argmax_partials_page_bytes;
+        cb_desc.core_ranges = all_cores_in_rect_grid;
+        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_7,
+            .data_format = tt::DataFormat::UInt32,
+            .page_size = fused_argmax_partials_page_bytes});
         desc.cbs.push_back(std::move(cb_desc));
     }
 
@@ -748,12 +796,15 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             std::vector<uint32_t> mm_compute_args;
             mm_compute_args.push_back((std::uint32_t)is_worker_core);
             compute_kernel_desc.runtime_args.emplace_back(core, std::move(mm_compute_args));
-        } else {
+        } else if (!fused_argmax) {
             bool is_worker_core = true;
             std::vector<uint32_t> mm_compute_args;
             mm_compute_args.push_back((std::uint32_t)is_worker_core);
             compute_kernel_desc.runtime_args.emplace_back(core, std::move(mm_compute_args));
         }
+        // fused_argmax: worker-core compute args need the per-worker column offset, which is
+        // keyed off the DRAM bank assignment — they are emplaced in the worker-ordered loop
+        // below instead.
     }
 
     // Worker cores: in1 sender/writer runtime args
@@ -869,12 +920,40 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 5, num_cores_write_back);
         }
 
+        size_t fused_argmax_addr_idx = 0;
+        if (fused_argmax) {
+            const uint32_t worker_bank = bank_ids[i];
+            // Writer: partials tensor address + this worker's page id, appended AFTER the
+            // variable-length write-back args. The kernel recomputes this offset at runtime as
+            // 7 + 3 * num_shard_to_write_back (runtime arg [5]); assert the layout holds.
+            TT_FATAL(
+                mm_in1_sender_writer_args.size() == 7 + 3 * (size_t)mm_in1_sender_writer_args[5],
+                "fused_argmax: unexpected in1 sender/writer runtime-arg layout ({} args, {} shards)",
+                mm_in1_sender_writer_args.size(),
+                mm_in1_sender_writer_args[5]);
+            fused_argmax_addr_idx = mm_in1_sender_writer_args.size();
+            mm_in1_sender_writer_args.push_back(fused_argmax_partials->address());  // smuggled-rta-ok: rebound
+            mm_in1_sender_writer_args.push_back(worker_bank);                       // partials page id
+
+            // Compute kernel: [is_worker, n_tile_offset, valid_w_tiles, valid_rows]. The scan
+            // stops at the LOGICAL vocab boundary, so padded-tail columns never participate.
+            const uint32_t n_off = worker_bank * per_core_N_in1_sender;
+            const uint32_t valid_w = fused_argmax_valid_n_tiles > n_off
+                                         ? std::min(per_core_N_in1_sender, fused_argmax_valid_n_tiles - n_off)
+                                         : 0u;
+            compute_kernel_desc.runtime_args.emplace_back(
+                core, std::vector<uint32_t>{1u, n_off, valid_w, fused_argmax_valid_rows});
+        }
+
         // Build variant args: positions [1] and [2] are buffer addresses
         std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>> in1_writer_args(
             mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
         in1_writer_args[1] = in1_tensor;
         if (bias.has_value()) {
             in1_writer_args[2] = *bias;
+        }
+        if (fused_argmax) {
+            in1_writer_args[fused_argmax_addr_idx] = *fused_argmax_partials;
         }
         in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_writer_args);
         TT_FATAL(
@@ -1012,6 +1091,25 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];
     uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile_shape[1];
 
+    // Fused greedy-argmax epilogue (opt-in): scan extent is the LOGICAL output geometry.
+    ttsl::optional_reference<const tt::tt_metal::MeshTensor> fused_argmax_partials;
+    uint32_t fused_argmax_valid_n_tiles = 0;
+    uint32_t fused_argmax_valid_rows = 0;
+    if (tensor_args.fused_argmax_partials.has_value()) {
+        fused_argmax_partials = tensor_args.fused_argmax_partials->mesh_tensor();
+        TT_FATAL(
+            b.logical_shape()[-1] % in1_tile_shape[1] == 0,
+            "matmul fused_argmax requires the logical output width ({}) to be a multiple of the tile width {}",
+            b.logical_shape()[-1],
+            in1_tile_shape[1]);
+        fused_argmax_valid_n_tiles = b.logical_shape()[-1] / in1_tile_shape[1];
+        fused_argmax_valid_rows = a.logical_shape()[-2];
+        TT_FATAL(
+            fused_argmax_valid_rows <= in0_tile_shape[0],
+            "matmul fused_argmax supports at most one output tile-row ({} logical rows)",
+            fused_argmax_valid_rows);
+    }
+
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
     const auto& output_mesh = output.mesh_tensor();
@@ -1051,7 +1149,10 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
         skip_compute,
         skip_in0_mcast,
         skip_write_back,
-        row_broadcast_bias);
+        row_broadcast_bias,
+        fused_argmax_partials,
+        fused_argmax_valid_n_tiles,
+        fused_argmax_valid_rows);
 }
 
 }  // namespace ttnn::prim

@@ -219,7 +219,8 @@ static ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     ttnn::prim::MatmulParams& parameters,
-    std::optional<ttnn::Tensor>& optional_output_tensor) {
+    std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<ttnn::Tensor>& fused_argmax_partials = std::nullopt) {
     if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
         TT_THROW(
             "ttnn.matmul: Both arguments to matmul need to be at least 1D, but got shapes {} and {}",
@@ -312,7 +313,8 @@ static ttnn::Tensor bound_matmul(
                              input_tensor_b_adjusted,
                              post_process_bias ? std::nullopt : bias,
                              optional_output_tensor,
-                             attributes)
+                             attributes,
+                             fused_argmax_partials)
                              .at(0);
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
@@ -376,7 +378,8 @@ Tensor matmul(
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<Tensor>& fused_argmax_partials) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -408,7 +411,8 @@ Tensor matmul(
         input_tensor_b,
         /*bias=*/std::nullopt,
         matmul_params,
-        optional_output_tensor);
+        optional_output_tensor,
+        fused_argmax_partials);
 }
 
 Tensor linear(
