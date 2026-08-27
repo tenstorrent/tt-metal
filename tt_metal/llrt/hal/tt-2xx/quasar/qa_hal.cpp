@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <enchantum/enchantum.hpp>
 #include <numeric>
 #include <string>
@@ -13,6 +14,7 @@
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "llrt/rtoptions.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
@@ -337,6 +339,41 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        // Snapshot the env once: defines() runs separately for firmware and
+        // kernel builds, and a mid-process env change must not compile them
+        // against different maps.
+        static const char* const att_map = std::getenv("TT_METAL_NOC_ATT");
+        if (att_map != nullptr) {
+            // ATT enabled => the ATT backend and the V3 API everywhere, one map
+            // per build. The defines reach the JIT build key through the
+            // define hash, so toggling can never reuse stale binaries.
+            const std::string_view map(att_map);
+            if (map == "grendel_qsr1") {
+                defines.push_back("NOC_ATT_CONFIG_GRENDEL_QSR1");
+            } else if (map == "quasar_aether_2x3") {
+                defines.push_back("NOC_ATT_CONFIG_QUASAR_AETHER_2X3");
+            } else {
+                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1 or quasar_aether_2x3)", map);
+            }
+            // The dispatch kernels stay on the V2 API until their dedicated
+            // conversion, so fast dispatch cannot run under ATT yet. Check the
+            // effective runtime mode, not the raw env var.
+            TT_FATAL(
+                !params.rtoptions.get_fast_dispatch(),
+                "TT_METAL_NOC_ATT requires slow dispatch (dispatch kernels are not converted to the V3 API yet)");
+            // The watcher NoC sanitizer decodes XY operands; reject the
+            // effective runtime state until it is ATT-aware.
+            TT_FATAL(!params.rtoptions.get_watcher_enabled(), "TT_METAL_NOC_ATT does not support the watcher yet");
+            defines.push_back("NOC_ATT_ENABLED");
+            defines.push_back("NOC_API_V3");
+            static const bool att_program_for_test = std::getenv("TT_METAL_ATT_PROGRAM_FOR_TEST") != nullptr;
+            if (params.is_fw && att_program_for_test) {
+                // Firmware-only bring-up hook: replay the generated ATT image
+                // during noc_init on targets whose boot leaves the tables
+                // unprogrammed (the emulator).
+                defines.push_back("ATT_PROGRAM_FOR_TEST");
+            }
+        }
         return defines;
     }
 
@@ -372,8 +409,7 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_dm.ld",
-                            params.is_fw ? "firmware" : "kernel");
+                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(
@@ -397,11 +433,9 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_dm.ld",
-                            params.is_fw ? "firmware" : "kernel");
+                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
                     }
-                    case HalProcessorClassType::COMPUTE:
-                        TT_THROW("DISPATCH cores do not have compute processors");
+                    case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
                 }
             default:
                 TT_THROW(
