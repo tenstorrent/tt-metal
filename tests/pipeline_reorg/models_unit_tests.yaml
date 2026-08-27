@@ -1728,16 +1728,12 @@
   team: models
 
 - name: TT-Transformers MLP 2D module unit tests
-  # Only the two from_model_args 8x4 cases are excluded: they hit TT_FATAL @
-  # tt_metal/fabric/fabric.cpp:174 forwarding_direction. A bare "not 8x4" would also drop
-  # the two passing direct-API cases and the strict-xfail topology canary.
   cmd: |
     unset TT_METAL_WATCHER
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     pytest models/common/tests/modules/mlp/test_mlp_2d.py \
       -m "not slow" \
-      -k "not (test_mlp_2d_vs_reference_from_model_args and 8x4)" \
       --tb=short \
       --durations-min=3.0 \
       --cov=models.common.modules.mlp.mlp_2d \
