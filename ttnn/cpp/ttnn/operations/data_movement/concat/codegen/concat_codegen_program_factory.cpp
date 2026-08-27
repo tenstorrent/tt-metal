@@ -45,6 +45,10 @@ std::optional<ConcatCbPlan> plan_concat_cb(uint32_t page_size, uint32_t max_batc
 
 namespace {
 
+// Names here that a sibling codegen factory also uses carry a Concat prefix: a unity build
+// merges this anonymous namespace with theirs, and untilize and repeat declare their own
+// kKernelDir, kCbIn, CoreSplit and work_for_core in the same enclosing ttnn::prim.
+
 // Host half of the block-cycling cursor shared by ops/concat/spec.py's
 // build_concat_rm (N=2, inlined) and build_concat_rm_nonwidth_nway (N>2,
 // _rm_nway_reader_cursor). Maps a core's first output stick to the per-input
@@ -99,7 +103,7 @@ uint32_t num_accum_sticks(const ttnn::Shape& out_shape, uint32_t dim) {
     return accum;
 }
 
-struct CoreSplit {
+struct ConcatCoreSplit {
     CoreRangeSet all_cores;
     std::vector<CoreCoord> cores_in_order;
     CoreRangeSet core_group_1;
@@ -112,11 +116,11 @@ struct CoreSplit {
 // ttnn.split_work_to_cores / corerange_to_cores at their row_wise=False
 // default (the same shared common/codegen_common/factory library
 // repeat_codegen's port also matched).
-CoreSplit split_work(IDevice* device, uint32_t total_work) {
+ConcatCoreSplit concat_split_work(IDevice* device, uint32_t total_work) {
     const auto grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
         tt::tt_metal::split_work_to_cores(grid_size, total_work, /*row_wise=*/false);
-    return CoreSplit{
+    return ConcatCoreSplit{
         .all_cores = all_cores,
         .cores_in_order = corerange_to_cores(all_cores, num_cores, /*row_wise=*/false),
         .core_group_1 = core_group_1,
@@ -126,7 +130,7 @@ CoreSplit split_work(IDevice* device, uint32_t total_work) {
     };
 }
 
-uint32_t work_for_core(const CoreSplit& split, const CoreCoord& core) {
+uint32_t concat_work_for_core(const ConcatCoreSplit& split, const CoreCoord& core) {
     if (split.core_group_1.contains(core)) {
         return split.work_per_core_1;
     }
@@ -136,11 +140,11 @@ uint32_t work_for_core(const CoreSplit& split, const CoreCoord& core) {
     return 0;
 }
 
-constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/data_movement/concat/codegen/kernels/";
-constexpr const char* kSharedWriter =
+constexpr const char* kConcatKernelDir = "ttnn/cpp/ttnn/operations/data_movement/concat/codegen/kernels/";
+constexpr const char* kConcatSharedWriter =
     "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/writer_interleaved.cpp";
-constexpr uint32_t kCbIn = 0;
-constexpr uint32_t kCbScratch = 1;
+constexpr uint32_t kConcatCbIn = 0;
+constexpr uint32_t kConcatCbScratch = 1;
 
 // build_concat_rm: 2-tensor RM, non-width dim. reader_concat_rm_interleaved.cpp.
 ProgramDescriptor create_descriptor_rm(
@@ -166,7 +170,7 @@ ProgramDescriptor create_descriptor_rm(
     const uint32_t ppb_0 = accum * in0.logical_shape()[dim];
     const uint32_t ppb_1 = accum * in1.logical_shape()[dim];
 
-    const CoreSplit split = split_work(device, total_out_sticks);
+    const ConcatCoreSplit split = concat_split_work(device, total_out_sticks);
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     ProgramDescriptor desc;
@@ -174,14 +178,14 @@ ProgramDescriptor create_descriptor_rm(
         .total_size = plan->depth * cb_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = kCbIn,
+            .buffer_index = kConcatCbIn,
             .data_format = cb_data_format,
             .page_size = cb_page,
         }}},
     });
 
     std::vector<uint32_t> reader_ct = {
-        kCbIn,
+        kConcatCbIn,
         batch,
         2,
         ppb_0,
@@ -193,18 +197,18 @@ ProgramDescriptor create_descriptor_rm(
     TensorAccessorArgs(*src1).append_to(reader_ct);
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source = std::string(kKernelDir) + "reader_concat_rm_interleaved.cpp";
+    reader_desc.kernel_source = std::string(kConcatKernelDir) + "reader_concat_rm_interleaved.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = split.all_cores;
     reader_desc.compile_time_args = std::move(reader_ct);
     reader_desc.config = ReaderConfigDescriptor{};
 
-    std::vector<uint32_t> writer_ct = {kCbIn, out_page};
+    std::vector<uint32_t> writer_ct = {kConcatCbIn, out_page};
     TensorAccessorArgs(*dst).append_to(writer_ct);
     writer_ct.push_back(batch);
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kSharedWriter;
+    writer_desc.kernel_source = kConcatSharedWriter;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = split.all_cores;
     writer_desc.compile_time_args = std::move(writer_ct);
@@ -212,7 +216,7 @@ ProgramDescriptor create_descriptor_rm(
 
     uint32_t start = 0;
     for (const auto& core : split.cores_in_order) {
-        const uint32_t n = work_for_core(split, core);
+        const uint32_t n = concat_work_for_core(split, core);
         const RmNwayCursor cursor = rm_nway_reader_cursor({ppb_0, ppb_1}, start);
         reader_desc.emplace_runtime_args(
             core,
@@ -261,7 +265,7 @@ ProgramDescriptor create_descriptor_rm_width(
     TT_FATAL(plan.has_value(), "ConcatCodegen: RM width-concat CB page ({} B) does not fit per-core L1", out_page);
     const uint32_t write_batch = plan->batch;
 
-    const CoreSplit split = split_work(device, total_out_sticks);
+    const ConcatCoreSplit split = concat_split_work(device, total_out_sticks);
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     ProgramDescriptor desc;
@@ -269,36 +273,44 @@ ProgramDescriptor create_descriptor_rm_width(
         .total_size = plan->depth * out_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = kCbIn, .data_format = cb_data_format, .page_size = out_page}}},
+            .buffer_index = kConcatCbIn, .data_format = cb_data_format, .page_size = out_page}}},
     });
     desc.cbs.push_back(CBDescriptor{
         .total_size = scratch_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = kCbScratch, .data_format = cb_data_format, .page_size = scratch_page}}},
+            .buffer_index = kConcatCbScratch, .data_format = cb_data_format, .page_size = scratch_page}}},
     });
 
     // Read batch matches write_batch: the CB depth above is only actually
     // pipelined if the reader fills it write_batch pages at a time instead of
     // reserving/barriering one page per stick.
     std::vector<uint32_t> reader_ct = {
-        kCbIn, in0_stick, in1_stick, out_page, in0_page, in1_page, kCbScratch, in1_noc_alignment, write_batch};
+        kConcatCbIn,
+        in0_stick,
+        in1_stick,
+        out_page,
+        in0_page,
+        in1_page,
+        kConcatCbScratch,
+        in1_noc_alignment,
+        write_batch};
     TensorAccessorArgs(*src0).append_to(reader_ct);
     TensorAccessorArgs(*src1).append_to(reader_ct);
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source = std::string(kKernelDir) + "reader_concat_rm_width_interleaved.cpp";
+    reader_desc.kernel_source = std::string(kConcatKernelDir) + "reader_concat_rm_width_interleaved.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = split.all_cores;
     reader_desc.compile_time_args = std::move(reader_ct);
     reader_desc.config = ReaderConfigDescriptor{};
 
-    std::vector<uint32_t> writer_ct = {kCbIn, out_page};
+    std::vector<uint32_t> writer_ct = {kConcatCbIn, out_page};
     TensorAccessorArgs(*dst).append_to(writer_ct);
     writer_ct.push_back(write_batch);
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kSharedWriter;
+    writer_desc.kernel_source = kConcatSharedWriter;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = split.all_cores;
     writer_desc.compile_time_args = std::move(writer_ct);
@@ -306,7 +318,7 @@ ProgramDescriptor create_descriptor_rm_width(
 
     uint32_t start = 0;
     for (const auto& core : split.cores_in_order) {
-        const uint32_t n = work_for_core(split, core);
+        const uint32_t n = concat_work_for_core(split, core);
         reader_desc.emplace_runtime_args(core, {n, src0, src1, start, start});
         writer_desc.emplace_runtime_args(core, {dst, n, start});
         start += n;
@@ -342,7 +354,7 @@ ProgramDescriptor create_descriptor_rm_nonwidth_nway(
         sticks_per_block[i] = accum * input_tensors[i].logical_shape()[dim];
     }
 
-    const CoreSplit split = split_work(device, total_out_sticks);
+    const ConcatCoreSplit split = concat_split_work(device, total_out_sticks);
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     ProgramDescriptor desc;
@@ -350,25 +362,25 @@ ProgramDescriptor create_descriptor_rm_nonwidth_nway(
         .total_size = plan->depth * cb_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = kCbIn, .data_format = cb_data_format, .page_size = cb_page}}},
+            .buffer_index = kConcatCbIn, .data_format = cb_data_format, .page_size = cb_page}}},
     });
 
-    std::vector<uint32_t> reader_ct = {kCbIn, batch, n_inputs, cb_page, in_page};
+    std::vector<uint32_t> reader_ct = {kConcatCbIn, batch, n_inputs, cb_page, in_page};
     TensorAccessorArgs(*src0).append_to(reader_ct);
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source = std::string(kKernelDir) + "reader_concat_rm_nonwidth_nway.cpp";
+    reader_desc.kernel_source = std::string(kConcatKernelDir) + "reader_concat_rm_nonwidth_nway.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = split.all_cores;
     reader_desc.compile_time_args = std::move(reader_ct);
     reader_desc.config = ReaderConfigDescriptor{};
 
-    std::vector<uint32_t> writer_ct = {kCbIn, out_page};
+    std::vector<uint32_t> writer_ct = {kConcatCbIn, out_page};
     TensorAccessorArgs(*dst).append_to(writer_ct);
     writer_ct.push_back(batch);
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kSharedWriter;
+    writer_desc.kernel_source = kConcatSharedWriter;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = split.all_cores;
     writer_desc.compile_time_args = std::move(writer_ct);
@@ -376,7 +388,7 @@ ProgramDescriptor create_descriptor_rm_nonwidth_nway(
 
     uint32_t start = 0;
     for (const auto& core : split.cores_in_order) {
-        const uint32_t n = work_for_core(split, core);
+        const uint32_t n = concat_work_for_core(split, core);
         const RmNwayCursor cursor = rm_nway_reader_cursor(sticks_per_block, start);
 
         KernelDescriptor::RTArgList reader_args;
@@ -423,7 +435,7 @@ ProgramDescriptor create_descriptor_rm_width_nway(
     TT_FATAL(
         plan.has_value(), "ConcatCodegen: RM N-way width-concat CB page ({} B) does not fit per-core L1", out_page);
     const uint32_t write_batch = plan->batch;
-    const CoreSplit split = split_work(device, total_out_sticks);
+    const ConcatCoreSplit split = concat_split_work(device, total_out_sticks);
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     ProgramDescriptor desc;
@@ -431,13 +443,13 @@ ProgramDescriptor create_descriptor_rm_width_nway(
         .total_size = plan->depth * out_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = kCbIn, .data_format = cb_data_format, .page_size = out_page}}},
+            .buffer_index = kConcatCbIn, .data_format = cb_data_format, .page_size = out_page}}},
     });
     desc.cbs.push_back(CBDescriptor{
         .total_size = scratch_page,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = kCbScratch, .data_format = cb_data_format, .page_size = scratch_page}}},
+            .buffer_index = kConcatCbScratch, .data_format = cb_data_format, .page_size = scratch_page}}},
     });
 
     // All N inputs share one memory configuration (enforced by
@@ -447,22 +459,22 @@ ProgramDescriptor create_descriptor_rm_width_nway(
     // Read batch matches write_batch, same as the 2-tensor width builder: the
     // CB depth above is only pipelined if the reader fills it write_batch
     // pages at a time instead of one page per barrier.
-    std::vector<uint32_t> reader_ct = {kCbIn, kCbScratch, n_inputs, out_page, write_batch, noc_alignment};
+    std::vector<uint32_t> reader_ct = {kConcatCbIn, kConcatCbScratch, n_inputs, out_page, write_batch, noc_alignment};
     TensorAccessorArgs(*input_tensors[0].buffer()).append_to(reader_ct);
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source = std::string(kKernelDir) + "reader_concat_rm_width_nway.cpp";
+    reader_desc.kernel_source = std::string(kConcatKernelDir) + "reader_concat_rm_width_nway.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = split.all_cores;
     reader_desc.compile_time_args = std::move(reader_ct);
     reader_desc.config = ReaderConfigDescriptor{};
 
-    std::vector<uint32_t> writer_ct = {kCbIn, out_page};
+    std::vector<uint32_t> writer_ct = {kConcatCbIn, out_page};
     TensorAccessorArgs(*dst).append_to(writer_ct);
     writer_ct.push_back(write_batch);
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kSharedWriter;
+    writer_desc.kernel_source = kConcatSharedWriter;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = split.all_cores;
     writer_desc.compile_time_args = std::move(writer_ct);
@@ -470,7 +482,7 @@ ProgramDescriptor create_descriptor_rm_width_nway(
 
     uint32_t start = 0;
     for (const auto& core : split.cores_in_order) {
-        const uint32_t n = work_for_core(split, core);
+        const uint32_t n = concat_work_for_core(split, core);
 
         KernelDescriptor::RTArgList reader_args;
         reader_args.reserve(2 + 3 * n_inputs);
