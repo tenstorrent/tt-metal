@@ -21,6 +21,7 @@ CMakeUserPresets.json
 
 /llk_out/
 /out/
+tracy_captures
 
 /test_*
 core_graph_lib/core_graph_lib_integration_tests
