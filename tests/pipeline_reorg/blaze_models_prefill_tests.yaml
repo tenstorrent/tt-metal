@@ -2,29 +2,33 @@
 
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions. Naming convention:
-#         "<Model>-<version>-<size> <unit under test> <accuracy|perf|determinism> <shape>"
+#         "(<Models>) <unit under test> <accuracy|perf|determinism> <shape>"
+#         * The model list LEADS, in parentheses, always -- one convention, not two. Comma-separate
+#           any number of them: "(Kimi-K2.6-1T)", "(Kimi-K2.6-1T, GLM-5.2-744B)". This keeps the
+#           models in one place and lets the unit under test read left-to-right after them.
 #         * Do NOT prefix with "Blaze - ": every job here is a Blaze job, so it carries no information.
 #         * Name the model the test actually runs, with version AND parameter count -- "GLM-5.2-744B",
-#           not "GLM"; "Kimi-K2.6-1T"/"Kimi-K2.7-1T"/"Kimi-K3-2.8T", not "Kimi". Multi-model jobs
-#           follow the "&" rule below. Op-level jobs with no model (CCL, SDPA) name the op.
+#           not "GLM"; "Kimi-K2.6-1T"/"Kimi-K2.7-1T"/"Kimi-K3-2.8T", not "Kimi". A job covering every
+#           gate model says so: "(all prefill gate models)".
+#         * Op-level jobs with no model take NO leading parenthesis and name the op instead
+#           -> "high_bw_all_gather CCL perf + accuracy"
 #         * Tag what is being gated: "accuracy" (PCC/golden compare), "perf", or "determinism".
 #         * Chunked tests state total ISL and chunk size as <isl>@<chunk>, e.g. "code_debug 55k@5k".
+#         * Nothing else goes in parentheses -- the leading "(...)" is the model list and only that,
+#           so a qualifier is trailing prose: "... 55k@5k vs golden trace", "... 55k@5k, SC4".
 #         * One separator, one meaning -- a job whose name reads several ways is the bug this
 #           convention exists to prevent:
 #             "+"  the distinct things this one job gates, each carrying its own shape
-#                  -> "MoE accuracy 12.5k + perf 25k"
+#                  -> "(GLM-5.2-744B) MoE accuracy 12.5k + perf 25k"
 #             ","  peers sharing a qualifier; binds tighter than "+". Either direction:
 #                  several shapes under one tag, or several tags under one shape
-#                  -> "MLA accuracy 100k, 128k"      (two shapes, one tag)
+#                  -> "(DeepSeek-V3-671B) MLA accuracy 100k, 128k"   (two shapes, one tag)
 #                  -> "ring MLA chunked 55k@5k perf, accuracy, determinism"  (one shape, three tags)
-#             "&"  two models. At three or more the unit leads and the models move to a trailing
-#                  "(...)" list, so the unit under test is not buried behind the model list
-#                  -> "DeepSeek-V3-671B & Kimi-K2.6-1T MLA chunked accuracy 10k@5k"
-#                  -> "KV cache table accuracy (DeepSeek-V3-671B, Kimi-K2.6-1T, GLM-5.2-744B)"
 #             "/"  components of one pipeline, not a list of gated things
 #                  -> "disaggregated prefill runner/producer"
-#           Never leave a shape whose binding is ambiguous: "MoE accuracy + perf 25k" cannot say
-#           whether 25k covers both tags, so give each tag its own shape or give neither one.
+#         * Entries are grouped by model in file order, in the same order the name reads: a
+#           cross-model section first, then one section per model, then op-level jobs. Keep a new
+#           entry inside its model's section rather than appending it at the end.
 #   cmd: The exact command to run (env vars must be inlined).
 #   test_type: Test type identifier for filtering (workflow_dispatch test-type selection).
 #   test_group: Group identifier for selecting multiple related tests at once.
@@ -46,7 +50,7 @@
 # `fabric_profile: torus_xy` to the production TorusXY descriptor and certification environment.
 
 # Blackhole Galaxy DeepSeek Prefill tests
-- name: "MoE gate accuracy (all prefill gate models)"
+- name: "(all prefill gate models) MoE gate accuracy"
   fabric_profile: torus_xy
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
@@ -71,7 +75,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T MLA chunked accuracy 10k@5k + determinism 5k"
+- name: "(Kimi-K2.6-1T) MLA chunked accuracy 10k@5k + determinism 5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -91,7 +95,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K3-2.8T MLA chunked accuracy 10k@5k + determinism 5k@5k"
+- name: "(Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -111,7 +115,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K3-2.8T MLA chunked accuracy 55k@5k (vs golden trace)"
+- name: "(Kimi-K3-2.8T) MLA chunked accuracy 55k@5k vs golden trace"
   fabric_profile: torus_xy
   cmd: |
     export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3
@@ -131,7 +135,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K3-2.8T MLA chunked perf 55k@5k"
+- name: "(Kimi-K3-2.8T) MLA chunked perf 55k@5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -150,7 +154,7 @@
   team: models
   sp_config: sc1
 
-- name: "DeepSeek-V4-Flash HCA chunked accuracy 6k@5k"
+- name: "(DeepSeek-V4-Flash) HCA chunked accuracy 6k@5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -168,7 +172,7 @@
   team: models
   sp_config: sc1
 
-- name: "DeepSeek-V4-Flash HCA chunked perf 10k@5k"
+- name: "(DeepSeek-V4-Flash) HCA chunked perf 10k@5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -186,7 +190,7 @@
   team: models
   sp_config: sc1
 
-- name: "KV cache table accuracy (Kimi-K2.6-1T, GLM-5.2-744B)"
+- name: "(Kimi-K2.6-1T, GLM-5.2-744B) KV cache table accuracy"
   fabric_profile: torus_xy
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
@@ -213,7 +217,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T chunked prefill padded accuracy 15k@5k (no trace)"
+- name: "(Kimi-K2.6-1T) chunked prefill padded accuracy 15k@5k no-trace"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -243,7 +247,7 @@
 # that the padded forward is captured once as a ttnn trace and replayed per chunk. Run as its own
 # entry (not a second -k term) so a trace-only regression is attributed on the CI dashboard instead
 # of being hidden inside a two-case job.
-- name: "Kimi-K2.6-1T chunked prefill padded accuracy 15k@5k (trace)"
+- name: "(Kimi-K2.6-1T) chunked prefill padded accuracy 15k@5k traced"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -267,7 +271,7 @@
   team: models
   sp_config: sc1
 
-- name: "GLM-5.2-744B sparse MLA accuracy + determinism (incl. chunked 5k@1k)"
+- name: "(GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -291,7 +295,7 @@
   team: models
   sp_config: sc1
 
-- name: "GLM-5.2-744B MoE accuracy 12.5k + perf 25k"
+- name: "(GLM-5.2-744B) MoE accuracy 12.5k + perf 25k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -310,7 +314,7 @@
   team: models
   sp_config: sc1
 
-- name: "GLM-5.2-744B prefill block accuracy 5k"
+- name: "(GLM-5.2-744B) prefill block accuracy 5k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -336,7 +340,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T MoE accuracy 5k + perf 25k"
+- name: "(Kimi-K2.6-1T) MoE accuracy 5k + perf 25k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -354,7 +358,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K3-2.8T MoE accuracy 5k"
+- name: "(Kimi-K3-2.8T) MoE accuracy 5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -372,7 +376,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T & Kimi-K3-2.8T MoE perf 5k"
+- name: "(Kimi-K2.6-1T, Kimi-K3-2.8T) MoE perf 5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -441,7 +445,7 @@
   team: ttnn
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T chunked prefill perf code_debug 55k@5k (no trace)"
+- name: "(Kimi-K2.6-1T) chunked prefill perf code_debug 55k@5k no-trace"
   fabric_profile: torus_xy
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
@@ -478,7 +482,7 @@
 # Trace twin of the entry above: same 61 layers / 11 chunks / 10 iterations, but the chunk forward
 # is captured once and replayed. Separate entry so the two per-chunk timing tables are attributed
 # independently -- a traced-vs-untraced perf delta is the number this pair exists to surface.
-- name: "Kimi-K2.6-1T chunked prefill perf code_debug 55k@5k (trace)"
+- name: "(Kimi-K2.6-1T) chunked prefill perf code_debug 55k@5k traced"
   fabric_profile: torus_xy
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
@@ -512,7 +516,7 @@
   team: models
   sp_config: sc1
 
-- name: "GLM-5.2-744B chunked prefill perf code_debug 55k@5k"
+- name: "(GLM-5.2-744B) chunked prefill perf code_debug 55k@5k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -534,7 +538,7 @@
   team: models
   sp_config: sc1
 
-- name: "GLM-5.2-744B chunked prefill accuracy code_debug 55k@5k"
+- name: "(GLM-5.2-744B) chunked prefill accuracy code_debug 55k@5k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -556,7 +560,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T DFlash drafter accuracy"
+- name: "(Kimi-K2.6-1T) DFlash drafter accuracy"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -577,7 +581,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T prefill runner accuracy code_debug 55k@5k"
+- name: "(Kimi-K2.6-1T) prefill runner accuracy code_debug 55k@5k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -610,7 +614,7 @@
 # 4-galaxy (SC4-blitz) disaggregated prefill: a 4-rank background runner opens the mesh, loads
 # Kimi-2.7, warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less
 # producer then reads it back and PCCs it against the golden KV cache.
-- name: "Kimi-K2.7-1T disaggregated prefill runner/producer KV accuracy 55k@5k (SC4)"
+- name: "(Kimi-K2.7-1T) disaggregated prefill runner/producer KV accuracy 55k@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -636,7 +640,7 @@
 # its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
 # Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
 # covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
-- name: "GLM-5.2-744B disaggregated prefill runner/producer KV accuracy 55k@5k (SC4)"
+- name: "(GLM-5.2-744B) disaggregated prefill runner/producer KV accuracy 55k@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -664,7 +668,7 @@
 #   PREFILL_TRACE_DIR -> /mnt/models/MiniMaxAI/MiniMax-M3-ref/golden
 #   TT_CACHE_PATH     -> optional; defaults under HF_MODEL. Prefill the tilized
 #                       tensor_cache_bfp8_{MeshShape(8,4)} there or CI will cold-build for hours.
-- name: "MiniMax-M3-428B chunked prefill KV accuracy longbook 55k@5k"
+- name: "(MiniMax-M3-428B) chunked prefill KV accuracy longbook 55k@5k"
   cmd: |
     export LOGURU_LEVEL=INFO
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
@@ -703,7 +707,7 @@
 # #52775 here.
 # If this test fails: first check whether it is a true regression or a performance improvement.
 # If neither (CI noise), widen this range or comment out this test due to CI instability.
-- name: "MiniMax-M3-428B chunked prefill perf longbook 55k@5k"
+- name: "(MiniMax-M3-428B) chunked prefill perf longbook 55k@5k"
   cmd: |
     export LOGURU_LEVEL=INFO
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
