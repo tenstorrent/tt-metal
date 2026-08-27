@@ -40,7 +40,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
-from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_OUTPUT_TOKENS
+from models.demos.deepseek_v3_d_p.utils.chunk_config import ISL_TOKENS_PER_CHIP, PREFILL_CHUNK_OUTPUT_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_1K_PATH,
@@ -93,8 +93,8 @@ def _ci_unsupported_param_combos(**params):
 )
 @pytest.mark.parametrize(
     "isl_total",
-    # One entry per SP factor the mesh list below covers, each carrying ISL_TOKENS_PER_CHIP on
-    # every chip: 640 x {1, 2, 4, 8}. Pick the one matching the mesh under test.
+    # One entry per SP factor the mesh list below covers; the body skips every pair that does not
+    # land ISL_TOKENS_PER_CHIP on each chip, so only the matching (mesh, isl) combinations run.
     [640, 1280, 2560, 5120],
     ids=["isl_640", "isl_1k28", "isl_2k56", "isl_5k"],
 )
@@ -144,9 +144,15 @@ def test_prefill_block_loop(
     if state_dict is None:
         pytest.skip("State dict not available (no pretrained weights)")
 
+    # Only 640 tokens/chip is tested, so the isl_total x mesh cross product is pruned to the pairs
+    # that land it.
+    if isl_total != ISL_TOKENS_PER_CHIP * mesh_device.shape[0]:
+        pytest.skip(
+            f"only {ISL_TOKENS_PER_CHIP} tokens/chip is tested; {tuple(mesh_device.shape)} needs "
+            f"isl_total={ISL_TOKENS_PER_CHIP * mesh_device.shape[0]}, got {isl_total}"
+        )
+
     # The 4x4 subtorus sweep is intentionally local/experimental until a dedicated CI owner exists.
-    # Keyed on the mesh, not the ISL: 2560 is now simply 640/chip x sp=4, which the 4x2 LoudBox
-    # shares, so an ISL-keyed skip would drop that coverage too.
     if (os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ) and tuple(mesh_device.shape) == (4, 4):
         pytest.skip("the 4x4 subtorus sweep is local/experimental; not run in CI")
 

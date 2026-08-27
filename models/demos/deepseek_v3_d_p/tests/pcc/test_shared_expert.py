@@ -16,6 +16,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -35,7 +36,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     [
         # Every case runs the one prefill ISL, which pins the matmul program configs to
         # per_core_M=1 -- the blocking prefill uses.
-        (ISL_TOKENS_PER_CHIP, 7 * 1024, 2 * 1024, ACTIVATION_SILU),
+        (ISL_TOKENS_PER_CHIP, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, ACTIVATION_SILU),
         # Kimi-K3: one shared-expert MLP at moe_intermediate_size * num_shared_experts = 3072 * 2.
         # Worth its own case because every prior model has num_shared_experts == 1, so hidden_dim and
         # the shared intermediate coincided and 6144 was never exercised here.

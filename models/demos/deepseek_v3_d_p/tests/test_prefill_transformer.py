@@ -81,8 +81,6 @@ DETERMINISM_PCC_THRESHOLD = 1.0
 INFINITEBENCH_SUBSET_NAMES = {"longbook_qa_eng"}
 # input_source meaning "this variant's own golden" — naming it after a prompt would go stale.
 VARIANT_DEFAULT_TRACE = "variant_default"
-# The one ISL every prefill test targets: 5120 global = 640 tokens on each of the 8 SP chips.
-SEQ_LEN_5K = PREFILL_CHUNK_OUTPUT_TOKENS
 
 
 def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_padded_tokens, padding_side):
@@ -855,7 +853,7 @@ def run_model(
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_5K, 8)],
+    [(PREFILL_CHUNK_OUTPUT_TOKENS, 8)],
     ids=["5k"],
 )
 @pytest.mark.parametrize(
@@ -970,7 +968,7 @@ def test_ds_prefill_transformer(
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_5K, 8)],
+    [(PREFILL_CHUNK_OUTPUT_TOKENS, 8)],
     ids=["5k"],
 )
 @pytest.mark.parametrize(
@@ -1074,7 +1072,7 @@ def test_kimi_prefill_transformer(
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_5K, 8)],
+    [(PREFILL_CHUNK_OUTPUT_TOKENS, 8)],
     ids=["5k"],
 )
 @pytest.mark.parametrize(

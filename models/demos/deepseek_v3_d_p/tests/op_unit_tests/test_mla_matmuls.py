@@ -477,12 +477,8 @@ def test_mla_mm(
     out_mem_config,
     skip_host_comparison,
 ):
-    # The SEQ_LEN_25K rows carry six hand-tuned program configs (prog_config_*_bh_25k) whose
-    # per_core_M / out_subblock_h / grid were sized for 6400 rows = 200 tiles. The prefill ISL is now
-    # 640 tokens/chip = 20 tiles, so those values are wrong or outright illegal at the new shape, and
-    # re-deriving them by eye is the class of bug commit 335fc565ea8 ("guard tuned matmul configs
-    # against the wrong K") already had to fix once. Skipped rather than re-guessed until the configs
-    # are re-tuned.
+    # prog_config_*_bh_25k are hand-tuned for 6400 rows (200 tiles); the ISL is now 20 tiles, so
+    # per_core_M / out_subblock_h are invalid at the new shape.
     if in0_z == SEQ_LEN_25K:
         pytest.skip(
             "tuned program configs are sized for 6400 rows (3200 tokens/chip); needs re-tuning for "

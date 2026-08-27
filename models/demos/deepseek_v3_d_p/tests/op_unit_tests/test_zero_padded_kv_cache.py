@@ -314,7 +314,7 @@ def test_zero_padded_kv_cache_layers_users(
     tp = mesh_shape[1]
     kvpe = 64
     chunk_size_global = PREFILL_CHUNK_OUTPUT_TOKENS
-    seq_len_cache = 5120
+    seq_len_cache = chunk_size_global
     seq_len_local = seq_len_cache // sp
     num_batches = num_users * num_layers
     target_batch = slot_idx * num_layers + layer_idx
@@ -417,7 +417,7 @@ def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, slot_idx, valid
     sp = mesh_shape[sp_axis]
     kvpe = 64
     chunk_size_global = PREFILL_CHUNK_OUTPUT_TOKENS
-    seq_len_cache = 5120
+    seq_len_cache = chunk_size_global
     seq_len_local = seq_len_cache // sp
     num_users, num_layers = 2, 1
 
@@ -478,7 +478,7 @@ def test_zero_padded_kv_cache_tensor_program_reuse(mesh_device):
     sp_axis = 0
     kvpe = 64
     chunk_size_global = PREFILL_CHUNK_OUTPUT_TOKENS
-    seq_len_cache = 5120
+    seq_len_cache = chunk_size_global
     num_users, num_layers = 2, 1
 
     cache = _init_cache_filled_with_ones(

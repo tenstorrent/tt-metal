@@ -15,16 +15,12 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla"
 
-# Both proxies run the one prefill ISL at 640 tokens/chip. 8x4 takes it literally (max_sl: 5120
-# global / sp=8); 2x4 scales it (scaled_sl: 1280 global / sp=2), since max_sl there would put 2560
-# on each chip. Selecting seq5k rather than seq100k keeps the id honest about the workload.
+# 640 tokens/chip on both: 8x4 takes seq5k literally, 2x4 scales it to 1280 global.
 _CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq5k and scaled_sl and random and fabric2d-2x4' --wrapper-invocation"
 _CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq5k and max_sl and random and torus-xy-8x4' --wrapper-invocation"
 
-# Kimi K2.6 chunked prefill: 50k KV-cache prefix + one fresh 5k chunk (chunk_size_global=5120). On
-# the 8x4 Galaxy (sp=8) this lands chunk_local=640 per chip, exercising the num_heads=64 chunked-only
-# 640 matmul/SDPA configs. Functional reference (no PCC) keeps the measured region to the single
-# forward (the 50k prefix is preloaded host->device before the MLA_START signpost, so it is not timed).
+# Kimi K2.6 chunked prefill: 50k cache + one 5k chunk. The 50k prefix is preloaded before the
+# MLA_START signpost, so only the single forward is timed.
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
 _CMD_CHUNKED_8X4 = (
     f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and kimi and func and torus-xy-8x4' --wrapper-invocation"
@@ -69,8 +65,8 @@ def test_deepseek_v3_mla_perf_loudbox():
     """Retain the existing 2x4 LoudBox proxy on unwrapped Fabric2D."""
     run_mla_perf_loudbox(
         command_2x4=_CMD_2X4,
-        # Re-measured 2026-08-22 at 640 tokens/chip on the BH LoudBox bh-lb-15 (8x p150b, DDR 16000
-        # nominal, 150W TDP limit). Mean of 14 runs, 2.658-2.664 ms, 0.25% peak to peak.
+        # Re-measured 2026-08-22 at 640 tokens/chip, BH LoudBox bh-lb-15, DDR 16000, 150W.
+        # Mean of 14 runs, 2.658-2.664 ms, 0.25% peak to peak.
         expected_ns_2x4=2_660_615,
         model_name_2x4="deepseek_v3_mla_lb_2x4_fabric2d",
         subdir="deepseek_v3_mla",
@@ -89,8 +85,6 @@ def test_deepseek_v3_mla_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
-        # Migration starting threshold: measured 2026-06-10 on bh-glx-110-c08u02 with FABRIC_1D.
-        # The first certified TorusXY result must be used to recalibrate it.
         # Measured 2026-08-22 on the 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified
         # (DDR 16000 nominal, high power).
         # Two runs 3.894 / 3.886 ms, spread 0.21% -- the tightest of the five.

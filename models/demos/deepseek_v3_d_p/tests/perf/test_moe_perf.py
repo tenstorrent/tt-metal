@@ -40,15 +40,12 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Both re-measured 2026-08-22 at 640 tokens/chip on the BH LoudBox bh-lb-15 (8x p150b,
-        # DDR 16000 nominal, 150W TDP limit). Mean of 14 runs each; 30/30 gate runs passed.
-        # 5.876-5.921 ms, 0.76% peak to peak. Supersedes the 2026-08-21 recalibration, which was
-        # still taken at 3200 tokens/chip.
+        # Re-measured 2026-08-22 at 640 tokens/chip, BH LoudBox bh-lb-15, DDR 16000, 150W.
+        # Mean of 14 runs, 5.876-5.921 ms, 0.76% peak to peak.
         expected_ns_8x1=5_895_298,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # 9.548-9.655 ms, 1.12% peak to peak -- the widest of the four LoudBox gates, still inside
-        # the 3% band below.
+        # Same box and method. 9.548-9.655 ms, 1.12% peak to peak.
         expected_ns_2x4=9_601_530,
         model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
@@ -69,9 +66,8 @@ def test_deepseek_v3_moe_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad0,
-        # Measured 2026-08-22 on the 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified
-        # (DDR 16000 nominal, high power).
-        # Two runs 6.155 / 6.070 ms, spread 1.38%. Supersedes a FABRIC_1D-era number.
+        # Measured 2026-08-22, 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified, DDR 16000.
+        # Two runs 6.155 / 6.070 ms, spread 1.38%.
         expected_device_perf_ns_per_iteration=6_112_530,
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4",
@@ -93,9 +89,8 @@ def test_deepseek_v3_moe_perf_galaxy_pad50():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad50,
-        # Measured 2026-08-22 on the 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified
-        # (DDR 16000 nominal, high power).
-        # Two runs 5.223 / 5.188 ms, spread 0.67%. Supersedes a FABRIC_1D-era number.
+        # Measured 2026-08-22, 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified, DDR 16000.
+        # Two runs 5.223 / 5.188 ms, spread 0.67%.
         expected_device_perf_ns_per_iteration=5_205_872,
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4_pad50",

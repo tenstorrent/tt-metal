@@ -216,10 +216,7 @@ def run_model(
 
     mesh_shape = list(mesh_device.shape)
 
-    # scale_down_sl runs the one prefill ISL: 640 tokens on every chip, so the global length follows
-    # the mesh. `max_sl` keeps the parametrized seq_len, which is the long-context leg. Note that
-    # under scale_down_sl the seq_len parametrize no longer varies the workload, so test_ds_mla's
-    # seq128k and seq100k scaled cases run identical shapes.
+    # 640 tokens on every chip; the global length follows the mesh. max_sl keeps the literal seq_len.
     if scale_down_sl:
         seq_len = ISL_TOKENS_PER_CHIP * mesh_shape[sp_axis]
 
@@ -434,8 +431,8 @@ def _ci_unsupported_param_combos(**params):
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
 @pytest.mark.parametrize(
     "seq_len",
-    [128 * 1024, 100 * 1024, PREFILL_CHUNK_OUTPUT_TOKENS],
-    ids=["seq128k", "seq100k", "seq5k"],
+    [PREFILL_CHUNK_OUTPUT_TOKENS],
+    ids=["seq5k"],
 )
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])

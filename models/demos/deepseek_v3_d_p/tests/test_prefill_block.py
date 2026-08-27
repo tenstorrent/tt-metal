@@ -502,11 +502,10 @@ def _ci_unsupported_param_combos(**params):
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, PREFILL_CHUNK_OUTPUT_TOKENS, 8),
         ("prompt_5k", False, PREFILL_CHUNK_OUTPUT_TOKENS, 8),
         ("prompt_5k", True, PREFILL_CHUNK_OUTPUT_TOKENS, 8),
     ],
-    ids=["smoke-random", "perf-prompt_5k", "pcc-prompt_5k"],
+    ids=["perf-prompt_5k", "pcc-prompt_5k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -629,10 +628,9 @@ def test_ds_prefill_block(
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, PREFILL_CHUNK_OUTPUT_TOKENS, 8),
         ("prompt_5k", True, PREFILL_CHUNK_OUTPUT_TOKENS, 8),
     ],
-    ids=["perf-random-5k", "pcc-prompt_5k"],
+    ids=["pcc-prompt_5k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",

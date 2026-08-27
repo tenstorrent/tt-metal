@@ -39,12 +39,6 @@ _SUBTORUS_XY4_ENV = {
     ),
 }
 
-_ISL_REBASELINE_SKIP = pytest.mark.skip(
-    reason="baseline was measured at 3200 tokens/chip; the ISL is now 640/chip and device time does "
-    "not scale with ISL (fixed dispatch overhead, CCL latency floors, expert-loop tails). Re-measure "
-    "on the gating box, then drop this mark."
-)
-
 _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
     reason="4x4 subtorus MoE uses the 128-expert host gate; its device-perf is host-stall-dominated "
     "and needs a new baseline before the gate can be re-enabled"
@@ -56,9 +50,8 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
     [
         pytest.param(
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4-2link and layer3 and gate_device and no_ref and isl_1k28' --wrapper-invocation",
-            14_179_641,  # Re-measured 2026-08-22 at 640 tokens/chip on the BH LoudBox bh-lb-15
-            # (8x p150b, DDR 16000 nominal, 150W TDP limit). Mean of 14 runs, 14.153-14.243 ms,
-            # 0.64% peak to peak.
+            14_179_641,  # Re-measured 2026-08-22 at 640 tokens/chip, BH LoudBox bh-lb-15, DDR 16000,
+            # 150W. Mean of 14 runs, 14.153-14.243 ms, 0.64% peak to peak.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",
             1,
@@ -99,7 +92,6 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             1,
             0.03,
             "subtorus_4x4_layer0_dense_real_weights_torus_y",
-            marks=_ISL_REBASELINE_SKIP,
         ),
         pytest.param(
             f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer3 and gate_device and no_ref and isl_2k56' --wrapper-invocation",
