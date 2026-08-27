@@ -52,7 +52,7 @@ pre-agent-steps:
         LINES=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)
         gh pr view "$PR_NUMBER" \
           --repo "$EXPR_GITHUB_REPOSITORY" \
-          --json number,title,body,headRefName,headRefOid,additions,deletions,changedFiles,files \
+          --json number,title,body,baseRefName,headRefName,headRefOid,additions,deletions,changedFiles,files,author,reviewRequests \
           > /tmp/gh-aw/agent/pr-meta.json
         if [ -z "$CURRENT_HEAD_SHA" ]; then
           CURRENT_HEAD_SHA="$(jq -r '.headRefOid // empty' /tmp/gh-aw/agent/pr-meta.json)"
@@ -70,6 +70,105 @@ pre-agent-steps:
         COMMENT_COUNT=$(jq 'length' /tmp/gh-aw/agent/pr-review-comments.json)
         echo "Pre-fetched PR diff (${LINES} lines), metadata, and ${COMMENT_COUNT} existing review comments for head ${CURRENT_HEAD_SHA:-unknown}"
       fi
+  - name: Pre-fetch CODEOWNERS inputs for the split check
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPR_GITHUB_REPOSITORY: ${{ github.repository }}
+      SPLIT_MIN_CHANGED_FILES: "20"
+    run: |
+      set -euo pipefail
+      # The agent shell has no GH_TOKEN -- gh-aw strips credentials before the
+      # agent step and `tools.github` runs in local MCP mode, which does not
+      # authenticate the CLI. Every gh call the split check needs therefore
+      # happens here, where the token exists, and the agent only reads files.
+      OUT=/tmp/gh-aw/agent
+      rm -f "$OUT/split-check.enabled"
+
+      # This check is advisory. Every failure below disables it and returns 0:
+      # a split proposal is worth less than the domain review, so nothing here
+      # may fail the job.
+      [ -f "$OUT/pr-meta.json" ] || { echo "No pr-meta.json; split check disabled"; exit 0; }
+
+      CHANGED=$(jq -r '.changedFiles // 0' "$OUT/pr-meta.json" 2>/dev/null || echo 0)
+      case "$CHANGED" in ''|null|*[!0-9]*) CHANGED=0 ;; esac
+      if [ "$CHANGED" -lt "$SPLIT_MIN_CHANGED_FILES" ]; then
+        echo "Split check skipped: ${CHANGED} changed files < ${SPLIT_MIN_CHANGED_FILES}"
+        exit 0
+      fi
+
+      PR_NUMBER=$(jq -r '.number // empty' "$OUT/pr-meta.json")
+      BASE=$(jq -r '.baseRefName // empty' "$OUT/pr-meta.json")
+      HEAD_SHA=$(jq -r '.headRefOid // empty' "$OUT/pr-meta.json")
+      if [ -z "$PR_NUMBER" ] || [ -z "$BASE" ]; then
+        echo "::warning::pr-meta.json has no number/baseRefName; split check disabled"
+        exit 0
+      fi
+
+      # /tmp/gh-aw/agent is cached across runs on this PR. Re-fetching a
+      # 3000-file list on every push is the expensive part, so reuse it when it
+      # was built for this same head commit.
+      if [ -n "$HEAD_SHA" ] && [ -f "$OUT/pr-split-context.json" ] && [ -f "$OUT/pr-files.txt" ] \
+         && [ -f "$OUT/CODEOWNERS.base" ] \
+         && [ "$(jq -r '.head_sha // empty' "$OUT/pr-split-context.json" 2>/dev/null)" = "$HEAD_SHA" ]; then
+        touch "$OUT/split-check.enabled"
+        echo "Split check: reusing cached inputs for head ${HEAD_SHA}"
+        exit 0
+      fi
+
+      # CODEOWNERS: first found of three locations, on the BASE branch, raw
+      # media type. Default JSON leaves .content empty above 1MB while GitHub
+      # loads a CODEOWNERS up to 3MB, so a valid large file would read as
+      # missing. An empty file parses as zero rules and reports every path
+      # unowned -- "no approvals needed" off a transient failure -- so abort
+      # instead of leaving one behind.
+      FOUND=""
+      for p in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
+        if gh api -H "Accept: application/vnd.github.raw" \
+             "repos/$EXPR_GITHUB_REPOSITORY/contents/$p?ref=$BASE" \
+             > "$OUT/CODEOWNERS.base" 2>/dev/null && [ -s "$OUT/CODEOWNERS.base" ]; then
+          FOUND="$p"; break
+        fi
+      done
+      if [ -z "$FOUND" ]; then
+        rm -f "$OUT/CODEOWNERS.base"
+        echo "::warning::No CODEOWNERS found on ${BASE}; split check disabled for this run"
+        exit 0
+      fi
+
+      # pr-meta.json's `files` comes from `gh pr view --json files`, which
+      # builds files(first: 100) and does not paginate -- it caps silently at
+      # 100, on exactly the wide PRs this check targets. Fetch it properly.
+      if ! gh api --paginate "repos/$EXPR_GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" \
+             --jq '.[].filename' > "$OUT/pr-files.txt" 2>/dev/null; then
+        rm -f "$OUT/pr-files.txt" "$OUT/CODEOWNERS.base"
+        echo "::warning::Could not list PR files; split check disabled for this run"
+        exit 0
+      fi
+      FETCHED=$(wc -l < "$OUT/pr-files.txt")
+
+      # Rulesets, not classic branch protection: the latter needs
+      # administration:read, which this workflow does not hold. On this repo
+      # two overlapping pull_request rulesets compose most-restrictive, and
+      # rulesets is the reading that answers correctly.
+      REQUIRED=$(gh api "repos/$EXPR_GITHUB_REPOSITORY/rules/branches/$BASE" \
+        --jq '[.[] | select(.type=="pull_request") | .parameters.required_approving_review_count]
+              | max // 0' 2>/dev/null || echo 0)
+      # Fall back to no floor rather than a malformed --argjson, which would
+      # abort the step and take the whole review down with it.
+      case "$REQUIRED" in ''|null|*[!0-9]*) REQUIRED=0 ;; esac
+
+      jq -n --arg base "$BASE" --arg codeowners "$FOUND" --arg head_sha "$HEAD_SHA" \
+            --argjson changed "$CHANGED" --argjson fetched "$FETCHED" \
+            --argjson required "$REQUIRED" \
+            --arg author "$(jq -r '.author.login // ""' "$OUT/pr-meta.json")" \
+            --argjson requested "$(jq -c '[.reviewRequests[]? | (.name // .login)]' "$OUT/pr-meta.json")" \
+            '{base: $base, codeowners_path: $codeowners, head_sha: $head_sha,
+              changed_files: $changed, files_fetched: $fetched,
+              required_approvals: $required,
+              author: $author, requested_reviewers: $requested}' \
+        > "$OUT/pr-split-context.json"
+      touch "$OUT/split-check.enabled"
+      echo "Split check enabled: ${FETCHED}/${CHANGED} files, CODEOWNERS at ${FOUND} on ${BASE}, floor ${REQUIRED}"
 max-daily-ai-credits: 10000
 if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
 "on":
@@ -91,7 +190,7 @@ permissions:
   pull-requests: read
 network: defaults
 tools:
-  bash: ["cat", "ls", "find", "grep", "head", "tail", "wc", "gh", "python3"]
+  bash: ["cat", "ls", "find", "grep", "head", "tail", "wc", "python3"]
   github:
     toolsets: [pull_requests, repos]
     lockdown: false
@@ -230,15 +329,33 @@ These describe **impact, not merge gates**. This workflow is advisory and cannot
 
 ### Step 4b: Split check — wide PRs only
 
-**Gate: run this only when `pr-meta.json` reports `changedFiles >= 20`.** Below that a PR rarely spans enough CODEOWNERS rules for a split to save an approval, and the check costs a CODEOWNERS fetch plus a paginated file list. Skip silently when the gate is not met — do not mention it.
+**Gate: `/tmp/gh-aw/agent/split-check.enabled` exists.** If it does not, skip this step entirely and say nothing about it — the PR is below the width threshold, or it has no CODEOWNERS on its base branch. Do not reconstruct the check by hand.
 
-When the gate is met, load `/tt-split-pr-by-codeowners` and follow it. Three deviations for this workflow:
+**You have no authenticated `gh` in this step, and you do not need one.** Credentials are stripped before the agent runs, so every input was fetched for you into `/tmp/gh-aw/agent/`:
 
-- **Do not use `pr-meta.json`'s `files` list.** It comes from `gh pr view --json files`, which builds `files(first: 100)` and does not paginate — it silently caps at 100 on exactly the PRs this check targets. Fetch the list yourself, as the skill directs: `gh api --paginate repos/${{ github.repository }}/pulls/<n>/files --jq '.[].filename'`, and pass `--expect-files` from `changedFiles` so a short list fails loudly.
-- **Skip the classic branch-protection call.** `repos/…/branches/<base>/protection` needs `administration: read`, which this workflow deliberately does not hold. Use `repos/${{ github.repository }}/rules/branches/<base>` alone — per the skill's own validation it is the reading that answers correctly on this repo, where two overlapping rulesets compose most-restrictive. Take `required_approving_review_count` from it and pass `--required-approvals`.
-- **Exclude the PR author** via `--exclude`: GitHub never accepts an author as a reviewer of their own PR, and leaving them in the pool can report a minimum that cannot occur.
+| File | Contents |
+|---|---|
+| `pr-split-context.json` | `base`, `codeowners_path`, `changed_files`, `files_fetched`, `required_approvals`, `author`, `requested_reviewers` |
+| `pr-files.txt` | The full changed-file list, paginated — **use this, not `pr-meta.json`'s `files`**, which caps at 100 |
+| `CODEOWNERS.base` | CODEOWNERS as it exists on the base branch, first-found of the three locations |
 
-Report the result in Step 6 as a `CONSIDER`-level note in its own `<details>` block, never as an inline comment and never as a MUST-FIX — a split is a judgment call about review cost, not a defect. **Recommending no split is the expected outcome and must be stated plainly** when the cover is already small; say nothing at all rather than manufacturing a proposal. The skill plans only: propose the slices, never open or push anything.
+Load `/tt-split-pr-by-codeowners` for the semantics and the judgement, and run its matcher against those files:
+
+```bash
+python3 .github/skills/tt-split-pr-by-codeowners/scripts/codeowners_map.py \
+  --codeowners /tmp/gh-aw/agent/CODEOWNERS.base \
+  --files-from /tmp/gh-aw/agent/pr-files.txt \
+  --expect-files <changed_files> \
+  --required-approvals <required_approvals> \
+  --exclude <author> \
+  --json
+```
+
+`--exclude <author>` is not optional: GitHub never accepts an author as a reviewer of their own PR, so leaving them in the candidate pool can report a minimum approval count that cannot occur.
+
+Read the skill's fetching guidance as **already satisfied** — do not re-run its `gh` snippets. If `files_fetched` is below `changed_files`, or the matcher reports `cover_is_exact: false`, say so in the report rather than presenting the number as settled.
+
+Report in Step 6 as a `CONSIDER`-level note in its own `<details>` block, never as an inline comment and never as a MUST-FIX — a split is a judgment call about review cost, not a defect. **Recommending no split is the expected outcome and must be stated plainly** when the cover is already small; say nothing rather than manufacturing a proposal. The skill plans only: propose the slices, never open or push anything.
 
 ### Step 5: Post inline review comments
 
