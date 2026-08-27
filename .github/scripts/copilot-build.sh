@@ -40,14 +40,30 @@ DOCKER_ARGS=(
 # Credentials arrive as *Agents* secrets, which the platform exposes to the agent
 # as plain environment variables. Copilot has no access to Actions secrets.
 if [[ -n "${GARAGE_S3_ACCESS_KEY:-}" && -n "${GARAGE_S3_SECRET_KEY:-}" ]]; then
+  # read-only: the agent reads CI's warm cache but must never write to it. A
+  # writable shared cache would let agent-executed code plant objects that
+  # trusted CI builds later consume. Within a session, repeated builds are
+  # served by the local cache mounted at /ccache above.
+  #
+  # NOTE: this flag is a guardrail, not a boundary - it is client-side, and the
+  # agent holds the credentials in its own environment. A genuinely read-only
+  # Garage key is the real fix; none exists yet (only one read-write pair is
+  # provisioned). Tracked in the PR discussion.
+  export CCACHE_REMOTE_STORAGE="s3://ccache|region=garage|prefix=tt-metal|endpoint_url=${GARAGE_ENDPOINT}|read-only=true"
+  export AWS_ACCESS_KEY_ID="${GARAGE_S3_ACCESS_KEY}"
+  export AWS_SECRET_ACCESS_KEY="${GARAGE_S3_SECRET_KEY}"
+  export AWS_DEFAULT_REGION=garage
+  export AWS_ENDPOINT_URL_S3="${GARAGE_ENDPOINT}"
+  # Passed by name, not value: `-e KEY=value` would put the secret in docker's
+  # argv, visible to process inspection and diagnostics on the runner.
   DOCKER_ARGS+=(
-    -e "CCACHE_REMOTE_STORAGE=s3://ccache|region=garage|prefix=tt-metal|endpoint_url=${GARAGE_ENDPOINT}"
-    -e "AWS_ACCESS_KEY_ID=${GARAGE_S3_ACCESS_KEY}"
-    -e "AWS_SECRET_ACCESS_KEY=${GARAGE_S3_SECRET_KEY}"
-    -e AWS_DEFAULT_REGION=garage
-    -e "AWS_ENDPOINT_URL_S3=${GARAGE_ENDPOINT}"
+    -e CCACHE_REMOTE_STORAGE
+    -e AWS_ACCESS_KEY_ID
+    -e AWS_SECRET_ACCESS_KEY
+    -e AWS_DEFAULT_REGION
+    -e AWS_ENDPOINT_URL_S3
   )
-  echo "[copilot-build] remote ccache enabled"
+  echo "[copilot-build] remote ccache enabled (read-only)"
 else
   echo "[copilot-build] WARNING: GARAGE_S3_ACCESS_KEY / GARAGE_S3_SECRET_KEY not set." >&2
   echo "[copilot-build]          Building with a COLD cache. A full cold build takes" >&2
