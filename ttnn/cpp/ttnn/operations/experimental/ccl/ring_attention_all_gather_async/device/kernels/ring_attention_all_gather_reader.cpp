@@ -16,45 +16,194 @@
 #include <cstdint>
 #include <utility>
 
-using address_t = uint32_t;
 using ttnn::ccl::Topology;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr uint32_t cb_output_id = get_compile_time_arg_val(1);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(2);  // 2
-constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(3);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(4);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
-constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(6));
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(7);  // 2
-constexpr uint32_t num_inputs = get_compile_time_arg_val(8);
-constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
-constexpr bool fuse_op = get_compile_time_arg_val(10);
-constexpr bool has_metadata = get_compile_time_arg_val(11);
-constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
-constexpr uint32_t num_links = get_compile_time_arg_val(13);
-// Host-derived even-ring split-forwarding gate: the parent fused op owns this protocol decision and
-// passes the same flag to both all-gather directions and its own receiver, so producer and consumer
-// cannot disagree. Standalone (non-fused) callers get the legacy even-ring topology gate from the host.
-constexpr bool split_forwarding_enabled = get_compile_time_arg_val(14);
+enum CompileTimeArg : uint32_t {
+    kMyChipId,
+    kCbOutputId,
+    kPacketSizeInPages,
+    kInputTensorPageSize,
+    kNumTargetsForwardDirection,
+    kNumTargetsBackwardDirection,
+    kTopology,
+    kContigPagesAdvanced,
+    kNumInputs,
+    kDirection,
+    kFuseOp,
+    kHasMetadata,
+    kNumLinks,
+    kSplitForwardingEnabled,
+    kOutputBankOwnedSchedule,
+    kNumDramBanks,
+    kPrefetchPackets,
+    kRoundRobinBankPackets,
+    kNumFixedCompileTimeArgs,
+};
+
+constexpr uint32_t my_chip_id = get_compile_time_arg_val(kMyChipId);
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(kCbOutputId);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(kPacketSizeInPages);
+constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(kInputTensorPageSize);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(kNumTargetsForwardDirection);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(kNumTargetsBackwardDirection);
+constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(kTopology));
+constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(kContigPagesAdvanced);
+constexpr uint32_t num_inputs = get_compile_time_arg_val(kNumInputs);
+constexpr bool direction = get_compile_time_arg_val(kDirection);  // 1 is forward, 0 is backward
+constexpr bool fuse_op = get_compile_time_arg_val(kFuseOp);
+constexpr bool has_metadata = get_compile_time_arg_val(kHasMetadata);
+constexpr uint32_t num_links = get_compile_time_arg_val(kNumLinks);
+// The parent fused op owns this protocol decision and passes the same flag to both
+// all-gather directions and its receiver, keeping producer and consumer in sync.
+constexpr bool split_forwarding_enabled = get_compile_time_arg_val(kSplitForwardingEnabled);
+constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
+constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
-// CB depth must be >= 2 * PREFETCH_PACKETS * packet_size_in_pages (see program_factory cb_num_pages).
-constexpr uint32_t PREFETCH_PACKETS = 4;
+// CB depth must be >= 2 * prefetch_packets * packet_size_in_pages (see program_factory cb_num_pages).
+constexpr uint32_t prefetch_packets = get_compile_time_arg_val(kPrefetchPackets);
+constexpr bool round_robin_bank_packets = get_compile_time_arg_val(kRoundRobinBankPackets);
+
+template <bool physically_contiguous, typename Accessor>
+FORCE_INLINE void prefetch_bank_owned_slices_round_robin(
+    const Noc& noc,
+    CircularBuffer& cb_output,
+    uint32_t cb_fifo_limit,
+    uint32_t cb_fifo_size,
+    const Accessor& accessor,
+    uint32_t accessor_page_base,
+    uint32_t output_page_base,
+    uint32_t valid_pages,
+    uint32_t first_bank,
+    uint32_t bank_stride) {
+    ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
+        output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
+    const auto next_packet = [&](uint32_t& pages_to_read) {
+        uint32_t first_page_offset = 0;
+        schedule.next_packet(first_page_offset, pages_to_read);
+        return accessor_page_base + first_page_offset;
+    };
+    if constexpr (physically_contiguous) {
+        prefetch_batch_read_physically_contiguous_packets<
+            input_tensor_page_size,
+            packet_size_in_pages,
+            prefetch_packets>(
+            noc, cb_output, schedule.packets_remaining, cb_fifo_limit, cb_fifo_size, accessor, next_packet);
+    } else {
+        prefetch_batch_read_packets<input_tensor_page_size, packet_size_in_pages, prefetch_packets>(
+            noc,
+            cb_output,
+            schedule.packets_remaining,
+            cb_fifo_limit,
+            cb_fifo_size,
+            accessor,
+            next_packet,
+            [](uint32_t first_page_id, uint32_t page) { return first_page_id + page * num_dram_banks; });
+    }
+}
+
+template <bool physically_contiguous, typename Accessor>
+FORCE_INLINE void prefetch_bank_owned_slices_whole_bank(
+    const Noc& noc,
+    CircularBuffer& cb_output,
+    uint32_t cb_fifo_limit,
+    uint32_t cb_fifo_size,
+    const Accessor& accessor,
+    uint32_t accessor_page_base,
+    uint32_t output_page_base,
+    uint32_t valid_pages,
+    uint32_t first_bank,
+    uint32_t bank_stride) {
+    for (uint32_t bank = first_bank; bank < num_dram_banks; bank += bank_stride) {
+        const auto bank_slice =
+            ring_attention_all_gather::get_bank_owned_slice(output_page_base, valid_pages, bank, num_dram_banks);
+        uint32_t pages_read = 0;
+        if constexpr (physically_contiguous) {
+            prefetch_batch_read_physically_contiguous_tiles<
+                input_tensor_page_size,
+                packet_size_in_pages,
+                prefetch_packets>(
+                noc,
+                cb_output,
+                pages_read,
+                bank_slice.page_count,
+                cb_fifo_limit,
+                cb_fifo_size,
+                accessor,
+                [&](uint32_t page) {
+                    return accessor_page_base + bank_slice.first_page_offset + page * num_dram_banks;
+                });
+        } else {
+            prefetch_batch_read_tiles<
+                input_tensor_page_size,
+                packet_size_in_pages,
+                prefetch_packets,
+                contig_pages_advanced>(
+                noc,
+                cb_output,
+                pages_read,
+                bank_slice.page_count,
+                cb_fifo_limit,
+                cb_fifo_size,
+                accessor,
+                [&](uint32_t page) {
+                    return accessor_page_base + bank_slice.first_page_offset + page * num_dram_banks;
+                });
+        }
+    }
+}
+
+template <bool physically_contiguous, typename Accessor>
+FORCE_INLINE void prefetch_bank_owned_slices(
+    const Noc& noc,
+    CircularBuffer& cb_output,
+    uint32_t cb_fifo_limit,
+    uint32_t cb_fifo_size,
+    const Accessor& accessor,
+    uint32_t accessor_page_base,
+    uint32_t output_page_base,
+    uint32_t valid_pages,
+    uint32_t first_bank,
+    uint32_t bank_stride) {
+    if constexpr (round_robin_bank_packets) {
+        prefetch_bank_owned_slices_round_robin<physically_contiguous>(
+            noc,
+            cb_output,
+            cb_fifo_limit,
+            cb_fifo_size,
+            accessor,
+            accessor_page_base,
+            output_page_base,
+            valid_pages,
+            first_bank,
+            bank_stride);
+    } else {
+        prefetch_bank_owned_slices_whole_bank<physically_contiguous>(
+            noc,
+            cb_output,
+            cb_fifo_limit,
+            cb_fifo_size,
+            accessor,
+            accessor_page_base,
+            output_page_base,
+            valid_pages,
+            first_bank,
+            bank_stride);
+    }
+}
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 15;
-    constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
+    constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, kNumFixedCompileTimeArgs + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
         std::get<num_inputs - 1>(inputs_args).next_compile_time_args_offset()>();
     constexpr uint32_t kMetaArgsOffset = has_metadata
                                              ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
-                                             : (page_size_base_idx + num_inputs);
+                                             : (kNumFixedCompileTimeArgs + num_inputs);
     constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
     constexpr uint32_t kKvMetaArgsOffset = has_metadata ? meta_args.next_compile_time_args_offset() : kMetaArgsOffset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kKvMetaArgsOffset>();
@@ -77,7 +226,7 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_tile_id_end;
     std::array<uint32_t, num_inputs> input_valid_pages;
     std::array<uint32_t, num_inputs> worker_link;
-    // Phase-1 input page base: nonzero only for single-slot gather (skip to the sliced input slot).
+    // Nonzero only for a single-slot gather, where it skips to the selected input slot.
     // The slice is always emitted into output slot 0, whatever the output batch size.
     std::array<uint32_t, num_inputs> input_batch_base;
 
@@ -87,10 +236,8 @@ void kernel_main() {
         output_tensor_Wt[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         output_tensor_Ht[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        (void)get_arg_val<uint32_t>(arg_idx++);  // structural tile_id_start placeholder
-        (void)get_arg_val<uint32_t>(arg_idx++);  // structural tile_id_end placeholder
         input_batch_base[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        // valid_pages_per_batch_head (slot 8): clamp the gather to the logical_n-valid slab prefix so
+        // valid_pages_per_batch_head (slot 6): clamp the gather to the logical_n-valid slab prefix so
         // only kv_actual-sized data moves. Uniform across cores/devices, so producer/consumer page
         // counts and the ring slice protocol stay matched. Default (full input) leaves it unchanged.
         const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
@@ -151,33 +298,51 @@ void kernel_main() {
     Noc noc_obj;
     CircularBuffer cb_output(cb_output_id);
 
-    // Push out our local slice
-    // For a single-slot gather this starts at the sliced batch slot; otherwise 0 (full batch).
-    uint32_t output_tile_id_start = 0;
-    // Read local slice to our buffers, before sending them over
+    // Read the local slice into the packet CB before sending it over Fabric.
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        output_tile_id_start = input_batch_base[input_idx];
-        uint32_t tiles_read = input_tile_id_start[input_idx];
-        uint32_t tiles_to_read = input_tile_id_end[input_idx];
-        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
-            prefetch_batch_read_tiles<
-                input_tensor_page_size,
-                packet_size_in_pages,
-                PREFETCH_PACKETS,
-                contig_pages_advanced>(
-                noc_obj,
-                cb_output,
-                tiles_read,
-                tiles_to_read,
-                cb_fifo_limit,
-                cb_fifo_size,
-                input_tensor_addrgens[input_idx],
-                [&](uint32_t tr) { return output_tile_id_start + tr; });
-            tiles_read = input_tile_id_start[input_idx];
-            tiles_to_read = input_tile_id_end[input_idx];
-            output_tile_id_start += input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
+        const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
+        const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+        if constexpr (output_bank_owned_schedule) {
+            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
+                const uint32_t input_page_base = input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
+                const uint32_t output_page_base =
+                    bh_idx * output_pages_per_batch_head + my_chip_id * input_pages_per_batch_head;
+                prefetch_bank_owned_slices<false>(
+                    noc_obj,
+                    cb_output,
+                    cb_fifo_limit,
+                    cb_fifo_size,
+                    input_tensor_addrgens[input_idx],
+                    input_page_base,
+                    output_page_base,
+                    input_valid_pages[input_idx],
+                    worker_link[input_idx],
+                    num_links);
+            }
+        } else {
+            // For a single-slot gather this starts at the sliced batch slot; otherwise 0 (full batch).
+            uint32_t input_page_base = input_batch_base[input_idx];
+            uint32_t tiles_read = input_tile_id_start[input_idx];
+            uint32_t tiles_to_read = input_tile_id_end[input_idx];
+            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+                prefetch_batch_read_tiles<
+                    input_tensor_page_size,
+                    packet_size_in_pages,
+                    prefetch_packets,
+                    contig_pages_advanced>(
+                    noc_obj,
+                    cb_output,
+                    tiles_read,
+                    tiles_to_read,
+                    cb_fifo_limit,
+                    cb_fifo_size,
+                    input_tensor_addrgens[input_idx],
+                    [&](uint32_t tr) { return input_page_base + tr; });
+                tiles_read = input_tile_id_start[input_idx];
+                tiles_to_read = input_tile_id_end[input_idx];
+                input_page_base += input_pages_per_batch_head;
+            }
         }
-        output_tile_id_start = 0;
     }
 
     uint32_t slices_received = 0;
@@ -250,62 +415,85 @@ void kernel_main() {
             // The last slice we relay is the diametric shard of our downstream neighbor
             const bool is_split_forwarded_slice = split_forwarding_enabled && (slices_received == writes_expected);
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-                uint32_t slice_Wt = input_tensor_Wt[input_idx];
-                uint32_t stride_Wt = output_tensor_Wt[input_idx];
-
-                // Packet-aligned midpoint of this input's per-batch-head page range (matches the writer)
-                const uint32_t total_pages = input_tile_id_end[input_idx] - input_tile_id_start[input_idx];
-                const uint32_t num_packets = (total_pages + packet_size_in_pages - 1) / packet_size_in_pages;
-                const uint32_t first_half_pages = (num_packets / 2) * packet_size_in_pages;
-                const bool split_this_input = is_split_forwarded_slice;
-                uint32_t relay_start = input_tile_id_start[input_idx];
-                uint32_t relay_end = input_tile_id_end[input_idx];
-                if (split_this_input) {
-                    if (direction == 0) {
-                        relay_end = input_tile_id_start[input_idx] + first_half_pages;
-                    } else {
-                        relay_start = input_tile_id_start[input_idx] + first_half_pages;
+                const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
+                const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+                if constexpr (output_bank_owned_schedule) {
+                    // Split the diametric slice by DRAM-bank ownership. Both directions together still
+                    // cover every bank, while each direction forwards roughly half the traffic.
+                    const uint32_t split_factor = is_split_forwarded_slice ? 2 : 1;
+                    const uint32_t first_bank =
+                        worker_link[input_idx] + (is_split_forwarded_slice ? direction * num_links : 0);
+                    const uint32_t bank_stride = num_links * split_factor;
+                    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
+                        const uint32_t output_page_base =
+                            bh_idx * output_pages_per_batch_head + actual_sender_chip_id * input_pages_per_batch_head;
+                        prefetch_bank_owned_slices<true>(
+                            noc_obj,
+                            cb_output,
+                            cb_fifo_limit,
+                            cb_fifo_size,
+                            output_tensor_addrgens[input_idx],
+                            output_page_base,
+                            output_page_base,
+                            input_valid_pages[input_idx],
+                            first_bank,
+                            bank_stride);
                     }
-                }
-
-                uint32_t tiles_read = relay_start;
-                uint32_t tiles_to_read = relay_end;
-                uint32_t output_tile_id_start = 0;
-                uint32_t pages_read_in_row = relay_start % slice_Wt;
-                uint32_t row_offset = (relay_start / slice_Wt) * stride_Wt;
-                if (gather_dim == 3) {
-                    output_tile_id_start = actual_sender_chip_id * input_tensor_Wt[input_idx];
                 } else {
-                    output_tile_id_start =
-                        actual_sender_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
-                }
-                for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
-                    prefetch_batch_read_tiles<
-                        input_tensor_page_size,
-                        packet_size_in_pages,
-                        PREFETCH_PACKETS,
-                        contig_pages_advanced>(
-                        noc_obj,
-                        cb_output,
-                        tiles_read,
-                        tiles_to_read,
-                        cb_fifo_limit,
-                        cb_fifo_size,
-                        output_tensor_addrgens[input_idx],
-                        [&](uint32_t /* tiles_read */) {
-                            const uint32_t pid = output_tile_id_start + row_offset + pages_read_in_row;
-                            pages_read_in_row++;
-                            if (pages_read_in_row >= slice_Wt) {
-                                row_offset += stride_Wt;
-                                pages_read_in_row = 0;
-                            }
-                            return pid;
-                        });
-                    pages_read_in_row = relay_start % slice_Wt;
-                    row_offset = (relay_start / slice_Wt) * stride_Wt;
-                    tiles_read = relay_start;
-                    tiles_to_read = relay_end;
-                    output_tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+                    // Packet-aligned midpoint of this worker's page range (matches the writer).
+                    const uint32_t total_pages = input_tile_id_end[input_idx] - input_tile_id_start[input_idx];
+                    const uint32_t num_packets = (total_pages + packet_size_in_pages - 1) / packet_size_in_pages;
+                    const uint32_t first_half_pages = (num_packets / 2) * packet_size_in_pages;
+                    uint32_t relay_start = input_tile_id_start[input_idx];
+                    uint32_t relay_end = input_tile_id_end[input_idx];
+                    if (is_split_forwarded_slice) {
+                        if constexpr (direction == 0) {
+                            relay_end = relay_start + first_half_pages;
+                        } else {
+                            relay_start += first_half_pages;
+                        }
+                    }
+
+                    uint32_t tiles_read = relay_start;
+                    uint32_t tiles_to_read = relay_end;
+                    uint32_t output_tile_id_start = 0;
+                    const uint32_t slice_Wt = input_tensor_Wt[input_idx];
+                    const uint32_t stride_Wt = output_tensor_Wt[input_idx];
+                    uint32_t pages_read_in_row = relay_start % slice_Wt;
+                    uint32_t row_offset = (relay_start / slice_Wt) * stride_Wt;
+                    if (gather_dim == 3) {
+                        output_tile_id_start = actual_sender_chip_id * slice_Wt;
+                    } else {
+                        output_tile_id_start = actual_sender_chip_id * input_pages_per_batch_head;
+                    }
+                    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+                        prefetch_batch_read_tiles<
+                            input_tensor_page_size,
+                            packet_size_in_pages,
+                            prefetch_packets,
+                            contig_pages_advanced>(
+                            noc_obj,
+                            cb_output,
+                            tiles_read,
+                            tiles_to_read,
+                            cb_fifo_limit,
+                            cb_fifo_size,
+                            output_tensor_addrgens[input_idx],
+                            [&](uint32_t /* tiles_read */) {
+                                const uint32_t pid = output_tile_id_start + row_offset + pages_read_in_row;
+                                pages_read_in_row++;
+                                if (pages_read_in_row >= slice_Wt) {
+                                    row_offset += stride_Wt;
+                                    pages_read_in_row = 0;
+                                }
+                                return pid;
+                            });
+                        pages_read_in_row = relay_start % slice_Wt;
+                        row_offset = (relay_start / slice_Wt) * stride_Wt;
+                        tiles_read = relay_start;
+                        tiles_to_read = relay_end;
+                        output_tile_id_start += output_pages_per_batch_head;
+                    }
                 }
             }
         }

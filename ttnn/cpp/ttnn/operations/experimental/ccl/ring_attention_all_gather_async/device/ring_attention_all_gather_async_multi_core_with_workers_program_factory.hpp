@@ -49,18 +49,19 @@ namespace ring_attention_all_gather_async_detail {
 // All-gather reader runtime-arg layout: [0]=dim, [1]=ring_size, [2]=out_ready_sem,
 // followed by one tensor-descriptor block per gathered input.
 constexpr uint32_t kReaderRuntimeArgHeaderCount = 3;
+constexpr uint32_t kReaderReadySemaphoreFieldOffset = 2;
 // All-gather writer runtime-arg layout: [0]=dim, [1]=sem_noc0_x, [2]=sem_noc0_y, [3]=ring_size,
 // [4]=out_ready_sem, followed by one tensor-descriptor block per gathered input.
 constexpr uint32_t kWriterRuntimeArgHeaderCount = 5;
-// Per-input fields: Wt, Ht, out_Wt, out_Ht, batch_head_size, tile_id_start, tile_id_end,
-// input_batch_base (offset 7), valid_pages_per_batch_head (offset 8), worker link (offset 9).
-constexpr uint32_t kTensorDescriptorFieldCount = 10;
-constexpr uint32_t kInputBatchBaseFieldOffset = 7;
+constexpr uint32_t kWriterReadySemaphoreFieldOffset = 4;
+// Per-input fields: Wt, Ht, out_Wt, out_Ht, batch_head_size, input_batch_base,
+// valid_pages_per_batch_head, and worker link.
+constexpr uint32_t kTensorDescriptorFieldCount = 8;
+constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 // Per-(batch,head) page count each worker is allowed to gather. Defaults to the full input
 // (input_Ht * input_Wt); the fused ring_joint_sdpa path patches it down to the logical_n-valid
 // slab prefix so the gather moves only kv_actual-sized data, not the whole oversized cache.
-constexpr uint32_t kValidPagesFieldOffset = 8;
-constexpr uint32_t kWorkerLinkFieldOffset = 9;
+constexpr uint32_t kValidPagesFieldOffset = 6;
 constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 1;
 constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 5;
 constexpr uint32_t kNeighborReaderInputTileStartFieldOffset = 2;
@@ -73,6 +74,15 @@ constexpr uint32_t kNeighborWriterInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
 constexpr uint32_t kNeighborWriterInputOriginPageFieldOffset = 4;
 
+constexpr uint32_t kRingDirectionCount = 2;
+
+// Kernel order appended by ring_attention_all_gather_async_multi_core_with_workers_helper.
+// Fused consumers add these offsets to the number of kernels they emit before the all-gather.
+constexpr uint32_t kReaderForwardKernelOffset = 0;
+constexpr uint32_t kWriterForwardKernelOffset = 1;
+constexpr uint32_t kReaderBackwardKernelOffset = 2;
+constexpr uint32_t kWriterBackwardKernelOffset = 3;
+
 inline uint32_t input_batch_base_pages(uint32_t batch_idx, uint32_t num_heads, uint32_t Ht, uint32_t Wt) {
     return batch_idx * num_heads * Ht * Wt;
 }
@@ -83,10 +93,10 @@ inline uint32_t input_batch_base_pages(uint32_t batch_idx, uint32_t num_heads, u
 // ring-attention all-gather worker pipeline to `desc`.
 //
 // `desc` may already contain entries from a parent op (e.g., ring_joint_sdpa).
-// Semaphore IDs assigned by this helper start at `desc.semaphores.size()` at
-// entry and are sequential. The descriptor framework auto-patches buffer
-// addresses on cache hits so callers do not need to retain kernel handles or
-// implement an override_runtime_arguments path.
+// Semaphore IDs are selected per worker core without colliding with existing
+// descriptors. The descriptor framework auto-patches buffer addresses on cache
+// hits so callers do not need to retain kernel handles or implement an
+// override_runtime_arguments path.
 void ring_attention_all_gather_async_multi_core_with_workers_helper(
     tt::tt_metal::ProgramDescriptor& desc,
     const std::vector<Tensor>& input_tensor,

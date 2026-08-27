@@ -45,6 +45,18 @@ using tt::tt_metal::SemaphoreDescriptor;
 using tt::tt_metal::WriterConfigDescriptor;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+constexpr uint32_t kReaderKernelIndex = 0;
+constexpr uint32_t kWriterKernelIndex = 1;
+constexpr uint32_t kComputeKernelIndex = 2;
+constexpr uint32_t kFirstAllGatherKernelIndex = 3;
+constexpr uint32_t kAllGatherReaderForwardKernelIndex = kFirstAllGatherKernelIndex + ag_rt::kReaderForwardKernelOffset;
+constexpr uint32_t kAllGatherWriterForwardKernelIndex = kFirstAllGatherKernelIndex + ag_rt::kWriterForwardKernelOffset;
+constexpr uint32_t kAllGatherReaderBackwardKernelIndex =
+    kFirstAllGatherKernelIndex + ag_rt::kReaderBackwardKernelOffset;
+constexpr uint32_t kAllGatherWriterBackwardKernelIndex =
+    kFirstAllGatherKernelIndex + ag_rt::kWriterBackwardKernelOffset;
 
 // Runtime-arg slots the kernels match POSITIONALLY. The reader shares the classic factory's layout for slots
 // 0..26 (q/k/w addrs, schedule(6), 2 mcast dirs, persistent-cache), then appends a fused-ring tail. Derived
@@ -114,15 +126,7 @@ ProgramDescriptor build_ring_program_descriptor(
     const operation_attributes_t& args,
     const tensor_args_t& tensors,
     const Tensor& out,
-    const ttnn::MeshCoordinate& coord,
-    bool consumers_only = false) {
-    // consumers_only: build ONLY the three consumer kernels (reader/writer/compute, indices 0/1/2) and SKIP the
-    // ring_attention all-gather helper. Used by override_runtime_arguments on a program-cache HIT, which reads
-    // just the consumer kernels' per-dispatch scalar slots from the returned descriptor and copies them into
-    // the live program -- it never touches the AG worker kernels (3..). Skipping the helper drops its per-hit
-    // fabric-worker setup cost and removes any dependence on it being alloc-free. The consumer kernels' runtime
-    // args are built by the SAME loop as create(), so create and override cannot compute the scalars/slots
-    // differently (the invariant the historical stale-scalar bug violated).
+    const ttnn::MeshCoordinate& coord) {
     ProgramDescriptor desc;
 
     const auto& q = tensors.q;
@@ -204,8 +208,8 @@ ProgramDescriptor build_ring_program_descriptor(
     // of the group count <= grid_y, so shaving even one row can halve the schedule (10 groups: grid_y 10->9 drops
     // group_rows 10->5 -> 55 cores instead of 110). cols_for_bands() just distributes the bands over min(bands,
     // compute_cols_x) columns (uneven remainder handled by band_list), so a reserved column costs exactly one
-    // column of compute -- no divisor cliff. The AG needs only num_links*2 workers; one column (grid_y cores) is
-    // plenty and the compute keeps grid_y*compute_cols_x cores.
+    // column of compute -- no divisor cliff. The AG uses num_links*2 workers, so compute keeps
+    // grid_y*compute_cols_x cores.
     const uint32_t grid_y = phys_grid.y;  // full compute-grid height (all rows kept for compute)
     TT_FATAL(fused.num_links >= 1, "indexer_score fused: num_links must be >= 1 (got {})", fused.num_links);
     const uint32_t ag_worker_cores = fused.num_links * 2u;                   // AG uses 2 workers (fwd/bwd) per link
@@ -555,10 +559,10 @@ ProgramDescriptor build_ring_program_descriptor(
                 q_sender,
                 cols_used - 1);
             // Reader tail (sequential push; slots named in rt_arg, matched positionally by the kernel).
-            reader_rt.push_back(k_batch_page_offset);        // rt_arg::reader_k_batch_offset (25)
-            reader_rt.push_back(kv_len_tiles);               // rt_arg::reader_kv_len_tiles (26)
-            reader_rt.append(fused_rt);             // rt_arg::reader_fused_rt_base (27..35): ring/dir/sems/split
-            reader_rt.push_back(k_local.buffer());  // rt_arg::reader_k_local_addr (36): local SP shard address
+            reader_rt.push_back(k_batch_page_offset);  // rt_arg::reader_k_batch_offset (25)
+            reader_rt.push_back(kv_len_tiles);         // rt_arg::reader_kv_len_tiles (26)
+            reader_rt.append(fused_rt);                // rt_arg::reader_fused_rt_base (27..35): ring/dir/sems/split
+            reader_rt.push_back(k_local.buffer());     // rt_arg::reader_k_local_addr (36): local SP shard address
             reader_rt.push_back(k_local_batch_page_offset);  // selected slot in the original local cache
             reader_rt.append(band_perm);                     // rt_arg::reader_band_perm_base (38..): band-visit perm
             reader_kernel.emplace_runtime_args(core, reader_rt);
@@ -589,54 +593,52 @@ ProgramDescriptor build_ring_program_descriptor(
     desc.kernels.push_back(std::move(writer_kernel));
     desc.kernels.push_back(std::move(compute_kernel));
 
-    if (!consumers_only) {  // override (cache hit) reads only the consumer kernels above -> skip the AG helper
-        // Producer-side signaler copies the consumer's receiver cores + signal semaphores.
-        std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> ag_sig =
-            ttnn::experimental::ccl::AllGatherFusedOpSignaler();
-        ag_sig->init_fused_op(
-            sdpa_sig.fused_op_receiver_cores_noc,
-            sdpa_sig.fused_op_receiver_signal_semaphores,
-            sdpa_sig.fused_op_signaler_mode);
+    // Producer-side signaler copies the consumer's receiver cores + signal semaphores.
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> ag_sig =
+        ttnn::experimental::ccl::AllGatherFusedOpSignaler();
+    ag_sig->init_fused_op(
+        sdpa_sig.fused_op_receiver_cores_noc,
+        sdpa_sig.fused_op_receiver_signal_semaphores,
+        sdpa_sig.fused_op_signaler_mode);
 
-        const auto forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            q, coord, /*offset=*/1, fused.topology, args.sp_axis());
-        const auto backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            q, coord, /*offset=*/-1, fused.topology, args.sp_axis());
+    const auto forward_coord =
+        ttnn::ccl::get_physical_neighbor_from_physical_coord(q, coord, /*offset=*/1, fused.topology, args.sp_axis());
+    const auto backward_coord =
+        ttnn::ccl::get_physical_neighbor_from_physical_coord(q, coord, /*offset=*/-1, fused.topology, args.sp_axis());
 
-        std::vector<Tensor> ag_in = {k_local};
-        std::vector<Tensor> ag_out = {k};
-        // The gather concatenates the SP shards along the seq axis (dim 2); the reader's block-cyclic permutation
-        // assumes this, so it is a fixed constant, not a configurable knob.
-        constexpr int32_t ag_seq_concat_dim = 2;
-        ttnn::ring_attention_all_gather_async_multi_core_with_workers_helper(
-            desc,
-            ag_in,
-            coord,
-            forward_coord,
-            backward_coord,
-            ag_out,
-            ag_seq_concat_dim,
-            fused.num_links,
-            ring_size,
-            device_index,
-            fused.topology,
-            fused.ag_semaphore,
-            fused.ag_sub_device_id,
-            ag_sig,
-            ccl_core_grid_offset,
-            // COL_MAJOR so the reserved-column offset lays the workers DOWN the free column ((compute_cols_x,0),
-            // (compute_cols_x,1), ...) instead of running off the right grid edge as row-major would.
-            ttnn::ccl::CoreAllocationStrategy::COL_MAJOR,
-            args.cache_batch_idx,
-            gather_valid_height_tiles(args, k_local),
-            /*slot_id=*/std::nullopt,
-            /*kv_actual_isl=*/std::nullopt,
-            /*chunk_local_tiles=*/0,
-            /*kv_cache_num_layers=*/1,
-            /*kv_cache_layer_idx=*/0,
-            // This consumer's FusedRingGate has no split-shard second-half wait; keep the gather unsplit.
-            /*split_forwarding_enabled=*/false);
-    }
+    std::vector<Tensor> ag_in = {k_local};
+    std::vector<Tensor> ag_out = {k};
+    // The gather concatenates the SP shards along the seq axis (dim 2); the reader's block-cyclic permutation
+    // assumes this, so it is a fixed constant, not a configurable knob.
+    constexpr int32_t ag_seq_concat_dim = 2;
+    ttnn::ring_attention_all_gather_async_multi_core_with_workers_helper(
+        desc,
+        ag_in,
+        coord,
+        forward_coord,
+        backward_coord,
+        ag_out,
+        ag_seq_concat_dim,
+        fused.num_links,
+        ring_size,
+        device_index,
+        fused.topology,
+        fused.ag_semaphore,
+        fused.ag_sub_device_id,
+        ag_sig,
+        ccl_core_grid_offset,
+        // COL_MAJOR so the reserved-column offset lays the workers DOWN the free column ((compute_cols_x,0),
+        // (compute_cols_x,1), ...) instead of running off the right grid edge as row-major would.
+        ttnn::ccl::CoreAllocationStrategy::COL_MAJOR,
+        args.cache_batch_idx,
+        gather_valid_height_tiles(args, k_local),
+        /*slot_id=*/std::nullopt,
+        /*kv_actual_isl=*/std::nullopt,
+        /*chunk_local_tiles=*/0,
+        /*kv_cache_num_layers=*/1,
+        /*kv_cache_layer_idx=*/0,
+        // This consumer's FusedRingGate has no split-shard second-half wait; keep the gather unsplit.
+        /*split_forwarding_enabled=*/false);
 
     log_debug(
         tt::LogOp,
@@ -659,6 +661,7 @@ ProgramDescriptor build_ring_program_descriptor(
     return desc;
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 tt::tt_metal::WorkloadDescriptor RingIndexerScoreDsaProgramFactory::create_workload_descriptor(
@@ -670,7 +673,7 @@ tt::tt_metal::WorkloadDescriptor RingIndexerScoreDsaProgramFactory::create_workl
     const auto coords = tensor_coords.coords();
     wd.programs.reserve(coords.size());
     for (const auto& coord : coords) {
-        auto desc = build_ring_program_descriptor(args, tensors, out, coord);
+        auto desc = CMAKE_UNIQUE_NAMESPACE::build_ring_program_descriptor(args, tensors, out, coord);
         wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return wd;
@@ -690,6 +693,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const operation_attributes_t& args,
     const tensor_args_t& tensors,
     tensor_return_value_t& out) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     // Buffer addresses (q/k/w/out/k_local + the AG's gathered buffer) auto-patch via the descriptor's
     // BufferBinding fast path.
     descriptor_adapter_t::apply_descriptor(cached, args, tensors, out);
@@ -713,7 +717,6 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const uint32_t local_slot_pages =
         (k_local_shape[2] / tt::constants::TILE_HEIGHT) * (k_local_shape[3] / tt::constants::TILE_WIDTH);
     const uint32_t k_local_batch_page_offset = args.cache_batch_idx.value_or(0) * local_slot_pages;
-
     for (auto& [range, program] : cached.workload.get_programs()) {
         const uint32_t device_index = device_index_for(args, range.start_coord(), q);
         const uint32_t tp_index =
@@ -737,28 +740,24 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             }
         };
 
-        // kernel_idx: reader=0, writer=1, compute=2; AG workers are 3..6.
-        // The fused rt_arg namespace is file-local, but this .cpp participates in unity builds alongside
-        // the classic factory's same-named namespace. Keep these literals synchronized with its static_assert
-        // (reader_k_batch_offset=25, reader_kv_len_tiles=26, reader_k_local_batch_offset=37 — past the
-        // 9-wide fused block at 27..35 and k_local_addr at 36).
-        patch_field(0, 25u, k_batch_page_offset);
-        patch_field(0, 26u, pcache.kv_len_tiles);
-        patch_field(0, 37u, k_local_batch_page_offset);
+        patch_field(kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_k_batch_offset, k_batch_page_offset);
+        patch_field(kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_kv_len_tiles, pcache.kv_len_tiles);
+        patch_field(
+            kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_k_local_batch_offset, k_local_batch_page_offset);
         // compute: kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles (slots [6, perm_base)).
-        patch_field(2, 6u, pcache.kv_len_tiles);
-        patch_field(2, 7u, geom.chunk_start_tiles);
-        patch_field(2, 8u, geom.straddle_q_tile);
-        patch_field(2, 9u, geom.straddle_jump_tiles);
+        patch_field(kComputeKernelIndex, 6u, pcache.kv_len_tiles);
+        patch_field(kComputeKernelIndex, 7u, geom.chunk_start_tiles);
+        patch_field(kComputeKernelIndex, 8u, geom.straddle_q_tile);
+        patch_field(kComputeKernelIndex, 9u, geom.straddle_jump_tiles);
         // writer: same four scalars after out-addr(0) + schedule(1..6) (slots [7, perm_base)).
-        patch_field(1, 7u, pcache.kv_len_tiles);
-        patch_field(1, 8u, geom.chunk_start_tiles);
-        patch_field(1, 9u, geom.straddle_q_tile);
-        patch_field(1, 10u, geom.straddle_jump_tiles);
+        patch_field(kWriterKernelIndex, 7u, pcache.kv_len_tiles);
+        patch_field(kWriterKernelIndex, 8u, geom.chunk_start_tiles);
+        patch_field(kWriterKernelIndex, 9u, geom.straddle_q_tile);
+        patch_field(kWriterKernelIndex, 10u, geom.straddle_jump_tiles);
 
         // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
-        // workers. cache_batch_idx and kv_len are hash-excluded, so update the selected input slot and the
-        // slab-rounded gather extent on every cache hit (same protocol as ring_joint_sdpa).
+        // workers. cache_batch_idx and the exact kv_len are hash-excluded (only the structural schedule class is
+        // hashed), so update the selected input slot and slab-rounded gather extent on every cache hit.
         const auto& shape = k_local.padded_shape();
         const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
@@ -769,13 +768,24 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
 
         const auto patch_ag_field = [&](uint32_t kernel_idx, uint32_t slot, uint32_t value) {
             auto& grid_args = GetRuntimeArgs(program, kernel_idx);
+            bool patched_any_core = false;
             for (auto& col_args : grid_args) {
                 for (auto& core_args : col_args) {
-                    if (core_args.size() > slot) {
-                        core_args[slot] = value;
+                    if (core_args.size() == 0) {
+                        continue;
                     }
+                    TT_FATAL(
+                        core_args.size() > slot,
+                        "indexer_score fused override: AG scalar slot {} out of range (size {}) for kernel {}",
+                        slot,
+                        core_args.size(),
+                        kernel_idx);
+                    core_args[slot] = value;
+                    patched_any_core = true;
                 }
             }
+            TT_FATAL(
+                patched_any_core, "indexer_score fused override: AG kernel {} has no runtime arguments", kernel_idx);
         };
 
         // Semaphore identity is hash-excluded. Rebind both ring directions on every cache hit so callers
@@ -788,21 +798,23 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             ag_semaphores.size());
         const uint32_t backward_semaphore = static_cast<uint32_t>(ag_semaphores[0].address());
         const uint32_t forward_semaphore = static_cast<uint32_t>(ag_semaphores[1].address());
-        patch_ag_field(/*reader forward=*/3, /*out_ready_sem=*/2, forward_semaphore);
-        patch_ag_field(/*writer forward=*/4, /*out_ready_sem=*/4, forward_semaphore);
-        patch_ag_field(/*reader backward=*/5, /*out_ready_sem=*/2, backward_semaphore);
-        patch_ag_field(/*writer backward=*/6, /*out_ready_sem=*/4, backward_semaphore);
+        patch_ag_field(kAllGatherReaderForwardKernelIndex, ag_rt::kReaderReadySemaphoreFieldOffset, forward_semaphore);
+        patch_ag_field(kAllGatherWriterForwardKernelIndex, ag_rt::kWriterReadySemaphoreFieldOffset, forward_semaphore);
+        patch_ag_field(
+            kAllGatherReaderBackwardKernelIndex, ag_rt::kReaderReadySemaphoreFieldOffset, backward_semaphore);
+        patch_ag_field(
+            kAllGatherWriterBackwardKernelIndex, ag_rt::kWriterReadySemaphoreFieldOffset, backward_semaphore);
 
         constexpr uint32_t ag_reader_input_base =
             ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kInputBatchBaseFieldOffset;
         constexpr uint32_t ag_reader_valid_pages = ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
         constexpr uint32_t ag_writer_valid_pages = ag_rt::kWriterRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
-        patch_ag_field(/*reader forward=*/3, ag_reader_input_base, input_batch_base);
-        patch_ag_field(/*reader backward=*/5, ag_reader_input_base, input_batch_base);
-        patch_ag_field(/*reader forward=*/3, ag_reader_valid_pages, valid_pages);
-        patch_ag_field(/*reader backward=*/5, ag_reader_valid_pages, valid_pages);
-        patch_ag_field(/*writer forward=*/4, ag_writer_valid_pages, valid_pages);
-        patch_ag_field(/*writer backward=*/6, ag_writer_valid_pages, valid_pages);
+        patch_ag_field(kAllGatherReaderForwardKernelIndex, ag_reader_input_base, input_batch_base);
+        patch_ag_field(kAllGatherReaderBackwardKernelIndex, ag_reader_input_base, input_batch_base);
+        patch_ag_field(kAllGatherReaderForwardKernelIndex, ag_reader_valid_pages, valid_pages);
+        patch_ag_field(kAllGatherReaderBackwardKernelIndex, ag_reader_valid_pages, valid_pages);
+        patch_ag_field(kAllGatherWriterForwardKernelIndex, ag_writer_valid_pages, valid_pages);
+        patch_ag_field(kAllGatherWriterBackwardKernelIndex, ag_writer_valid_pages, valid_pages);
     }
 }
 

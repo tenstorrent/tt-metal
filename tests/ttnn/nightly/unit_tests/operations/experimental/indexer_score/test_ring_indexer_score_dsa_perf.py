@@ -18,6 +18,7 @@ Run (requires an IOMMU-enabled Blackhole runner):
 """
 
 import math
+import statistics
 
 import pytest
 import torch
@@ -59,17 +60,18 @@ RING_PERF_MESHES = ((4, 1), (8, 1))
 RING_PERF_MESH_IDS = ("quietbox_4x1", "loudbox_8x1")
 
 # Match the indexer_score perf gate: expected FPU utilization is compared with
-# a symmetric +/-2% relative band.  These are warm trace-replay realtime-profiler
+# a symmetric relative band. These are warm trace-replay realtime-profiler
 # baselines taken on the complete physical boxes.  A value is deliberately per
 # SKU: the proxy retains the box's actual fabric path rather than treating a 4x1
 # subset of an 8x1 box as equivalent.
 RING_INDEXER_PERF_MARGIN = 0.02
+RING_INDEXER_PERF_REPLAYS = 3
 RING_INDEXER_EXPECTED_FPU_UTIL = {
     # (SP ranks, KV prefix): expected fused-program FPU utilization, percent.
-    (4, GLM52_KV_55K): 37.16,
-    (4, GLM52_KV_512K): 39.31,
-    (8, GLM52_KV_55K): 38.48,
-    (8, GLM52_KV_512K): 42.72,
+    (4, GLM52_KV_55K): 43.74,
+    (4, GLM52_KV_512K): 47.26,
+    (8, GLM52_KV_55K): 48.90,
+    (8, GLM52_KV_512K): 47.14,
 }
 
 _FABRIC_2D_TORUS_DEVICE_PARAMS = {
@@ -169,7 +171,7 @@ def _ring_perf_config():
 @pytest.mark.parametrize("kv_len", RING_PERF_KV_LENS, ids=RING_PERF_KV_IDS)
 @pytest.mark.timeout(0)
 def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
-    """Profile one warm fused ring score at a 55K or 512K KV prefix.
+    """Profile the median warm fused ring score at a 55K or 512K KV prefix.
 
     The realtime profiler's fused-program critical path is converted to FPU
     utilization using a test-local mirror of the op's fusion-aware
@@ -266,16 +268,22 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
         trace_capture_ended = True
         ttnn.synchronize_device(mesh_device, sub_device_ids=[subdevice_id])
 
-        # Warm the trace replay outside the profiler window, then measure the
-        # identical captured command stream without first-replay jitter.
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device, sub_device_ids=[subdevice_id])
-
         def replay_once():
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
 
-        _, programs = profile_realtime_program_merged(mesh_device, replay_once, record_timeout_seconds=30.0)
-        duration_ns = _ring_indexer_duration_ns(programs)
+        # Profile and discard the warm replay. Realtime-profiler records arrive asynchronously, so an
+        # unprofiled warm replay can otherwise leak into the measured callback below. Trace replays reuse
+        # their runtime ID, causing the merge helper to take the slower of the stale and measured records.
+        _, warm_programs = profile_realtime_program_merged(mesh_device, replay_once, record_timeout_seconds=30.0)
+        _ring_indexer_duration_ns(warm_programs)
+
+        # Use separate profiler windows because captured trace replays share a runtime ID and would be merged
+        # into one maximum if queued in a single window.
+        measured_durations_ns = []
+        for _ in range(RING_INDEXER_PERF_REPLAYS):
+            _, programs = profile_realtime_program_merged(mesh_device, replay_once, record_timeout_seconds=30.0)
+            measured_durations_ns.append(_ring_indexer_duration_ns(programs))
+        duration_ns = statistics.median(measured_durations_ns)
         ideal_compute_cycles = _ring_indexer_ideal_compute_cycles(mesh_device, kv_len, chunk_start)
         fpu_utilization = ideal_compute_cycles / (duration_ns * _BH_CLOCK_GHZ) * 100
         expected_fpu_utilization = RING_INDEXER_EXPECTED_FPU_UTIL[(sp, kv_len)]
