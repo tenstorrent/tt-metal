@@ -72,12 +72,15 @@ by the FPU kernel `_llk_math_deepseek_moe_gate_eltwise_binary_`; here they are s
 by plain datacopy so this test isolates the SFPU half. Cover the FPU kernel
 separately.
 
+Expert-count coverage
+---------------------
+The full flag cross-product remains pinned to 256 experts. A focused companion sweep
+covers 16-aligned counts, the top-8 64-expert path, and the 288-expert padding case on
+both top-8 and top-16. Its unused lanes contain large positive poison keys, so a
+missing `-inf` mask fails by selecting an out-of-range generated id.
+
 Configurations left uncovered
 -----------------------------
-* `num_total_experts` is pinned 256, which is one full face and the only layout the
-  stimuli and the id = 16 * row + column expectation here are written for. 128 routes
-  to `_generic_moe_gate_top8_sort_half_face_` instead and needs a half-face stimulus
-  tile, so it wants its own variant rather than an axis bolted onto this one.
 * `dest_acc` is pinned No, structurally: the kernel carries the expert id in the LO16
   and the score in the HI16 of one DEST word, which only exists for a 16-bit DEST
   format. A 32-bit DEST leaves no room for the payload.
@@ -87,6 +90,7 @@ Configurations left uncovered
   reached. See MOE_GATE_TOPK in helpers/test_variant_parameters.py.
 """
 
+import pytest
 import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -135,8 +139,8 @@ def _expected_live_winners(
     return emitted_rows, emitted_rows
 
 
-def _distinct_bf16_keys() -> torch.Tensor:
-    """256 consecutive bfloat16 encodings starting at 1.0, shuffled.
+def _distinct_bf16_keys(num_total_experts: int) -> torch.Tensor:
+    """Consecutive bfloat16 encodings starting at 1.0, shuffled.
 
     bfloat16 has 7 fraction bits, so [1, 2) holds only 128 distinct values, spaced
     1/128 apart -- keys spaced 1/256 would collapse in pairs the moment _face0_tile
@@ -146,15 +150,30 @@ def _distinct_bf16_keys() -> torch.Tensor:
     1.0 up to 3.984375, spacing 1/128 in [1, 2) and 1/64 in [2, 4) -- keeps all 256
     distinct with no rounding at all, so the top-8 boundary cannot be a tie.
     """
-    bits = (0x3F80 + torch.arange(NUM_TOTAL_EXPERTS, dtype=torch.int32)) << 16
+    bits = (0x3F80 + torch.arange(num_total_experts, dtype=torch.int32)) << 16
     keys = bits.contiguous().view(torch.float32)
-    return keys[torch.randperm(NUM_TOTAL_EXPERTS)]
+    return keys[torch.randperm(num_total_experts)]
 
 
-def _face0_tile(values: torch.Tensor, torch_format) -> torch.Tensor:
-    """Place 256 values row-major into face 0 of a [32, 32] tile; rest zero."""
-    tile = torch.zeros((TILE_DIM, TILE_DIM), dtype=torch.float32)
-    tile[:FACE_DIM, :FACE_DIM] = values.reshape(FACE_DIM, FACE_DIM)
+def _experts_tile(
+    values: torch.Tensor, torch_format, pad_value: float = 0.0
+) -> torch.Tensor:
+    """Place values consecutively in face order; fill unused lanes with padding."""
+    tile = torch.full((TILE_DIM, TILE_DIM), pad_value, dtype=torch.float32)
+    for face_idx in range(4):
+        start = face_idx * FACE_DIM * FACE_DIM
+        if start >= values.numel():
+            break
+        end = min(start + FACE_DIM * FACE_DIM, values.numel())
+        face_values = values[start:end]
+        face = torch.full((FACE_DIM, FACE_DIM), pad_value, dtype=torch.float32)
+        face.reshape(-1)[: face_values.numel()] = face_values
+        face_row = (face_idx // 2) * FACE_DIM
+        face_col = (face_idx % 2) * FACE_DIM
+        tile[
+            face_row : face_row + FACE_DIM,
+            face_col : face_col + FACE_DIM,
+        ] = face
     return tile.to(torch_format)
 
 
@@ -191,15 +210,12 @@ def assert_odd_columns_untouched(result_indices, result_scores, scores, rows):
             )
 
 
-@skip_for_wormhole
-@parametrize(
-    num_selected_experts=[4, 8, *range(9, 17)],
-    full_sort=[True, False],
-    normalize=[True, False],
-    zero_tail=[False, True],
-)
-def test_sfpu_generic_moe_gate_topk(
-    num_selected_experts, full_sort, normalize, zero_tail
+def _run_sfpu_generic_moe_gate_topk(
+    num_selected_experts,
+    full_sort,
+    normalize,
+    zero_tail,
+    num_total_experts=NUM_TOTAL_EXPERTS,
 ):
     torch.manual_seed(0)
 
@@ -209,16 +225,18 @@ def test_sfpu_generic_moe_gate_topk(
     # Sort keys: distinct by construction. Raw scores: independent, positive, and
     # deliberately on a different scale from the keys so that reporting the key
     # instead of the score would be caught.
-    biased = _distinct_bf16_keys()
+    biased = _distinct_bf16_keys(num_total_experts)
     scores = (
-        torch.empty(NUM_TOTAL_EXPERTS, dtype=torch.float32)
+        torch.empty(num_total_experts, dtype=torch.float32)
         .uniform_(0.05, 0.95)
         .to(torch_format)
         .to(torch.float32)
     )
 
-    scores_tile = _face0_tile(scores, torch_format)
-    biased_tile = _face0_tile(biased, torch_format)
+    # Make unread/padded lanes obvious: without the SFPU -inf mask they beat
+    # every valid key and the test returns an out-of-range generated id.
+    scores_tile = _experts_tile(scores, torch_format, pad_value=7.0)
+    biased_tile = _experts_tile(biased, torch_format, pad_value=100.0)
 
     src_A = torch.cat(
         [
@@ -236,7 +254,7 @@ def test_sfpu_generic_moe_gate_topk(
         templates=[
             MOE_GATE_TOPK(
                 num_selected_experts=num_selected_experts,
-                num_total_experts=NUM_TOTAL_EXPERTS,
+                num_total_experts=num_total_experts,
                 normalize=normalize,
                 zero_tail=zero_tail,
                 full_sort=full_sort,
@@ -332,9 +350,52 @@ def test_sfpu_generic_moe_gate_topk(
             f"got id {got_id}, score {got_score}"
         )
 
-    if not is_top16_path:
+    if not is_top16_path and num_total_experts >= 128:
         # All eight emitted rows, blanked ones included -- the tail zeroing hits the
         # even-column payload, never the odd columns.
         assert_odd_columns_untouched(
             result_indices, result_scores, scores, emitted_rows
         )
+
+
+@skip_for_wormhole
+@parametrize(
+    num_selected_experts=[4, 8, *range(9, 17)],
+    full_sort=[True, False],
+    normalize=[True, False],
+    zero_tail=[False, True],
+)
+def test_sfpu_generic_moe_gate_topk(
+    num_selected_experts, full_sort, normalize, zero_tail
+):
+    _run_sfpu_generic_moe_gate_topk(
+        num_selected_experts,
+        full_sort,
+        normalize,
+        zero_tail,
+    )
+
+
+@skip_for_wormhole
+@pytest.mark.parametrize(
+    "num_total_experts,num_selected_experts",
+    [
+        pytest.param(16, 8, id="top8-16"),
+        pytest.param(32, 8, id="top8-32"),
+        pytest.param(48, 8, id="top8-48"),
+        pytest.param(64, 8, id="top8-64"),
+        pytest.param(192, 8, id="top8-192"),
+        pytest.param(288, 8, id="top8-288"),
+        pytest.param(288, 16, id="top16-288"),
+    ],
+)
+def test_sfpu_generic_moe_gate_topk_expert_count_padding(
+    num_total_experts, num_selected_experts
+):
+    _run_sfpu_generic_moe_gate_topk(
+        num_selected_experts,
+        full_sort=True,
+        normalize=False,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
+    )
