@@ -125,7 +125,7 @@ def resources():
     return ResourceHarness()
 
 
-def make_config(mesh=None, expected_weight_count=2, global_cb_size=4096):
+def make_config(mesh=None, expected_weight_count=2, global_cb_size=4096, defer_global_cb=False):
     mesh = FakeMesh() if mesh is None else mesh
     return Prefetcher2DConfig(
         mesh_device=mesh,
@@ -148,6 +148,7 @@ def make_config(mesh=None, expected_weight_count=2, global_cb_size=4096):
         address_repeat_count=2,
         address_memory_config="address-memcfg",
         address_mesh_mapper="address-mapper",
+        defer_global_cb=defer_global_cb,
     )
 
 
@@ -257,6 +258,50 @@ def test_default_registration_rejects_duplicate_buffer_and_other_mesh(resources)
         owner.register_weight("lazy", object())
     with pytest.raises(ValueError, match="different mesh"):
         owner.register_weight("other", FakeTensor(FakeMesh(), 202))
+
+
+def test_deferred_global_cb_is_allocated_on_first_decode_activation(resources):
+    """`defer_global_cb` moves the allocation from `seal()` to `activate("decode")`.
+
+    The global CB is ~774 kB of L1 per sender/receiver core and nothing frees it,
+    so a prefill program needing static circular buffers on those cores cannot be
+    placed while it is resident. Prefill never reads it, so it must not exist yet.
+
+    Three properties matter, and all three are checked here:
+
+    1. sealing allocates nothing, and prefill still gets `global_cb=None`;
+    2. the first `activate("decode")` allocates exactly one buffer, *before* the
+       prefetch program is started - the prefetch program is what reads it;
+    3. the decode context object that modules captured at build time sees the
+       buffer, not the `None` it was sealed with. Module configs hold the context
+       *object* (`MLP2DConfig.decode_prefetch_context`), so binding a replacement
+       context would silently leave every built module with no global CB.
+    """
+
+    owner = initialized_owner(resources, expected_weight_count=1, defer_global_cb=True)
+    weight = FakeTensor(owner.config.mesh_device, 101, 128)
+    owner.register_weight("weight", weight)
+    prefill, decode = owner.seal()
+
+    assert resources.created_cbs == []
+    assert prefill.global_cb is None
+    assert decode.global_cb is None
+
+    # Prefill must be activatable with no buffer in existence at all.
+    owner.activate("prefill")
+    assert resources.created_cbs == []
+
+    owner.activate("decode")
+    assert len(resources.created_cbs) == 1
+    assert decode.global_cb == resources.created_cbs[0]
+    # The prefetch program was handed the buffer, not None.
+    starts = [event for event in resources.prefetch_events if event[0] == "start"]
+    assert starts[-1][3] == resources.created_cbs[0]
+
+    # Re-activating decode must not allocate a second buffer.
+    owner.activate("decode")
+    assert len(resources.created_cbs) == 1
+    owner.cleanup()
 
 
 def test_seal_derives_cb_size_and_rejects_undersized_configuration(resources):

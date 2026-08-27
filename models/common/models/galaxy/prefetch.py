@@ -113,8 +113,17 @@ def build_galaxy_prefetcher_config(
     expected_weight_count: int,
     global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
     prefetch_num_layers: int = 1,
+    defer_global_cb: bool = True,
 ) -> Prefetcher2DConfig:
-    """Resolve the prefetcher policy that matches a Galaxy resource config."""
+    """Resolve the prefetcher policy that matches a Galaxy resource config.
+
+    ``defer_global_cb`` defaults to ``True`` here, and only here: on this mesh
+    the global CB's ~774 kB of L1 per sender/receiver core makes every prefill
+    program that needs static circular buffers on those cores unplaceable, and
+    the Galaxy models all run prefill before decode. See the field's own
+    docstring in ``Prefetcher2DConfig``; the production Galaxy prefetcher makes
+    the same choice for the same reason.
+    """
 
     return Prefetcher2DConfig(
         mesh_device=mesh_device,
@@ -129,6 +138,7 @@ def build_galaxy_prefetcher_config(
         address_mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         prefetch_num_layers=prefetch_num_layers,
         mesh_shape=resources_config.mesh_shape,
+        defer_global_cb=defer_global_cb,
     )
 
 

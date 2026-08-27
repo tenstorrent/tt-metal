@@ -21,6 +21,9 @@ LOG="$1"; shift
 NODE="$1"; shift
 export HF_HOME=/proj_sw/user_dev/hf_data
 DEADLINE=${MB_DEADLINE:-420}
+# attempt 3: the pytest-level timeout is now settable too. A prefill 2048 or an
+# 80-layer load legitimately needs longer than 900 s, and a pytest timeout that
+# fires early costs a whole run.
 
 {
   echo "=== $(date -u) ==="
@@ -29,7 +32,7 @@ DEADLINE=${MB_DEADLINE:-420}
   echo "devices: $(ls /dev/tenstorrent | wc -l)"
 } > "$LOG"
 
-python -u -m pytest -v -rA --color=no -p no:cacheprovider --timeout=900 "$NODE" "$@" >> "$LOG" 2>&1 &
+python -u -m pytest -v -rA --color=no -p no:cacheprovider --timeout=${MB_PYTEST_TIMEOUT:-900} "$NODE" "$@" >> "$LOG" 2>&1 &
 child=$!
 
 signal_child() {

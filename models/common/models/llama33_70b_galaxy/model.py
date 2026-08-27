@@ -962,6 +962,18 @@ def build_llama33_70b_galaxy_transformer_2d_config(
         # divides the local hidden width.
         decode_output_memcfg=decode.residual_memcfg,
         prefill_output_dtype=precision.prefill_activation_dtype,
+        # Prefill stays interleaved DRAM, and so does spread over the whole
+        # compute grid - including the sender columns. That is legal *because*
+        # the prefill mode plan is a single sub-device covering the full grid,
+        # and it only became placeable when the prefetcher stopped holding its
+        # global circular buffer through prefill (`defer_global_cb`). Before that
+        # deferral this line aborted with the same message the decode comment
+        # above quotes, at prefill 128:
+        #     TT_THROW ... Statically allocated circular buffers in program 100
+        #     clash with L1 buffers on core range [0-0 - 0-3]. L1 buffer
+        #     allocated at 579104 and static circular buffer region ends at 630080
+        # Sharding the prefill output would not have been a fix: every other
+        # prefill program on this grid has the same L1 to fit around.
         prefill_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
     )
     rope_config = RotarySetup2DConfig(

@@ -333,3 +333,48 @@ Also: do not pass `models/common/tests/modules/lm_head` as a *directory*. That
 collects `test_lm_head_1d.py`, a real 8-device suite that walks a dozen
 checkpoints and runs for well over ten minutes. `host_gate.sh` names the
 `test_lm_head_2d.py` file for exactly this reason.
+
+---
+
+# Addendum — attempt 3, 2026-08-27
+
+Re-verified rather than inherited, as the house rules require.
+
+| Item | Value | Where it was read |
+| --- | --- | --- |
+| Commit at start | `45efb7c10e8349d1093f6c1a17dbc6d8ac2b65e6` | `git rev-parse HEAD`, echoed into every `logs3/*.log` header |
+| Branch | `apbernal/tttv2_wh_glx_2d_modules_milestone_b` | driver log |
+| Boards | 32 Wormhole, no `ARC startup error` | `tttv2_milestone_b_runs/20260827T112601Z/mb-llama_tt_smi_before.log` (driver probe, 11:26 UTC) |
+| `/dev/tenstorrent` | 32 | every `logs3/*.log` header |
+| Firmware bundle | 18.12.1 | `logs3/a3_02_step2_gate.log`, UMD `topology_discovery.cpp:575` |
+| KMD | 2.4.1 | same log, `cluster.cpp:150` |
+| IOMMU | enabled | same log, `cluster.cpp:147` |
+| Host RAM | 566 GB total | `free -g` |
+| Python | 3.10.21, pytest 9.0.3 | pytest header in every log |
+| Build | reused `build_Release/` and `python_env/`; nothing rebuilt | brief's fixed parameters |
+| Mesh state at start | reset clean before the first run | `logs3/a3_00_reset.log`, `Re-initialized 32 boards after reset` |
+
+## Attempt 3's invocations
+
+Every device run went through `run3.sh`, which is `cycle.sh` with the CCL trace
+exported, a settable pytest-level timeout and its reset logs in `logs3/`:
+
+```sh
+MB_DEADLINE=<wrapper deadline> MB_PYTEST_TIMEOUT=<pytest deadline> \
+  ./tttv2_milestone_b_evidence/llama/run3.sh <logname> <node-id> \
+      -o faulthandler_timeout=600
+```
+
+Two changes to attempt 2's scripts, both backward compatible:
+
+* `device_run.sh` takes `MB_PYTEST_TIMEOUT` (default 900). A prefill 2048 or an
+  80-layer load legitimately needs longer, and a pytest timeout that fires early
+  costs a whole run.
+* `after_device_run.sh` takes `MB_RESET_DIR` so attempt 3's reset logs do not
+  land in attempt 1's `logs/`.
+
+`-o faulthandler_timeout=600` is new and is diagnostic only — nothing committed
+depends on it. Attempt 2 needed `gdb -p` to find out where a hang was, because a
+device-side CCL hang leaves no Python traceback. pytest's own faulthandler plugin
+dumps every thread's Python stack from a watchdog thread after 600 s and then
+lets the run continue, which names the hanging Python line for free.

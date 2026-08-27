@@ -14,7 +14,7 @@ echo "$out"
 #   Timed out waiting for ETH heartbeat on device ASIC ID ... ETH core e9-0
 # which costs a whole run to rediscover.
 if echo "$out" | grep -q REAPED || [ "$RC" != "0" ]; then
-    R="$(dirname "$0")/logs/reset_${TAG}.log"
+    R="${MB_RESET_DIR:-$(dirname "$0")/logs}/reset_${TAG}.log"
     { date -u; echo "reset after reaping a hung teardown ($TAG)"; } > "$R"
     # 900, not 600. A glx_reset after a wedged ARC controller needs longer than
     # ten minutes on this machine: attempt 2's reset after run 07 was killed at

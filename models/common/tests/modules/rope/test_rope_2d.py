@@ -64,7 +64,15 @@ def test_rope_2d_resolves_llama_and_qwen_data(table_len, theta, scale, original_
     assert parse_shard_dims_from_mesh_mapper_config(module.config.decode_index_mapper_config) == [0]
     assert "PlacementReplicate" in repr(module.config.decode_index_mapper_config)
     assert tuple(module.config._decode_trans_mat.source.shape) == (1, 1, 256, 32)
-    assert tuple(module.config._prefill_trans_mat.source.shape) == (1, 1, 128, 128)
+    # (1, 1, 32, 32), not (1, 1, head_dim, head_dim). This assertion used to read
+    # 128 and was wrong: `rotary_embedding_llama` applies the transformation one
+    # tile at a time and rejects anything else --
+    #     TT_FATAL ... Transformation matrix must have 4th dim equal to TILE_WIDTH
+    # measured on `(8, 4)` at prefill 128. `get_rot_transformation_mat`'s own
+    # docstring says "Must equal TILE_SIZE", and the qualified 1D reference
+    # hard-forces `dhead = 32  # ROPE op uses a single tile`. Nothing had ever
+    # driven the prefill matrix through the op, so the shape went unchallenged.
+    assert tuple(module.config._prefill_trans_mat.source.shape) == (1, 1, 32, 32)
     assert not hasattr(RotarySetup2D, "from_model_args")
 
 
@@ -203,3 +211,46 @@ def test_rope_2d_release_is_repeatable(monkeypatch):
 
     assert deallocated == values
     assert not module._device_weights_loaded
+
+
+def test_rope_2d_prefill_table_copy_is_tilized_and_decode_table_is_not(monkeypatch):
+    """Each mode's table has exactly one legal layout, and they differ.
+
+    Decode reads the table through `ttnn.embedding`, which needs a *row-major*
+    weight table; prefill slices the table and hands the slice to
+    `rotary_embedding_llama`, which rejects anything but TILE:
+
+        TT_FATAL ... cos tensor to rotary embedding must be tilized
+
+    measured on `(8, 4)` at prefill 128. So the second copy
+    `_materialize_table_copy` makes must be tilized even though the table it
+    copies is not, and that must not silently regress to `table.layout`.
+    """
+
+    from models.common.modules.rope import rope_2d
+
+    mesh = _galaxy()
+    core_grid, batch_grid = _grid_resources()
+    module = RotarySetup2D.from_config(
+        RotarySetup2DConfig(
+            LazyWeight(source=_ShapeOnly(1, 1, 4096, 128), device=mesh),
+            LazyWeight(source=_ShapeOnly(1, 1, 4096, 128), device=mesh),
+            32,
+            core_grid=core_grid,
+            batch_grid=batch_grid,
+        )
+    )
+    assert module.config.cos_matrix.layout is ttnn.ROW_MAJOR_LAYOUT
+
+    requested = []
+
+    def fake_get_device_weight(self):
+        requested.append(self.layout)
+        return object()
+
+    monkeypatch.setattr(LazyWeight, "get_device_weight", fake_get_device_weight)
+    module.load_device_weights()
+
+    # cos, sin, decode transform, prefill transform, and the two prefill copies.
+    assert requested.count(ttnn.TILE_LAYOUT) >= 2
+    assert rope_2d._materialize_table_copy.__doc__ is not None

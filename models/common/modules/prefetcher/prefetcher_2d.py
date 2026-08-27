@@ -73,6 +73,28 @@ class Prefetcher2DConfig:
     address_mesh_mapper: Any
     prefetch_num_layers: int = 1
     mesh_shape: tuple[int, int] = (8, 4)
+    #: Allocate the global circular buffer on the first ``activate("decode")``
+    #: instead of in ``seal()``.
+    #:
+    #: The global CB is ~774 kB of L1 on every sender/receiver core and nothing
+    #: can free it, so with the default ``False`` a *prefill* program that needs
+    #: static circular buffers on those cores cannot be placed at all:
+    #:
+    #:     TT_THROW ... Statically allocated circular buffers in program 100
+    #:     clash with L1 buffers on core range [0-0 - 0-3]. L1 buffer allocated
+    #:     at 579104 and static circular buffer region ends at 630080
+    #:                                              (from ttnn.embedding, prefill)
+    #:
+    #: Prefill never reads the buffer - ``seal()`` already hands the prefill
+    #: context ``global_cb=None`` - so holding it through prefill buys nothing.
+    #: The production Galaxy prefetcher makes the same choice and says so:
+    #: ``self.global_circular_buffer = None  # Global CB will only be allocated
+    #: before decode runs`` in ``models/demos/llama3_70b_galaxy/tt/
+    #: prefetcher_common.py``, with allocation in its own ``create_global_cb()``.
+    #:
+    #: Defaults to ``False`` so the Milestone A qualification of this module is
+    #: bit-for-bit unchanged unless a caller asks for the deferral.
+    defer_global_cb: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -288,11 +310,12 @@ class Prefetcher2D:
         metadata = None
         try:
             self._configure_mode_resources(self.config.decode)
-            global_cb = self._create_global_cb(
-                self.config.mesh_device,
-                list(self.config.sender_receiver_mapping),
-                resolved_cb_size,
-            )
+            if not self.config.defer_global_cb:
+                global_cb = self._create_global_cb(
+                    self.config.mesh_device,
+                    list(self.config.sender_receiver_mapping),
+                    resolved_cb_size,
+                )
             metadata = self._create_address_metadata(
                 addresses,
                 device=self.config.mesh_device,
@@ -378,6 +401,7 @@ class Prefetcher2D:
         try:
             self._configure_mode(context)
             if mode == "decode":
+                self._ensure_global_cb(context)
                 self._start_prefetch(context)
         except Exception as activation_error:
             if self._prefetch_result is not None:
@@ -400,6 +424,33 @@ class Prefetcher2D:
 
         self._active_mode = mode
         return context
+
+    def _ensure_global_cb(self, context: Prefetcher2DContext) -> None:
+        """Allocate the deferred global circular buffer and bind it to `context`.
+
+        Called from ``activate("decode")`` before the prefetch program is
+        enqueued, which is the first moment anything reads the buffer.
+
+        The binding is an ``object.__setattr__`` on a frozen dataclass, and that
+        is deliberate rather than lazy typing. Module configs capture the
+        *context object* at construction (`MLP2DConfig.decode_prefetch_context`,
+        read as ``getattr(context, "global_cb", None)`` at call time), so
+        replacing the entry in ``self._contexts`` would leave every already-built
+        module holding a context whose ``global_cb`` is still ``None``. The field
+        is bound exactly once, from ``None`` to the buffer, and never rebound.
+        """
+
+        if not self.config.defer_global_cb or self._global_cb is not None:
+            return
+        if self._resolved_global_cb_size is None:
+            raise RuntimeError("global CB size was not resolved during sealing")
+        global_cb = self._create_global_cb(
+            self.config.mesh_device,
+            list(self.config.sender_receiver_mapping),
+            self._resolved_global_cb_size,
+        )
+        self._global_cb = global_cb
+        object.__setattr__(context, "global_cb", global_cb)
 
     def cleanup(self) -> None:
         if self._cleaned:

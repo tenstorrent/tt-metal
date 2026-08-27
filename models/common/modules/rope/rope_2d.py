@@ -220,13 +220,40 @@ def _materialize_table_copy(table: LazyWeight) -> ttnn.Tensor:
 
     No cache entry is requested: this copy must not collide with the decode
     table's cache key, and it is cheap to rewrite.
+
+    **The copy is tilized, and the table it copies is not.** The two modes read
+    the table through different ops, and each op accepts exactly one layout:
+
+    * decode calls ``ttnn.embedding(rot_idxs, cos_matrix, layout=TILE)``, which
+      requires a **row-major** weight table and *produces* tilized cos/sin;
+    * prefill slices the table directly and hands the slice to
+      ``ttnn.experimental.rotary_embedding_llama``, which requires **tilized**
+      cos/sin:
+
+          TT_FATAL ... cos tensor to rotary embedding must be tilized
+          (rotary_embedding_llama_device_operation.cpp:51, cos.layout() == TILE)
+
+      measured on `(8, 4)` at prefill 128 with the row-major copy this used to
+      make. The qualified 1D reference agrees: ``get_prefill_rot_mat`` in
+      ``models/tt_transformers/tt/common.py`` writes its cos/sin with
+      ``layout=ttnn.TILE_LAYOUT``.
+
+    So there is no layout that serves both, and this is not a configuration
+    choice - it is one legal layout per consumer. Tilizing here rather than at
+    the slice keeps it a host-side write, which is the whole point of this
+    function: a device-side ``ttnn.tilize`` would compile a full-grid program
+    under the decode sub-device partition and abort exactly as the clone did.
+
+    A tilized slice constrains prefill's ``start_pos`` to a multiple of the tile
+    height, which every prefill and chunked-prefill start in this package already
+    is.
     """
 
     return LazyWeight(
         source=table.source,
         device=table.device,
         dtype=table.dtype,
-        layout=table.layout,
+        layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper_config=table.mesh_mapper_config,
         pad_value=table.pad_value,
@@ -295,7 +322,18 @@ def _resolve_rope2d_config(config: RotarySetup2DConfig) -> RotarySetup2DConfig:
         mesh_mapper_config=None,
     )
     prefill_trans = LazyWeight(
-        source=get_rot_transformation_mat(dhead=head_dim),
+        # `TILE_SIZE`, not `head_dim`. `rotary_embedding_llama` applies the
+        # transformation one tile at a time and validates it:
+        #     TT_FATAL ... Transformation matrix must have 4th dim equal to
+        #                  TILE_WIDTH
+        #     (rotary_embedding_llama_device_operation.cpp:194,
+        #      trans_mat.logical_shape()[-1] == TILE_WIDTH)
+        # measured on `(8, 4)` at prefill 128 with `head_dim = 128`. The helper
+        # says the same thing in its own docstring - "dhead: Matrix dimension.
+        # Must equal TILE_SIZE" - and the qualified reference forces it:
+        # `get_rot_transformation_mat` in `models/tt_transformers/tt/common.py`
+        # opens with `dhead = 32  # ROPE op uses a single tile`.
+        source=get_rot_transformation_mat(dhead=TILE_SIZE),
         device=mesh_device,
         dtype=config.datatype,
         layout=ttnn.TILE_LAYOUT,
