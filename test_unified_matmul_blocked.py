@@ -50,6 +50,8 @@ def run(
     wdtype=None,
     adtype=None,
     odtype=None,
+    skew=0,
+    share_pair=False,
 ):
     """Extents and block widths all in TILES. a/b let a caller supply the operands."""
     assert mtot % mt == 0 and ktot % kt == 0 and ntot % nt == 0
@@ -150,6 +152,8 @@ def run(
             + [("MMB_IN0_THREAD", str(in0_thread)), ("MMB_IN1_THREAD", str(in1_thread))]
             + ([("MMB_MCAST", "1"), ("MMB_GRID_H", str(mb)), ("MMB_GRID_W", str(nb))] if mcast else [])
             + ([("MMB_ABL_HOIST", "1")] if hoist else [])
+            + ([("MMB_SKEW", str(skew))] if skew else [])
+            + ([("MMB_SHARE_PAIR", "1")] if share_pair else [])
             + ([("TT_UNIFIED_MCAST_ZONES", "1")] if zones else [])
         )
         or None,
@@ -269,6 +273,41 @@ def main(argv=None):
                 )
                 if not ok:
                     failed.append(f"bf8-{tag.strip()}-{mtot}-{ktot}-{ntot}-{mt}-{kt}-{nt}")
+
+        # THE PAIR PARAMETER IS LOAD-BEARING, and this is the proof rather than the claim.
+        #
+        # Two collectives on ONE data-movement thread sharing one handshake pair corrupts,
+        # silently, on hardware. Three conditions have to coincide and all three are needed:
+        #
+        #   * both collectives on the same thread (in0_thread == in1_thread), so the
+        #     thread-derived default would give them the same pair,
+        #   * a receiver holding a LIVE buffer while the next round's ready counting runs --
+        #     that is what MMB_SKEW does, and where it sits matters: before the load it lands
+        #     after the previous pop, the buffer is already free, and nothing corrupts,
+        #   * depth 1, so there is no spare slot for an early broadcast to land in
+        #     harmlessly. At the default depth of 2 this passes, which is why it stayed
+        #     latent.
+        #
+        # The mechanism: (0, 0) is row 0's sender and waits for EQUALITY on its ready
+        # counter. Lower rows finish their own row broadcast and increment (0, 0) for the
+        # COLUMN collective while it is still counting ROW receivers, so the wait is
+        # satisfied by the wrong increments and the broadcast goes out into a buffer a
+        # receiver has not freed.
+        #
+        # Asserted as a DIFFERENCE, not an absolute: the control must be correct and the
+        # shared-pair build must be measurably worse. If shared pairs ever become safe this
+        # fails loudly, which is the right outcome -- it would mean the parameter can go.
+        skewed = dict(mcast=True, depth=1, in0_thread=0, in1_thread=0, skew=5000)
+        good, want = run(device, 16, 64, 64, 2, 8, 8, share_pair=False, **skewed)
+        bad, _ = run(device, 16, 64, 64, 2, 8, 8, share_pair=True, **skewed)
+        good_pcc, bad_pcc = pcc(good, want), pcc(bad, want)
+        ok = good_pcc >= args.pcc and bad_pcc < 0.99
+        logger.info(
+            f"  shared handshake pair corrupts: distinct={good_pcc:.6f}, shared={bad_pcc:.6f} "
+            f"({'corrupted as expected' if bad_pcc < 0.99 else 'NO LONGER CORRUPTS'})  {'ok' if ok else 'FAIL'}"
+        )
+        if not ok:
+            failed.append("shared-pair")
 
         # Partitioned across cores.
         for ncores in (2, 4, 8):
