@@ -230,6 +230,12 @@ class Qwen36RoPESetup:
         self._req_cos = torch.cat([self._req_cos, new_cos.to(torch.bfloat16)], dim=0)
         self._req_sin = torch.cat([self._req_sin, new_sin.to(torch.bfloat16)], dim=0)
 
+    @property
+    def mrope_staged(self):
+        """True when build_request_rope staged a per-sequence M-RoPE table (multimodal request),
+        so the absolute 1D tables cannot serve this prefill."""
+        return self._req_cos is not None
+
     def prefill_cos_sin_torch(self, start, length):
         """Torch bf16 cos/sin [length, rope_width] for SEQUENCE positions [start, start+length).
 
@@ -246,6 +252,22 @@ class Qwen36RoPESetup:
         if self.full_head_dim:
             cos_t, sin_t = to_full_width_rot_mats(cos_t, sin_t, self.full_head_dim, self.head_dim, self.device)
         return cos_t.to(torch.bfloat16), sin_t.to(torch.bfloat16)
+
+    def ensure_prefill_tables(self, n_rows):
+        """Grow the resident cos/sin tables to n_rows NOW, outside any traced region.
+
+        _rope_dev_tables grows by from_torch -- a host write. A caller that slices per chunk inside
+        a trace-replay loop must warm past its last position first, or that write lands mid-loop.
+        Mirrors how the decode rope path sizes to max_seq_len up front. Same args as the slice
+        below, so both hit one cache entry. Blackhole never builds them (get_prefill_rot_mats keeps
+        its host path there). Not gated on a staged M-RoPE table: these are the absolute tables, so
+        skipping the warm-up would only leave the growth to land inside a later capture.
+        """
+        if is_blackhole():
+            return
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
+
+        _rope_dev_tables(self.device, self.head_dim, int(n_rows), self.theta, full_head_dim=self.full_head_dim)
 
     def get_prefill_rot_mats(self, start, length):
         """ttnn cos/sin [1, length, head_dim] (replicated) for SEQUENCE positions [start, start+length).
