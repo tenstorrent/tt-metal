@@ -118,6 +118,7 @@ def unified_program(
     defines=None,
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
+    dynamic_noc=False,
 ):
     """Build a ProgramDescriptor that compiles ONE source for all five threads.
 
@@ -143,6 +144,9 @@ def unified_program(
             metal defaults (HiFi4, exact) are the most accurate and the slowest;
             HiFi2 halves the FPU passes per bfloat16 matmul and approx mode
             picks the cheap SFPU transcendentals.
+        dynamic_noc: put both data-movement kernels in DM_DYNAMIC_NOC. Only needed to let
+            a thread issue on a NOC other than its own -- in the default DM_DEDICATED_NOC
+            that is a device hang, not a slowdown. Costs ~2.7% when unused, so leave it off.
     """
     # Reserve the multicast handshake semaphores: two per DM thread, placed ABOVE
     # any id the caller used so their choices stay unconstrained. Their base goes
@@ -186,6 +190,14 @@ def unified_program(
         compiler_include_paths=UNIFIED_INCLUDE_PATHS,
     )
 
+    # DM_DEDICATED_NOC tracks issued reads in a per-RISC software counter and compares it
+    # against the per-core hardware response register, so it is only correct while exactly
+    # one RISC issues on a given NOC. DM_DYNAMIC_NOC keeps those counters in shared L1 and
+    # sums both RISCs', which is what lets two RISCs share a NOC and still barrier
+    # correctly. Metal requires every DM kernel on a core to agree on the mode, so this is
+    # per-program, not per-call. See unified_explicit_noc_spec.md.
+    noc_mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC if dynamic_noc else ttnn.NOC_MODE.DM_DEDICATED_NOC
+
     kernels = [
         # reader. `noc` must be set explicitly: DataMovementConfig defaults it to
         # RISCV_0_default (= NOC 0) regardless of processor, so leaving it out puts
@@ -197,13 +209,17 @@ def unified_program(
         ttnn.KernelDescriptor(
             **shared,
             runtime_args=make_runtime_args(cores, runtime_args),
-            config=ttnn.DataMovementConfigDescriptor(processor=reader_processor, noc=ttnn.NOC.RISCV_1_default),
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=reader_processor, noc=ttnn.NOC.RISCV_1_default, noc_mode=noc_mode
+            ),
         ),
         # writer
         ttnn.KernelDescriptor(
             **shared,
             runtime_args=make_runtime_args(cores, runtime_args),
-            config=ttnn.DataMovementConfigDescriptor(processor=writer_processor, noc=ttnn.NOC.RISCV_0_default),
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=writer_processor, noc=ttnn.NOC.RISCV_0_default, noc_mode=noc_mode
+            ),
         ),
         # compute (fans out to TRISC 0/1/2)
         ttnn.KernelDescriptor(
