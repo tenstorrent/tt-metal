@@ -36,13 +36,6 @@ namespace distributed {
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
 
-// Compile-only mode (RunTimeOptions::compile_only): EnqueueMeshWorkload fires each workload's kernel
-// compilation asynchronously and skips dispatch, so many programs' compiles run concurrently across
-// host cores instead of one blocking compile per op. Call this to join all pending async compiles --
-// e.g. at the end of a pre-compilation pass, before switching back to normal execution or clearing
-// the program cache. Must be called before pending compilation workloads can be destroyed.
-void WaitForPendingCompiles();
-
 template <typename DType>
 void WriteShard(
     MeshCommandQueue& mesh_cq,

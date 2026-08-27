@@ -18,6 +18,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "impl/context/metal_context.hpp"
+#include "distributed/compile_only.hpp"
 
 namespace tt::tt_metal {
 

@@ -9,6 +9,7 @@
 #include <mesh_coord.hpp>
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
+#include "distributed/compile_only.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include <tt_stl/small_vector.hpp>
 #include <sub_device.hpp>

@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "jit_build/build.hpp"
+#include "compile_only.hpp"
 #include "device.hpp"
 #include "mesh_device.hpp"
 #include "mesh_device_impl.hpp"
