@@ -14,6 +14,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/experimental/matmul_decode/packed_weight_spec.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
@@ -73,6 +74,14 @@ struct MatmulDecodeDeviceOperation {
             const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
+    struct AllGatherFullWidth {
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    };
+
     struct PartialWidthSharded {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
@@ -87,7 +96,8 @@ struct MatmulDecodeDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<FullWidthSharded, PartialWidthSharded, BatchedWidthSharded>;
+    using program_factory_t =
+        std::variant<FullWidthSharded, AllGatherFullWidth, PartialWidthSharded, BatchedWidthSharded>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

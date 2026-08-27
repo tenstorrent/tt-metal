@@ -61,8 +61,8 @@ inline void all_gather_local_output(tt::tt_fabric::RoutingPlaneConnectionManager
     constexpr uint32_t N_tiles_per_core = get_named_compile_time_arg_val("ag_N_tiles_per_core");
     constexpr uint32_t ring_index = get_named_compile_time_arg_val("ag_ring_index");
     constexpr uint32_t ring_size = get_named_compile_time_arg_val("ag_ring_size");
-    constexpr uint32_t out_ready_sem_id = get_named_compile_time_arg_val("ag_out_ready_sem_id");
-    constexpr uint32_t barrier_sem_id = get_named_compile_time_arg_val("ag_barrier_sem_id");
+    constexpr uint32_t out_ready_sem_addr = get_named_compile_time_arg_val("ag_out_ready_sem_id");
+    constexpr uint32_t barrier_sem_addr = get_named_compile_time_arg_val("ag_barrier_sem_id");
     constexpr uint32_t start_distance_in_hops_forward = get_named_compile_time_arg_val("ag_start_fwd");
     constexpr uint32_t range_hops_forward = get_named_compile_time_arg_val("ag_range_fwd");
     constexpr uint32_t start_distance_in_hops_backward = get_named_compile_time_arg_val("ag_start_bwd");
@@ -90,9 +90,6 @@ inline void all_gather_local_output(tt::tt_fabric::RoutingPlaneConnectionManager
 
     CircularBuffer out_cb(cb_out_id);
     const uint32_t tile_size = out_cb.get_tile_size();
-    const uint32_t out_ready_sem_addr = get_semaphore(out_ready_sem_id);
-    const uint32_t barrier_sem_addr = get_semaphore(barrier_sem_id);
-
     DPRINT(
         "[AGW] enter ring_idx={} ring_size={} nconn={} nshards={} start_fwd={} range_fwd={} start_bwd={} "
         "range_bwd={} M={} Npc={} out_addr={:x} noc=({},{}) ready_sem={:x} barrier_sem={:x}\n",

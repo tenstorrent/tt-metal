@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <algorithm>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -99,26 +98,25 @@ inline AllGatherFabricRoute make_all_gather_fabric_route(
     return route;
 }
 
-// Ethernet channels that can forward to every neighbor in `route`. Each AG writer core needs its
-// own channel: two tensix cores cannot handshake the same EDM sender slot (hangs in
-// open_connections). all_gather_via_broadcast uses the same 1-worker-per-link split.
-inline std::vector<uint32_t> all_gather_shared_forwarding_links(
-    const Tensor& tensor_a, const ttnn::MeshCoordinate& sender_coord, const AllGatherFabricRoute& route) {
+// Select one valid Ethernet channel for each destination connection. A forwarding link is
+// direction-specific: on a line/ring, the link that reaches the forward neighbor need not be
+// valid for the backward neighbor. Reusing one link for both connections can leave a multicast
+// atomic increment stranded while open_connections still succeeds.
+inline std::vector<uint32_t> all_gather_forwarding_links(
+    const Tensor& tensor_a,
+    const ttnn::MeshCoordinate& sender_coord,
+    const AllGatherFabricRoute& route,
+    uint32_t core_index) {
     TT_FATAL(!route.dst_nodes.empty(), "matmul_decode all_gather: no fabric destinations");
     const auto sender_node = tensor_a.device()->get_fabric_node_id(sender_coord);
-    std::vector<uint32_t> shared = tt::tt_fabric::get_forwarding_link_indices(sender_node, route.dst_nodes.front());
-    for (size_t i = 1; i < route.dst_nodes.size(); ++i) {
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(sender_node, route.dst_nodes[i]);
-        std::vector<uint32_t> inter;
-        inter.reserve(shared.size());
-        for (uint32_t l : shared) {
-            if (std::find(links.begin(), links.end(), l) != links.end()) {
-                inter.push_back(l);
-            }
-        }
-        shared = std::move(inter);
+    std::vector<uint32_t> links;
+    links.reserve(route.dst_nodes.size());
+    for (const auto& dst_node : route.dst_nodes) {
+        const auto valid_links = tt::tt_fabric::get_forwarding_link_indices(sender_node, dst_node);
+        TT_FATAL(!valid_links.empty(), "matmul_decode all_gather: no forwarding link to destination {}", dst_node);
+        links.push_back(valid_links[core_index % valid_links.size()]);
     }
-    return shared;
+    return links;
 }
 
 // Prefix (if any) is the writer kernel's existing runtime args; the all-gather block
@@ -132,7 +130,7 @@ inline void set_all_gather_writer_runtime_args(
     const ttnn::MeshCoordinate& sender_coord,
     Tensor& output,
     const AllGatherFabricRoute& route,
-    uint32_t link_idx = 0,
+    const std::vector<uint32_t>& link_indices = {},
     const std::vector<uint32_t>& prefix_args = {},
     const std::vector<tt::tt_metal::CoreCoord>& extra_shard_phys = {}) {
     const auto phys = device->worker_core_from_logical_core(core);
@@ -151,7 +149,7 @@ inline void set_all_gather_writer_runtime_args(
     const auto sender_node = tensor_a.device()->get_fabric_node_id(sender_coord);
     tt::tt_metal::KernelHandle writer_id_mut = writer_id;
     tt::tt_fabric::append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
-        sender_node, route.dst_nodes, {link_idx}, desc, writer_id_mut, core, rt);
+        sender_node, route.dst_nodes, link_indices, desc, writer_id_mut, core, rt);
 
     std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> var;
     var.reserve(rt.size());

@@ -5,6 +5,7 @@
 #include "matmul_decode_device_operation.hpp"
 #include "ring_walk.hpp"
 #include "all_gather_writer.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/shape.hpp"
@@ -12,6 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include <map>
 #include <memory>
@@ -32,7 +34,9 @@ ProgramDescriptor create_descriptor_ring_gather_full(
     const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
     const MatmulDecodeDeviceOperation::tensor_args_t& tensor_args,
     MatmulDecodeDeviceOperation::tensor_return_value_t& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
+    const GlobalSemaphore* out_ready_semaphore = nullptr,
+    const GlobalSemaphore* barrier_semaphore = nullptr);
 }  // namespace
 
 // Full width-sharded: B/output are width(N)-sharded; reader gathers full A onto every core.
@@ -548,7 +552,9 @@ ProgramDescriptor create_descriptor_ring_gather_full(
     const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
     const MatmulDecodeDeviceOperation::tensor_args_t& tensor_args,
     MatmulDecodeDeviceOperation::tensor_return_value_t& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
+    const GlobalSemaphore* out_ready_semaphore,
+    const GlobalSemaphore* barrier_semaphore) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
@@ -751,19 +757,13 @@ ProgramDescriptor create_descriptor_ring_gather_full(
         .core_ranges = all_ring_cores,
         .initial_value = 0,
     });
-    constexpr uint32_t out_ready_sem_id = 1;
-    constexpr uint32_t barrier_sem_id = 2;
     if (all_gather) {
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = out_ready_sem_id,
-            .core_ranges = output_core_range_set,
-            .initial_value = 0,
-        });
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = barrier_sem_id,
-            .core_ranges = output_core_range_set,
-            .initial_value = 0,
-        });
+        TT_FATAL(
+            out_ready_semaphore != nullptr && barrier_semaphore != nullptr,
+            "matmul_decode all_gather requires workload-scoped semaphores");
+        // Cross-device semaphores are allocated once by AllGatherFullWidth and
+        // kept alive by its WorkloadDescriptor. The activation-ring semaphore
+        // above remains a normal per-program semaphore.
     }
 
     const uint32_t shard_num_tiles = M_tiles * inA_K_tiles_per_core;
@@ -912,26 +912,25 @@ ProgramDescriptor create_descriptor_ring_gather_full(
             inB_N_tiles_per_core,
             route.ring_index,
             operation_attributes.ring_size,
-            out_ready_sem_id,
-            barrier_sem_id,
+            static_cast<uint32_t>(out_ready_semaphore->address()),
+            static_cast<uint32_t>(barrier_semaphore->address()),
             route.start_fwd,
             route.range_fwd,
             route.start_bwd,
             route.range_bwd,
-            /*ag_rt_arg_base=*/0);
+            /*ag_rt_arg_base=*/0,
+            /*num_shards=*/1,
+            /*shard_sem_id=*/0,
+            /*staging_cb_id=*/0);
         writer.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::NOC_1,
         };
-        const auto shared_links = all_gather_shared_forwarding_links(input_tensor_a, *mesh_dispatch_coordinate, route);
-        TT_FATAL(
-            shared_links.size() >= C_cores.size(),
-            "matmul_decode all_gather: need {} fabric links (one per compute core), but this device has {}",
-            C_cores.size(),
-            shared_links.size());
         const KernelHandle writer_id = static_cast<KernelHandle>(desc.kernels.size());
         desc.kernels.push_back(std::move(writer));
         for (uint32_t i = 0; i < C_cores.size(); ++i) {
+            const auto forwarding_links =
+                all_gather_forwarding_links(input_tensor_a, *mesh_dispatch_coordinate, route, i);
             set_all_gather_writer_runtime_args(
                 desc,
                 writer_id,
@@ -941,7 +940,7 @@ ProgramDescriptor create_descriptor_ring_gather_full(
                 *mesh_dispatch_coordinate,
                 output_tensor,
                 route,
-                shared_links[i]);
+                forwarding_links);
         }
     }
 
@@ -960,5 +959,37 @@ ProgramDescriptor create_descriptor_ring_gather_full(
 }
 
 }  // namespace
+
+tt::tt_metal::WorkloadDescriptor MatmulDecodeDeviceOperation::AllGatherFullWidth::create_workload_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    TT_FATAL(operation_attributes.all_gather, "internal error: all-gather workload factory used without all_gather");
+    TT_FATAL(
+        !operation_attributes.global_cb.has_value(),
+        "matmul_decode all_gather is not supported with global_cb (tensor prefetcher)");
+
+    auto* mesh_device = tensor_args.input_tensor_a.device();
+    const auto subdevice_id = mesh_device->get_sub_device_ids().at(0);
+    const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+
+    tt::tt_metal::WorkloadDescriptor workload;
+    workload.semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
+    workload.semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
+    const auto& out_ready_semaphore = workload.semaphores[0];
+    const auto& barrier_semaphore = workload.semaphores[1];
+
+    ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
+
+    workload.programs.reserve(tensor_coords.coords().size());
+    for (const auto& coord : tensor_coords.coords()) {
+        auto descriptor = create_descriptor_ring_gather_full(
+            operation_attributes, tensor_args, tensor_return_value, coord, &out_ready_semaphore, &barrier_semaphore);
+        workload.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(descriptor)});
+    }
+    return workload;
+}
 
 }  // namespace ttnn::operations::experimental::matmul_decode

@@ -24,6 +24,9 @@ MatmulDecodeDeviceOperation::program_factory_t MatmulDecodeDeviceOperation::sele
     if (tensor_args.input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1) {
         return BatchedWidthSharded{};
     }
+    if (operation_attributes.all_gather) {
+        return AllGatherFullWidth{};
+    }
     if (operation_attributes.partial_width_sharded) {
         return PartialWidthSharded{};
     }
@@ -49,6 +52,10 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
             !operation_attributes.global_cb.has_value(),
             "matmul_decode all_gather is not supported with global_cb (tensor prefetcher)");
         TT_FATAL(!batched, "matmul_decode all_gather is not supported with the batched width-sharded factory");
+        TT_FATAL(
+            !partial,
+            "matmul_decode all_gather is not supported with partial_width_sharded; "
+            "the partial-width all-gather implementation is not available");
     }
 
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input tensor A must be in tile layout");
