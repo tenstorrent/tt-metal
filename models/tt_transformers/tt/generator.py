@@ -280,15 +280,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # The offset a real request will be floored to for this length, so
                 # the captured program config is the one those replays need.
                 num_cached = self._resume_offset_alignment(prefill_seq_len, block_size, model_id)
-                # The prompt spans the bucket rather than the bucket plus the
-                # offset: adding to it would exceed max_seq_len for the largest
-                # bucket, skipping the trace a real request of that length uses.
-                # The suffix still pads back to this bucket because the offset is
-                # at most half of it.
-                total_seq_len = prefill_seq_len
-                assert (
-                    get_padded_prefill_len(total_seq_len - num_cached) == prefill_seq_len
-                ), f"warmup suffix {total_seq_len - num_cached} does not pad to bucket {prefill_seq_len}"
+                # Only the suffix after the offset is padded into the bucket, so
+                # the prompt has to clear the offset by a full bucket to land on
+                # this key. ``capped_warmup_seq_len`` is the ceiling the rest of
+                # warmup uses: past it the call would be split into chunks and
+                # capture something else.
+                total_seq_len = min(num_cached + prefill_seq_len, model_args.capped_warmup_seq_len)
+                suffix = total_seq_len - num_cached
+                if suffix <= 0 or get_padded_prefill_len(suffix) != prefill_seq_len:
+                    logger.warning(
+                        f"Skipping resumed prefill warmup for sequence length {prefill_seq_len}: "
+                        f"offset {num_cached} leaves no suffix padding back to it within "
+                        f"{model_args.capped_warmup_seq_len} tokens. Its trace is captured on first use."
+                    )
+                    continue
 
                 num_blocks = num_blocks_in_seq(total_seq_len, block_size)
                 logger.info(
