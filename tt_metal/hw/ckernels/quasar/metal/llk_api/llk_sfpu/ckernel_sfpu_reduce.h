@@ -292,6 +292,10 @@ inline void reduce_col_tile() {
  */
 template <PoolType POOL_TYPE, bool IS_INT>
 inline void reduce_row_fold_columns() {
+    // "unroll 1" is an unroll *factor* of one - it disables unrolling rather than asking for it.
+    // Both bounds are compile-time constants (distance runs 4, then 2, then 1), so GCC would
+    // otherwise flatten this into ~23 straight-line SFPU instructions instead of emitting the
+    // body once.
 #pragma GCC unroll 1
     for (std::uint32_t distance = REDUCE_SFPU_COLUMNS / 2; distance > 0; distance >>= 1) {
         TTI_SFPMOV(REDUCE_ACC_REG, REDUCE_ROT_REG, 0 /* instr_mod1: plain copy */);
