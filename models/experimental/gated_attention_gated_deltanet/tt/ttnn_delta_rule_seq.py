@@ -346,6 +346,11 @@ def _multiply_into_dead_rhs(lhs, rhs, *, memory_config):
     return ttnn.multiply(lhs, rhs, memory_config=memory_config, output_tensor=rhs)
 
 
+def _multiply_into_dead_lhs(lhs, rhs, *, memory_config):
+    """Multiply into ``lhs`` when its unscaled value has no later consumers."""
+    return ttnn.multiply(lhs, rhs, memory_config=memory_config, output_tensor=lhs)
+
+
 def chunk_gated_delta_rule_seq(
     q,  # [BH, T, K] float32 on mesh
     k,  # [BH, T, K] float32 on mesh
@@ -544,8 +549,6 @@ def chunk_gated_delta_rule_seq(
         ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    q_decay_4d = ttnn.multiply(q_c_4d, decay_raw_exp_4d, memory_config=_cmc)
-    ttnn.deallocate(decay_raw_exp_4d)
 
     decay_last_norm_4d = ttnn.reshape(decay_last_normalized, [BH, num_chunks, 1], memory_config=_cmc)
     decay_diff_3d = ttnn.subtract(decay_last_norm_4d, decay_3d, memory_config=_cmc)
@@ -580,13 +583,18 @@ def chunk_gated_delta_rule_seq(
     L_mask_4d = ttnn.reshape(L_mask, [BH, num_chunks, chunk_size, chunk_size], memory_config=None)
     L_mask_4d = ttnn.to_layout(L_mask_4d, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     lower_causal_4d = ttnn.reshape(lower_causal, [1, 1, chunk_size, chunk_size], memory_config=None)
-    combined_mask_4d = ttnn.multiply(L_mask_4d, lower_causal_4d, memory_config=_cmc)
-    ttnn.deallocate(L_mask_4d)
+    combined_mask_4d = _multiply_into_dead_lhs(L_mask_4d, lower_causal_4d, memory_config=_cmc)
     k_c_4d_t = ttnn.transpose(k_c_4d, 2, 3, memory_config=_cmc)
     qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
     ttnn.deallocate(k_c_4d_t)
-    intra_attn_4d = ttnn.multiply(qk_4d, combined_mask_4d, memory_config=_cmc)
-    ttnn.deallocate(qk_4d)
+
+    # q_c and qk are dead after this point, so retain their storage for the
+    # equally-shaped decay and masked-attention outputs instead of demanding
+    # two more large contiguous DRAM regions at the preprocessing high-water.
+    q_decay_4d = _multiply_into_dead_lhs(q_c_4d, decay_raw_exp_4d, memory_config=_cmc)
+    ttnn.deallocate(decay_raw_exp_4d)
+    ttnn.deallocate(k_c_4d)
+    intra_attn_4d = _multiply_into_dead_lhs(qk_4d, combined_mask_4d, memory_config=_cmc)
     ttnn.deallocate(combined_mask_4d)
 
     # ---- Reshape preprocessing outputs to 4D for the C++ kernel ----
