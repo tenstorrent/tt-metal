@@ -322,3 +322,59 @@ def test_forward_rejects_unknown_mode(expect_error):
     module = object.__new__(RMSNorm2D)
     with expect_error(ValueError, "mode must be"):
         module.forward(object(), mode="train")
+
+
+def test_distributed_decode_does_not_deallocate_a_tensor_it_returns(monkeypatch):
+    """The decode norm must not free its own output when no copy was made.
+
+    ``ttnn.to_memory_config`` returns *the same* tt_metal tensor when the
+    requested config already matches, and nanobind hands that back as a fresh
+    Python wrapper - so a plain ``if placed is not source: source.deallocate()``
+    cannot tell "no copy was made" from "a copy was made", and frees the buffer
+    it is about to return. The next op then fails with "Tensor is not allocated".
+
+    Both of ``_decode_distributed``'s placements are in that position: the norm's
+    ``decode_input_memcfg`` is the residual placement the previous layer already
+    produced, and ``rms_norm_post_all_gather`` already returns its output in
+    ``decode_output_memcfg``. So on the real Galaxy decode path the short-circuit
+    fires *every time*, for both of them.
+
+    This went unnoticed for a whole milestone because the sibling test above
+    mocks ``to_memory_config`` with ``side_effect=[distributed, output]``, which
+    always hands back a distinct object - exactly the case where the identity
+    test happens to be right. Here the tensors already carry the requested
+    configs, which is what the hardware does.
+    """
+
+    mesh = _mesh()
+    stats_buffer = _stats_buffer()
+    resolved = _resolve_2d_config(
+        RMSNorm2DConfig(weight=_weight(8192, mesh), mesh_device=mesh, tt_ccl=_ccl(mesh, stats_buffer))
+    )
+    module = object.__new__(RMSNorm2D)
+    module.config = resolved
+    module.weight = "weight"
+
+    def placed(memory_config):
+        tensor = MagicMock()
+        tensor.memory_config = MagicMock(return_value=memory_config)
+        return tensor
+
+    source = placed(resolved.decode_input_memcfg)
+    output = placed(resolved.decode_output_memcfg)
+    stats = MagicMock()
+
+    relocate = MagicMock(side_effect=AssertionError("to_memory_config called for a placement already satisfied"))
+    monkeypatch.setattr(rmsnorm_2d, "_load_input_device_tensor_2d", lambda value, *_a, **_k: value)
+    monkeypatch.setattr(ttnn, "to_memory_config", relocate)
+    monkeypatch.setattr(ttnn, "rms_norm_pre_all_gather", MagicMock(return_value=stats))
+    monkeypatch.setattr(ttnn.experimental, "all_gather_async", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(ttnn, "rms_norm_post_all_gather", MagicMock(return_value=output))
+
+    assert module._decode_distributed(source) is output
+
+    # Neither placement was re-issued, so neither identity test could misfire.
+    relocate.assert_not_called()
+    # And nothing that is still in use was released.
+    output.deallocate.assert_not_called()
+    source.deallocate.assert_not_called()

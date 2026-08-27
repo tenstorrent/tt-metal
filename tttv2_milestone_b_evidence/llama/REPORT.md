@@ -242,6 +242,17 @@ docstring in `moe/tt_moe_decode.py` already warns about.
 Pre-existing, not caused by this job; `_decode_distributed` had simply never run
 on hardware. Evidence: `logs/30`.
 
+Guarded on host:
+`test_rmsnorm_2d.py::test_distributed_decode_does_not_deallocate_a_tensor_it_returns`.
+It hands the norm tensors that already carry the requested configs - which is
+what the hardware does, and where the short-circuit fires every time - and
+asserts that neither placement is re-issued and nothing still in use is released.
+**Verified to fail against the pre-fix code** (`logs/95`) and pass against the fix
+(`logs/94`). The reason this stayed latent for a milestone is visible one test
+above it: the sibling test mocks `to_memory_config` with
+`side_effect=[distributed, output]`, which always returns a distinct object -
+precisely the case where the identity test happens to be right.
+
 ### D-B5 — L3 is not closed: the attention decode matmuls still use the dense `(7,1)` grid
 
 `models/common/models/galaxy/recipes.py::dense_matmul_program_config` (**shared
@@ -468,10 +479,10 @@ job can determine, and it is not claimed either way.
 
 ## 6. Regression gates and boundaries
 
-Host gate, final code state, **driver-free selection** (`logs/92`):
+Host gate, final code state, **driver-free selection** (`logs/96`):
 
 ```text
-390 passed, 3 warnings in 86.57s     0 driver errors
+391 passed, 3 warnings in 87.18s     0 driver errors
 ```
 
 Host gate, final code state, **standard selection** (`logs/91`):
@@ -488,8 +499,8 @@ earlier, on a working mesh (`logs/81`). `test_plans.py` is therefore
 **NOT RUN at the final code state**, by infrastructure failure, and is called out
 rather than folded into a number.
 
-Baseline at job start: **395 passed** (`logs/01`). Three tests were added to the
-standard selection and nine to the driver-free one. **No test was deleted,
+Baseline at job start: **395 passed** (`logs/01`). Four tests were added to the
+standard selection and ten to the driver-free one. **No test was deleted,
 `xfail`ed, skipped, or had a threshold, tolerance or parametrization relaxed.**
 
 Boundaries, `b350e51554470414d5a8b08f5ea9775c986145a4..HEAD`:
@@ -518,6 +529,22 @@ Extension-discipline order was followed: config first (D-B3, D-B8), frozen
 config value second (D-B8's default), mechanical delegation to an existing
 qualified helper third (D-B2, D-B5, D-B6). Nothing larger was attempted; §4.1,
 which would be larger, is left as a recommendation and not half-done.
+
+### A note on the logs, for `mb-signoff`
+
+The 105 logs are committed, force-added past `.gitignore:7` (`*.log`). An
+ordinary `git add` of the evidence directory silently drops them, which is why
+job 0's 30 reconcile logs are present on disk in this checkout but untracked -
+that is the ignore rule, not a missing deliverable. `trailing-whitespace` and
+`end-of-file-fixer` were skipped for that commit: they rewrote 25 of the logs
+(574 insertions, 574 deletions, all trailing spaces in pytest's output tables),
+and evidence should be the bytes the tools emitted.
+
+### Final mesh state, re-checked
+
+At 2026-08-27T00:46Z, after the write-up: `/dev/tenstorrent/7` still unreadable,
+`tt-smi -ls` still aborting with zero boards (`logs/93`). Still broken; no device
+work was attempted after the `BLOCKED` call.
 
 ## 7. Commits
 

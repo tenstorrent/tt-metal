@@ -1,0 +1,104 @@
+2026-08-27 00:48:33.795 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 600.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_does_not_deallocate_a_tensor_it_returns FAILED
+
+=================================== FAILURES ===================================
+_______ test_distributed_decode_does_not_deallocate_a_tensor_it_returns ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x71299756bbb0>
+
+    def test_distributed_decode_does_not_deallocate_a_tensor_it_returns(monkeypatch):
+        """The decode norm must not free its own output when no copy was made.
+    
+        ``ttnn.to_memory_config`` returns *the same* tt_metal tensor when the
+        requested config already matches, and nanobind hands that back as a fresh
+        Python wrapper - so a plain ``if placed is not source: source.deallocate()``
+        cannot tell "no copy was made" from "a copy was made", and frees the buffer
+        it is about to return. The next op then fails with "Tensor is not allocated".
+    
+        Both of ``_decode_distributed``'s placements are in that position: the norm's
+        ``decode_input_memcfg`` is the residual placement the previous layer already
+        produced, and ``rms_norm_post_all_gather`` already returns its output in
+        ``decode_output_memcfg``. So on the real Galaxy decode path the short-circuit
+        fires *every time*, for both of them.
+    
+        This went unnoticed for a whole milestone because the sibling test above
+        mocks ``to_memory_config`` with ``side_effect=[distributed, output]``, which
+        always hands back a distinct object - exactly the case where the identity
+        test happens to be right. Here the tensors already carry the requested
+        configs, which is what the hardware does.
+        """
+    
+        mesh = _mesh()
+        stats_buffer = _stats_buffer()
+        resolved = _resolve_2d_config(
+            RMSNorm2DConfig(weight=_weight(8192, mesh), mesh_device=mesh, tt_ccl=_ccl(mesh, stats_buffer))
+        )
+        module = object.__new__(RMSNorm2D)
+        module.config = resolved
+        module.weight = "weight"
+    
+        def placed(memory_config):
+            tensor = MagicMock()
+            tensor.memory_config = MagicMock(return_value=memory_config)
+            return tensor
+    
+        source = placed(resolved.decode_input_memcfg)
+        output = placed(resolved.decode_output_memcfg)
+        stats = MagicMock()
+    
+        relocate = MagicMock(side_effect=AssertionError("to_memory_config called for a placement already satisfied"))
+        monkeypatch.setattr(rmsnorm_2d, "_load_input_device_tensor_2d", lambda value, *_a, **_k: value)
+        monkeypatch.setattr(ttnn, "to_memory_config", relocate)
+        monkeypatch.setattr(ttnn, "rms_norm_pre_all_gather", MagicMock(return_value=stats))
+        monkeypatch.setattr(ttnn.experimental, "all_gather_async", MagicMock(return_value=MagicMock()))
+        monkeypatch.setattr(ttnn, "rms_norm_post_all_gather", MagicMock(return_value=output))
+    
+>       assert module._decode_distributed(source) is output
+
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py:374: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+models/common/modules/rmsnorm/rmsnorm_2d.py:279: in _decode_distributed
+    distributed_input = ttnn.to_memory_config(x, memory_config=cfg.decode_input_memcfg)
+/home/ctr-apbernal/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/unittest/mock.py:1114: in __call__
+    return self._mock_call(*args, **kwargs)
+/home/ctr-apbernal/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/unittest/mock.py:1118: in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <MagicMock id='124423447067568'>
+args = (<MagicMock id='124423446956736'>,)
+kwargs = {'memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=S...rientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)}
+effect = AssertionError('to_memory_config called for a placement already satisfied')
+
+    def _execute_mock_call(self, /, *args, **kwargs):
+        # separate from _increment_mock_call so that awaited functions are
+        # executed separately from their call, also AsyncMock overrides this method
+    
+        effect = self.side_effect
+        if effect is not None:
+            if _is_exception(effect):
+>               raise effect
+E               AssertionError: to_memory_config called for a placement already satisfied
+
+/home/ctr-apbernal/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/unittest/mock.py:1173: AssertionError
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_does_not_deallocate_a_tensor_it_returns
+
+(2 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+FAILED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_does_not_deallocate_a_tensor_it_returns
+============================== 1 failed in 0.83s ===============================
+exit=1

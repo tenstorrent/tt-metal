@@ -1,0 +1,96 @@
+2026-08-27 00:47:42.463 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ctr-apbernal/.cache/ttnn,model_cache_path=/home/ctr-apbernal/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.21, pytest-9.0.3, pluggy-1.6.0 -- /proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /proj_sw/user_dev/ctr-apbernal/tt-metal
+configfile: pytest.ini
+plugins: cov-7.0.0, dash-2.15.0, benchmark-5.2.3, repeat-0.9.4, anyio-4.14.2, timeout-2.4.0, github-actions-annotate-failures-0.3.0, split-0.11.0
+timeout: 600.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 20 items
+
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolves_representative_norm_geometries[llama-final-norm] PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolves_representative_norm_geometries[qwen-qk-norm] PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape0-32-Arch.WORMHOLE_B0-WH Galaxy mesh] 2026-08-27 00:47:56.405 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] AssertionError message="WH Galaxy mesh"
+2026-08-27 00:47:56.405 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] AssertionError message="WH Galaxy mesh"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape1-31-Arch.WORMHOLE_B0-exactly 32 devices] 2026-08-27 00:47:56.553 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] AssertionError message="exactly 32 devices"
+2026-08-27 00:47:56.554 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] AssertionError message="exactly 32 devices"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape2-32-Arch.BLACKHOLE-requires Wormhole] 2026-08-27 00:47:56.702 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] AssertionError message="requires Wormhole"
+2026-08-27 00:47:56.702 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] AssertionError message="requires Wormhole"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_rejects_resources_from_another_mesh 2026-08-27 00:47:56.853 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] AssertionError message="prefetch context"
+2026-08-27 00:47:56.853 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] AssertionError message="prefetch context"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_resolution_fails_closed_without_ccl_resources 2026-08-27 00:47:57.004 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] TypeError message="context"
+2026-08-27 00:47:57.004 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] TypeError message="context"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_fused_decode_returns_normalized_output_and_residual_sum PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_fused_decode_rejects_stats_buffer_off_the_norm_sender_core 2026-08-27 00:47:57.302 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="first core of the norm input shard grid"
+2026-08-27 00:47:57.302 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="first core of the norm input shard grid"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_decode_stays_interleaved PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_stats_share_the_norm_sender_core PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_qwen_128_wide_norm_is_head_local_and_skips_collectives PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_chunked_prefill_stats_shape_preserves_all_token_axes PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_consumes_resolved_gather_resources PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_prefill_uses_resolved_standard_gather PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_from_model_args_is_not_part_of_contract PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_mode_bound_ccl_contexts_are_resolved_at_construction PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_simple_constructor_accepts_explicit_galaxy_ccl PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_forward_rejects_unknown_mode 2026-08-27 00:47:58.788 | INFO     | conftest:expect_error_:922 - [EXPECTED_ERROR BEGIN] ValueError message="mode must be"
+2026-08-27 00:47:58.788 | INFO     | conftest:expect_error_:927 - [EXPECTED_ERROR END] ValueError message="mode must be"
+PASSED
+models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_does_not_deallocate_a_tensor_it_returns PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /proj_sw/user_dev/ctr-apbernal/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.16s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolves_representative_norm_geometries[llama-final-norm]
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_prefill_uses_resolved_standard_gather
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolves_representative_norm_geometries[qwen-qk-norm]
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_resolution_fails_closed_without_ccl_resources
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_forward_rejects_unknown_mode
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_rejects_resources_from_another_mesh
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_from_model_args_is_not_part_of_contract
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape2-32-Arch.BLACKHOLE-requires Wormhole]
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_fused_decode_returns_normalized_output_and_residual_sum
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_qwen_128_wide_norm_is_head_local_and_skips_collectives
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape1-31-Arch.WORMHOLE_B0-exactly 32 devices]
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_decode_stays_interleaved
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape0-32-Arch.WORMHOLE_B0-WH Galaxy mesh]
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_chunked_prefill_stats_shape_preserves_all_token_axes
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_simple_constructor_accepts_explicit_galaxy_ccl
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_stats_share_the_norm_sender_core
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_fused_decode_rejects_stats_buffer_off_the_norm_sender_core
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_consumes_resolved_gather_resources
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_mode_bound_ccl_contexts_are_resolved_at_construction
+0.15s setup    models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_does_not_deallocate_a_tensor_it_returns
+
+(5 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolves_representative_norm_geometries[llama-final-norm]
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolves_representative_norm_geometries[qwen-qk-norm]
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape0-32-Arch.WORMHOLE_B0-WH Galaxy mesh]
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape1-31-Arch.WORMHOLE_B0-exactly 32 devices]
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_fails_closed_on_non_wh_galaxy[shape2-32-Arch.BLACKHOLE-requires Wormhole]
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_resolution_rejects_resources_from_another_mesh
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_resolution_fails_closed_without_ccl_resources
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_fused_decode_returns_normalized_output_and_residual_sum
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_fused_decode_rejects_stats_buffer_off_the_norm_sender_core
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_head_local_decode_stays_interleaved
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_stats_share_the_norm_sender_core
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_qwen_128_wide_norm_is_head_local_and_skips_collectives
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_chunked_prefill_stats_shape_preserves_all_token_axes
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_consumes_resolved_gather_resources
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_prefill_uses_resolved_standard_gather
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_from_model_args_is_not_part_of_contract
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_mode_bound_ccl_contexts_are_resolved_at_construction
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_simple_constructor_accepts_explicit_galaxy_ccl
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_forward_rejects_unknown_mode
+PASSED models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py::test_distributed_decode_does_not_deallocate_a_tensor_it_returns
+============================== 20 passed in 3.22s ==============================
+exit=0
