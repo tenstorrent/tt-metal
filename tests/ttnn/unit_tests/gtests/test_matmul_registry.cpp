@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <thread>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -1062,7 +1063,24 @@ TEST(MatmulConfigRegistry, LegacyExplicitCkcExactEvidenceCannotActivateProgramCo
     const auto exact_parameters = materialize_parameters_for_execution(Mode::On, authorized, caller_parameters);
     ASSERT_TRUE(exact_parameters.has_value());
     EXPECT_TRUE(exact_parameters->program_config.has_value());
-    EXPECT_EQ(exact_parameters->compute_kernel_config, caller_parameters.compute_kernel_config);
+    ASSERT_TRUE(exact_parameters->compute_kernel_config.has_value());
+    const auto& exact_ckc = exact_parameters->compute_kernel_config.value();
+    const auto& caller_ckc = caller_parameters.compute_kernel_config.value();
+    EXPECT_EQ(
+        std::tie(
+            exact_ckc.math_fidelity,
+            exact_ckc.math_approx_mode,
+            exact_ckc.fp32_dest_acc_en,
+            exact_ckc.packer_l1_acc,
+            exact_ckc.dst_full_sync_en,
+            exact_ckc.throttle_level),
+        std::tie(
+            caller_ckc.math_fidelity,
+            caller_ckc.math_approx_mode,
+            caller_ckc.fp32_dest_acc_en,
+            caller_ckc.packer_l1_acc,
+            caller_ckc.dst_full_sync_en,
+            caller_ckc.throttle_level));
 
     auto legacy_metadata = compact_metadata();
     legacy_metadata.program_config_only_evidence_schema_version = 0;
