@@ -4,12 +4,16 @@
 
 // Reader kernel for fused multi-scale deformable attention.
 //
-// Produces one (input_tile, scalar_tile) pair per (p, corner) per output
-// tile, where one output tile carries up to 32 queries (all from the same
-// batch index n). The compute kernel multiplies them via
-// mul_tiles_bcast<COL>: result[h, w] = input[h, w] * scalar[h, 0], so row h
-// must hold query h's value-stick and scalar col-0 row h must hold that
-// query's combined weight (attn * bilinear_corner).
+// Stages the grid and attn for a block of up to 32 queries as column-0 tiles the
+// compute kernel solves the sampling geometry from, then gathers the value
+// sticks for the corners it hands back. One output tile carries up to 32 queries
+// from a single batch index n.
+//
+// The geometry itself is not here. It is per-point float work over 32 queries —
+// vector work on a core with no vector unit and no FPU, where every operation
+// costs about 140 cycles of soft-float emulation. The compute kernel owns it.
+// What stays is integer: decoding the floored corner out of bf16, bounds-testing
+// it, and turning it into a page index.
 //
 // Tile face layout (bf16, 32x32 tile = 4 faces of 16x16, 512 B per face,
 // 2048 B per tile):
@@ -17,25 +21,18 @@
 //   TR face: offset  512..1023  (rows  0..15, cols 16..31)
 //   BL face: offset 1024..1535  (rows 16..31, cols  0..15)
 //   BR face: offset 1536..2047  (rows 16..31, cols 16..31)
-// Row r ∈ [0, 16) spans TL[r*32 .. r*32+31] + TR[512+r*32 .. 512+r*32+31].
-// Row r ∈ [16, 32) spans BL[1024+(r-16)*32 ..] + BR[1536+(r-16)*32 ..].
-// For COL bcast the scalar tile is read at col 0 of TL (rows 0..15) and
-// col 0 of BL (rows 16..31): bytes 0, 32, 64, ..., 480 and 1024, 1056,
-// ..., 1504. Non-col-0 lanes of the scalar tile are never written — the
-// compute kernel calls mul_tiles_bcast<COL> with clear_fp32_dst_acc=true so
-// DST is cleared on entry and only col-0 broadcasts contribute.
+// Row r spans a low half (cols 0..15) and a high half (cols 16..31) at
+// non-contiguous offsets; both are 32-byte aligned, so the NoC writes value
+// sticks into them directly.
 //
-// Per-tile runtime args (3 per tile): (n, q_start, v_rows). 1 ≤ v_rows ≤ 32.
+// Per-tile runtime args (3 per tile): (n, q_start, v_rows). 1 <= v_rows <= 32.
 // Zero-fill contract:
-//   * scalar tile: col 0 is explicitly written for all 32 rows. Tail rows
-//     (r ≥ v_rows) and OOB-corner rows get bf16 0, so their contribution
-//     zeroes out at the multiply.
-//   * input tile: only valid rows (r < v_rows AND corner in-bounds) are
-//     written; tail/OOB rows are left as whatever the CB slot held from a
-//     previous iter. That's safe because the matching scalar lane is 0, so
-//     stale bytes contribute 0 to the accumulator.
+//   * grid/attn tiles: column 0 is written for all 32 rows, zero past v_rows, so
+//     a tail row's weight comes out zero.
+//   * input tile: only valid rows (r < v_rows AND corner in bounds) are written;
+//     tail and out-of-bounds rows keep whatever the CB slot held. Safe because
+//     the matching scalar lane is zero.
 
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <stdint.h>
@@ -54,38 +51,40 @@ namespace {
 // and a handful of other reader kernels; duplicated here to keep the kernel
 // dependency-free.
 // TODO(#45742): consolidate these per-op copies into one shared kernel header.
-inline float bf16_to_float(uint16_t bf16) {
-    uint32_t tmp = static_cast<uint32_t>(bf16) << 16;
-    float result;
-    std::memcpy(&result, &tmp, sizeof(result));
-    return result;
-}
-
-inline uint16_t float_to_bf16(float value) {
-    uint32_t tmp;
-    std::memcpy(&tmp, &value, sizeof(tmp));
-    return static_cast<uint16_t>(tmp >> 16);
+// x0/y0 arrive as bf16 holding exact integers (the compute kernel floored them),
+// so they decode with shifts. Going through float here would put soft-float back
+// on a core that has no FPU, which is the whole point of moving the geometry.
+inline int32_t bf16_to_int(uint16_t bf16) {
+    const uint32_t bits = static_cast<uint32_t>(bf16) << 16;
+    const int32_t exp = static_cast<int32_t>((bits >> 23) & 0xFF) - 127;
+    if (exp < 0) {
+        return 0;  // |v| < 1, and v is integral, so v == 0
+    }
+    const uint32_t mant = (bits & 0x7FFFFFu) | 0x800000u;
+    const int32_t v = static_cast<int32_t>(mant >> (23 - exp));
+    return (bits & 0x80000000u) ? -v : v;
 }
 
 }  // namespace
 
-constexpr uint32_t value_scratch_cb_index = get_compile_time_arg_val(0);
-constexpr uint32_t grid_cb_index = get_compile_time_arg_val(1);
-constexpr uint32_t attn_cb_index = get_compile_time_arg_val(2);
-constexpr uint32_t input_tile_cb_index = get_compile_time_arg_val(3);
-constexpr uint32_t scalar_tile_cb_index = get_compile_time_arg_val(4);
+constexpr uint32_t grid_cb_index = get_compile_time_arg_val(0);
+constexpr uint32_t attn_cb_index = get_compile_time_arg_val(1);
+constexpr uint32_t input_tile_cb_index = get_compile_time_arg_val(2);
+constexpr uint32_t grid_x_cb_index = get_compile_time_arg_val(3);
+constexpr uint32_t grid_y_cb_index = get_compile_time_arg_val(4);
+constexpr uint32_t attn_tile_cb_index = get_compile_time_arg_val(5);
+constexpr uint32_t x0_cb_index = get_compile_time_arg_val(6);
+constexpr uint32_t y0_cb_index = get_compile_time_arg_val(7);
 
-constexpr uint32_t D = get_compile_time_arg_val(5);
-constexpr uint32_t Q = get_compile_time_arg_val(6);
-constexpr uint32_t P = get_compile_time_arg_val(7);
-constexpr uint32_t h_in = get_compile_time_arg_val(8);
-constexpr uint32_t w_in = get_compile_time_arg_val(9);
-constexpr uint32_t value_stick_nbytes = get_compile_time_arg_val(10);
-constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(11);
-constexpr uint32_t attn_stick_nbytes = get_compile_time_arg_val(12);
-constexpr bool ALIGN_CORNERS = get_compile_time_arg_val(13) != 0;
-
-constexpr auto value_args = TensorAccessorArgs<14>();
+constexpr uint32_t D = get_compile_time_arg_val(8);
+constexpr uint32_t Q = get_compile_time_arg_val(9);
+constexpr uint32_t P = get_compile_time_arg_val(10);
+constexpr uint32_t h_in = get_compile_time_arg_val(11);
+constexpr uint32_t w_in = get_compile_time_arg_val(12);
+constexpr uint32_t value_stick_nbytes = get_compile_time_arg_val(13);
+constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(14);
+constexpr uint32_t attn_stick_nbytes = get_compile_time_arg_val(15);
+constexpr auto value_args = TensorAccessorArgs<16>();
 constexpr auto grid_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
 constexpr auto attn_args = TensorAccessorArgs<grid_args.next_compile_time_args_offset()>();
 
@@ -104,6 +103,9 @@ constexpr uint32_t N_D_TILES = (STICK_WORDS + WORDS_PER_TILE_ROW - 1) / WORDS_PE
 constexpr uint32_t STICK_NBYTES = D * 2;                     // logical, before alignment padding
 constexpr uint32_t TILE_ROW_NBYTES = 2 * HALF_STICK_NBYTES;  // 32 bf16 = one tile row
 static_assert(D % 16 == 0 && D > 0, "D must be a positive multiple of 16");
+// x0/y0 cross from the compute kernel as bf16, which is exact for integers up to
+// 256. Past that the decoded corner would silently be wrong, not out of bounds.
+static_assert(h_in <= 256 && w_in <= 256, "bf16 corner indices are exact only up to 256");
 
 void kernel_main() {
     const uint32_t value_addr = get_arg_val<uint32_t>(0);
@@ -116,35 +118,31 @@ void kernel_main() {
     const auto attn_acc = TensorAccessor(attn_args, attn_addr, attn_stick_nbytes);
 
     Noc noc;
-    CircularBuffer value_scratch_cb(value_scratch_cb_index);
     CircularBuffer grid_cb(grid_cb_index);
     CircularBuffer attn_cb(attn_cb_index);
     CircularBuffer input_tile_cb(input_tile_cb_index);
-    CircularBuffer scalar_tile_cb(scalar_tile_cb_index);
+    CircularBuffer grid_x_cb(grid_x_cb_index);
+    CircularBuffer grid_y_cb(grid_y_cb_index);
+    CircularBuffer attn_tile_cb(attn_tile_cb_index);
+    CircularBuffer x0_cb(x0_cb_index);
+    CircularBuffer y0_cb(y0_cb_index);
 
     constexpr int32_t h_in_i = static_cast<int32_t>(h_in);
     constexpr int32_t w_in_i = static_cast<int32_t>(w_in);
 
     // Reserve scratch CBs once and treat them as fixed linear L1 arenas.
-    value_scratch_cb.reserve_back(TILE_MAX_ROWS);
-    const uint32_t value_scratch_l1 = value_scratch_cb.get_write_ptr();
     grid_cb.reserve_back(TILE_MAX_ROWS * P);
     const uint32_t grid_scratch_l1 = grid_cb.get_write_ptr();
     attn_cb.reserve_back(TILE_MAX_ROWS);
     const uint32_t attn_scratch_l1 = attn_cb.get_write_ptr();
 
     // Per-(p, corner) precompute scratch (one entry per row in the current tile).
-    float w_attn_arr[TILE_MAX_ROWS];
     int32_t x0_arr[TILE_MAX_ROWS];
     int32_t y0_arr[TILE_MAX_ROWS];
     bool x0v_arr[TILE_MAX_ROWS];
     bool x1v_arr[TILE_MAX_ROWS];
     bool y0v_arr[TILE_MAX_ROWS];
     bool y1v_arr[TILE_MAX_ROWS];
-    float w_nw_arr[TILE_MAX_ROWS];
-    float w_ne_arr[TILE_MAX_ROWS];
-    float w_sw_arr[TILE_MAX_ROWS];
-    float w_se_arr[TILE_MAX_ROWS];
 
     uint32_t arg_idx = 4;
     for (uint32_t t = 0; t < num_output_tiles; ++t) {
@@ -169,44 +167,67 @@ void kernel_main() {
 
         const uint32_t n_off = n * static_cast<uint32_t>(h_in_i * w_in_i);
 
+        // Hand the geometry to the compute kernel: one column-0 tile per point for
+        // gx, gy and attn. All P points go out before any corner comes back — a
+        // reader that interleaved the two would block on a full input_tile_cb while
+        // compute waited on the next point's grid.
         for (uint32_t p = 0; p < P; ++p) {
-            // Precompute per-row geometry for this p.
-            for (uint32_t r = 0; r < v_rows; ++r) {
-                CoreLocalMem<volatile uint16_t> grid_ptr(grid_scratch_l1 + (r * P + p) * grid_stick_nbytes);
-                CoreLocalMem<volatile uint16_t> attn_ptr(attn_scratch_l1 + r * attn_stick_nbytes);
+            grid_x_cb.reserve_back(1);
+            grid_y_cb.reserve_back(1);
+            attn_tile_cb.reserve_back(1);
+            const uint32_t gx_l1 = grid_x_cb.get_write_ptr();
+            const uint32_t gy_l1 = grid_y_cb.get_write_ptr();
+            const uint32_t at_l1 = attn_tile_cb.get_write_ptr();
 
-                const float gx = bf16_to_float(grid_ptr[0]);
-                const float gy = bf16_to_float(grid_ptr[1]);
-                w_attn_arr[r] = bf16_to_float(attn_ptr[p]);
-
-                // align_corners selects the pixel-coord mapping (mmcv default
-                // is false: pixel = (g+1)*size/2 - 0.5; true variant uses
-                // pixel = (g+1)*(size-1)/2).
-                float px, py;
-                if constexpr (ALIGN_CORNERS) {
-                    px = (gx + 1.0f) * 0.5f * static_cast<float>(w_in_i - 1);
-                    py = (gy + 1.0f) * 0.5f * static_cast<float>(h_in_i - 1);
-                } else {
-                    px = (gx + 1.0f) * 0.5f * static_cast<float>(w_in_i) - 0.5f;
-                    py = (gy + 1.0f) * 0.5f * static_cast<float>(h_in_i) - 0.5f;
+            for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
+                // Tail rows are written as zero: their weight ends up zero, which
+                // is the same contract the reduction already relies on.
+                uint16_t gx = 0;
+                uint16_t gy = 0;
+                uint16_t av = 0;
+                if (r < v_rows) {
+                    CoreLocalMem<volatile uint16_t> grid_ptr(grid_scratch_l1 + (r * P + p) * grid_stick_nbytes);
+                    CoreLocalMem<volatile uint16_t> attn_ptr(attn_scratch_l1 + r * attn_stick_nbytes);
+                    gx = grid_ptr[0];
+                    gy = grid_ptr[1];
+                    av = attn_ptr[p];
                 }
+                const uint32_t col0 = msda_tile_layout::tile_col0_offset(r);
+                CoreLocalMem<volatile uint16_t> gx_dst(gx_l1 + col0);
+                CoreLocalMem<volatile uint16_t> gy_dst(gy_l1 + col0);
+                CoreLocalMem<volatile uint16_t> at_dst(at_l1 + col0);
+                gx_dst[0] = gx;
+                gy_dst[0] = gy;
+                at_dst[0] = av;
+            }
 
-                const int32_t x0 = static_cast<int32_t>(std::floor(px));
-                const int32_t y0 = static_cast<int32_t>(std::floor(py));
-                const float dx = px - static_cast<float>(x0);
-                const float dy = py - static_cast<float>(y0);
+            grid_x_cb.push_back(1);
+            grid_y_cb.push_back(1);
+            attn_tile_cb.push_back(1);
+        }
 
+        for (uint32_t p = 0; p < P; ++p) {
+            // Corners solved on the SFPU. Only the bounds test and the page index
+            // stay here, both in integer arithmetic.
+            x0_cb.wait_front(1);
+            y0_cb.wait_front(1);
+            const uint32_t x0_l1 = x0_cb.get_read_ptr();
+            const uint32_t y0_l1 = y0_cb.get_read_ptr();
+            for (uint32_t r = 0; r < v_rows; ++r) {
+                const uint32_t col0 = msda_tile_layout::tile_col0_offset(r);
+                CoreLocalMem<volatile uint16_t> x0_src(x0_l1 + col0);
+                CoreLocalMem<volatile uint16_t> y0_src(y0_l1 + col0);
+                const int32_t x0 = bf16_to_int(x0_src[0]);
+                const int32_t y0 = bf16_to_int(y0_src[0]);
                 x0_arr[r] = x0;
                 y0_arr[r] = y0;
                 x0v_arr[r] = (x0 >= 0) && (x0 < w_in_i);
                 x1v_arr[r] = (x0 + 1 >= 0) && (x0 + 1 < w_in_i);
                 y0v_arr[r] = (y0 >= 0) && (y0 < h_in_i);
                 y1v_arr[r] = (y0 + 1 >= 0) && (y0 + 1 < h_in_i);
-                w_nw_arr[r] = (1.0f - dx) * (1.0f - dy);
-                w_ne_arr[r] = dx * (1.0f - dy);
-                w_sw_arr[r] = (1.0f - dx) * dy;
-                w_se_arr[r] = dx * dy;
             }
+            x0_cb.pop_front(1);
+            y0_cb.pop_front(1);
 
             for (uint32_t c = 0; c < 4; ++c) {
                 // Hoist all c-invariant selectors out of the per-r loops below:
@@ -216,7 +237,6 @@ void kernel_main() {
                 const int32_t dx_off = (c & 1) ? 1 : 0;
                 const bool* yv_arr = (c < 2) ? y0v_arr : y1v_arr;
                 const bool* xv_arr = (c & 1) ? x1v_arr : x0v_arr;
-                const float* w_corner_arr = (c == 0) ? w_nw_arr : (c == 1) ? w_ne_arr : (c == 2) ? w_sw_arr : w_se_arr;
 
                 // ---- INPUT TILES (N_D_TILES per (p, corner)) ----
                 input_tile_cb.reserve_back(N_D_TILES);
@@ -269,29 +289,6 @@ void kernel_main() {
                 // reads those lanes back.
                 input_tile_cb.push_back(N_D_TILES);
 
-                // ---- SCALAR TILE ----
-                // LLK COL bcast reads only col 0 of TL face (rows 0..15) and BL
-                // face (rows 16..31). Non-col-0 lanes are unused mathematically
-                // (mul_tiles_bcast<COL> uses clear_fp32_dst_acc=true, so DST is
-                // cleared on entry and only the col-0 broadcast contributes).
-                // We therefore skip the 2-KiB full zero-fill and only write the
-                // 32 col-0 bf16 lanes — 32× less L1 traffic per iter.
-                scalar_tile_cb.reserve_back(1);
-                const uint32_t s_tile_l1 = scalar_tile_cb.get_write_ptr();
-
-                for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
-                    uint16_t bf = 0;
-                    if (r < v_rows) {
-                        const float combined = (yv_arr[r] && xv_arr[r]) ? (w_attn_arr[r] * w_corner_arr[r]) : 0.0f;
-                        bf = float_to_bf16(combined);
-                    }
-                    // Rows ≥ v_rows OR invalid corners: bf stays 0 — explicitly
-                    // overwrite col 0 because the CB slot may contain non-zero
-                    // bf16 left by a previous tile where this row was valid.
-                    CoreLocalMem<volatile uint16_t> p16(s_tile_l1 + msda_tile_layout::tile_col0_offset(r));
-                    p16[0] = bf;
-                }
-                scalar_tile_cb.push_back(1);
             }
         }
     }

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstring>
 #include <algorithm>
 #include <cstdint>
 #include <vector>
@@ -100,7 +101,6 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         tt::tt_metal::split_work_to_cores(compute_grid, total_output_tiles);
 
     // Data formats (all bf16).
-    const auto value_fmt = datatype_to_dataformat_converter(value.dtype());
     const auto grid_fmt = datatype_to_dataformat_converter(grid.dtype());
     const auto attn_fmt = datatype_to_dataformat_converter(attn.dtype());
     const auto output_fmt = datatype_to_dataformat_converter(output.dtype());
@@ -108,11 +108,17 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     // CB indices. CBFormatDescriptor::buffer_index is uint8_t — keep these
     // typed the same so push_cb's aggregate init doesn't trigger a narrowing
     // conversion (forbidden in brace-init).
-    constexpr uint8_t value_scratch_cb = tt::CBIndex::c_0;   // raw stick scratch (reader-only)
     constexpr uint8_t grid_cb = tt::CBIndex::c_1;            // grid scratch (reader-only)
     constexpr uint8_t attn_cb = tt::CBIndex::c_2;            // attn scratch (reader-only)
     constexpr uint8_t input_tile_cb = tt::CBIndex::c_3;      // reader -> compute (tile)
-    constexpr uint8_t scalar_tile_cb = tt::CBIndex::c_4;     // reader -> compute (tile)
+    constexpr uint8_t scalar_tile_cb = tt::CBIndex::c_4;     // compute -> compute (tile)
+    constexpr uint8_t grid_x_cb = tt::CBIndex::c_6;          // reader -> compute (tile)
+    constexpr uint8_t grid_y_cb = tt::CBIndex::c_7;          // reader -> compute (tile)
+    constexpr uint8_t attn_tile_cb = tt::CBIndex::c_8;       // reader -> compute (tile)
+    constexpr uint8_t x0_cb = tt::CBIndex::c_9;              // compute -> reader (tile)
+    constexpr uint8_t y0_cb = tt::CBIndex::c_10;             // compute -> reader (tile)
+    constexpr uint8_t frac_x_cb = tt::CBIndex::c_11;         // compute -> compute (tile)
+    constexpr uint8_t frac_y_cb = tt::CBIndex::c_12;         // compute -> compute (tile)
     constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;    // compute -> writer (tile)
     constexpr uint8_t output_scratch_cb = tt::CBIndex::c_5;  // writer-only stick scratch
 
@@ -130,12 +136,23 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     // Reader-only scratches sized to hold one full output tile worth of
     // staging (up to 32 queries per tile). Reader reserves the whole CB
     // once at startup and treats each as a linear L1 arena.
-    push_cb(value_scratch_cb, TILE_MAX_ROWS, value_stick_aligned, value_fmt);
     push_cb(grid_cb, TILE_MAX_ROWS * P, grid_stick_aligned, grid_fmt);
     push_cb(attn_cb, TILE_MAX_ROWS, attn_stick_aligned, attn_fmt);
     // Reader -> compute pipes: double-buffered blocks of n_d_tiles tiles.
     push_cb(input_tile_cb, 2 * n_d_tiles, tile_nbytes, data_format);
-    push_cb(scalar_tile_cb, 2, tile_nbytes, data_format);
+    // The geometry phase solves every point of a block before the reduction
+    // starts, so all reduction_size scalar tiles are live at once. The grid and
+    // corner pipes hold a block's worth for the same reason: the reader pushes
+    // all P points before taking any corner back, and interleaving the two would
+    // deadlock on a full input_tile_cb.
+    push_cb(scalar_tile_cb, reduction_size, tile_nbytes, data_format);
+    push_cb(grid_x_cb, P, tile_nbytes, data_format);
+    push_cb(grid_y_cb, P, tile_nbytes, data_format);
+    push_cb(attn_tile_cb, P, tile_nbytes, data_format);
+    push_cb(x0_cb, P, tile_nbytes, data_format);
+    push_cb(y0_cb, P, tile_nbytes, data_format);
+    push_cb(frac_x_cb, 2, tile_nbytes, data_format);
+    push_cb(frac_y_cb, 2, tile_nbytes, data_format);
     // Compute -> writer pipe: double-buffered blocks of n_d_tiles tiles.
     push_cb(output_tile_cb, 2 * n_d_tiles, tile_nbytes, output_fmt);
     // Writer-only scratch: 1 page.
@@ -143,11 +160,14 @@ ProgramDescriptor MSDAOperation::create_descriptor(
 
     // Reader kernel descriptor (CT args, NoC config, but runtime args filled later).
     KernelDescriptor::CompileTimeArgs reader_ct{
-        value_scratch_cb,
         grid_cb,
         attn_cb,
         input_tile_cb,
-        scalar_tile_cb,
+        grid_x_cb,
+        grid_y_cb,
+        attn_tile_cb,
+        x0_cb,
+        y0_cb,
         D,
         Q,
         P,
@@ -156,7 +176,6 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         value_stick_aligned,
         grid_stick_aligned,
         attn_stick_aligned,
-        static_cast<uint32_t>(operation_attributes.align_corners),
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*grid.buffer()).append_to(reader_ct);
@@ -176,7 +195,38 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         "ttnn/cpp/ttnn/operations/experimental/multi_scale_deformable_attn/device/kernels/compute/msda_compute.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = {input_tile_cb, scalar_tile_cb, output_tile_cb, reduction_size, n_d_tiles};
+    // align_corners picks the pixel-coord mapping; folding it into the scale and
+    // shift keeps the branch off the device. The SFPU scalar ops take fp32 as a
+    // bit pattern.
+    const auto fp32_bits = [](float v) {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &v, sizeof(bits));
+        return bits;
+    };
+    const bool align = operation_attributes.align_corners;
+    const uint32_t x_scale_bits = fp32_bits(align ? 0.5f * static_cast<float>(w_in - 1) : 0.5f * static_cast<float>(w_in));
+    const uint32_t y_scale_bits = fp32_bits(align ? 0.5f * static_cast<float>(h_in - 1) : 0.5f * static_cast<float>(h_in));
+    const uint32_t x_shift_bits = fp32_bits(align ? 0.0f : 0.5f);
+    const uint32_t y_shift_bits = x_shift_bits;
+
+    compute_desc.compile_time_args = {
+        input_tile_cb,
+        scalar_tile_cb,
+        output_tile_cb,
+        reduction_size,
+        n_d_tiles,
+        grid_x_cb,
+        grid_y_cb,
+        attn_tile_cb,
+        x0_cb,
+        y0_cb,
+        frac_x_cb,
+        frac_y_cb,
+        P,
+        x_scale_bits,
+        x_shift_bits,
+        y_scale_bits,
+        y_shift_bits};
     compute_desc.config = ComputeConfigDescriptor{};
 
     // Writer kernel descriptor.

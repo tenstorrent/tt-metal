@@ -32,12 +32,31 @@
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+
+#include "ttnn/cpp/ttnn/operations/experimental/multi_scale_deformable_attn/device/kernels/compute/msda_geometry.hpp"
 
 constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
 constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(1);
 constexpr uint32_t output_cb_index = get_compile_time_arg_val(2);
 constexpr uint32_t reduction_size = get_compile_time_arg_val(3);  // = 4 * P
 constexpr uint32_t n_d_tiles = get_compile_time_arg_val(4);       // = ceil(D / 32)
+
+// Geometry phase: the reader stages gx/gy/attn as column-0 tiles here, and takes
+// back the floored corner per axis. Scale and shift carry the align_corners
+// variant as fp32 bit patterns, so this kernel has no branch on it.
+constexpr uint32_t grid_x_cb_index = get_compile_time_arg_val(5);
+constexpr uint32_t grid_y_cb_index = get_compile_time_arg_val(6);
+constexpr uint32_t attn_tile_cb_index = get_compile_time_arg_val(7);
+constexpr uint32_t x0_cb_index = get_compile_time_arg_val(8);
+constexpr uint32_t y0_cb_index = get_compile_time_arg_val(9);
+constexpr uint32_t frac_x_cb_index = get_compile_time_arg_val(10);
+constexpr uint32_t frac_y_cb_index = get_compile_time_arg_val(11);
+constexpr uint32_t P = get_compile_time_arg_val(12);
+constexpr uint32_t x_scale_bits = get_compile_time_arg_val(13);
+constexpr uint32_t x_shift_bits = get_compile_time_arg_val(14);
+constexpr uint32_t y_scale_bits = get_compile_time_arg_val(15);
+constexpr uint32_t y_shift_bits = get_compile_time_arg_val(16);
 
 void kernel_main() {
     const uint32_t num_output_tiles = get_arg_val<uint32_t>(0);
@@ -47,9 +66,34 @@ void kernel_main() {
     CircularBuffer output_cb(output_cb_index);
 
     compute_kernel_hw_startup(input_cb_index, scalar_cb_index, output_cb_index);
-    bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(input_cb_index, scalar_cb_index);
 
     for (uint32_t out = 0; out < num_output_tiles; ++out) {
+        // ---- GEOMETRY ----
+        // Every point of the block is solved before the reduction starts. The
+        // reader is holding all P grid tiles and cannot take a corner back until
+        // it has pushed them, so interleaving the two phases would deadlock.
+        init_sfpu(grid_x_cb_index, x0_cb_index);
+        uint32_t last_srca = grid_x_cb_index;
+        for (uint32_t p = 0; p < P; ++p) {
+            msda_geometry::point(
+                grid_x_cb_index,
+                grid_y_cb_index,
+                attn_tile_cb_index,
+                x0_cb_index,
+                y0_cb_index,
+                frac_x_cb_index,
+                frac_y_cb_index,
+                scalar_cb_index,
+                x_scale_bits,
+                x_shift_bits,
+                y_scale_bits,
+                y_shift_bits,
+                last_srca);
+        }
+
+        // ---- REDUCTION ----
+        bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(input_cb_index, scalar_cb_index);
+
         // Reserve the block's output tiles; we accumulate into them via L1 acc.
         output_cb.reserve_back(n_d_tiles);
 
