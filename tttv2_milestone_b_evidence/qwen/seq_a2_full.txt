@@ -1,0 +1,1 @@
+3600 3500 a2_10_fullmodel models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_full_model_prefill_and_first_decode_token

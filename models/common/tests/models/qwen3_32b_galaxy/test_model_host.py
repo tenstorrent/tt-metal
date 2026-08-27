@@ -15,7 +15,11 @@ import torch
 
 import ttnn
 from models.common.models.galaxy.plans import build_galaxy_decode_collectives
-from models.common.models.galaxy.recipes import resolve_galaxy_decode_placements
+from models.common.models.galaxy.recipes import (
+    GALAXY_PHYSICAL_BATCH,
+    resolve_galaxy_decode_placements,
+    worker_cores,
+)
 from models.common.models.qwen3_32b_galaxy import hf_adaptor
 from models.common.models.qwen3_32b_galaxy import model as galaxy_model
 from models.common.models.qwen3_32b_galaxy import weight_utils
@@ -394,6 +398,7 @@ def test_qk_norms_resolve_to_head_local_geometry():
             mesh_device=mesh,
             precision=QWEN3_32B_GALAXY_ACCURACY,
             decode_placements=decode,
+            head_dim=params.head_dim,
             eps=params.rms_norm_eps,
         )
 
@@ -413,6 +418,23 @@ def test_qk_norms_resolve_to_head_local_geometry():
         assert config.decode_input_memcfg == decode.attention_heads_memcfg
         assert config.decode_output_memcfg == decode.attention_heads_memcfg
         assert config.decode_input_memcfg.is_sharded()
+        # And the third placement: the created heads are HEIGHT_SHARDED, which
+        # `ttnn.rms_norm` rejects outright, so the kernel runs in a block-sharded
+        # rectangle of worker cores and the norm relocates in and out with the
+        # sub-device-aware pair. One core wide, so the whole 128-column head
+        # lands on one core and the reduction needs no multicast.
+        compute = config.decode_compute_memcfg
+        assert compute is not None
+        assert compute.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        assert compute.shard_spec.grid.bounding_box().grid_size().x == 1
+        assert compute.shard_spec.shape == [
+            GALAXY_PHYSICAL_BATCH * ttnn.TILE_SIZE // galaxy_model._HEAD_LOCAL_DECODE_NORM_CORES,
+            params.head_dim,
+        ]
+        workers = worker_cores()
+        for core_range in compute.shard_spec.grid.ranges():
+            for y in range(core_range.start.y, core_range.end.y + 1):
+                assert workers.contains(ttnn.CoreCoord(core_range.start.x, y))
         assert config.prefill_input_memcfg == ttnn.DRAM_MEMORY_CONFIG
         assert config.prefill_output_memcfg == ttnn.DRAM_MEMORY_CONFIG
 
@@ -546,6 +568,7 @@ def test_head_local_qk_norm_agrees_with_the_module_default_by_contract(monkeypat
         mesh_device=mesh,
         precision=QWEN3_32B_GALAXY_ACCURACY,
         decode_placements=decode,
+        head_dim=params.head_dim,
         eps=params.rms_norm_eps,
     )
     assert explicit.geometry is RMSNorm2DGeometry.HEAD_LOCAL

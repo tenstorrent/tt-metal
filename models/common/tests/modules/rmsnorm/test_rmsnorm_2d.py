@@ -378,3 +378,140 @@ def test_distributed_decode_does_not_deallocate_a_tensor_it_returns(monkeypatch)
     # And nothing that is still in use was released.
     output.deallocate.assert_not_called()
     source.deallocate.assert_not_called()
+
+
+def _head_local_module(monkeypatch, mesh, *, compute_memcfg=None, output_memcfg=None):
+    """Return a `RMSNorm2D` with a resolved head-local config and a stub weight."""
+
+    monkeypatch.setattr(rmsnorm_2d, "resolve_lazy_weight", lambda weight, **_: weight)
+    config = _resolve_2d_config(
+        RMSNorm2DConfig(
+            weight=_weight(128, mesh),
+            mesh_device=mesh,
+            cluster_shape=(8, 4),
+            geometry=RMSNorm2DGeometry.HEAD_LOCAL,
+            decode_output_memcfg=output_memcfg,
+            decode_compute_memcfg=compute_memcfg,
+        )
+    )
+    module = object.__new__(RMSNorm2D)
+    module.config = config
+    module.weight = object()
+    module.load_device_weights = lambda: None
+    return module
+
+
+def _fake_tensor(memory_config):
+    tensor = MagicMock(spec=ttnn.Tensor)
+    tensor.memory_config.return_value = memory_config
+    return tensor
+
+
+def _memcfg(layout):
+    memory_config = MagicMock(spec=ttnn.MemoryConfig)
+    memory_config.memory_layout = layout
+    memory_config.is_sharded.return_value = layout != ttnn.TensorMemoryLayout.INTERLEAVED
+    return memory_config
+
+
+def test_head_local_decode_without_a_compute_placement_is_one_rms_norm(monkeypatch):
+    """The default behaviour is unchanged: one op, on the input as given.
+
+    That is the right thing on an unpartitioned device, and it is what every
+    caller that has already placed its input somewhere the op accepts wants.
+    """
+
+    mesh = _mesh()
+    interleaved = _memcfg(ttnn.TensorMemoryLayout.INTERLEAVED)
+    module = _head_local_module(monkeypatch, mesh, output_memcfg=interleaved)
+    calls = []
+    monkeypatch.setattr(rmsnorm_2d.ttnn, "rms_norm", lambda x, **kwargs: calls.append((x, kwargs)) or "normed")
+    monkeypatch.setattr(
+        rmsnorm_2d.ttnn,
+        "sharded_to_interleaved",
+        lambda *args, **kwargs: pytest.fail("no relocation without a compute placement"),
+    )
+
+    source = _fake_tensor(interleaved)
+    assert module.decode_forward(source) == "normed"
+    assert len(calls) == 1
+    assert calls[0][0] is source
+    assert calls[0][1]["memory_config"] is interleaved
+
+
+def test_head_local_decode_runs_the_kernel_in_the_compute_placement(monkeypatch):
+    """Height-sharded in, height-sharded out, the kernel block-sharded between.
+
+    Measured on WH Galaxy `(8, 4)` as D-B26. Both obvious spellings abort:
+
+    * interleaved input -> `LayerNormDefaultProgramConfig`, whose rows spread
+      over the whole compute grid ->
+      ``TT_FATAL: Kernel group cores do not match sub device cores``;
+    * the created heads' own placement -> ``Height sharded inputs are not
+      supported`` (`layernorm_device_operation.cpp:166`).
+
+    So the kernel runs in a third, block-sharded placement, and the relocations
+    at both ends use `sharded_to_interleaved` / `interleaved_to_sharded` rather
+    than `to_memory_config`, which between two shard specs resolves to `reshard`
+    and would abort exactly like the first case.
+    """
+
+    mesh = _mesh()
+    heads = _memcfg(ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+    compute = _memcfg(ttnn.TensorMemoryLayout.BLOCK_SHARDED)
+    module = _head_local_module(monkeypatch, mesh, compute_memcfg=compute, output_memcfg=heads)
+
+    ops: list[str] = []
+    staged_in, placed_in = _fake_tensor(_memcfg(ttnn.TensorMemoryLayout.INTERLEAVED)), _fake_tensor(compute)
+    staged_out, placed_out = _fake_tensor(_memcfg(ttnn.TensorMemoryLayout.INTERLEAVED)), _fake_tensor(heads)
+    normalized = _fake_tensor(compute)
+    to_interleaved = iter((staged_in, staged_out))
+    to_sharded = iter((placed_in, placed_out))
+    monkeypatch.setattr(
+        rmsnorm_2d.ttnn,
+        "sharded_to_interleaved",
+        lambda *args, **kwargs: ops.append("sharded_to_interleaved") or next(to_interleaved),
+    )
+    monkeypatch.setattr(
+        rmsnorm_2d.ttnn,
+        "interleaved_to_sharded",
+        lambda *args, **kwargs: ops.append("interleaved_to_sharded") or next(to_sharded),
+    )
+    monkeypatch.setattr(
+        rmsnorm_2d.ttnn, "to_memory_config", lambda *args, **kwargs: pytest.fail("to_memory_config is not partition-safe")
+    )
+    norm_calls = []
+    monkeypatch.setattr(
+        rmsnorm_2d.ttnn, "rms_norm", lambda x, **kwargs: norm_calls.append((x, kwargs)) or normalized
+    )
+
+    source = _fake_tensor(heads)
+    assert module.decode_forward(source) is placed_out
+    assert ops == [
+        "sharded_to_interleaved",
+        "interleaved_to_sharded",
+        "sharded_to_interleaved",
+        "interleaved_to_sharded",
+    ]
+    assert norm_calls[0][0] is placed_in
+    assert norm_calls[0][1]["memory_config"] is compute
+    # The caller owns its input; only the module's own intermediates are freed.
+    source.deallocate.assert_not_called()
+    for intermediate in (staged_in, placed_in, staged_out, normalized):
+        intermediate.deallocate.assert_called_once_with(True)
+
+
+def test_head_local_decode_refuses_a_residual_it_cannot_place(monkeypatch, expect_error):
+    """`ttnn.rms_norm` demands the residual carry the input's shard spec exactly.
+
+    Relocating it in step with `x` is possible but no caller needs it - a
+    per-head Q/K norm has no residual - and guessing is worse than saying so.
+    """
+
+    mesh = _mesh()
+    heads = _memcfg(ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+    compute = _memcfg(ttnn.TensorMemoryLayout.BLOCK_SHARDED)
+    module = _head_local_module(monkeypatch, mesh, compute_memcfg=compute, output_memcfg=heads)
+
+    with expect_error(ValueError, "does not support a residual"):
+        module.decode_forward(_fake_tensor(heads), residual=_fake_tensor(heads))

@@ -109,6 +109,10 @@ class RMSNorm2DConfig:
     decode_progcfg: ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
     decode_stats_memcfg: ttnn.MemoryConfig | None = None
 
+    #: Where a ``HEAD_LOCAL`` decode norm runs its kernel. Optional, and only
+    #: meaningful for that geometry; see ``_decode_head_local``.
+    decode_compute_memcfg: ttnn.MemoryConfig | None = None
+
     # Compute kernel config (only for prefill - decode uses program_config)
     compute_kernel_config_prefill: ttnn.WormholeComputeKernelConfig | None = None
 
@@ -225,13 +229,7 @@ class RMSNorm2D(LightweightModule):
             residual = _load_input_device_tensor_2d(residual, cfg, mode="decode", residual=True)
 
         if cfg.geometry is RMSNorm2DGeometry.HEAD_LOCAL:
-            return ttnn.rms_norm(
-                x,
-                epsilon=cfg.eps,
-                weight=self.weight,
-                residual_input_tensor=residual,
-                memory_config=cfg.decode_output_memcfg,
-            )
+            return self._decode_head_local(x, residual)
 
         if cfg.residual_policy is RMSNorm2DResidualPolicy.FUSED_DECODE:
             if residual is None:
@@ -242,6 +240,94 @@ class RMSNorm2D(LightweightModule):
             x = ttnn.add(x, residual, memory_config=cfg.decode_residual_memcfg)
 
         return self._decode_distributed(x, release_input=residual is not None)
+
+    def _decode_head_local(self, x: ttnn.Tensor, residual: ttnn.Tensor | None) -> ttnn.Tensor:
+        """Normalize each ``head_dim``-wide head, inside the decode partition.
+
+        A head-local norm is a plain ``ttnn.rms_norm`` - no column reduction, no
+        collective - and on an unpartitioned device the obvious spelling is to
+        run it straight on whatever placement the caller hands over. On a WH
+        Galaxy decode step it is not that simple, and both of the obvious
+        spellings fail:
+
+        * **interleaved input.** ``ttnn.rms_norm`` resolves
+          ``LayerNormDefaultProgramConfig``, which splits its tile rows over
+          ``device->compute_with_storage_grid_size()`` - the whole compute grid,
+          including the prefetch sender columns the loaded decode sub-device
+          manager does not own::
+
+              TT_FATAL: Kernel group cores do not match sub device cores for
+                        programmable core type TENSIX
+              program.cpp:2205: num_intersections == num_cores
+
+          This is Milestone A's D2 seen from the other side: D2's fix made
+          interleaved DRAM the *default* for this geometry, which is right for
+          prefill - whose mode plan is one sub-device over the full grid - and
+          unplaceable for decode. Nothing had run the decode side until
+          Milestone B's Qwen3-32B bring-up (D-B26).
+        * **the created heads' own placement.** ``nlp_create_qkv_heads_decode``
+          writes Q and K height-sharded, one user per core, and the op rejects
+          that outright::
+
+              TT_FATAL: Height sharded inputs are not supported.
+              layernorm_device_operation.cpp:166
+
+          (a standing TODO in that file, not a property of the maths.)
+
+        So the kernel runs in a third placement, ``decode_compute_memcfg``: a
+        block-sharded rectangle of worker cores, which the sharded program
+        factory accepts and which it derives its core ranges from - so the
+        program lands exactly on those cores. The caller chooses the rectangle,
+        because only the caller knows which cores its sub-device owns.
+
+        Getting in and out of it is the other half. ``to_memory_config`` between
+        two shard specs resolves to ``reshard``, which builds over the full grid
+        and would abort the same way; the safe pair is
+        ``sharded_to_interleaved`` (runs on its *input's* shard grid) and
+        ``interleaved_to_sharded`` (runs on its *output's* cores). Both ends are
+        worker cores here, so every one of the four hops stays inside the
+        partition. That is a real decode-latency cost - four extra ops per norm,
+        eight per layer - and it belongs on the performance follow-up list; it is
+        not a correctness argument.
+
+        With ``decode_compute_memcfg`` unset the behaviour is exactly what it was
+        before: one ``ttnn.rms_norm`` on the input as given. That is the right
+        thing on an unpartitioned device and for any caller that has already
+        placed its input somewhere the op accepts.
+        """
+
+        cfg = self.config
+        compute_memcfg = cfg.decode_compute_memcfg
+        if compute_memcfg is None:
+            return ttnn.rms_norm(
+                x,
+                epsilon=cfg.eps,
+                weight=self.weight,
+                residual_input_tensor=residual,
+                memory_config=cfg.decode_output_memcfg,
+            )
+        if residual is not None:
+            # The op requires the residual to carry the input's shard spec
+            # exactly, so it would have to be relocated in step with `x`. No
+            # caller needs that - a per-head Q/K norm has no residual - and
+            # guessing is worse than saying so.
+            raise ValueError("decode_compute_memcfg does not support a residual input")
+
+        placed = _place_without_leaving_subdevice(x, compute_memcfg)
+        try:
+            normalized = ttnn.rms_norm(
+                placed,
+                epsilon=cfg.eps,
+                weight=self.weight,
+                memory_config=compute_memcfg,
+            )
+        finally:
+            if placed is not x:
+                placed.deallocate(True)
+        output = _place_without_leaving_subdevice(normalized, cfg.decode_output_memcfg)
+        if output is not normalized:
+            normalized.deallocate(True)
+        return output
 
     def _decode_fused_residual_norm(self, x: ttnn.Tensor, residual: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run WH fused residual accumulation and distributed normalization."""
@@ -612,6 +698,42 @@ def _resolve_2d_config(config: RMSNorm2DConfig) -> RMSNorm2DConfig:
 # =============================================================================
 # Input Tensor Utilities
 # =============================================================================
+
+
+def _place_without_leaving_subdevice(tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
+    """Move `tensor` into `memory_config` using only sub-device-aware ops.
+
+    ``to_memory_config`` is not usable here: between two shard specs it resolves
+    to ``reshard``, and between two interleaved configs to ``ttnn::prim::copy``,
+    both of which build their programs over the device's whole compute grid. A
+    partitioned decode manager rejects that with
+
+        TT_FATAL ... Kernel group cores do not match sub device cores
+
+    ``sharded_to_interleaved`` runs on its input's ``shard_spec.grid`` and
+    ``interleaved_to_sharded`` on its output shard's cores, so as long as both
+    ends are inside the partition, so is every program this builds. Returns the
+    input itself when it is already placed, so callers can test identity to know
+    whether they own the result.
+    """
+
+    if tensor.memory_config() == memory_config:
+        return tensor
+    if not memory_config.is_sharded():
+        if not tensor.memory_config().is_sharded():
+            raise ValueError("an interleaved-to-interleaved move is ttnn::prim::copy, which is not sub-device aware")
+        # One hop, straight into the requested interleaved config:
+        # `sharded_to_interleaved` runs on its input's grid whatever the
+        # destination buffer type is, so staging through DRAM first would only
+        # add an interleaved-to-interleaved copy on the full grid.
+        return ttnn.sharded_to_interleaved(tensor, memory_config)
+    staged = tensor
+    if staged.memory_config().is_sharded():
+        staged = ttnn.sharded_to_interleaved(staged, ttnn.DRAM_MEMORY_CONFIG)
+    placed = ttnn.interleaved_to_sharded(staged, memory_config)
+    if staged is not tensor:
+        staged.deallocate(True)
+    return placed
 
 
 def _load_input_device_tensor_2d(

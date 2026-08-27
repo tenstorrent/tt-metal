@@ -79,6 +79,7 @@ from models.common.models.galaxy.recipes import (
     rope_core_grids,
     sampling_core_grids,
     validate_galaxy_mesh,
+    worker_cores,
 )
 from models.common.models.galaxy.resources import create_galaxy_resources
 from models.common.modules.attention.attention_2d import (
@@ -764,12 +765,71 @@ def _norm_config(
     )
 
 
+#: How many worker cores the head-local Q/K decode norm runs on. The tensor it
+#: normalizes is ``GALAXY_PHYSICAL_BATCH`` users x one tile of padded heads, i.e.
+#: 32 tile rows, so eight cores divide it into four tile rows each. Ten - the
+#: full height of a worker column - does not divide 32.
+_HEAD_LOCAL_DECODE_NORM_CORES = 8
+
+
+def _head_local_decode_compute_memcfg(head_dim: int) -> Any:
+    """Return the placement a head-local decode norm runs its kernel in.
+
+    Block-sharded, one core wide and ``_HEAD_LOCAL_DECODE_NORM_CORES`` tall,
+    inside the decode worker envelope. Three properties are load-bearing and
+    each of them is a thing `ttnn.rms_norm` refuses without:
+
+    * **sharded**, so the op derives a ``LayerNormShardedMultiCoreProgramConfig``
+      from the tensor's own shard spec and the sharded factory takes its core
+      ranges from that shard spec rather than from the device compute grid. An
+      interleaved input takes the default factory, which spreads over the whole
+      grid and aborts under the decode manager (D-B26);
+    * **not height-sharded**, which the op rejects outright
+      (``layernorm_device_operation.cpp:166``, a standing TODO). That is why the
+      created heads' own ``attention_heads_memcfg`` cannot be used directly;
+    * **a rectangle**, which the op also requires
+      (``Sharded layernorm does not support non-rectangular core grids``), and
+      one core wide, so the full 128-column head lands on a single core and the
+      reduction needs no multicast.
+
+    Taken from the worker envelope's first column, and asserted to lie inside
+    it: `worker_cores()` is ``{[1-0 - 3-9], [5-0 - 6-9]}`` on this mesh, so
+    ``x = 1, y = 0..7`` is worker-owned and disjoint from the prefetch senders.
+    """
+
+    workers = worker_cores()
+    origin = workers.bounding_box().start
+    core_range = ttnn.CoreRange(
+        ttnn.CoreCoord(origin.x, origin.y),
+        ttnn.CoreCoord(origin.x, origin.y + _HEAD_LOCAL_DECODE_NORM_CORES - 1),
+    )
+    # The envelope is not contiguous - the `x = 4` prefetch sender column splits
+    # it - and its bounding box therefore includes cores no sub-device owns, so
+    # membership is checked core by core rather than taken from the box.
+    for y in range(core_range.start.y, core_range.end.y + 1):
+        if not workers.contains(ttnn.CoreCoord(core_range.start.x, y)):
+            raise ValueError(f"head-local decode norm core ({core_range.start.x}, {y}) is not a worker core")
+    rows = GALAXY_PHYSICAL_BATCH * ttnn.TILE_SIZE
+    if rows % _HEAD_LOCAL_DECODE_NORM_CORES:
+        raise ValueError(f"{rows} head rows do not divide over {_HEAD_LOCAL_DECODE_NORM_CORES} cores")
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({core_range}),
+            (rows // _HEAD_LOCAL_DECODE_NORM_CORES, head_dim),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+
 def _head_local_norm_config(
     weight: LazyWeight,
     *,
     mesh_device: Any,
     precision: Qwen3_32BGalaxyPrecision,
     decode_placements: GalaxyDecodePlacements,
+    head_dim: int,
     eps: float,
 ) -> RMSNorm2DConfig:
     """Return the per-head Q/K norm config `Attention2D` requires.
@@ -821,6 +881,7 @@ def _head_local_norm_config(
         prefill_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
         decode_output_memcfg=decode_placements.attention_heads_memcfg,
         prefill_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        decode_compute_memcfg=_head_local_decode_compute_memcfg(head_dim),
         compute_kernel_config_prefill=precision.norm_kernel_config,
     )
 
@@ -926,10 +987,20 @@ def _build_block_config(
         prefill_wqkv=lazy.prefill_wqkv,
         prefill_wo=lazy.prefill_wo,
         q_norm_config=_head_local_norm_config(
-            lazy.q_norm, mesh_device=mesh_device, precision=precision, decode_placements=decode, eps=norm_eps
+            lazy.q_norm,
+            mesh_device=mesh_device,
+            precision=precision,
+            decode_placements=decode,
+            head_dim=geometry.head_dim,
+            eps=norm_eps,
         ),
         k_norm_config=_head_local_norm_config(
-            lazy.k_norm, mesh_device=mesh_device, precision=precision, decode_placements=decode, eps=norm_eps
+            lazy.k_norm,
+            mesh_device=mesh_device,
+            precision=precision,
+            decode_placements=decode,
+            head_dim=geometry.head_dim,
+            eps=norm_eps,
         ),
         mesh_device=mesh_device,
         architecture=mesh_device.arch(),
