@@ -33,10 +33,10 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
         peak_l1_memory_device (actual) for operations with sequential execution.
     """
     metrics = None
-    # Set once a NO_DISPATCH capture has actually begun: only from that point can the device
-    # program cache hold entries for programs that were never dispatched. Failures before this
-    # (no device, ttnn import, grid query) leave the cache untouched, so there is nothing to purge.
-    capture_may_have_poisoned_cache = False
+    # Set once a NO_DISPATCH capture has actually begun: only from that point can the programs
+    # already in the cache have been invalidated. Failures before this (no device, ttnn import,
+    # grid query) leave the cache untouched, so there is nothing to clear.
+    capture_invalidated_cached_programs = False
     try:
         import ttnn
 
@@ -45,7 +45,7 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
 
         mode = ttnn.graph.RunMode.NO_DISPATCH if use_no_dispatch else ttnn.graph.RunMode.NORMAL
         ttnn.graph.begin_graph_capture(mode)
-        capture_may_have_poisoned_cache = use_no_dispatch
+        capture_invalidated_cached_programs = use_no_dispatch
 
         # Execute test (results not used, just capturing memory profile)
         try:
@@ -76,21 +76,25 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
         logger.warning(f"Failed to capture peak memory: {e}")
         metrics = None
 
-    if capture_may_have_poisoned_cache:
-        # A NO_DISPATCH capture still walks the whole ttnn op path, so it can leave entries in the
-        # device program cache for programs that were never actually dispatched. A LATER vector's
-        # real run that hits one of those entries reads back garbage -- the op appears to compute a
-        # wrong answer, and the failure lands on whichever vector happens to run next rather than on
-        # the capture that caused it.
+    if capture_invalidated_cached_programs:
+        # A NO_DISPATCH capture does NOT add program cache entries -- ttnn blocks the insert while
+        # the graph hook is blocking (#36772), and the entry count is measurably unchanged across a
+        # capture. What it does is leave the ALREADY-cached programs unusable, so a later real run
+        # that hits one of them reads back garbage.
         #
-        # Reproduced on blackhole with the traced split vectors: running 8 vectors with this capture
-        # after each one failed 2 of them at PCC 0.00012 and 0.00323 (matching CI run 32804882724's
-        # b7972db392d7 at 0.00012689648134461343); the identical sequence with the capture disabled
-        # passed 8 of 8. The failing vector is never the captured one.
+        # Measured on wormhole (1x1), traced split vectors, 10 vectors with a capture after each:
+        #     no capture ................... 10/10 pass
+        #     capture, cache kept ..........  5/10 pass
+        #     capture, cache cleared ....... 10/10 pass
+        #     capture, program cache OFF ... 10/10 pass   <- corruption needs a cache hit
         #
-        # Clearing the cache costs a recompile on the next vector, which is the same cost the runner
-        # already accepts at every module boundary (clear_job_device_program_cache). NORMAL captures
-        # dispatch for real, so their cache entries are valid and are deliberately left in place.
+        # Re-running the SAME config straight after its own capture flips it from pass to fail, so
+        # this is not a wrong-program/hash-collision effect: a cache hit only overrides runtime
+        # args, so whatever the capture disturbs on the device is never rewritten.
+        #
+        # Clearing forces the next run to re-create the program, which restores it, at the cost of
+        # a recompile -- the same cost the runner already accepts at every module boundary
+        # (clear_job_device_program_cache). NORMAL captures dispatch for real and are unaffected.
         try:
             device.clear_program_cache()
         except Exception as exc:
@@ -98,8 +102,8 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
             # to the next vector, which is the silent wrong answer this function exists to prevent;
             # failing now pins the problem on the capture that caused it.
             raise RuntimeError(
-                "Could not clear the device program cache after a NO_DISPATCH memory capture; it may "
-                "still hold entries for undispatched programs that would corrupt later vectors"
+                "Could not clear the device program cache after a NO_DISPATCH memory capture; its "
+                "existing entries can no longer be trusted and would corrupt later vectors"
             ) from exc
 
     return metrics
