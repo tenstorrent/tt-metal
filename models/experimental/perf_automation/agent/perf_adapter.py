@@ -339,6 +339,18 @@ class PipelineStageAdapter:
         for name in list(_stage_names or []):
             step = getattr(p, _seams.hook(name, _seams.STEP), None)
             if not callable(step):
+                # A DECLARED STAGE THAT CANNOT BE MEASURED SAYS SO. This was a bare `continue`, so a
+                # stage the model listed in PIPELINE_STAGES but never gave a step hook disappeared
+                # here -- out of adapter.stages, out of stage_ms, and out of the roofline, which
+                # renders exactly the stages that measured. The report then showed two towers for a
+                # three-tower model and nothing anywhere said one was missing. The contract warns at
+                # preflight; this is the same fact at the moment it costs a row.
+                print(
+                    "  [perf-adapter] stage %r declared but %s is missing; it cannot be measured and "
+                    "gets no row. The other stages are unaffected." % (name, _seams.hook(name, _seams.STEP)),
+                    file=sys.stderr,
+                    flush=True,
+                )
                 continue
             setup = getattr(p, _seams.hook(name, _seams.SETUP), None)
             if callable(setup):

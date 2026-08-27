@@ -28,6 +28,7 @@ FORWARD_WALL_MS.
 from __future__ import annotations
 
 import os
+import sys
 import time
 
 import ttnn
@@ -465,7 +466,20 @@ def measure_adapter(adapter, device) -> float:
 
     results = []
     for st in stages:
-        ms, path = _measure_stage(device, st)
+        # ONE STAGE THAT CANNOT BE MEASURED MUST NOT COST THE OTHERS THEIR ROW. The adapter already
+        # holds this line for the stage that cannot PREPARE its inputs; the loop that MEASURES them
+        # had no such guard, so a raise here lost every stage rather than one -- the whole replay,
+        # and with it every roofline row, for a fault in a single tower. Same rule, one step later.
+        try:
+            ms, path = _measure_stage(device, st)
+        except Exception as exc:  # noqa: BLE001
+            print(
+                "  [trace-replay] stage %r could not be measured (%s: %s); it gets no row, the "
+                "others are unaffected" % (st.name, type(exc).__name__, str(exc)[:120]),
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
         results.append((st.name, ms, path))
         print("TRACE_STAGE_MS[%s]=%.4f path=%s" % (st.name, ms, path), flush=True)
         # BESIDE THE TIME THAT MEASURED IT. The compute ceiling is 2 x params x items-in-the-unit,
