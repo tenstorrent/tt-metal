@@ -849,6 +849,98 @@ constexpr uint32_t FABRIC_DBG_RINGBUF_CSENT1_TAG = 0xE0000000;  // receiver's se
 constexpr uint32_t FABRIC_DBG_RINGBUF_RXCC_TAG = 0xF0000000;    // receiver's local completion_counter
 constexpr uint32_t FABRIC_DBG_RINGBUF_VALUE_MASK = 0x0FFFFFFF;
 
+// [#45872 DRAIN TIME-SERIES] Time-resolved trace of the post-retrain drain, pushed from the speedy sender
+// step (channel 0) once the sender has quiesced. The existing 0xE4 probe only fires inside if(can_send), so
+// it stops the instant forwarding stops and cannot show the settle; this one samples every loop iteration
+// and pushes only when something MOVES, which is what keeps a 32-entry ring viable across a whole drain.
+//
+// One entry per change, packed into a single word:
+//   [31:28] tag   0x9 = drain sample, 0x8 = retrain_count-increment marker
+//   [27:22] seq   free-running 0..63, so a wrap past the 32-entry ring is visible instead of silent
+//   [21:16] reg   stream-22 free slots as the router reads them (0..32, saturating at 63)
+//   [15:10] occ   counter-derived occupancy, occ_at_stop - forwards_since (0..32, saturating at 63)
+//   [ 9: 0] dt    wall-clock delta since the previous entry, in 64-cycle units (64ns), saturating at 1023
+// The eth wall clock is 1 GHz (ETH_CLOCK_CYCLE_1MS = 1e6 cycles/ms), so dt spans ~65us before saturating.
+constexpr uint32_t FABRIC_DBG_DRAIN_TS_TAG = 0x9u;   // drain sample
+constexpr uint32_t FABRIC_DBG_DRAIN_RC_TAG = 0x8u;   // retrain_count incremented here
+constexpr uint32_t FABRIC_DBG_DRAIN_DT_SHIFT = 6u;   // wall-clock cycles per dt unit (2^6 = 64)
+constexpr uint32_t FABRIC_DBG_DRAIN_FIELD_MAX = 63u;  // 6-bit saturation for reg/occ/seq
+constexpr uint32_t FABRIC_DBG_DRAIN_DT_MAX = 1023u;   // 10-bit saturation for dt
+// Number of periodic samples emitted after the values stop changing, so a settled trace is distinguishable
+// from one that merely stopped recording. Spaced by FABRIC_DBG_DRAIN_SETTLE_CYCLES.
+constexpr uint32_t FABRIC_DBG_DRAIN_SETTLE_SAMPLES = 4u;
+constexpr uint32_t FABRIC_DBG_DRAIN_SETTLE_CYCLES = ETH_CLOCK_CYCLE_1MS;  // 1ms between settle samples
+
+inline uint32_t fabric_dbg_drain_pack(uint32_t tag, uint32_t seq, uint32_t reg, uint32_t occ, uint32_t dt_units) {
+    const uint32_t s = (seq & FABRIC_DBG_DRAIN_FIELD_MAX);
+    const uint32_t r = (reg > FABRIC_DBG_DRAIN_FIELD_MAX) ? FABRIC_DBG_DRAIN_FIELD_MAX : reg;
+    const uint32_t o = (occ > FABRIC_DBG_DRAIN_FIELD_MAX) ? FABRIC_DBG_DRAIN_FIELD_MAX : occ;
+    const uint32_t d = (dt_units > FABRIC_DBG_DRAIN_DT_MAX) ? FABRIC_DBG_DRAIN_DT_MAX : dt_units;
+    return (tag << 28) | (s << 22) | (r << 16) | (o << 10) | d;
+}
+
+// [#45872 DRAIN SELF-CHECK] No dedicated counter word is needed, and there isn't a free one: word[16] looks
+// spare but fabric_dbg_set_sender_gate() rewrites it every iteration, and growing the slot would move the
+// base out from under a dozen hardcoded 0x6F1F8 / 0x6F220 sites in the test kernel.
+//
+// Instead the trace is self-checking by construction. The enclosing ACK-gated block writes word[6] (read
+// pointer), word[7] and word[15] on EVERY speedy iteration, so a populated word[6] proves the block ran; and
+// the first drain sample always pushes, because ts_last_reg starts at a value free_slots cannot hold. So:
+//   word[6] live + ring entries present -> trace is working
+//   word[6] live + ring EMPTY           -> the push executed and the ring lost it
+//   word[6] dead                        -> the block never ran (ACK never set)
+// That is the same three-way split the 0xE4 probe currently leaves ambiguous, at no L1 cost.
+
+// MUST stay noinline. The speedy sender step is inlined wholesale into the router main loop, and ERISC0's
+// stack is a fixed 2048B set up by base firmware -- bh_hal.cpp caps kernels at -Werror=stack-usage=1912.
+// Inlining this sampler's locals and their live ranges into that already-enormous frame took it to 3680B
+// and failed the build; given its own frame it costs the caller only the argument marshalling. The clock is
+// read as the low 32 bits only (wraps every ~4.3s at 1GHz) so no 64-bit arithmetic reaches the hot loop --
+// unsigned subtraction still yields the correct delta across a wrap, and deltas here are sub-millisecond.
+__attribute__((noinline)) inline void fabric_dbg_drain_sample(
+    [[maybe_unused]] uint32_t free_slots, [[maybe_unused]] uint32_t occ, [[maybe_unused]] uint32_t rc) {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    static uint32_t ts_seq = 0;
+    static uint32_t ts_last_reg = 0xFFFFFFFFu;  // impossible free-slot value -> the first sample always pushes
+    static uint32_t ts_last_occ = 0xFFFFFFFFu;
+    static uint32_t ts_last_t = 0;
+    static uint32_t ts_rc_at_arm = 0xFFFFFFFFu;
+    static bool ts_rc_marked = false;
+    static bool ts_started = false;
+    static uint32_t ts_settle_left = FABRIC_DBG_DRAIN_SETTLE_SAMPLES;
+
+    if (ts_rc_at_arm == 0xFFFFFFFFu) {
+        ts_rc_at_arm = rc;  // arm point: first call after the sender ACKed the quiesce handshake
+    }
+    const uint32_t now = eth_risc_reg_read(ETH_RISC_WALL_CLOCK_0);
+    const bool moved = (free_slots != ts_last_reg) || (occ != ts_last_occ);
+    const bool rc_edge = !ts_rc_marked && (rc != ts_rc_at_arm);
+    // Once nothing moves, emit a bounded number of spaced samples so a settled trace is distinguishable
+    // from one that merely stopped recording.
+    const bool settle_due = !moved && ts_started && (ts_settle_left != 0u) &&
+                            ((now - ts_last_t) >= FABRIC_DBG_DRAIN_SETTLE_CYCLES);
+    if (!(moved || rc_edge || settle_due)) {
+        return;
+    }
+    const uint32_t dt_units = ts_started ? ((now - ts_last_t) >> FABRIC_DBG_DRAIN_DT_SHIFT) : 0u;
+    WATCHER_RING_BUFFER_PUSH(fabric_dbg_drain_pack(
+        rc_edge ? FABRIC_DBG_DRAIN_RC_TAG : FABRIC_DBG_DRAIN_TS_TAG, ts_seq, free_slots, occ, dt_units));
+    ts_seq++;
+    ts_last_t = now;
+    ts_started = true;
+    if (rc_edge) {
+        ts_rc_marked = true;
+    }
+    if (moved) {
+        ts_last_reg = free_slots;
+        ts_last_occ = occ;
+        ts_settle_left = FABRIC_DBG_DRAIN_SETTLE_SAMPLES;  // re-arm the tail after any motion
+    } else if (settle_due) {
+        ts_settle_left--;
+    }
+#endif
+}
+
 // [CREDIT-STALL DUMP MODE] Alternative to fabric_dbg_ringbuf_push_txrx_counts: instead of a per-context-
 // switch TX/RX/CRED time series (which floods the 32-entry ring), this keeps the ring QUIET and only emits
 // a one-shot dump when a core has STOPPED TRANSMITTING (TX frozen) for ~5 minutes. This fires for ANY core
