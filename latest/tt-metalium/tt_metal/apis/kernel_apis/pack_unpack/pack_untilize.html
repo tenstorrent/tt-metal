@@ -405,6 +405,7 @@
 </tbody>
 </table>
 
+<p>NOTE: When a row is processed in multiple blocks, every block must use the same block_ct_dim; full_ct_dim must be divisible by block_ct_dim. Remainder blocks are unsupported because the L1 column offset is computed as block_c_index * block_ct_dim. </p>
 </dd>
 </dl>
 
@@ -481,6 +482,7 @@
 </tbody>
 </table>
 
+<p>NOTE: When a row is processed in multiple blocks, every block must use the same block_ct_dim; full_ct_dim must be divisible by block_ct_dim. Remainder blocks are unsupported because the L1 column offset is computed as block_c_index * block_ct_dim. </p>
 </dd>
 </dl>
 
@@ -556,12 +558,13 @@
 <td><p>block_c_index  </p></td>
 <td><p>Index of the currently processed block  </p></td>
 <td><p>uint32_t  </p></td>
-<td><p>&gt;= 0  </p></td>
+<td><p>0 to (full_ct_dim / block_ct_dim) - 1  </p></td>
 <td><p>False  </p></td>
 </tr>
 </tbody>
 </table>
 
+<p>NOTE: When a row is processed in multiple blocks, every block must use the same block_ct_dim; full_ct_dim must be divisible by block_ct_dim. Remainder blocks are unsupported because the L1 column offset is computed as block_c_index * block_ct_dim. </p>
 </dd>
 </dl>
 
@@ -669,7 +672,7 @@
 <td><p>block_c_index  </p></td>
 <td><p>Block column index (used when full_ct_dim &gt; block_ct_dim)  </p></td>
 <td><p>uint32_t  </p></td>
-<td><p>&gt;= 0  </p></td>
+<td><p>0 to (full_ct_dim / block_ct_dim) - 1  </p></td>
 <td><p>False (default=0)  </p></td>
 </tr>
 <tr class="row-even">
@@ -683,6 +686,7 @@
 </tbody>
 </table>
 
+<p>NOTE: When a row is processed in multiple blocks, every block must use the same block_ct_dim; full_ct_dim must be divisible by block_ct_dim. Remainder blocks are unsupported because the L1 column offset is computed as block_c_index * block_ct_dim.</p>
 <p>NOTE: Face geometry (face_r_dim, num_faces) is derived from the output circular buffer metadata configured on the host via CircularBufferConfig::set_unpack_face_geometry / CBFormatDescriptor::face_geometry. </p>
 </dd>
 </dl>
