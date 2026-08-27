@@ -23,9 +23,6 @@ constexpr BlackholeStatsSelectorParams default_params() {
         .fuse_pre_add = false,
         .has_gamma = true,
         .has_beta = true,
-        .num_tile_rows = 512,
-        .active_cores = 110,
-        .available_cores = 110,
         .compact_two_pass_fits_in_l1 = true,
     };
 }
@@ -91,17 +88,9 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
     auto bfp8_residual_below = bfp8_residual;
     bfp8_residual_below.padded_width = 2879;
 
-    auto fp32_underutilized = default_params();
-    fp32_underutilized.num_tile_rows = 32;
-    fp32_underutilized.active_cores = 32;
-
-    auto fp32_residual_replay = fp32_underutilized;
+    auto fp32_residual_replay = default_params();
     fp32_residual_replay.fuse_pre_add = true;
     fp32_residual_replay.compact_two_pass_fits_in_l1 = false;
-
-    auto fp32_restricted_grid = default_params();
-    fp32_restricted_grid.active_cores = 64;
-    fp32_restricted_grid.available_cores = 64;
 
     auto two_pass_does_not_fit = bf16_affine;
     two_pass_does_not_fit.compact_two_pass_fits_in_l1 = false;
@@ -113,12 +102,12 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
     };
     const TestCase cases[] = {
         {"fp32 affine at crossover", default_params(), true},
-        {"fp32 affine below crossover", fp32_affine_below, false},
-        {"fp32 parameter-free", fp32_plain, false},
-        {"fp32 compact parameter-free residual", fp32_plain_residual_compact, false},
+        {"fp32 affine below former crossover", fp32_affine_below, true},
+        {"fp32 parameter-free", fp32_plain, true},
+        {"fp32 compact parameter-free residual", fp32_plain_residual_compact, true},
         {"fp32 large parameter-free residual", fp32_plain_residual_large, true},
         {"fp32 residual affine", fp32_residual, true},
-        {"fp32 residual affine below crossover", fp32_residual_below, false},
+        {"fp32 residual affine below former crossover", fp32_residual_below, true},
         {"bf16 affine", bf16_affine, true},
         {"bf16 residual narrow", bf16_residual_narrow, true},
         {"bf16 residual middle", bf16_residual_middle, false},
@@ -131,9 +120,7 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
         {"bfp8 affine", bfp8_affine, false},
         {"bfp8 residual affine", bfp8_residual, true},
         {"bfp8 residual affine below crossover", bfp8_residual_below, false},
-        {"fp32 underutilized", fp32_underutilized, false},
         {"fp32 residual replay", fp32_residual_replay, true},
-        {"fp32 restricted grid", fp32_restricted_grid, false},
         {"two-pass compact allocation does not fit", two_pass_does_not_fit, false},
     };
 

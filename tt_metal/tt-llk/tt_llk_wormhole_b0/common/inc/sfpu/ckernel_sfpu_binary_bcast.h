@@ -475,6 +475,94 @@ inline void _calculate_sfpu_residual_normalize_bcast_col_full_tile_(
     }
 }
 
+inline void _broadcast_scalar_from_dest_(std::uint32_t scalar_addr)
+{
+    constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
+    TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, scalar_addr);
+    // The unused statistic-tile lanes can contain infinities after rsqrt.
+    // Predicated assignment is required here: multiplying those lanes by a
+    // zero mask would produce NaNs rather than zeros.
+    TTI_SFPMOV(0, p_sfpu::LTILEID, LREG_TMP, 0);
+    TTI_SFPSHFT(28, 0, LREG_TMP, SFPSHFT_MOD1_ARG_IMM);
+    TTI_SFPSETCC(0, LREG_TMP, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+    TTI_SFPLOADI(LREG_BCAST, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+    // SFPCONFIG vertically broadcasts the first eight lanes. Moving the
+    // result back to LREG0 makes scalar lane zero available in every 8-lane
+    // sub-vector; the inline rotate-and-add sequence fills each one.
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG12, LREG_BCAST, 0);
+    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0, LREG_BCAST, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPADD(LREG_BCAST, p_sfpu::LCONST_1, LREG_TMP, LREG_BCAST, 0);
+    TTI_SFPNOP;
+    _broadcast_stage3_preserve_data_();
+}
+
+inline void _process_scalar_normalize_row_band_(
+    std::uint32_t mean_scalar_addr,
+    std::uint32_t inv_std_scalar_addr,
+    std::uint32_t left_face_addr,
+    std::uint32_t right_face_addr,
+    std::uint32_t data_tile_offset,
+    std::uint32_t out_tile_offset)
+{
+    constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
+    const std::uint32_t slot0      = left_face_addr;
+    const std::uint32_t slot1      = left_face_addr + ODD_COLS_OFFSET;
+    const std::uint32_t slot2      = right_face_addr;
+    const std::uint32_t slot3      = right_face_addr + ODD_COLS_OFFSET;
+
+    TT_SFPLOAD(LREG_DATA0, IM, ADDR_MOD_3, data_tile_offset + slot0);
+    TT_SFPLOAD(LREG_DATA1, IM, ADDR_MOD_3, data_tile_offset + slot1);
+    TT_SFPLOAD(LREG_DATA2, IM, ADDR_MOD_3, data_tile_offset + slot2);
+    TT_SFPLOAD(LREG_DATA3, IM, ADDR_MOD_3, data_tile_offset + slot3);
+
+    _broadcast_scalar_from_dest_(mean_scalar_addr);
+    TTI_SFPMOV(0, LREG_BCAST, LREG_TMP, 1 /* SFPMOV_MOD1_NEGATE */);
+    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA0, 0);
+    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA1, 0);
+    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA2, 0);
+    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA3, 0);
+
+    _broadcast_scalar_from_dest_(inv_std_scalar_addr);
+    TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
+    TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
+    TTI_SFPMUL(LREG_DATA2, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA2, 0);
+    TTI_SFPMUL(LREG_DATA3, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA3, 0);
+
+    TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_3, out_tile_offset + slot0);
+    TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_3, out_tile_offset + slot1);
+    TT_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_3, out_tile_offset + slot2);
+    TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, out_tile_offset + slot3);
+}
+
+inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
+    std::uint32_t dst_index_data, std::uint32_t dst_index_mean, std::uint32_t dst_index_out, std::uint32_t dst_index_inv_std)
+{
+    const std::uint32_t data_base    = dst_index_data * DEST_TILE_SIZE_RAW;
+    const std::uint32_t mean_addr    = dst_index_mean * DEST_TILE_SIZE_RAW;
+    const std::uint32_t inv_std_addr = dst_index_inv_std * DEST_TILE_SIZE_RAW;
+    const std::uint32_t out_base     = dst_index_out * DEST_TILE_SIZE_RAW;
+
+    for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++)
+    {
+        const std::uint32_t band_off = band * ROW_BAND_STRIDE;
+        _process_scalar_normalize_row_band_(mean_addr, inv_std_addr, FACE0_BASE + band_off, FACE1_BASE + band_off, data_base, out_base);
+    }
+    for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++)
+    {
+        const std::uint32_t band_off = band * ROW_BAND_STRIDE;
+        _process_scalar_normalize_row_band_(mean_addr, inv_std_addr, FACE2_BASE + band_off, FACE3_BASE + band_off, data_base, out_base);
+    }
+}
+
 // ============================================================================
 // BCAST_ROW: driver (SFPTRANSP + in-place)
 // ============================================================================

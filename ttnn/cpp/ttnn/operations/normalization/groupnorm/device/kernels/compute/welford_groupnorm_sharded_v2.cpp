@@ -16,6 +16,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/transpose.h"
 #include "api/compute/welford.h"
+#include "api/compute/sfpu_binary_bcast.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/dataflow_buffer.h"
@@ -60,6 +61,9 @@ void kernel_main() {
     // are then required. All-bf16 compiles them out (no-ops). See program factory.
     constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
     constexpr std::uint32_t sfpu_two_pass_reciprocal = get_named_compile_time_arg_val("sfpu_two_pass_reciprocal");
+    constexpr bool fp32_sfpu_normalizer = get_named_compile_time_arg_val("fp32_sfpu_normalizer") != 0;
+    constexpr std::uint32_t dfb_ex_global_fp32_id = get_named_compile_time_arg_val("cb_ex_global_fp32");
+    constexpr std::uint32_t dfb_ex2pe_fp32_id = get_named_compile_time_arg_val("cb_ex2pe_fp32");
 
     // dst regs
     constexpr std::uint32_t dst0 = 0;
@@ -113,7 +117,9 @@ void kernel_main() {
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
+    DataflowBuffer dfb_ex2pe_fp32(dfb_ex2pe_fp32_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
+    DataflowBuffer dfb_ex_global_fp32(dfb_ex_global_fp32_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_in(dfb_in_id);
@@ -351,7 +357,14 @@ void kernel_main() {
         // Start Variance Calc
         // Wait for final welford values in cb_ex_global_id
         dfb_ex_global.wait_front(2 * num_groups);
+        if constexpr (fp32_sfpu_normalizer) {
+            dfb_ex_global_fp32.reserve_back(2 * num_groups);
+            dfb_ex_global_fp32.push_back(2 * num_groups);
+        }
         dfb_ex2pe.reserve_back(num_groups);
+        if constexpr (fp32_sfpu_normalizer) {
+            dfb_ex2pe_fp32.reserve_back(num_groups);
+        }
         // (Var + eps)
         // fp32: dfb_ex_global is fp32 (var), dfb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
         if constexpr (enable_fp32_reconfig) {
@@ -372,9 +385,16 @@ void kernel_main() {
             tile_regs_release();
         }
         dfb_ex2pe.push_back(num_groups);
+        if constexpr (fp32_sfpu_normalizer) {
+            dfb_ex2pe_fp32.push_back(num_groups);
+        }
         // End Variance Calc
 
         dfb_ex2pe.wait_front(num_groups);
+        if constexpr (fp32_sfpu_normalizer) {
+            dfb_ex_global_fp32.wait_front(2 * num_groups);
+            dfb_ex2pe_fp32.wait_front(num_groups);
+        }
 
         // Start Final Val Calc
         tile_id = b * block_hw;
@@ -402,35 +422,60 @@ void kernel_main() {
                     dfb_xmm.reserve_back(1);
 
                     // // Now let us do the actual computation for the current group here
-                    // // a. x-u
-                    reconfig_data_format(dfb_in0_id, dfb_ex_global_id);
-                    sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
-
-                    tile_regs_acquire();
+                    // // a/b. (x-u) * 1/[sqrt(Var + eps)]
+                    if constexpr (fp32_sfpu_normalizer) {
+                        constexpr std::uint32_t data_dst = 0;
+                        constexpr std::uint32_t mean_dst = 1;
+                        constexpr std::uint32_t inv_std_dst = 2;
+                        tile_regs_acquire();
 #ifdef TILIZE_IN
-                    sub_tiles_bcast_scalar(dfb_in_id, dfb_ex_global_id, tile_id, 0 + (g << 1), dst0);
+                        copy_tile_to_dst_init_short(dfb_in_welford_id);
+                        copy_tile(dfb_in_welford_id, tile_id, data_dst);
 #else
-                    sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, tile_id, 0 + (g << 1), dst0);
+                        copy_tile_to_dst_init_short(dfb_in0_welford_id);
+                        copy_tile(dfb_in0_welford_id, tile_id, data_dst);
 #endif
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_xmm_id);
-                    tile_regs_release();
-                    dfb_xmm.push_back(1);
+                        copy_tile_to_dst_init_short_with_dt(dfb_in0_welford_id, dfb_ex_global_fp32_id);
+                        copy_tile(dfb_ex_global_fp32_id, g << 1, mean_dst);
+                        copy_tile_to_dst_init_short_with_dt(dfb_ex_global_fp32_id, dfb_ex2pe_fp32_id);
+                        copy_tile(dfb_ex2pe_fp32_id, g, inv_std_dst);
+                        sfpu_normalize_bcast_scalar(data_dst, mean_dst, inv_std_dst);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile(data_dst, dfb_xmm_id);
+                        tile_regs_release();
+                        dfb_xmm.push_back(1);
+                        copy_tile_to_dst_init_short_with_dt(dfb_ex2pe_fp32_id, dfb_in0_welford_id);
+                    } else {
+                        reconfig_data_format(dfb_in0_id, dfb_ex_global_id);
+                        sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
 
-                    // // b. (x - u) * 1/[sqrt(Var + eps)]
-                    dfb_xmm.wait_front(1);
-                    reconfig_data_format(dfb_in0_id, dfb_xmm_id, dfb_ex_global_id, dfb_ex2pe_id);
-                    mul_bcast_scalar_init(dfb_xmm_id, dfb_ex2pe_id);
-                    tile_regs_acquire();
-                    mul_tiles_bcast_scalar(dfb_xmm_id, dfb_ex2pe_id, 0, g, dst0);
-                    tile_regs_commit();
-                    dfb_xmm.pop_front(1);
-                    dfb_xmm.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, dfb_xmm_id);
-                    tile_regs_release();
-                    dfb_xmm.push_back(1);
+                        tile_regs_acquire();
+#ifdef TILIZE_IN
+                        sub_tiles_bcast_scalar(dfb_in_id, dfb_ex_global_id, tile_id, 0 + (g << 1), dst0);
+#else
+                        sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, tile_id, 0 + (g << 1), dst0);
+#endif
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile(dst0, dfb_xmm_id);
+                        tile_regs_release();
+                        dfb_xmm.push_back(1);
+
+                        // // b. (x - u) * 1/[sqrt(Var + eps)]
+                        dfb_xmm.wait_front(1);
+                        reconfig_data_format(dfb_in0_id, dfb_xmm_id, dfb_ex_global_id, dfb_ex2pe_id);
+                        mul_bcast_scalar_init(dfb_xmm_id, dfb_ex2pe_id);
+                        tile_regs_acquire();
+                        mul_tiles_bcast_scalar(dfb_xmm_id, dfb_ex2pe_id, 0, g, dst0);
+                        tile_regs_commit();
+                        dfb_xmm.pop_front(1);
+                        dfb_xmm.reserve_back(1);
+                        tile_regs_wait();
+                        pack_tile(dst0, dfb_xmm_id);
+                        tile_regs_release();
+                        dfb_xmm.push_back(1);
+                    }
 
                     // // c. [(x - u) * rsqrt] * mask
                     const std::uint32_t mask_offset = g * block_w;
@@ -577,6 +622,10 @@ void kernel_main() {
 
         dfb_ex_global.pop_front(2 * num_groups);
         dfb_ex2pe.pop_front(num_groups);
+        if constexpr (fp32_sfpu_normalizer) {
+            dfb_ex_global_fp32.pop_front(2 * num_groups);
+            dfb_ex2pe_fp32.pop_front(num_groups);
+        }
     }
 
     dfb_eps.pop_front(1);

@@ -18,6 +18,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/transpose.h"
 #include "api/compute/welford.h"
+#include "api/compute/sfpu_binary_bcast.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/dataflow_buffer.h"
@@ -119,6 +120,10 @@ void kernel_main() {
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     // True when the statistics intake CB is configured with UnpackToDestFp32.
     constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
+    constexpr bool fp32_sfpu_normalizer = get_named_compile_time_arg_val("fp32_sfpu_normalizer") != 0;
+    constexpr uint32_t dfb_normalize_in_fp32_id = get_named_compile_time_arg_val("cb_normalize_in_fp32");
+    constexpr uint32_t dfb_ex_global_fp32_id = get_named_compile_time_arg_val("cb_ex_global_fp32");
+    constexpr uint32_t dfb_ex2pe_fp32_id = get_named_compile_time_arg_val("cb_ex2pe_fp32");
     // True when a reconfig-relevant operand is fp32: the per-tile reconfig_data_format calls below
     // are then required. All-bf16 compiles them out (no-ops). See program factory.
     constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
@@ -177,6 +182,9 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb_in_id);
     DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_in0_welford(dfb_in0_welford_id);
+    DataflowBuffer dfb_normalize_in_fp32(dfb_normalize_in_fp32_id);
+    DataflowBuffer dfb_ex_global_fp32(dfb_ex_global_fp32_id);
+    DataflowBuffer dfb_ex2pe_fp32(dfb_ex2pe_fp32_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
     DataflowBuffer dfb_out(dfb_out_id);
     DataflowBuffer dfb_x(dfb_x_id);
@@ -413,7 +421,16 @@ void kernel_main() {
         // Start Normalization Factor Calculation
         // Wait for final welford values in cb_ex_global_id
         dfb_ex_global.wait_front(2 * num_groups);
+        if constexpr (fp32_sfpu_normalizer) {
+            // These aliases share the populated statistic buffers but carry
+            // independent FIFO state and UnpackToDestFp32 configuration.
+            dfb_ex_global_fp32.reserve_back(2 * num_groups);
+            dfb_ex_global_fp32.push_back(2 * num_groups);
+        }
         dfb_ex2pe.reserve_back(num_groups);
+        if constexpr (fp32_sfpu_normalizer) {
+            dfb_ex2pe_fp32.reserve_back(num_groups);
+        }
         // (Var + eps)
         // fp32: dfb_ex_global is fp32 (var), dfb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
         // Reset both srcs so they match the operands read below. no-op for bf16.
@@ -435,9 +452,16 @@ void kernel_main() {
             tile_regs_release();
         }
         dfb_ex2pe.push_back(num_groups);
+        if constexpr (fp32_sfpu_normalizer) {
+            dfb_ex2pe_fp32.push_back(num_groups);
+        }
         // End Normalization Factor Calculation
 
         dfb_ex2pe.wait_front(num_groups);
+        if constexpr (fp32_sfpu_normalizer) {
+            dfb_ex_global_fp32.wait_front(2 * num_groups);
+            dfb_ex2pe_fp32.wait_front(num_groups);
+        }
 
         // Start Final Normalization
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
@@ -478,52 +502,84 @@ void kernel_main() {
                         dfb_xmm.reserve_back(1);
 
                         // // Now let us do the actual computation for the current group here
-                        // // a. x-u
-                        // fp32: SrcA needs dfb_in0 (fp32 input), SrcB needs dfb_ex_global (fp32 mean); the prior
-                        // group's mul_tiles(dfb_xmm) left SrcA on dfb_xmm. Use the unconditional 1-arg form: the old
-                        // 2-arg srcb(dfb_eps -> dfb_ex_global) never reset SrcA at all.
-                        if constexpr (enable_fp32_reconfig) {
-                            reconfig_data_format_srca(dfb_in0_id);
-                            reconfig_data_format_srcb(dfb_ex_global_id);
+                        // // a/b. (x-u) * 1/[sqrt(Var + eps)]
+                        if constexpr (fp32_sfpu_normalizer) {
+                            constexpr uint32_t data_dst = 0;
+                            constexpr uint32_t mean_dst = 1;
+                            constexpr uint32_t inv_std_dst = 2;
+                            tile_regs_acquire();
+#ifdef TILIZE_IN
+                            copy_tile_to_dst_init_short(dfb_normalize_in_fp32_id);
+                            copy_tile(dfb_normalize_in_fp32_id, nt, data_dst);
+#else
+                            copy_tile_to_dst_init_short(dfb_normalize_in_fp32_id);
+                            copy_tile(dfb_normalize_in_fp32_id, 0, data_dst);
+#endif
+                            copy_tile_to_dst_init_short_with_dt(dfb_normalize_in_fp32_id, dfb_ex_global_fp32_id);
+                            copy_tile(dfb_ex_global_fp32_id, g << 1, mean_dst);
+                            copy_tile_to_dst_init_short_with_dt(dfb_ex_global_fp32_id, dfb_ex2pe_fp32_id);
+                            copy_tile(dfb_ex2pe_fp32_id, g, inv_std_dst);
+                            sfpu_normalize_bcast_scalar(data_dst, mean_dst, inv_std_dst);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_tile(data_dst, dfb_xmm_id);
+                            tile_regs_release();
+                            dfb_xmm.push_back(1);
+                            copy_tile_to_dst_init_short_with_dt(dfb_ex2pe_fp32_id, dfb_normalize_in_fp32_id);
                         } else {
-                            reconfig_data_format_srcb(dfb_eps_id, dfb_ex_global_id);
-                        }
-                        sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
+                            // // a. x-u
+                            // fp32: SrcA needs dfb_in0 (fp32 input), SrcB needs dfb_ex_global (fp32 mean); the prior
+                            // group's mul_tiles(dfb_xmm) left SrcA on dfb_xmm. Use the unconditional 1-arg form: the
+                            // old 2-arg srcb(dfb_eps -> dfb_ex_global) never reset SrcA at all.
+                            if constexpr (enable_fp32_reconfig) {
+                                reconfig_data_format_srca(dfb_in0_id);
+                                reconfig_data_format_srcb(dfb_ex_global_id);
+                            } else {
+                                reconfig_data_format_srcb(dfb_eps_id, dfb_ex_global_id);
+                            }
+                            sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
 
-                        tile_regs_acquire();
-                        sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, 0, 0 + (g << 1), dst0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(dst0, dfb_xmm_id);
-                        tile_regs_release();
-                        dfb_xmm.push_back(1);
+                            tile_regs_acquire();
+                            sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, 0, 0 + (g << 1), dst0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            pack_tile(dst0, dfb_xmm_id);
+                            tile_regs_release();
+                            dfb_xmm.push_back(1);
 
-                        // // b. (x - u) * 1/[sqrt(Var + eps)]
-                        dfb_xmm.wait_front(1);
-                        // fp32: reset SrcA to dfb_xmm (fp32); stage a left SrcA on dfb_in0. The reconfig has to
-                        // precede the init: the init's LLK assert checks that the unpack config registers already
-                        // describe these operands.
-                        if constexpr (enable_fp32_reconfig) {
-                            reconfig_data_format_srca(dfb_in0_id, dfb_xmm_id);
+                            // // b. (x - u) * 1/[sqrt(Var + eps)]
+                            dfb_xmm.wait_front(1);
+                            // fp32: reset SrcA to dfb_xmm (fp32); stage a left SrcA on dfb_in0. The reconfig has to
+                            // precede the init: the init's LLK assert checks that the unpack config registers already
+                            // describe these operands.
+                            if constexpr (enable_fp32_reconfig) {
+                                reconfig_data_format_srca(dfb_in0_id, dfb_xmm_id);
+                            }
+                            reconfig_data_format_srcb(dfb_ex_global_id, dfb_ex2pe_id);
+                            mul_bcast_scalar_init(dfb_xmm_id, dfb_ex2pe_id);
+                            tile_regs_acquire();
+                            mul_tiles_bcast_scalar(dfb_xmm_id, dfb_ex2pe_id, 0, g, dst0);
+                            tile_regs_commit();
+                            dfb_xmm.pop_front(1);
+                            dfb_xmm.reserve_back(1);
+                            tile_regs_wait();
+                            pack_tile(dst0, dfb_xmm_id);
+                            tile_regs_release();
+                            dfb_xmm.push_back(1);
                         }
-                        reconfig_data_format_srcb(dfb_ex_global_id, dfb_ex2pe_id);
-                        mul_bcast_scalar_init(dfb_xmm_id, dfb_ex2pe_id);
-                        tile_regs_acquire();
-                        mul_tiles_bcast_scalar(dfb_xmm_id, dfb_ex2pe_id, 0, g, dst0);
-                        tile_regs_commit();
-                        dfb_xmm.pop_front(1);
-                        dfb_xmm.reserve_back(1);
-                        tile_regs_wait();
-                        pack_tile(dst0, dfb_xmm_id);
-                        tile_regs_release();
-                        dfb_xmm.push_back(1);
 
                         // // c. [(x - u) * rsqrt] * mask
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
 
                         dfb_xmm.wait_front(1);
-                        reconfig_data_format_srcb(dfb_ex2pe_id, dfb_input_mask_id);
+                        if constexpr (fp32_sfpu_normalizer) {
+                            // Exit the UnpackToDestFp32 copy configuration before returning to
+                            // the ordinary FPU mask and affine pipeline.
+                            reconfig_data_format(dfb_xmm_id, dfb_input_mask_id);
+                        } else {
+                            reconfig_data_format_srcb(dfb_ex2pe_id, dfb_input_mask_id);
+                        }
                         mul_bcast_rows_init(dfb_xmm_id, dfb_input_mask_id);
                         tile_regs_acquire();
                         mul_tiles_bcast_rows(dfb_xmm_id, dfb_input_mask_id, 0, mask_index, dst0);
@@ -587,15 +643,18 @@ void kernel_main() {
                     }
 
                     if constexpr (do_gamma) {
-                        // fp32: reset SrcA to dfb_x (fp32); the prior mask/accumulate step left SrcA on a bf16 format.
-                        if constexpr (enable_fp32_reconfig) {
+                        if constexpr (fp32_sfpu_normalizer) {
+                            // The SFPU normalizer's copy path changes both unpacker inputs. Configure
+                            // the complete operand pair at the affine boundary instead of relying on
+                            // the legacy FPU path's incremental SrcA/SrcB state transitions.
+                            reconfig_data_format(dfb_x_id, dfb_gamma_id);
+                        } else if constexpr (enable_fp32_reconfig) {
                             reconfig_data_format_srca(dfb_x_id);
                             reconfig_data_format_srcb(dfb_xmm_id, dfb_gamma_id);
-                            mul_bcast_rows_init(dfb_x_id, dfb_gamma_id);
                         } else {
                             reconfig_data_format_srcb(dfb_xmm_id, dfb_gamma_id);
-                            mul_bcast_rows_init(dfb_x_id, dfb_gamma_id);
                         }
+                        mul_bcast_rows_init(dfb_x_id, dfb_gamma_id);
 
                         dfb_x.wait_front(1);
                         tile_regs_acquire();
@@ -610,15 +669,15 @@ void kernel_main() {
                     }
 
                     if constexpr (do_beta) {
-                        // fp32: reset SrcA to dfb_x (fp32), same as the gamma step above.
-                        if constexpr (enable_fp32_reconfig) {
+                        if constexpr (fp32_sfpu_normalizer) {
+                            reconfig_data_format(dfb_x_id, dfb_beta_id);
+                        } else if constexpr (enable_fp32_reconfig) {
                             reconfig_data_format_srca(dfb_x_id);
                             reconfig_data_format_srcb(do_gamma ? dfb_gamma_id : dfb_xmm_id, dfb_beta_id);
-                            add_bcast_rows_init(dfb_x_id, dfb_beta_id);
                         } else {
                             reconfig_data_format_srcb(do_gamma ? dfb_gamma_id : dfb_xmm_id, dfb_beta_id);
-                            add_bcast_rows_init(dfb_x_id, dfb_beta_id);
                         }
+                        add_bcast_rows_init(dfb_x_id, dfb_beta_id);
 
                         dfb_x.wait_front(1);
                         tile_regs_acquire();
@@ -689,6 +748,10 @@ void kernel_main() {
 
         dfb_ex_global.pop_front(2 * num_groups);
         dfb_ex2pe.pop_front(num_groups);
+        if constexpr (fp32_sfpu_normalizer) {
+            dfb_ex_global_fp32.pop_front(2 * num_groups);
+            dfb_ex2pe_fp32.pop_front(num_groups);
+        }
     }
 
     dfb_eps.pop_front(1);

@@ -303,11 +303,16 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias is only useful when
     // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
     const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
+    const bool fp32_sfpu_normalizer = welford_unpack_fp32_active;
     const bool enable_fp32_reconfig = groupnorm_needs_fp32_reconfig(
         {in_data_format, out_data_format, cb_data_format, gamma_beta_cb_data_format, in_mask_cb_data_format});
 
     const uint32_t cb_in0_welford_index =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
+    const uint32_t cb_normalize_in_fp32_index =
+        tilize_in ? static_cast<uint32_t>(tt::CBIndex::c_29) : static_cast<uint32_t>(tt::CBIndex::c_19);
+    constexpr uint32_t cb_ex_global_fp32_index = tt::CBIndex::c_7;
+    constexpr uint32_t cb_ex2pe_fp32_index = tt::CBIndex::c_11;
 
     TT_FATAL(num_channels_per_group > 0, "num_channels_per_group must be > 0 (W={}, num_groups={})", W, num_groups);
     TT_FATAL(
@@ -1037,6 +1042,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_19)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
+    if (fp32_sfpu_normalizer) {
+        unpack_to_dest_mode[cb_ex_global_fp32_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[cb_ex2pe_fp32_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
 
     mcast_sender_compute_named_compile_time_args_group_1["welford_fp32_alias"] =
         static_cast<uint32_t>(welford_fp32_alias);
@@ -1045,6 +1054,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     mcast_sender_compute_named_compile_time_args_group_1["cb_in0_welford"] = cb_in0_welford_index;
     mcast_sender_compute_named_compile_time_args_group_1["enable_fp32_reconfig"] =
         static_cast<uint32_t>(enable_fp32_reconfig);
+    mcast_sender_compute_named_compile_time_args_group_1["fp32_sfpu_normalizer"] =
+        static_cast<uint32_t>(fp32_sfpu_normalizer);
+    mcast_sender_compute_named_compile_time_args_group_1["cb_normalize_in_fp32"] = cb_normalize_in_fp32_index;
+    mcast_sender_compute_named_compile_time_args_group_1["cb_ex_global_fp32"] =
+        fp32_sfpu_normalizer ? cb_ex_global_fp32_index : static_cast<uint32_t>(tt::CBIndex::c_15);
+    mcast_sender_compute_named_compile_time_args_group_1["cb_ex2pe_fp32"] =
+        fp32_sfpu_normalizer ? cb_ex2pe_fp32_index : static_cast<uint32_t>(tt::CBIndex::c_27);
     mcast_sender_compute_named_compile_time_args_group_2["welford_fp32_alias"] =
         static_cast<uint32_t>(welford_fp32_alias);
     mcast_sender_compute_named_compile_time_args_group_2["welford_unpack_fp32_active"] =
@@ -1052,6 +1068,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     mcast_sender_compute_named_compile_time_args_group_2["cb_in0_welford"] = cb_in0_welford_index;
     mcast_sender_compute_named_compile_time_args_group_2["enable_fp32_reconfig"] =
         static_cast<uint32_t>(enable_fp32_reconfig);
+    mcast_sender_compute_named_compile_time_args_group_2["fp32_sfpu_normalizer"] =
+        static_cast<uint32_t>(fp32_sfpu_normalizer);
+    mcast_sender_compute_named_compile_time_args_group_2["cb_normalize_in_fp32"] = cb_normalize_in_fp32_index;
+    mcast_sender_compute_named_compile_time_args_group_2["cb_ex_global_fp32"] =
+        fp32_sfpu_normalizer ? cb_ex_global_fp32_index : static_cast<uint32_t>(tt::CBIndex::c_15);
+    mcast_sender_compute_named_compile_time_args_group_2["cb_ex2pe_fp32"] =
+        fp32_sfpu_normalizer ? cb_ex2pe_fp32_index : static_cast<uint32_t>(tt::CBIndex::c_27);
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel_path;
@@ -1455,7 +1478,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
 
     constexpr uint32_t ex_cb_index = tt::CBIndex::c_9;
     constexpr uint32_t ex_global_cb_index = tt::CBIndex::c_15;
-    desc.cbs.push_back(CBDescriptor{
+    auto ex_global_desc = CBDescriptor{
         .total_size = ex_global_CB_size,
         .core_ranges = all_cores,
         .format_descriptors =
@@ -1469,7 +1492,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                   .data_format = cb_data_format,
                   .page_size = single_tile_size,
               }}},
-    });
+    };
+    if (fp32_sfpu_normalizer) {
+        ex_global_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_ex_global_fp32_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size});
+    }
+    desc.cbs.push_back(std::move(ex_global_desc));
 
     if (!use_welford) {
         constexpr uint32_t ex2_cb_index = tt::CBIndex::c_13;
@@ -1492,7 +1522,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     }
 
     constexpr uint32_t cb_ex2pe_index = tt::CBIndex::c_27;
-    desc.cbs.push_back(CBDescriptor{
+    auto ex2pe_desc = CBDescriptor{
         .total_size = ex2pe_CB_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
@@ -1500,7 +1530,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
-    });
+    };
+    if (fp32_sfpu_normalizer) {
+        ex2pe_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_ex2pe_fp32_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size});
+    }
+    desc.cbs.push_back(std::move(ex2pe_desc));
 
     // Runtime Args
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);

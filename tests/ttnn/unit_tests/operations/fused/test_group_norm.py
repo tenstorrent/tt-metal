@@ -221,6 +221,57 @@ def test_group_norm_stable_stats_translation_stability(device, base, amplitude):
     assert pcc > 0.9995
 
 
+def test_group_norm_sharded_fp32_large_offset(device):
+    """Sharded FP32 normalization must retain low-order input variation."""
+    torch.manual_seed(7)
+    N, C, H, W, num_groups = 1, 256, 1, 256, 16
+    grid = ttnn.CoreGrid(y=1, x=1)
+    x = 1_000_000.0 + 128.0 * (torch.rand((N, C, H, W), dtype=torch.float32) - 0.5)
+    reference = torch.nn.functional.group_norm(x, num_groups).permute(0, 2, 3, 1).reshape(N, 1, H * W, C)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    input_tensor = ttnn.from_torch(
+        x.permute(0, 2, 3, 1).reshape(N, 1, H * W, C),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, grid.y, ttnn.bfloat8_b), device)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (H * W, C), ttnn.ShardOrientation.COL_MAJOR)
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        shard_spec,
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, memory_config)
+    output = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        input_mask=input_mask,
+        memory_config=memory_config,
+        core_grid=grid,
+        dtype=ttnn.float32,
+        compute_kernel_config=compute_kernel_config,
+        use_welford=True,
+        output_layout=ttnn.TILE_LAYOUT,
+        inplace=False,
+    )
+    actual = ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG))).float()
+
+    error = actual - reference
+    assert torch.isfinite(actual).all()
+    assert error.abs().max() < 0.02
+    assert error.abs().mean() < 0.004
+
+
 @pytest.mark.parametrize("N, C, H, W, num_groups", HEIGHT_SHARDED_SHAPES)
 @pytest.mark.parametrize("use_welford", statistics_backend_values, ids=statistics_backend_ids)
 @pytest.mark.parametrize("specify_grid", [True])

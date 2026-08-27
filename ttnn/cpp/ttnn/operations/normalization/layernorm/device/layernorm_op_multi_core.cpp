@@ -386,6 +386,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
             Wt_next_block_up = without_weights_max_size;
         }
     }
+    // The compact kernel forms fused pre-add through TF32 and its final
+    // normalisation consumes SrcA/SrcB. Use the streaming kernel for every
+    // tiled FP32 two-pass case so its UnpackToDestFp32 aliases and SFPU
+    // finaliser preserve the complete mantissa.
+    if (fp32_sfpu_finalizer) {
+        large_tensor_needed = true;
+    }
     if (large_tensor_needed) {
         in0_t = Wt_next_block_up;
         im0_t = Wt_next_block_up;  // buffer for saving xmm
@@ -444,9 +451,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // The large fused path normally rereads both inputs for normalisation after
     // materialising x = a + b for statistics. Retain the complete post-add row
     // through an aliased CB view when the actual free L1 span can hold it.
-    if (device->arch() == tt::ARCH::BLACKHOLE && use_welford_and_not_rms_norm && large_tensor_needed && fuse_pre_add &&
-        gamma.has_value() && beta.has_value() && !input_is_row_major && in_data_format == tt::DataFormat::Float32 &&
-        !operation_attributes.fused_activation.has_value()) {
+    if (!fp32_sfpu_finalizer && device->arch() == tt::ARCH::BLACKHOLE && use_welford_and_not_rms_norm &&
+        large_tensor_needed && fuse_pre_add && gamma.has_value() && beta.has_value() && !input_is_row_major &&
+        in_data_format == tt::DataFormat::Float32 && !operation_attributes.fused_activation.has_value()) {
         const std::uint32_t full_row_tiles = tt::round_up(Wt, block_size);
         auto replay_footprint = make_cb_footprint(true);
         replay_footprint.residual_values = static_cast<std::uint64_t>(full_row_tiles) * single_tile_size;
@@ -725,7 +732,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (welford_fp32_alias) {
         reader.compiler_options.defines.emplace("WELFORD_FP32_ALIAS", "1");
     }
-    if (fp32_residual_sfpu_finalizer) {
+    if (fp32_sfpu_finalizer) {
         for (auto cb : {tt::CBIndex::c_7, tt::CBIndex::c_8, tt::CBIndex::c_9, tt::CBIndex::c_10}) {
             unpack_to_dest_mode[static_cast<std::uint32_t>(cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }

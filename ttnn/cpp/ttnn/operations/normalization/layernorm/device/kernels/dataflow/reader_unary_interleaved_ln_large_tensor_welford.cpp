@@ -90,13 +90,15 @@ void kernel_main() {
             dfb_x_welford.push_back(block.full_block_size());
 #endif
 #endif
-            if constexpr (fp32_residual_sfpu_finalizer) {
+#ifdef FUSE_PRE_ADD
+            if constexpr (fp32_sfpu_finalizer) {
                 // These aliases share the input SRAM but maintain independent FIFO state.
                 dfb_in0_fp32.reserve_back(block.full_block_size());
                 dfb_in1_fp32.reserve_back(block.full_block_size());
                 dfb_in0_fp32.push_back(block.full_block_size());
                 dfb_in1_fp32.push_back(block.full_block_size());
             }
+#endif
         }  // wt loop
 
         // Second pass
@@ -126,11 +128,13 @@ void kernel_main() {
 #endif
 #endif
 #endif
-            if constexpr (fp32_residual_sfpu_finalizer) {
+            if constexpr (fp32_sfpu_finalizer) {
                 dfb_in0_fp32.reserve_back(block.full_block_size());
-                dfb_in1_fp32.reserve_back(block.full_block_size());
                 dfb_in0_fp32.push_back(block.full_block_size());
+#ifdef FUSE_PRE_ADD
+                dfb_in1_fp32.reserve_back(block.full_block_size());
                 dfb_in1_fp32.push_back(block.full_block_size());
+#endif
             }
 #ifdef AFFINE_MCAST_SENDER
             dfb_gamma.reserve_back(block.full_block_size());

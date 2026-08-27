@@ -810,6 +810,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     //     preserve ~ one mantissa-bit step beyond TF32, but the accumulated TF32
     //     errors from previous iteration dominate, so the gain doesn't justify the overhead.
     const bool welford_fp32_alias = use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
+    const bool fp32_sfpu_normalizer = welford_fp32_alias;
+    constexpr uint32_t ex_global_fp32_alias_index = tt::CBIndex::c_20;
+    constexpr uint32_t ex2pe_fp32_alias_index = tt::CBIndex::c_21;
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (welford_fp32_alias) {
@@ -817,6 +820,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_31)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[ex_global_fp32_alias_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[ex2pe_fp32_alias_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     // Welford-fp32 alias args. Only attached on the welford compute kernel; the non-welford
@@ -841,6 +846,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         compute_named_compile_time_args.push_back({"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)});
         compute_named_compile_time_args.push_back({"cb_in0_welford", cb_in0_welford_arg});
         compute_named_compile_time_args.push_back({"cb_in_welford", cb_in_welford_arg});
+        compute_named_compile_time_args.push_back(
+            {"fp32_sfpu_normalizer", static_cast<uint32_t>(fp32_sfpu_normalizer)});
+        compute_named_compile_time_args.push_back({"cb_ex_global_fp32", ex_global_fp32_alias_index});
+        compute_named_compile_time_args.push_back({"cb_ex2pe_fp32", ex2pe_fp32_alias_index});
         compute_named_compile_time_args.push_back(
             {"sfpu_two_pass_reciprocal", std::bit_cast<uint32_t>(1.0f / static_cast<float>(local_count))});
     }
@@ -1139,7 +1148,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // ex_global
     constexpr uint32_t ex_cb_index = tt::CBIndex::c_9;
     constexpr uint32_t ex_global_cb_index = tt::CBIndex::c_15;
-    desc.cbs.push_back(CBDescriptor{
+    CBDescriptor ex_global_desc{
         .total_size = static_cb.ex_global_CB_size,
         .core_ranges = all_cores,
         .format_descriptors =
@@ -1153,11 +1162,19 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                   .data_format = cb_data_format,
                   .page_size = single_tile_size,
               }}},
-    });
+    };
+    if (fp32_sfpu_normalizer) {
+        ex_global_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(ex_global_fp32_alias_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        });
+    }
+    desc.cbs.push_back(std::move(ex_global_desc));
 
     // ex2pe
     constexpr uint32_t cb_ex2pe_index = tt::CBIndex::c_17;
-    desc.cbs.push_back(CBDescriptor{
+    CBDescriptor ex2pe_desc{
         .total_size = static_cb.ex2pe_CB_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
@@ -1165,7 +1182,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
-    });
+    };
+    if (fp32_sfpu_normalizer) {
+        ex2pe_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(ex2pe_fp32_alias_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        });
+    }
+    desc.cbs.push_back(std::move(ex2pe_desc));
 
     constexpr uint32_t cb_ones_index = tt::CBIndex::c_26;
     desc.cbs.push_back(CBDescriptor{

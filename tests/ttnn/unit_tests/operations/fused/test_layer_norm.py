@@ -189,6 +189,62 @@ def test_layer_norm_welford_fp32_residual_large_offset(device, rows, width):
     assert error.abs().mean() < 0.004
 
 
+@pytest.mark.parametrize(
+    "rows,width,has_residual,has_affine",
+    [
+        pytest.param(32, 64, False, False, id="compact_plain"),
+        pytest.param(32, 2880, True, True, id="residual_affine"),
+    ],
+)
+def test_layer_norm_welford_fp32_finalizer_large_offset(device, rows, width, has_residual, has_affine):
+    """All FP32 finalizer variants must retain variation below a shared offset."""
+    torch.manual_seed(37)
+    base = 1_000_000.0
+    torch_input = base + 64.0 * torch.randn((rows, width), dtype=torch.float32)
+    torch_residual = base + 64.0 * torch.randn((rows, width), dtype=torch.float32) if has_residual else None
+    torch_weight = torch.linspace(0.75, 1.25, width, dtype=torch.float32) if has_affine else None
+    torch_bias = torch.linspace(-0.25, 0.25, width, dtype=torch.float32) if has_affine else None
+
+    reference_input = torch_input.to(torch.float64)
+    if torch_residual is not None:
+        reference_input += torch_residual.to(torch.float64)
+    reference = torch.nn.functional.layer_norm(
+        reference_input,
+        [width],
+        weight=torch_weight.to(torch.float64) if torch_weight is not None else None,
+        bias=torch_bias.to(torch.float64) if torch_bias is not None else None,
+    )
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_tensor = (
+        ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device) if torch_residual is not None else None
+    )
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device) if torch_weight is not None else None
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device) if torch_bias is not None else None
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    output = ttnn.layer_norm(
+        input_tensor,
+        residual_input_tensor=residual_tensor,
+        weight=weight,
+        bias=bias,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        recip_tensor=create_recip_tensor(device, width, use_welford=True),
+        compute_kernel_config=compute_kernel_config,
+    )
+    actual = ttnn.to_torch(output).to(torch.float64)
+
+    error = actual - reference
+    assert torch.isfinite(actual).all()
+    assert error.abs().max() < 0.025
+    assert error.abs().mean() < 0.004
+
+
 @pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16)])
 def test_layer_norm_welford_off_default_tile(device, tile_shape, expect_error):
     """LayerNorm rejects tile shapes unsupported by its CB and LLK layout."""

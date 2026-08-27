@@ -35,6 +35,48 @@ def test_group_norm_statistics_mode_validation(expect_error):
         _use_two_pass_statistics("legacy")
 
 
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+def test_group_norm_fp32_large_offset_DRAM(device):
+    """The FP32 finalizer must not truncate x and mean to TF32 before subtraction."""
+    torch.manual_seed(7)
+    N, C, HW, num_groups = 1, 64, 32, 2
+    x = 1_000_000.0 + 128.0 * (torch.rand((N, 1, HW, C), dtype=torch.float32) - 0.5)
+    reference = torch.nn.functional.group_norm(
+        x.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW), num_groups
+    ).permute(0, 2, 3, 1)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    input_tensor = ttnn.from_torch(
+        x,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        dtype=ttnn.float32,
+        compute_kernel_config=compute_kernel_config,
+        use_welford=True,
+        inplace=False,
+    )
+    actual = ttnn.to_torch(ttnn.from_device(output)).float()
+
+    error = actual - reference
+    assert torch.isfinite(actual).all()
+    assert error.abs().max() < 0.015
+    assert error.abs().mean() < 0.004
+
+
 GROUP_NORM_DRAM_SHAPES = [
     (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
     (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
