@@ -541,7 +541,8 @@ void WriteToDeviceSharded(
     auto* device = buffer.device();
     const auto& allocator = device->allocator();
 
-    const auto& cluster = MetalContext::instance().get_cluster();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    const auto& cluster = metal_ctx.get_cluster();
     const size_t alignment_req = cluster.get_alignment_requirements(device->id(), page_size);
     const size_t aligned_bytes = alignment_req ? (page_size / alignment_req) * alignment_req : page_size;
     const size_t remainder_bytes = page_size - aligned_bytes;
@@ -570,8 +571,7 @@ void WriteToDeviceSharded(
                                         (write_device_page * buffer.aligned_page_size()) + offset;
                 auto core_coordinates =
                     device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
-                MetalContext::instance().get_cluster().write_core(
-                    device->id(), core_coordinates, page, absolute_address);
+                cluster.write_core(device->id(), core_coordinates, page, absolute_address);
             } else {
                 auto bank_local_address = buffer.address() + (write_device_page * buffer.aligned_page_size()) + offset;
                 WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
@@ -637,7 +637,8 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const u
     size_t bank_index = 0;
     size_t data_index = 0;
 
-    const auto& cluster = MetalContext::instance().get_cluster();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    const auto& cluster = metal_ctx.get_cluster();
     const size_t alignment_req = cluster.get_alignment_requirements(device->id(), page_size);
     const size_t aligned_bytes = alignment_req ? (page_size / alignment_req) * alignment_req : page_size;
     const size_t remainder_bytes = page_size - aligned_bytes;
@@ -713,7 +714,8 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
     size_t host_idx = 0;
     size_t bank_index = 0;
 
-    const auto& cluster = MetalContext::instance().get_cluster();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    const auto& cluster = metal_ctx.get_cluster();
     size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
 
     std::vector<uint8_t> page(aligned_page_size);
@@ -728,8 +730,7 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
             case BufferType::L1_SMALL: {
                 auto core_coordinates = device->worker_core_from_logical_core(
                     buffer.allocator()->get_logical_core_from_bank_id(bank_index));
-                tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                    page.data(), aligned_page_size, tt_cxy_pair(device->id(), core_coordinates), address);
+                cluster.read_core(page.data(), aligned_page_size, tt_cxy_pair(device->id(), core_coordinates), address);
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
         }
@@ -751,7 +752,8 @@ void read_pages_to_host_helper(
     const uint32_t& core_page_id,
     const uint32_t& bank_id) {
     uint64_t host_buffer_start = uint64_t(host_page_id) * page_size;
-    const auto& cluster = MetalContext::instance().get_cluster();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    const auto& cluster = metal_ctx.get_cluster();
     size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
 
     if (dev_buffer.is_l1()) {
@@ -762,11 +764,11 @@ void read_pages_to_host_helper(
                                 (core_page_id * dev_buffer.aligned_page_size());
         if (aligned_page_size > page_size) {
             std::vector<uint8_t> page(aligned_page_size);
-            MetalContext::instance().get_cluster().read_core(
+            cluster.read_core(
                 page.data(), aligned_page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
             std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
         } else {
-            MetalContext::instance().get_cluster().read_core(
+            cluster.read_core(
                 host_buffer + host_buffer_start,
                 page_size,
                 tt_cxy_pair(device->id(), core_coordinates),
@@ -819,10 +821,11 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
         case BufferType::TRACE:
         case BufferType::L1:  // fallthrough
         case BufferType::L1_SMALL: {
+            const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
             if (buffer.is_dram()) {
-                MetalContext::instance().get_cluster().dram_barrier(device->id());
+                metal_ctx.get_cluster().dram_barrier(device->id());
             } else {
-                MetalContext::instance().get_cluster().l1_barrier(device->id());
+                metal_ctx.get_cluster().l1_barrier(device->id());
             }
             ReadFromDevice(buffer, host_buffer);
         } break;
