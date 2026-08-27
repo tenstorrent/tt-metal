@@ -83,7 +83,7 @@ from models.experimental.xtts_v2.tt.ttnn_xtts_cond import (
     preprocess_perceiver_parameters,
 )
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import preprocess_gpt_parameters
-from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_decode import TTNNGPTTracedDecoder
+from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_decode import TTNNGPTTracedDecoder, prefill_shapes
 from models.experimental.xtts_v2.tt.ttnn_xtts_hifigan import (
     TTNNHifiganGenerator,
     preprocess_hifigan_parameters,
@@ -299,8 +299,8 @@ class XttsV2:
         conditioning chunk — the shape every long reference hits), the vocoder's slots and
         programs, one prefill, and the decode step BEFORE `capture()`. The vocoder TRACES are
         captured after it — see _alloc_vocoder / _capture_vocoder, which own that split.
-        (Per-request prefill at a NEW prompt length still compiles a few programs post-capture
-        — covered by the teacher-forced trace check in the bringup validation.)"""
+        Prefill compiles per padded length, so every shape a request can reach is warmed here;
+        otherwise the first request at each new length pays that compile."""
         t0 = time.time()
         # 1) Blocks 1+2 on a dummy full-length (6 s) reference clip.
         g = torch.Generator().manual_seed(0)
@@ -313,17 +313,19 @@ class XttsV2:
         self._alloc_vocoder(voice.speaker_embedding)
         logger.info(f"[XttsV2] warmup: vocoder compiled at {len(VOC_BUCKETS)} buckets in {time.time() - t1:.1f}s")
 
-        # 3) One eager prefill (compiles fill_cache/SDPA/etc.), then capture the step trace.
+        # 3) An eager prefill at every shape (compiles fill_cache/SDPA/etc.), then the step trace.
         t1 = time.time()
-        prefix = assemble_prompt(
-            self.tokenizer.encode("Warm up the decoder.", "en"), voice.gpt_cond_latent, self.tables
-        )
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        shapes = prefill_shapes(self.decoder.config.n_head, grid.x * grid.y, MAX_PREFIX)
+        for rows in shapes:
+            self.decoder.reset_caches()
+            self.decoder.prefill(torch.zeros(1, rows, self.decoder.config.n_embd))
         self.decoder.reset_caches()
-        self.decoder.prefill(prefix.contiguous())
         self.decoder.capture()
         self._warm = True
         logger.info(
-            f"[XttsV2] warmup: GPT prefill + trace captured in {time.time() - t1:.1f}s (max_seq={self.decoder.max_seq})"
+            f"[XttsV2] warmup: GPT prefill compiled at {len(shapes)} shapes + trace captured in "
+            f"{time.time() - t1:.1f}s (max_seq={self.decoder.max_seq})"
         )
 
         # 4) Vocoder traces, from the slots step 2 allocated (see _capture_vocoder: after capture).

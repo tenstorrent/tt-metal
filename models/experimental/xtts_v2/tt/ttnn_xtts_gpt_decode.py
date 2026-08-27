@@ -64,6 +64,11 @@ def _decode_matmul_cfg(device, K, N, fused_activation=None):
     )
 
 
+def prefill_shapes(n_head, n_cores, max_prefix):
+    """The distinct padded lengths prefill compiles for, so a caller can warm every one."""
+    return sorted({32 * _prefill_tiles(p, n_head, n_cores) for p in range(1, max_prefix + 1)})
+
+
 def _prefill_tiles(P, n_head, n_cores):
     """Smallest 32-row tile count covering P that ttnn.fill_cache seeds correctly.
 
