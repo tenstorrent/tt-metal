@@ -663,7 +663,14 @@ _OVERALL_FROM_STATUSES = [
         "shared library. Plan on lifting/adapting demo code.",
     ),
     (
-        lambda _: [],
+        # Terminal catch-all: reached only when neither MISSING nor PARTIAL
+        # matched, i.e. every needed block is SUPPORTED. This predicate must
+        # stay unconditionally true -- it is what guarantees _aggregate_overall
+        # always assigns a verdict. It previously returned `[]` (an "empty list
+        # of offending blocks"), which is falsy, so READY was unreachable and a
+        # fully-supported model fell out of the loop keeping CompatReport's
+        # "UNKNOWN" default -- which scaffold then refuses.
+        lambda _: True,
         "READY",
         "All required blocks already exist in models/tt_transformers/. Likely "
         "drop-in via the existing porting checklist.",

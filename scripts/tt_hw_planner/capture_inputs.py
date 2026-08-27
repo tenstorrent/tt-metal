@@ -905,6 +905,46 @@ _CAPTURED_SHORT_CIRCUIT_BLOCK = """
 """
 
 
+def _capture_loader_defined_names() -> "list[str]":
+    """The function names `CAPTURE_LOADER_SOURCE` defines, read off the source
+    itself rather than typed out here -- renaming a helper in the constant must
+    not silently disable the idempotency guard in `inject_capture_loader`."""
+    import re as _re
+
+    return _re.findall(r"^def (\w+)\(", CAPTURE_LOADER_SOURCE, _re.M)
+
+
+_CAPTURE_LOADER_ANCHOR = "def _build_torch_reference():"
+
+
+def inject_capture_loader(src: str) -> str:
+    """Ensure a generated PCC test DEFINES the capture-loader helpers it calls.
+
+    `_PCC_TEST_TEMPLATE` calls `_captured_submodule_path(COMPONENT_NAME)` inside
+    `_build_torch_reference`, but the template never emitted the definition --
+    it arrived only when `upgrade_test_to_use_captured_inputs` happened to run
+    and all of its string anchors happened to match. When any anchor drifted,
+    that function returned False without writing, leaving a test that calls an
+    undefined name: every generated test then died with `NameError` before a
+    single PCC comparison ran. Emitting the definition at template-render time
+    makes the test self-contained, so it no longer depends on a later patch pass
+    landing. Injection is idempotent, so the two callers cannot double-define.
+
+    A `conftest.py` cannot supply these: the sharded test imports its sibling by
+    path, so conftest injection never reaches it. They must be IN the file.
+    """
+    defined = _capture_loader_defined_names()
+    if defined and all(f"def {name}(" in src for name in defined):
+        return src
+    if _CAPTURE_LOADER_ANCHOR not in src:
+        return src
+    return src.replace(
+        _CAPTURE_LOADER_ANCHOR,
+        CAPTURE_LOADER_SOURCE.lstrip() + "\n\n" + _CAPTURE_LOADER_ANCHOR,
+        1,
+    )
+
+
 def upgrade_test_to_use_captured_inputs(test_path: Path) -> bool:
     """Idempotently inject the captured-inputs short-circuit into a
     generated PCC test file. Returns True if the file was modified."""
@@ -914,10 +954,9 @@ def upgrade_test_to_use_captured_inputs(test_path: Path) -> bool:
     if _INJECTION_MARKER_V1 in src:
         return False
 
-    anchor = "def _build_torch_reference():"
-    if anchor not in src:
+    if _CAPTURE_LOADER_ANCHOR not in src:
         return False
-    src = src.replace(anchor, CAPTURE_LOADER_SOURCE.lstrip() + "\n\n" + anchor, 1)
+    src = inject_capture_loader(src)
 
     resolved_marker = 'print(f"[bringup] resolved torch submodule via `{resolved_path}`")'
     if resolved_marker not in src:

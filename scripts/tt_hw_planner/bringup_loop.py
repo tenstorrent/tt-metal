@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .bringup import REPO_ROOT
+from .capture_inputs import inject_capture_loader
 from .discovery import BRINGUP_ROOT, safe_relative_to_root
 from .family_backends import DEFAULT_TEMPLATE_PYTEST_EXCLUDE_K
 
@@ -1171,6 +1172,9 @@ def _emit_pcc_template(
         sample_input_expr=_shape_to_torch_randn(new_shape or {}),
         stub_import_path=_stub_import_path(demo_dir, safe, repo_root),
     )
+    # The template CALLS `_captured_submodule_path`; this is what DEFINES it.
+    # Without it every emitted test raises NameError before any PCC runs.
+    body = inject_capture_loader(body)
     test_path.write_text(body)
     return test_path, True, False
 
