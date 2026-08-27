@@ -48,21 +48,26 @@ CLS embedding per prompt.
 
 ### Measure prefill performance (`perf.py`)
 
-`test_n300_dp` captures the trace and times only the trace replay
-(`execute_trace(blocking=True)`), reporting avg / best ms and embeddings/s for
-the B12/S8192 DP=2 shape on one N300. It has two variants:
+`test_perf` captures the trace and times only the trace replay
+(`execute_trace(blocking=True)`), reporting avg / best ms, embeddings/s,
+tokens/s, and requests/s.
+
+pytest reads the hardware while it collects the tests. An N300 runs the
+B12/S8192 data-parallel shape on a (2, 1) mesh with fabric. Any other card
+runs the S512 batch sweep on one device. No test filter is needed:
 
 ```bash
-# Full 8192-token attention (headline wall-clock latency)
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_n300_dp -k nomask -s
+# The shape the local card supports, unmasked and masked
+TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_perf -s
 
-# Masked serving: compact valid-length masking swept over
-# 128 / 512 / 1024 / 2048 / 4096 tokens (padded to 8192). A short request
-# skips the all-padding key blocks and finishes faster than the full pass.
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_n300_dp -k masked -s
+# Full 8192-token attention only (headline wall-clock latency)
+TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_perf -k nomask -s
 
-# Both variants
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_n300_dp -s
+# Masked serving: compact valid lengths swept over 128 / 512 / 1024 / 2048 /
+# 4096 tokens, each padded to 8192. A short request skips the all-padding key
+# blocks and finishes faster than the full pass. The data-parallel path is the
+# only one that accepts this mask, so other cards skip it.
+TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_perf -k masked -s
 ```
 
 ### Run MTEB evaluation (`mteb_eval_minimal.py`)
@@ -124,7 +129,7 @@ reference run produced:
 | **100 %** | **Total device kernel time** | **≈ 870 ms** |
 
 This is the untraced forward (pure device-kernel time), so it sits just under
-the traced wall time from `test_n300_dp` (≈ 985 ms); the difference is host
+the traced wall time from `test_perf` (≈ 985 ms); the difference is host
 dispatch overhead that trace replay hides. Attention (the `GenericOp` path)
 dominates at ~77 %. `tt-perf-report` prints "Unclassified operation" warnings
 for the model-local `GenericOp`/`MinimalMatmul` ops — cosmetic, totals are
