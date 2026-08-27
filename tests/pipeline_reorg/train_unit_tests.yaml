@@ -11,37 +11,15 @@
 #
 # For max allowed timeout refer to .github/time_budget.yaml.
 
-- name: tt-train cpp nightly unit tests
-  # ENABLE_NIGHTLY_TT_TRAIN_TESTS is inlined in cmd.
-  cmd: |
-    mkdir -p generated/test_reports
-    ENABLE_NIGHTLY_TT_TRAIN_TESTS=1 build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter=*NIGHTLY_*
-  skus:
-    bh_p100:
-      timeout: 40
-    bh_p150b_civ2:
-      timeout: 40
-  owner_id: U07K00A281X # Kevin Wu
-  team: train
-
-# Non-nightly unit tests
-- name: tt-train cpp non-nightly unit tests
-  cmd: |
-    mkdir -p generated/test_reports
-    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
-  skus:
-    bh_p100:
-      timeout: 30
-    # bh_p150b_civ2 is used for merge gate test
-  owner_id: U07K00A281X # Kevin Wu
-  team: train
+# THROWAWAY BRANCH: the two cpp entries are removed so a workflow_dispatch measures
+# only the python cold run. Restore from main before merging anything.
 
 - name: tt-train python unit tests
   cmd: python -m pytest tt-train/tests/python
   skus:
     bh_p100:
-      timeout: 20
+      timeout: 40
     bh_p150b_civ2:
-      timeout: 20
+      timeout: 40
   owner_id: U07K00A281X # Kevin Wu
   team: train

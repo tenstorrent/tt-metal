@@ -316,6 +316,11 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      # THROWAWAY BRANCH: the 40 min in train_unit_tests.yaml is a warm-run number and a
+      # cold run will blow through it. A non-zero override also bypasses
+      # verify_time_budget.py, which would otherwise reject a timeout this far above the
+      # 110/90 min train:unit budget.
+      timeout-minutes-override: 300
   tt-train-perf-pretraining-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |

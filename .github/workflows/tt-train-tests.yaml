@@ -147,6 +147,14 @@ jobs:
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
         TT_LOGGER_LEVEL: warn
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        # THROWAWAY BRANCH: cold-run measurement. Both of these default to
+        # $HOME/.cache/..., and HOME is /github/home, which is bind-mounted from the
+        # runner host and therefore survives between jobs. Redirecting them into the
+        # container's own /tmp (recreated per job) guarantees a cold start without
+        # deleting caches out from under other jobs sharing the runner.
+        TT_METAL_CACHE: /tmp/cold-run/metal
+        HF_HOME: /tmp/cold-run/hf
+        CCACHE_DISABLE: "1"
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -173,9 +181,33 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-          enable-kernel-ccache: true
-          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
+          # THROWAWAY BRANCH: false so setup-job never exports
+          # TT_METAL_CCACHE_KERNEL_SUPPORT / CCACHE_REMOTE_STORAGE. The Redis backend is
+          # shared with every other CI job, so leaving it on makes every JIT compile a
+          # remote cache hit and the run is not cold. redis-ccache-storage is only read
+          # when enable-kernel-ccache is true, so it is dropped here.
+          enable-kernel-ccache: false
           auto-triage: ${{ !inputs.enable-watcher }}
+
+      - name: 🧊 Verify caches are cold
+        run: |
+          set -euo pipefail
+          echo "TT_METAL_CACHE=${TT_METAL_CACHE}  HF_HOME=${HF_HOME}"
+          for d in "${TT_METAL_CACHE}" "${HF_HOME}"; do
+            if [ -e "$d" ]; then
+              echo "❌ expected no cache at $d, found $(du -sh "$d" | cut -f1)"
+              exit 1
+            fi
+            echo "✅ cold: $d"
+          done
+          # Informational only: the runner-persistent default location is no longer read
+          # now that TT_METAL_CACHE is set, so a warm one here does not affect the run.
+          echo "unused default cache: $(du -sh "${HOME}/.cache/tt-metal-cache" 2>/dev/null | cut -f1 || echo absent)"
+          if [ -n "${TT_METAL_CCACHE_KERNEL_SUPPORT:-}" ] || [ -n "${CCACHE_REMOTE_STORAGE:-}" ]; then
+            echo "❌ kernel ccache still enabled"
+            exit 1
+          fi
+          echo "✅ kernel ccache disabled"
 
       - name: Install ttml module
         if: ${{ inputs.wheel-artifact-name }}
@@ -235,11 +267,15 @@ jobs:
           hostname: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
           path: /work
 
-      - name: 📊 CCache Report
+      - name: 📊 Cold run report
         if: ${{ !cancelled() }}
         run: |
-          echo "::group::CCache Statistics"
-          ccache --show-stats || echo "ccache stats not available"
+          echo "::group::Cold run cache footprint"
+          # Size of what this job compiled/downloaded from scratch, i.e. the work the
+          # warm runs were skipping.
+          du -sh "${TT_METAL_CACHE}" 2>/dev/null || echo "no kernel cache produced"
+          du -sh "${HF_HOME}" 2>/dev/null || echo "no HF downloads"
+          find "${TT_METAL_CACHE}" -name '*.elf' 2>/dev/null | wc -l | xargs echo "kernel ELFs built:"
           echo "::endgroup::"
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main

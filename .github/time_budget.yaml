@@ -151,7 +151,7 @@ train:
   merge_gate:
     bh_p150b_civ2: 30
   unit:
-    bh_p100: 90
+    bh_p100: 110
     bh_p150b_civ2: 90
   perf:
     bh_p100: 160
