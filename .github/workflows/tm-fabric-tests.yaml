@@ -9,8 +9,9 @@ name: "(TM-Fabric) Fabric Tests"
 # Scheduled run (nightly cron) covers CPU-only tests only.
 #
 # workflow_dispatch UX:
-#   * HW SKU selection: one boolean per SKU (run-wh_n300_civ2, run-wh_llmbox_civ2,
-#     run-wh_galaxy, run-bh_loudbox, run-bh_p300, run-bh_quietbox_2). All default
+  #   * HW SKU selection: one boolean per SKU (run-wh_n300_civ2, run-wh_llmbox_civ2,
+  #     run-wh_galaxy, run-bh_loudbox, run-bh_p300, run-bh_quietbox_2,
+  #     run-bh_loudbox_civ2_viommu). All default
 #     true, so the form is fully checked out of the box. Uncheck the SKUs you don't want; if every HW
 #     SKU box is unchecked, the HW matrix is skipped entirely (no separate
 #     on/off toggle needed).
@@ -61,6 +62,11 @@ on:
         type: boolean
       run-bh_quietbox_2:
         description: "Run on bh_quietbox_2"
+        required: false
+        default: true
+        type: boolean
+      run-bh_loudbox_civ2_viommu:
+        description: "Run on bh_loudbox_civ2_viommu"
         required: false
         default: true
         type: boolean
@@ -175,7 +181,8 @@ jobs:
         github.event_name == 'schedule' && false
         || (github.event_name == 'workflow_dispatch' && (
               inputs.run-wh_n300_civ2 || inputs.run-wh_llmbox_civ2 || inputs.run-wh_galaxy
-              || inputs.run-bh_loudbox || inputs.run-bh_p300 || inputs.run-bh_quietbox_2))
+              || inputs.run-bh_loudbox || inputs.run-bh_p300 || inputs.run-bh_quietbox_2
+              || inputs.run-bh_loudbox_civ2_viommu))
         || github.event_name == 'push'
         || github.event_name == 'workflow_call' }}
       # Assemble enabled-skus from the checked per-SKU booleans on workflow_dispatch;
@@ -183,13 +190,14 @@ jobs:
       # Trailing commas are stripped by prepare_test_matrix.py's parse_enabled_skus.
       enabled-skus: >-
         ${{ github.event_name == 'workflow_dispatch' && format(
-              '{0}{1}{2}{3}{4}{5}',
+              '{0}{1}{2}{3}{4}{5}{6}',
               inputs.run-wh_n300_civ2  && 'wh_n300_civ2,'   || '',
               inputs.run-wh_llmbox_civ2 && 'wh_llmbox_civ2,' || '',
               inputs.run-wh_galaxy     && 'wh_galaxy,'      || '',
               inputs.run-bh_loudbox    && 'bh_loudbox,'     || '',
               inputs.run-bh_p300       && 'bh_p300,'        || '',
-              inputs.run-bh_quietbox_2 && 'bh_quietbox_2,'  || ''
+              inputs.run-bh_quietbox_2 && 'bh_quietbox_2,'  || '',
+              inputs.run-bh_loudbox_civ2_viommu && 'bh_loudbox_civ2_viommu,' || ''
             ) || 'ALL_SKUS_IN_TESTS' }}
       test-names: ${{ inputs.hw-test-names || '' }}
 
