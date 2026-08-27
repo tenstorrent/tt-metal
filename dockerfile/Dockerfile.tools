@@ -405,8 +405,13 @@ FROM ubuntu:22.04 AS sfpi-builder
 ENV DEBIAN_FRONTEND=noninteractive
 # Enforce strict error handling: exit on error, unset vars, pipe failures
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+# git through texinfo are only used when sfpi-version names no package and the
+# toolchain has to be built from source; sfpi-info.sh BUILD names them and
+# cannot install them itself.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget ca-certificates binutils xz-utils \
+    autoconf automake bison build-essential expect flex gawk git \
+    libexpat1-dev libgmp-dev libmpc-dev libmpfr-dev patchutils python3 texinfo \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy SFPI version info files (single source of truth)

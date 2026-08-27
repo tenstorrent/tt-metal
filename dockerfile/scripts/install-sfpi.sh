@@ -41,16 +41,22 @@ SFPI_PKG="deb"
 SFPI_HASH_VAR="sfpi_${SFPI_ARCH}_${SFPI_DIST}_${SFPI_PKG}_hash"
 SFPI_HASH="${!SFPI_HASH_VAR:-}"
 
-if [[ -z "$SFPI_HASH" ]]; then
-    echo "ERROR: No hash found for SFPI ${sfpi_version} ${SFPI_ARCH}/${SFPI_DIST}/${SFPI_PKG}" >&2
-    echo "Available variables in sfpi-version:" >&2
-    grep -E "^sfpi_" "$SFPI_VERSION_FILE" >&2 || true
-    exit 1
-fi
-
-DOWNLOAD_URL="${sfpi_repo}/releases/download/${sfpi_version}/sfpi_${sfpi_version}_${SFPI_ARCH}_${SFPI_DIST}.${SFPI_PKG}"
 TMPDIR="/tmp/sfpi-install"
 DEB_FILE="${TMPDIR}/sfpi.deb"
+
+# A development toolchain publishes no package, so build the branch sfpi-version
+# names.  BUILD leaves the tarball beside the source tree it is given, holding
+# the same sfpi/ directory the deb installs under /opt/tenstorrent.
+if [[ -z "$SFPI_HASH" ]]; then
+    echo "SFPI ${sfpi_version} has no ${SFPI_PKG} package. Building from source..."
+    mkdir -p "${TMPDIR}" "${INSTALL_DIR}/opt/tenstorrent"
+    "${SFPI_INFO_SCRIPT}" BUILD "${TMPDIR}/sfpi-src"
+    tar -xJf "${TMPDIR}/sfpi_${sfpi_version}_${SFPI_ARCH}_${SFPI_DIST}.txz" \
+        -C "${INSTALL_DIR}/opt/tenstorrent"
+    rm -rf "${TMPDIR}"
+else
+
+DOWNLOAD_URL="${sfpi_repo}/releases/download/${sfpi_version}/sfpi_${sfpi_version}_${SFPI_ARCH}_${SFPI_DIST}.${SFPI_PKG}"
 
 echo "Installing SFPI ${sfpi_version} for ${SFPI_ARCH}/${SFPI_DIST}..."
 echo "Download URL: ${DOWNLOAD_URL}"
@@ -109,6 +115,8 @@ done
 
 # Cleanup
 rm -rf "${TMPDIR}"
+
+fi
 
 # Verify installation
 if [[ -d "${INSTALL_DIR}/opt/tenstorrent/sfpi" ]]; then
