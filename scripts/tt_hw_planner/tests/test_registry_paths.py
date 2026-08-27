@@ -22,11 +22,12 @@ from scripts.tt_hw_planner.registry_sync import prunable_backends
 # dead weight that routing skips; the list may only SHRINK. Adding to it means
 # accepting a route that cannot work, so prefer landing the demo or deleting the
 # entry instead.
-KNOWN_ABSENT_DEMOS = {
-    # Pinned by test_xtts_v2_is_in_tts_bucket and the only TTS backend registered,
-    # so it cannot be removed without also deciding what TTS models should route to.
-    "XTTS-v2 (multilingual TTS)",
-}
+KNOWN_ABSENT_DEMOS: set = set()
+# Empty, and it should stay that way: the registry sync now PRUNES a template
+# backend whose demo folder is absent, so such an entry is removed rather than
+# tolerated. Add a name here only to register an entry ahead of its demo landing,
+# with $TT_HW_PLANNER_PRUNE_REGISTRY=0 set so the sync leaves it alone. The list may
+# only shrink.
 
 
 def test_no_new_template_backend_points_at_a_missing_folder() -> None:
@@ -44,7 +45,10 @@ def test_known_absent_list_has_not_gone_stale() -> None:
     for the next one."""
     dead = {name for name, _ in prunable_backends()}
     landed = KNOWN_ABSENT_DEMOS - dead
-    assert not landed, f"demo now exists — remove from KNOWN_ABSENT_DEMOS: {sorted(landed)}"
+    assert not landed, (
+        "these are no longer prunable -- either the demo landed or the sync pruned "
+        f"the entry. Remove them from KNOWN_ABSENT_DEMOS: {sorted(landed)}"
+    )
 
 
 def test_generic_backends_are_exempt_from_the_folder_rule() -> None:

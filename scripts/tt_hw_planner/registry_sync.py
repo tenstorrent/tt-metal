@@ -284,17 +284,20 @@ def prune_registry(*, apply: Optional[bool] = None) -> Tuple[List[tuple], bool]:
     """Drop registry entries that can never work. Returns ``(entries, applied)``.
 
     Called from the registry sync so every run evaluates the registry against the
-    tree it is actually running on. Reporting is unconditional; DELETING is opt-in
-    via ``$TT_HW_PLANNER_PRUNE_REGISTRY``, because an entry can legitimately be
-    registered before its demo lands -- a test may pin one -- and only a human
-    knows which. Removing such an entry silently would trade a visible dead entry
-    for an invisible missing route. Routing already skips these either way, so the
-    default (report) costs nothing.
+    tree it is actually running on, and DELETES what cannot work. A template
+    backend whose demo folder is absent can only ever produce an empty bring-up;
+    leaving it listed means the next reader has to rediscover that. Generic
+    backends are never touched -- they have no template by design.
+
+    Deletion rewrites ``family_backends.py``, so the run prints what it removed and
+    the change shows up in ``git status`` for review before it is committed. Set
+    ``$TT_HW_PLANNER_PRUNE_REGISTRY=0`` to report without deleting (useful when
+    registering an entry ahead of its demo landing).
 
     Never raises: registry maintenance may not break a bring-up."""
     entries = prunable_backends()
     if apply is None:
-        apply = os.environ.get(_PRUNE_ENV, "0") not in ("0", "", "false", "False")
+        apply = os.environ.get(_PRUNE_ENV, "1") not in ("0", "", "false", "False")
     if not entries or not apply:
         return entries, False
     try:
