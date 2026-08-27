@@ -1578,6 +1578,11 @@
     pytest --timeout 300 models/tt_transformers/tests/test_async_ahead_token_keep_unit.py \
       models/tt_transformers/tests/test_async_ahead_token_keep_decode.py
   model: tt-transformers-async-ahead-keep
+  # Shared-generator behaviour, not a model's: the keep runs before any layer and
+  # only reads torch tensors plus the two device trace-input buffers, so a single
+  # device is enough and no weights are loaded. Both architectures are covered
+  # because the models that declare supports_async_decode = False span both:
+  # Qwen3.6-27B is blackhole-only, Gemma4 also runs on wh_n150.
   skus:
     wh_n150:
       timeout: 10
@@ -1585,7 +1590,7 @@
     bh_p150:
       timeout: 10
       tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
 - name: TT-Transformers common unit tests
