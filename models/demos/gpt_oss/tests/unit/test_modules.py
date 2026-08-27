@@ -706,6 +706,18 @@ def test_decoder(
         pytest test_modules.py --test-modules=attention
         pytest test_modules.py --test-modules=attention,mlp
     """
+    # The paged/unpaged dimension only changes behavior for components that touch
+    # the kv cache (attention + the full decoder layer). Skip non-kv-only paged
+    # variants before constructing the reference model and device tensors.
+    modules_to_test = set(test_modules.split(","))
+    run_all = "all" in modules_to_test
+    KV_USING_MODULES = {"attention", "decoder"}
+    if paged and not run_all and not (modules_to_test & KV_USING_MODULES):
+        pytest.skip(
+            f"paged variant only exercises kv-cache-using components ({sorted(KV_USING_MODULES)}); "
+            f"requested modules {sorted(modules_to_test)} don't touch the kv cache"
+        )
+
     mesh_shape = tuple(mesh_device.shape)
     if mesh_shape[0] == 1 and batch_size > 1:
         pytest.skip(
@@ -872,23 +884,6 @@ def test_decoder(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.int32,
     )
-
-    # Parse test_modules (supports comma-separated values)
-    modules_to_test = set(test_modules.split(","))
-    run_all = "all" in modules_to_test
-
-    # The paged/unpaged dimension only changes behavior for components that touch
-    # the kv cache (attention + the full decoder layer). Skip the paged variant
-    # for runs that ask for only non-kv components — and inside ``should_test``,
-    # gate non-kv components on ``not paged`` so an "all" invocation doesn't run
-    # router / experts / mlp / rms_norm twice with identical inputs. The kv-using
-    # components still execute under both paged settings.
-    KV_USING_MODULES = {"attention", "decoder"}
-    if paged and not run_all and not (modules_to_test & KV_USING_MODULES):
-        pytest.skip(
-            f"paged variant only exercises kv-cache-using components ({sorted(KV_USING_MODULES)}); "
-            f"requested modules {sorted(modules_to_test)} don't touch the kv cache"
-        )
 
     logger.info(f"Running tests: {test_modules} (paged={paged})")
 

@@ -5,16 +5,42 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_loop import FusedLoop, LoopTileByTile
-from fuser.fused_operation import FusedOperation
-from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopTileByTile, TileLoop
+from helpers.llk_params import BroadcastType
 
 
 class UnaryBroadcastUnpacker(Unpacker):
-    loop: FusedLoop = LoopTileByTile()
+    loop: TileLoop = LoopTileByTile()
+
+    def _srcb_dvalids_per_tile(self, compute_unit: FpuNode) -> int:
+        if compute_unit.broadcast_type == BroadcastType.Scalar:
+            return 1
+        return compute_unit.src_a.tile_shape.total_num_faces()
+
+    def perf_set_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        count = self._srcb_dvalids_per_tile(compute_unit)
+        return f"_perf_unpack_loop_set_valid<false, true>({count});\n"
+
+    def perf_clear_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        count = self._srcb_dvalids_per_tile(compute_unit)
+        return f"_perf_math_loop_clear_valid<false, true>({count});\n"
 
     def get_headers(self) -> List[str]:
         return [
@@ -26,15 +52,16 @@ class UnaryBroadcastUnpacker(Unpacker):
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        tensor_b = self.broadcast_golden(tensor_b, config, operation, compute_unit)
         return tensor_a.flatten(), tensor_b.flatten()
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -48,7 +75,7 @@ class UnaryBroadcastUnpacker(Unpacker):
 
     def unpack(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -60,7 +87,7 @@ class UnaryBroadcastUnpacker(Unpacker):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,

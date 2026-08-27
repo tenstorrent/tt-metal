@@ -64,23 +64,16 @@ jobs:
             ./.github/sku_config.yaml
       - name: Apply test selection
         id: apply-test-selection
-        # MATRIX/TEST_SELECTION come in via env, not `MATRIX='${{ ... }}'`. The matrix
-        # JSON embeds each test's `cmd` verbatim, and any apostrophe in one (e.g. the
-        # "overrides setup-job's 5s default" comment in galaxy_stress_tests.yaml) would
-        # close that single-quoted string and leave the rest of the JSON to be parsed as
-        # shell -- `syntax error near unexpected token ')'` before a single test runs.
-        env:
-          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
-          TEST_SELECTION: ${{ inputs.test-selection }}
         run: |
-          if [ "$TEST_SELECTION" = "all" ]; then
+          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
+          if [ "${{ inputs.test-selection }}" = "all" ]; then
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
-            FILTERED=$(echo "$MATRIX" | jq -c --arg id "$TEST_SELECTION" '[.[] | select(.id == $id)]')
+            FILTERED=$(echo "$MATRIX" | jq -c --arg id "${{ inputs.test-selection }}" '[.[] | select(.id == $id)]')
             if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No tests found for test-selection '${TEST_SELECTION}'. Ensure id matches tests/pipeline_reorg/galaxy_stress_tests.yaml and enabled-skus includes the needed SKU."
+              echo "::error::No tests found for test-selection '${{ inputs.test-selection }}'. Ensure id matches tests/pipeline_reorg/galaxy_stress_tests.yaml and enabled-skus includes the needed SKU."
               exit 1
             fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
@@ -89,14 +82,11 @@ jobs:
           fi
       - name: Apply runner labels (topology / extra-tag)
         id: apply-runner-labels
-        env:
-          MATRIX: ${{ steps.apply-test-selection.outputs.matrix }}
-          EXTRA_TAG: ${{ inputs.extra-tag }}
-          TOPOLOGY: ${{ inputs.topology }}
         run: |
+          MATRIX='${{ steps.apply-test-selection.outputs.matrix }}'
           UPDATED=$(echo "$MATRIX" | jq -c \
-            --arg tag "$EXTRA_TAG" \
-            --arg topology "$TOPOLOGY" \
+            --arg tag "${{ inputs.extra-tag }}" \
+            --arg topology "${{ inputs.topology }}" \
             'map(.runs_on |= map(
               if . == "in-service" then $tag
               elif startswith("topology-") then $topology

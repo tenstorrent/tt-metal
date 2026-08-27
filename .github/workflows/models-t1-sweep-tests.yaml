@@ -2,8 +2,9 @@ name: "(Tier 1) Models Sweep Tests"
 
 on:
   schedule:
-    # Weekly, Saturdays at 06:00 UTC. (GitHub Actions cron is always UTC; scheduled runs fire on the default branch only.)
-    - cron: "0 6 * * 6"
+    # Twice weekly, Wednesdays and Saturdays at 06:00 UTC. (GitHub Actions cron is always UTC;
+    # scheduled runs fire on the default branch only.)
+    - cron: "0 6 * * 3,6"
   workflow_dispatch:
     inputs:
       model:
@@ -15,6 +16,8 @@ on:
           - all
           - llama3.1-8b
           - llama3.3-70b
+          - sampling-common
+          - tt-transformers-common
       sku:
         description: "Select SKU to test"
         required: false
@@ -88,6 +91,7 @@ jobs:
           fi
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -101,6 +105,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   models-sweep-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/models-sweep-tests-impl.yaml
     with:

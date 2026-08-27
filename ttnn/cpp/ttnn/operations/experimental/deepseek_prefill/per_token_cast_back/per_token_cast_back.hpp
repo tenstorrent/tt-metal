@@ -28,6 +28,7 @@ ttnn::Tensor per_token_cast_back(
     const std::optional<ttnn::Tensor>& input_scale = std::nullopt,
     const std::optional<tt::tt_metal::DataType>& output_dtype = std::nullopt,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    bool narrow_scales_to_bf16 = false,
     bool token_count_aware = false,
     const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
     const std::optional<ttnn::Tensor>& expert_token_counts = std::nullopt,

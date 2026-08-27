@@ -5,6 +5,8 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
 
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+
 #include <optional>
 #include <tuple>
 #include <tt-metalium/work_split.hpp>
@@ -139,7 +141,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         if (num_sticks_per_core != 0) {
             if (chunking.num_chunks_per_stick > 1) {
                 num_sticks_per_core_read = num_sticks_per_core;
-                num_read_per_barrier = 2;
+                // Match `compute_cb_size`: nrpb=2 only when num_chunks is even, else 1 to avoid ring-wrap straddle.
+                num_read_per_barrier = (chunking.num_chunks_per_stick % 2 == 0) ? 2 : 1;
             } else {
                 auto num_sticks_per_core_pad32 = round_up_to_mul32(num_sticks_per_core);
                 num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
@@ -246,7 +249,22 @@ SliceCbSizing compute_cb_size(
             l1_budget,
             alignment);
 
-        const uint32_t num_chunks = (unpadded_row_size_bytes + max_chunk - 1) / max_chunk;
+        uint32_t num_chunks = (unpadded_row_size_bytes + max_chunk - 1) / max_chunk;
+        // Odd num_chunks with nrpb=2 straddles the 4-page CB ring on the next stick — try an aligned
+        // shrink to reach even; commit only if it lands, else let the nrpb=1 fallback do the work.
+        constexpr uint32_t nrpb = 2;
+        if ((num_chunks % nrpb) != 0) {
+            const uint32_t target_n = num_chunks + (nrpb - (num_chunks % nrpb));
+            uint32_t new_max = unpadded_row_size_bytes / target_n;
+            new_max = (new_max / alignment) * alignment;
+            const uint32_t candidate_num_chunks =
+                (new_max >= alignment) ? (unpadded_row_size_bytes + new_max - 1) / new_max : 0;
+            if (new_max >= alignment && (candidate_num_chunks % nrpb) == 0) {
+                max_chunk = new_max;
+                num_chunks = candidate_num_chunks;
+            }
+        }
+
         const uint32_t remainder = unpadded_row_size_bytes % max_chunk;
         s.chunking = {
             .chunk_size = max_chunk,
@@ -271,7 +289,8 @@ SliceCbSizing compute_cb_size(
                                          : num_sticks_per_core_group_2;
     if (num_input_pages != 0) {
         if (needs_chunking) {
-            s.num_read_per_barrier = 2;
+            // Fallback when the shrink above couldn't reach an even num_chunks: nrpb=1 makes a straddle impossible.
+            s.num_read_per_barrier = (s.chunking.num_chunks_per_stick % 2 == 0) ? 2 : 1;
         } else {
             auto num_sticks_per_core_pad32 = round_up_to_mul32(num_input_pages);
             uint32_t num_sticks_per_core_read =
@@ -411,6 +430,15 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> slice_rm_reader_dynamic_args(
         dynamic_args.push_back(tt::tt_metal::DynamicRuntimeArg{0, core, 0, reader_base});
     }
     return dynamic_args;
+}
+
+void SliceRmProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    patch_slice_program_addresses(program, SliceRmProgramFactory{}, args, tensor_args, output);
 }
 
 }  // namespace ttnn::prim

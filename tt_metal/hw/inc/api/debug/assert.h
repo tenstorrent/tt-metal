@@ -6,17 +6,57 @@
 
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
-#include "risc_common.h"
 #if defined(ARCH_QUASAR)
 #include "internal/tt-2xx/quasar/error_handling.h"
 #endif
+
+// ASSERT must be defined before including risc_common.h. That header includes this file mid-way
+// (so assert_and_hang can see flush_l2_cache_*), then uses ASSERT in ISR handlers. When this file
+// is the include entry point (e.g. ckernel.h -> llk_assert.h -> here), the mid-file re-include is
+// skipped by #pragma once, so ASSERT would otherwise be used before it is defined.
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
+
+// Definition below, after risc_common.h provides flush_l2_cache_range and related symbols.
+inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped);
+
+#define ASSERT(condition, ...) (void(not(condition) ? assert_and_hang(__LINE__, ##__VA_ARGS__), 0 : 0))
+
+#define ASSERT_ENABLED 1
+#define WATCHER_ASSERT_ENABLED 1
+#define LIGHTWEIGHT_ASSERT_ENABLED 0
+
+#elif defined(LIGHTWEIGHT_KERNEL_ASSERTS)
+
+// Trap wrapped as a function to avoid inline assembly at ASSERT macro's use site.
+FORCE_INLINE void lightweight_assert_trap() { asm("ebreak"); }
+
+#define ASSERT(condition, ...) (void(not(condition) ? lightweight_assert_trap(), 0 : 0))
+
+#define ASSERT_ENABLED 1
+#define LIGHTWEIGHT_ASSERT_ENABLED 1
+#define WATCHER_ASSERT_ENABLED 0
+
+#else
+
+// Avoid unused variable warnings here.
+#define ASSERT(condition, ...) (void(sizeof(not(condition))))
+
+#define ASSERT_ENABLED 0
+#define LIGHTWEIGHT_ASSERT_ENABLED 0
+#define WATCHER_ASSERT_ENABLED 0
+
+#endif
+
+// Included after ASSERT so risc_common.h's ISR handlers can use the macro even when this header
+// is the include entry point (circular include with risc_common.h).
+#include "risc_common.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
 //  - for Quasar, multiple DMs and TRISCs share assert_status; only the first to assert records its
 //    metadata via a dedicated claim field atomically claimed (amoswap on the cached L1 alias).
 //    Writes are flushed to make them visible to host.
-inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped) {
+inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type) {
     // Write the line number into the memory mailbox for host to read.
     debug_assert_msg_t tt_l1_ptr* v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
 #if defined(ARCH_QUASAR)
@@ -93,32 +133,5 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
         ;
     }
 }
-
-#define ASSERT(condition, ...) (void(not(condition) ? assert_and_hang(__LINE__, ##__VA_ARGS__), 0 : 0))
-
-#define ASSERT_ENABLED 1
-#define WATCHER_ASSERT_ENABLED 1
-#define LIGHTWEIGHT_ASSERT_ENABLED 0
-
-#else  // !WATCHER_ENABLED
-
-#if defined(LIGHTWEIGHT_KERNEL_ASSERTS)
-
-#define ASSERT(condition, ...) (void(not(condition) ? ({ asm("ebreak"); }), 0 : 0))
-
-#define ASSERT_ENABLED 1
-#define LIGHTWEIGHT_ASSERT_ENABLED 1
-#define WATCHER_ASSERT_ENABLED 0
-
-#else
-
-// Avoid unused variable warnings here.
-#define ASSERT(condition, ...) (void(sizeof(not(condition))))
-
-#define ASSERT_ENABLED 0
-#define LIGHTWEIGHT_ASSERT_ENABLED 0
-#define WATCHER_ASSERT_ENABLED 0
-
-#endif  // LIGHTWEIGHT_KERNEL_ASSERTS
 
 #endif  // WATCHER_ENABLED

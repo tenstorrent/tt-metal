@@ -20,6 +20,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 
 _TOKENS_PER_ROW = 640  # tokens of the chunk carried per mesh row (the realistic knob)
 _HIDDEN = 7168  # DeepSeek-V3 / Kimi-K2 hidden size, sharded across the mesh columns
@@ -61,18 +62,18 @@ def _to_device(torch_u32, mesh, mapper):
     [
         pytest.param(
             (8, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_2D},
+            torus_xy_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
         # 4-chip QuietBox variant: 2 rows -> 1 sender row + 1 receiver row, 2 cols. Per-shard
         # page = (7168/2)*4 = 14336 B (< the 16384 B FIFO), so the same op path runs on a
         # small multi-card box (no 32-chip Galaxy needed).
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_2D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
-            id="linear-2x2",
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],

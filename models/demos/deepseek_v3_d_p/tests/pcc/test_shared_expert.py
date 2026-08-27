@@ -15,46 +15,64 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
-from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, ACTIVATION_SITU, TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim",
+    "seq_len_per_chip, emb_dim, hidden_dim, activation",
     [
-        (4096, 7 * 1024, 2 * 1024),
-        (3200, 7 * 1024, 2 * 1024),
+        # 640 is the per-chip prefill chunk: 5120 tokens over sp_factor 8. Every case here runs that
+        # depth, which pins the matmul program configs to per_core_M=1 -- the blocking prefill uses.
+        (640, 7 * 1024, 2 * 1024, ACTIVATION_SILU),
+        # Kimi-K3: one shared-expert MLP at moe_intermediate_size * num_shared_experts = 3072 * 2.
+        # Worth its own case because every prior model has num_shared_experts == 1, so hidden_dim and
+        # the shared intermediate coincided and 6144 was never exercised here.
+        (640, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SILU),
+        # ...and the same shape on the activation the K3 checkpoint actually uses. This builds
+        # TtSharedExpert without a sub-device, so ttnn.situ_glu runs here on the full grid; its
+        # sub_core_grids form is only reachable through the MoE (test_ttnn_moe).
+        (640, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SITU),
     ],
-    ids=["4K", "3.2K"],
+    # Ids label seq_len_per_chip first, then what differs from the case above it (the 6144 shared
+    # intermediate, the activation).
+    ids=["640", "640-k3-6144", "640-k3-6144-situ"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            torus_x_device_params(),
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            1,
-            ttnn.Topology.Ring,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="ring-4",
+            id="torus-x-1x4",
         ),
         pytest.param(
             (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            fabric2d_device_params(),
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),
-            id="mesh-2x4",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        ),
+        # BH Galaxy. A Blackhole box accepts no mesh smaller than all 32 devices, so this is the
+        # only param where the SiTU cases can run at all -- SiTU needs ttnn.softcap, Blackhole-only.
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -65,8 +83,8 @@ def test_shared_expert_pcc(
     seq_len_per_chip: int,
     emb_dim: int,
     hidden_dim: int,
+    activation: str,
     num_links: int,
-    topology: ttnn.Topology,
 ):
     """
     Test TtSharedExpert PCC against TorchExpert reference.
@@ -74,21 +92,30 @@ def test_shared_expert_pcc(
     This test verifies:
     1. Correct weight sharding (gate_proj/up_proj on -1, down_proj on -2)
     2. Proper all-gather before matmuls
-    3. SiLU activation fusion
+    3. The GLU activation — SiLU fused into the gate matmul, or SiTU-GLU over both raw accumulators
     4. Proper reduce-scatter after final matmul
     5. Output matches torch reference with PCC > 0.97
     """
+    if activation == ACTIVATION_SITU and not is_blackhole():
+        pytest.skip("SiTU-GLU needs ttnn.softcap, which is Blackhole-only")
 
     activations_dtype = ttnn.bfloat16
     weights_dtype = ttnn.bfloat8_b
+    topology = per_axis_topology(device_params["fabric_config"])[1]
+    # Only read on the SiTU path; TorchExpert and TtSharedExpert must be given the same pair or the
+    # comparison silently measures two different activations.
+    situ_betas = dict(
+        situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
+        situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
+    )
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
-    logger.debug(f"seq_len_per_chip={seq_len_per_chip}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
+    logger.debug(f"{seq_len_per_chip=} {emb_dim=} {hidden_dim=} {activation=}")
 
     # Add Tracy signpost for profiling
-    signpost(f"SharedExpert PCC test - {mesh_shape=} {seq_len_per_chip=} {num_links=} {topology=}")
+    signpost(f"SharedExpert PCC test - {mesh_shape=} {seq_len_per_chip=} {activation=} {num_links=} {topology=}")
 
     # Query available ethernet links
     actual_num_links = get_num_links(mesh_device, cluster_axis=1)  # Query along mesh columns
@@ -99,7 +126,7 @@ def test_shared_expert_pcc(
     # Step 1: Create PyTorch reference model
     # ========================================
     logger.debug("Creating TorchExpert reference")
-    torch_model = TorchExpert(emb_dim, hidden_dim)
+    torch_model = TorchExpert(emb_dim, hidden_dim, activation=activation, **situ_betas)
 
     # Extract weights for TTNN model
     torch_weights = {
@@ -121,6 +148,8 @@ def test_shared_expert_pcc(
         topology=topology,
         activations_dtype=activations_dtype,
         weights_dtype=weights_dtype,
+        activation=activation,
+        **situ_betas,
     )
 
     # ========================================

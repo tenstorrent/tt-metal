@@ -31,10 +31,10 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -79,7 +79,7 @@ MeshTensor MakeSingleTileL1MeshTensor(const std::shared_ptr<distributed::MeshDev
 // SECTION 1: Pure unit tests — no device required
 // ============================================================================
 
-TEST(DescriptorPatching, EmplaceRuntimeArgs_AllUint32_NoBufferBindings) {
+TEST(DescriptorPatching, CPU_EmplaceRuntimeArgs_AllUint32_NoBufferBindings) {
     KernelDescriptor kd;
     kd.emplace_runtime_args({0, 0}, {10u, 20u, 30u});
 
@@ -89,7 +89,7 @@ TEST(DescriptorPatching, EmplaceRuntimeArgs_AllUint32_NoBufferBindings) {
     EXPECT_TRUE(kd.buffer_bindings.empty());
 }
 
-TEST(DescriptorPatching, EmplaceRuntimeArgs_MultipleCores_AllUint32) {
+TEST(DescriptorPatching, CPU_EmplaceRuntimeArgs_MultipleCores_AllUint32) {
     KernelDescriptor kd;
     kd.emplace_runtime_args({0, 0}, {1u, 2u});
     kd.emplace_runtime_args({1, 0}, {3u, 4u});
@@ -100,7 +100,7 @@ TEST(DescriptorPatching, EmplaceRuntimeArgs_MultipleCores_AllUint32) {
     EXPECT_TRUE(kd.buffer_bindings.empty());
 }
 
-TEST(DescriptorPatching, EmplaceCommonRuntimeArgs_AllUint32_NoBindings) {
+TEST(DescriptorPatching, CPU_EmplaceCommonRuntimeArgs_AllUint32_NoBindings) {
     KernelDescriptor kd;
     kd.emplace_common_runtime_args({100u, 200u, 300u});
 
@@ -111,7 +111,7 @@ TEST(DescriptorPatching, EmplaceCommonRuntimeArgs_AllUint32_NoBindings) {
 // Regression: emplace_runtime_args must accept nullptr Buffer* as a placeholder for
 // an absent optional tensor.  It emits 0u into the runtime arg slot and registers no
 // binding, so the cache-hit fast path stays valid for ops with optional inputs.
-TEST(DescriptorPatching, EmplaceRuntimeArgs_NullBuffer_EmitsZero_NoBinding) {
+TEST(DescriptorPatching, CPU_EmplaceRuntimeArgs_NullBuffer_EmitsZero_NoBinding) {
     KernelDescriptor kd;
     Buffer* null_buf = nullptr;
     kd.emplace_runtime_args({0, 0}, {1u, null_buf, 3u});
@@ -121,7 +121,7 @@ TEST(DescriptorPatching, EmplaceRuntimeArgs_NullBuffer_EmitsZero_NoBinding) {
     EXPECT_TRUE(kd.buffer_bindings.empty());
 }
 
-TEST(DescriptorPatching, EmplaceCommonRuntimeArgs_NullBuffer_EmitsZero_NoBinding) {
+TEST(DescriptorPatching, CPU_EmplaceCommonRuntimeArgs_NullBuffer_EmitsZero_NoBinding) {
     KernelDescriptor kd;
     Buffer* null_buf = nullptr;
     kd.emplace_common_runtime_args({7u, null_buf, 9u});
@@ -130,7 +130,7 @@ TEST(DescriptorPatching, EmplaceCommonRuntimeArgs_NullBuffer_EmitsZero_NoBinding
     EXPECT_TRUE(kd.common_buffer_bindings.empty());
 }
 
-TEST(DescriptorPatching, RTArgList_Uint32Only_NoBufferBindings) {
+TEST(DescriptorPatching, CPU_RTArgList_Uint32Only_NoBufferBindings) {
     KernelDescriptor kd;
     KernelDescriptor::RTArgList args;
     args.push_back(7u);
@@ -143,7 +143,7 @@ TEST(DescriptorPatching, RTArgList_Uint32Only_NoBufferBindings) {
     EXPECT_TRUE(kd.buffer_bindings.empty());
 }
 
-TEST(DescriptorPatching, RTArgList_Append_ConcatenatesUint32s) {
+TEST(DescriptorPatching, CPU_RTArgList_Append_ConcatenatesUint32s) {
     KernelDescriptor kd;
     KernelDescriptor::RTArgList args;
     args.push_back(1u);
@@ -153,18 +153,18 @@ TEST(DescriptorPatching, RTArgList_Append_ConcatenatesUint32s) {
     EXPECT_EQ(kd.runtime_args[0].second, (std::vector<uint32_t>{1u, 2u, 3u, 4u}));
 }
 
-TEST(DescriptorPatching, ResolvedBindings_DefaultIsEmpty) {
+TEST(DescriptorPatching, CPU_ResolvedBindings_DefaultIsEmpty) {
     ResolvedBindings b;
     EXPECT_TRUE(b.empty());
 }
 
-TEST(DescriptorPatching, ResolvedBindings_EmptyAfterAddingRtArg_IsFalse) {
+TEST(DescriptorPatching, CPU_ResolvedBindings_EmptyAfterAddingRtArg_IsFalse) {
     ResolvedBindings b;
     b.rt_args.push_back({});
     EXPECT_FALSE(b.empty());
 }
 
-TEST(DescriptorPatching, ResolvedBindings_EmptyAfterAddingCb_IsFalse) {
+TEST(DescriptorPatching, CPU_ResolvedBindings_EmptyAfterAddingCb_IsFalse) {
     ResolvedBindings b;
     b.cbs.push_back({});
     EXPECT_FALSE(b.empty());

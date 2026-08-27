@@ -130,8 +130,13 @@ auto materialize_arg(tt::tt_metal::distributed::MeshDevice* device, Arg&& arg) {
 }  // namespace detail
 
 struct ResourceUsage {
+    // Circular buffers only. A Metal 2.0 program has none, so this is legitimately 0 for a ported
+    // op and its L1 shows up under the dataflow-buffer and scratchpad fields instead.
     size_t cb_peak_size_per_core = 0;
     size_t l1_buffers_peak_per_core = 0;
+    size_t dataflow_buffer_peak_size_per_core = 0;
+    size_t scratchpad_peak_size_per_core = 0;
+    // Every kind above: the number to check an op against the L1 budget.
     size_t peak_memory_usage_per_core = 0;
     size_t l1_output_buffer_per_core = 0;
 };
@@ -163,8 +168,7 @@ namespace detail {
 // Build a success response from the captured op trace and its output tensors.
 inline ConstraintQueryResponse build_success_response(
     const nlohmann::json& op_trace, const std::vector<Tensor>& outputs) {
-    const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
-        extract_resource_usage_per_core(op_trace);
+    const auto usage = extract_resource_usage_per_core(op_trace);
 
     size_t l1_output_buffer_per_core = 0;
     for (const auto& output : outputs) {
@@ -181,7 +185,12 @@ inline ConstraintQueryResponse build_success_response(
 
     return ConstraintQueryResponse{
         ExecutionStatus::Success,
-        {cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core, l1_output_buffer_per_core},
+        {.cb_peak_size_per_core = usage.peak_cb,
+         .l1_buffers_peak_per_core = usage.peak_l1,
+         .dataflow_buffer_peak_size_per_core = usage.peak_dataflow_buffer,
+         .scratchpad_peak_size_per_core = usage.peak_scratchpad,
+         .peak_memory_usage_per_core = usage.peak_total,
+         .l1_output_buffer_per_core = l1_output_buffer_per_core},
         std::make_optional(std::move(output_specs))};
 }
 
@@ -190,6 +199,8 @@ inline ConstraintQueryResponse error_response(const std::string& message) {
         ExecutionStatus::Error,
         {.cb_peak_size_per_core = 0,
          .l1_buffers_peak_per_core = 0,
+         .dataflow_buffer_peak_size_per_core = 0,
+         .scratchpad_peak_size_per_core = 0,
          .peak_memory_usage_per_core = 0,
          .l1_output_buffer_per_core = 0},
         /* output_tensor_specs= */ std::nullopt,

@@ -184,4 +184,77 @@ struct ComputeGen2Config {
 // A compute kernel's hardware config holds exactly one generation's config.
 using ComputeHardwareConfig = std::variant<ComputeGen1Config, ComputeGen2Config>;
 
+// ----------------------------------------------------------------------------
+//  Common-field accessors
+// ----------------------------------------------------------------------------
+//
+// Many compute settings are common to Gen1 and Gen2 architectures.
+//
+// Reaching a common field through the variant is syntactically awkward; you should not need
+// to know which alternative is held. For convenience, each common field is given an accessor
+// helper function here. (Generation-specific fields are not given accessors.)
+//
+// Each field has a mutable and a const accessor.
+//
+// The mutable accessor returns a reference, so you can assign through it:
+//
+//     enable_32_bit_dest(compute_hw) = true;
+//
+// or bind it and use it multiple times:
+//
+//     auto& dfb_unpack_modes = unpack_modes(compute_hw);
+//     dfb_unpack_modes.emplace(dfb1, UnpackMode::UnpackToDest);
+//     dfb_unpack_modes.emplace(dfb2, UnpackMode::UnpackToSrc);
+//
+// The const accessor returns the scalar fields by value, and unpack_modes (a container) by
+// const reference.
+//
+// For common fields, prefer this syntax over e.g. std::get<ComputeGen1Config>(config).field,
+// which throws if the wrong architecture is targeted.
+
+inline MathFidelity& fpu_math_fidelity(ComputeHardwareConfig& config) {
+    return std::visit([](auto& cfg) -> MathFidelity& { return cfg.fpu_math_fidelity; }, config);
+}
+
+inline MathFidelity fpu_math_fidelity(const ComputeHardwareConfig& config) {
+    return std::visit([](const auto& cfg) -> MathFidelity { return cfg.fpu_math_fidelity; }, config);
+}
+
+inline Precision& sfpu_precision_mode(ComputeHardwareConfig& config) {
+    return std::visit([](auto& cfg) -> Precision& { return cfg.sfpu_precision_mode; }, config);
+}
+
+inline Precision sfpu_precision_mode(const ComputeHardwareConfig& config) {
+    return std::visit([](const auto& cfg) -> Precision { return cfg.sfpu_precision_mode; }, config);
+}
+
+inline bool& enable_32_bit_dest(ComputeHardwareConfig& config) {
+    return std::visit([](auto& cfg) -> bool& { return cfg.enable_32_bit_dest; }, config);
+}
+
+inline bool enable_32_bit_dest(const ComputeHardwareConfig& config) {
+    return std::visit([](const auto& cfg) -> bool { return cfg.enable_32_bit_dest; }, config);
+}
+
+inline bool& double_buffer_dest(ComputeHardwareConfig& config) {
+    return std::visit([](auto& cfg) -> bool& { return cfg.double_buffer_dest; }, config);
+}
+
+inline bool double_buffer_dest(const ComputeHardwareConfig& config) {
+    return std::visit([](const auto& cfg) -> bool { return cfg.double_buffer_dest; }, config);
+}
+
+inline ComputeUnpackModes& unpack_modes(ComputeHardwareConfig& config) {
+    return std::visit([](auto& cfg) -> ComputeUnpackModes& { return cfg.unpack_modes; }, config);
+}
+
+inline const ComputeUnpackModes& unpack_modes(const ComputeHardwareConfig& config) {
+    return std::visit([](const auto& cfg) -> const ComputeUnpackModes& { return cfg.unpack_modes; }, config);
+}
+
+// Delete the rvalue overload of unpack_modes to prevent dangling references
+// (The mutable accessors can't bind a temporary, and the const scalars return by value,
+// so only this one needs it.)
+inline const ComputeUnpackModes& unpack_modes(const ComputeHardwareConfig&&) = delete;
+
 }  // namespace tt::tt_metal::experimental

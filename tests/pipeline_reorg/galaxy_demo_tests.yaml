@@ -10,39 +10,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: Galaxy SentenceBert demo tests
-  cmd: |
-    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
-    pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
-  model: sentence_bert
-  skus:
-    wh_galaxy_perf:
-      timeout: 5
-  owner_id: U088413NP0Q # Ashai Reddy
-  team: models
-
-- name: Galaxy Stable Diffusion 3.5 Large demo tests
-  cmd: |
-    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1 TT_MM_THROTTLE_PERF=5
-    pytest models/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k "4x8cfg1sp0tp1" --timeout 1200
-  model: sd35
-  skus:
-    wh_galaxy_perf:
-      timeout: 10
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: models
-
-- name: Galaxy Motif-Image-6B-Preview demo tests
-  cmd: |
-    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1
-    pytest models/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1" --timeout 1200
-  model: motif
-  skus:
-    wh_galaxy_perf:
-      timeout: 15
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-
 - name: Galaxy Wan2.2 demo tests
   cmd: |
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
@@ -54,17 +21,6 @@
   owner_id: U06UEFWB4P9 # Colman Glagovich
   team: models
 
-- name: Galaxy Mochi demo tests
-  cmd: |
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
-    pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "wh_4x8sp1tp0" --timeout=1500
-  model: mochi
-  skus:
-    wh_galaxy_perf:
-      timeout: 15
-  owner_id: U09ELB03XRU # Stephen Osborne
-  team: models
-
 - name: Galaxy DeepSeek v3 demo tests
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG
@@ -74,15 +30,4 @@
     wh_galaxy_perf:
       timeout: 15
   owner_id: U08H32XUS9W # Yousef Al Rawwash
-  team: models
-
-- name: Galaxy QwenImage demo tests
-  cmd: |
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
-    pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k "4x8" --timeout 1200
-  model: qwenimage
-  skus:
-    wh_galaxy_perf:
-      timeout: 20
-  owner_id: U08TED0JM9D # Samuel Adesoye
   team: models

@@ -63,11 +63,11 @@ void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
     pack_reconfig_data_format(o);
     reconfig_data_format(a, b);  // binary(a,b): a->srcA, b->srcB
     if (op == 0) {
-        add_tiles_init(a, b);
+        add_init(a, b);
     } else if (op == 1) {
-        sub_tiles_init(a, b);
+        sub_init(a, b);
     } else {
-        mul_tiles_init(a, b);
+        mul_init(a, b);
     }
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
@@ -91,7 +91,7 @@ void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
     cb_reserve_back(o, n);
     pack_reconfig_data_format(o);
     reconfig_data_format(a, scal);  // bcast(a,scal): a->srcA, scal->srcB
-    mul_tiles_bcast_scalar_init_short(a, scal);
+    mul_bcast_scalar_init(a, scal);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
         mul_tiles_bcast_scalar(a, scal, i, 0, 0);

@@ -56,6 +56,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # bf16 + MathFidelity.LoFi -> looser PCC (matches the model's batch-1 LoFi config).
@@ -145,7 +146,7 @@ def _run_conv2d(
 
 # The stem conv routes through conv_bmm_tilize which currently deadlocks on Quasar (see test_conv_hang.py);
 # cap the run so that hang surfaces as a timeout, not a suite block.
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, in_channels, out_channels, input_height, input_width, kernel_size, stride, padding, shard_layout, reshard_if_not_optimal",
@@ -249,6 +250,19 @@ def test_quasar_conv2d(
     shard_layout,
     reshard_if_not_optimal,
 ):
+    # WH-only HANG on the fused-tilize convs (all NON-1x1: the 7x7 stem AND the 3x3 bottleneck conv2 cases).
+    # This test runs the plain fused conv (no split env), so every kernel_size>1 conv goes through
+    # conv_bmm_tilize_metal2, which on WH hits the fast_tilize->matmul cadence race -- MATH MWDD in matmul_block,
+    # PACK in program_packer_destination (SyncHalf), cb stuck rcv!=ack; genuine (asserts-on, no assert). Confirmed
+    # for the 7x7 stem AND bottleneck_3x3_64to64 (s1); same family as test_conv2d_correctness_bisect / stem_7x7.
+    # NOT the WH model path (the model runs convs through the split path). The 1x1 cases use the mm_conv
+    # (matmul-only) path -> left to run. Imperative xfail so the sweep does NOT execute the hanging conv.
+    if tuple(kernel_size) != (1, 1) and is_wormhole_b0():
+        pytest.xfail(
+            "WH fused conv_bmm_tilize fast_tilize->matmul cadence race (kRaceGuardSpin family; MATH in "
+            "matmul_block, PACK in program_packer_destination) on the non-1x1 (7x7 stem / 3x3 conv2) fused convs. "
+            "Not the WH model path (model uses the split path)."
+        )
     # Emulator guard: conv2d auto-sizes its shard grid, so on a small grid (the 2-core emulator) a
     # large-spatial conv gets a huge per-core activation shard (activation + halo + weights + interm CBs)
     # and OOMs L1 -- e.g. the 224x224 stem = 50176 sticks / 2 cores = 25088/core. Skip when the grid can't

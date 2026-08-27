@@ -13,6 +13,17 @@
 namespace ttnn::prim {
 uint32_t largest_power_of_two(uint32_t x);
 
+// Structural multi-core eligibility (shape/K requirements only, no grid or L1
+// feasibility): width gate (>= multi_core_min_width, or the Ht-aware relaxation
+// for inputs with <= multi_core_low_ht_max_tile_rows tile rows), reduced width
+// below the 16-bit bitonic index limit, power-of-two width, and K <=
+// multi_core_max_k. This is the single source of truth shared by
+// select_program_factory, validate_on_program_cache_miss, and the composite
+// router in topk.cpp (the router passes a pinned num_tile_rows to disable the
+// Ht-aware relaxation — the composite measured faster on that cell); the
+// cost/grid check (verify_multi_core_cost) comes on top.
+bool topk_multicore_structurally_eligible(uint32_t reduced_width, uint32_t num_tile_rows, uint32_t k);
+
 struct TopKCoreConfig {
     uint16_t num_cores = 0;
     uint16_t split_size = 0;
@@ -45,4 +56,9 @@ bool verify_multi_core_cost(
     uint32_t tile_width = 32);
 
 bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool uint16_output);
+
+// The index dtype the op picks on its own: UINT16 if the padded reduced dim fits in 16 bits, else
+// UINT32. fp32 input also forces UINT32 -- it sorts with fp32 dest accumulation, which loads
+// indices as INT32.
+tt::tt_metal::DataType required_index_dtype(const ttnn::Tensor& input_tensor, int8_t dim);
 }  // namespace ttnn::prim

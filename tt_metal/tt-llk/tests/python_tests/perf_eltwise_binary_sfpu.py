@@ -9,11 +9,10 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     MathOperation,
-    PerfRunType,
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
@@ -91,13 +90,7 @@ def test_perf_eltwise_binary_sfpu_float(
     configuration = PerfConfig(
         "sources/eltwise_binary_sfpu_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
@@ -178,13 +171,7 @@ def test_perf_eltwise_binary_sfpu_int(
     configuration = PerfConfig(
         "sources/eltwise_binary_sfpu_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
@@ -275,13 +262,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
     configuration = PerfConfig(
         "sources/eltwise_binary_sfpu_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),

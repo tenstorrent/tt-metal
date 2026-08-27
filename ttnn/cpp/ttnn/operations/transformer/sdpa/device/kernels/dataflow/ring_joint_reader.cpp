@@ -690,9 +690,8 @@ void kernel_main() {
         // slice is read from the local joint tensor, same as spatial). Each shard is available right
         // after its ring_id sync, so we process joint K/V on EVERY ring iteration — no need to batch
         // at the end.
-        // Replicated joint: Already present full joint K/V is processd after all spatial K/V is consumed.
-        const bool do_joint_kv =
-            has_gathered_joint_k ? true : is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+        // Replicated joint: process joint when ring_id == ring_size-1
+        const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
         uint32_t num_kv_chunks = num_local_k_chunks;
         if constexpr (has_joint_k) {
             if (do_joint_kv) {

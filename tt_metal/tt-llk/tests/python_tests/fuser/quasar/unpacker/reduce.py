@@ -5,16 +5,16 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_loop import FusedLoop, LoopTileByTile
-from fuser.fused_operation import FusedOperation
-from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopTileByTile, TileLoop
 
 
 class ReduceUnpacker(Unpacker):
-    loop: FusedLoop = LoopTileByTile()
+    loop: TileLoop = LoopTileByTile()
 
     def __init__(self, reduce_dim, reduce_pool):
         self.reduce_dim = reduce_dim
@@ -30,15 +30,41 @@ class ReduceUnpacker(Unpacker):
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return tensor_a, tensor_b
 
+    def perf_set_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        return (
+            f"_perf_unpack_loop_set_valid<false, true>(1);\n"
+            f"_perf_unpack_loop_set_valid<true, false>({num_faces});\n"
+        )
+
+    def perf_clear_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        return (
+            f"_perf_math_loop_clear_valid<true, false>({num_faces});\n"
+            f"_perf_math_loop_clear_valid<false, true>(1);\n"
+        )
+
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -57,7 +83,7 @@ class ReduceUnpacker(Unpacker):
 
     def unpack(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -69,7 +95,7 @@ class ReduceUnpacker(Unpacker):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,

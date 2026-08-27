@@ -29,6 +29,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);  // rows to process in this kernel
 constexpr uint32_t block_size = get_compile_time_arg_val(1);         // size of block
@@ -209,7 +210,9 @@ void calculate_sum_exp_x() {
 
     const uint32_t max_value_register = 3U;
     reconfig_data_format(cb_max_value_after_reduction, cb_input);
-    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    compute_kernel_hw_startup(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction);
     unary_bcast<BroadcastType::COL>(
         cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
     for (uint32_t col = 0; col < Wt; ++col) {
@@ -221,8 +224,11 @@ void calculate_sum_exp_x() {
         sub_binary_tile_init();
         sub_binary_tile(working_register, max_value_register, working_register);  // subtract max value from each tile
 
-        exp_tile_init<false>();
-        exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
+        // exp via the shared SDPA path: on Blackhole this dispatches to the hand-scheduled
+        // TTI exp (~3x cheaper on the SFPU than the generic accurate exp_tile at bf16
+        // output precision); on Wormhole it falls back to the same accurate sfpi exp.
+        sdpa_exp_tile_init();
+        sdpa_exp_tile(working_register);  // calculate exp for each tile in tile register
 
         if constexpr (do_mask_w) {
             if (col + 1 == Wt) {
@@ -267,7 +273,9 @@ void calculate_sum_exp_x() {
 
     const uint32_t max_value_register = 3U;
     reconfig_data_format(cb_max_value_after_reduction, cb_input);
-    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    compute_kernel_hw_startup(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction);
     unary_bcast<BroadcastType::COL>(
         cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
     for (uint32_t col = 0; col < Wt;) {
@@ -283,8 +291,8 @@ void calculate_sum_exp_x() {
             sub_binary_tile(
                 working_register, max_value_register, working_register);  // subtract max value from each tile
 
-            exp_tile_init<false>();
-            exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
+            sdpa_exp_tile_init();
+            sdpa_exp_tile(working_register);  // calculate exp for each tile in tile register
 
             if constexpr (do_mask_w) {
                 if (col + 1 == Wt) {
@@ -369,7 +377,8 @@ void kernel_main() {
     cb_wait_front(cb_reduction_scaler, onetile);
 
     init_sfpu(cb_input, cb_output);
-    binary_op_init_common(cb_input, cb_input, cb_output);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         find_max_value_in_row();  // find max value in each row
@@ -391,7 +400,9 @@ void kernel_main() {
 
             tile_regs_acquire();
             reconfig_data_format(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
-            unary_bcast_init<BroadcastType::COL>(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
+            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+            compute_kernel_hw_startup(cb_exp_sum_after_reduction, cb_exp_sum_after_reduction);
+            unary_bcast_init<BroadcastType::COL>(cb_exp_sum_after_reduction);
             unary_bcast<BroadcastType::COL>(
                 cb_exp_sum_after_reduction, /* tile idx */ 0, /* reg tile idx */ sum_exp_register);
 
@@ -403,7 +414,7 @@ void kernel_main() {
 #endif
 
                 reconfig_data_format(cb_input, cb_max_value_after_reduction);
-                sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
+                sub_bcast_cols_init(cb_input, cb_max_value_after_reduction);
                 sub_tiles_bcast<BroadcastType::COL>(
                     cb_input,
                     cb_max_value_after_reduction,
@@ -411,14 +422,32 @@ void kernel_main() {
                     /* tile_idx */ 0,
                     /* register idx */ block_idx);
 
-                exp_tile_init<false>();
-                exp_tile</* approx */ false>(block_idx);  // calculate exp for each tile in tile register
+                sdpa_exp_tile_init();
+                sdpa_exp_tile(block_idx);  // calculate exp for each tile in tile register
 
                 mul_binary_tile_init();
                 mul_binary_tile(block_idx, sum_exp_register, block_idx);  // multiply by scaler
 
                 binop_with_scalar_tile_init();
                 mul_unary_tile(block_idx, scaler_bits);  // multiply by scaler
+
+                if constexpr (do_mask_w) {
+                    // Zero the vocab-padding lanes of the last tile so no gradient flows into
+                    // padded weight columns (exp(x - max) is nonzero there otherwise).
+                    if (col + block_idx + 1 == Wt) {
+                        // mask_tile requires the mask in the register right after the data
+                        // register. Wt % block_size == 0, so the last tile lands in the final
+                        // block_idx and that register is sum_exp_register; clobbering it is safe
+                        // because this tile has already consumed it and it is re-broadcast from
+                        // the CB at the start of every block.
+                        const uint32_t mask_register = block_idx + 1U;
+                        copy_tile_init(cb_mask);
+                        copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+
+                        mask_tile_init();
+                        mask_tile(block_idx, mask_register);
+                    }
+                }
             }
             tile_regs_commit();
 

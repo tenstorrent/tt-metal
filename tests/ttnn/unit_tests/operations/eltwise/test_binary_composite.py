@@ -16,6 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, asser
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
+from models.common.utility_functions import is_blackhole, is_slow_dispatch
 
 
 def _data_gen_div_scalar_input(input_shapes, low, high, device, divisor):
@@ -94,6 +95,34 @@ def test_binary_atan2_ttnn(input_shapes, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 1, 32, 32])),),
+)
+def test_binary_atan2_special_values(input_shapes, device):
+    """Regression test: atan2(±inf, ±0) must return ±π/2 per IEEE 754.
+
+    The kernel's both-zero rescue checked `min == 0`, which also fired when
+    only |x| was zero and |y| was infinite, overwriting the correct π/2
+    result with 0 (or π when x was -0).
+    """
+    y_vals = [float("inf"), float("-inf"), 1.0, -1.0, 0.0, float("inf"), float("-inf"), 2.5]
+    x_vals = [0.0, 0.0, float("inf"), float("-inf"), -0.0, 2.5, -2.5, -0.0]
+
+    torch_input_y = torch.tensor([y_vals] * 32, dtype=torch.float32)
+    torch_input_x = torch.tensor([x_vals] * 32, dtype=torch.float32)
+
+    golden_function = ttnn.get_golden_function(ttnn.atan2)
+    golden_tensor = golden_function(torch_input_y, torch_input_x)
+
+    tt_input_y = ttnn.from_torch(torch_input_y, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_input_x = ttnn.from_torch(torch_input_x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.atan2(tt_input_y, tt_input_x)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    torch.testing.assert_close(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -894,3 +923,184 @@ def test_unary_right_shift(input_shapes, device):
 
         pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
         assert pcc >= 0.99, f"Failed for scalar={scalar}"
+
+
+# Kimi K3 betas: 4 for the gate half, 25 for the up half.
+SITU_GLU_BETA1 = 4.0
+SITU_GLU_BETA2 = 25.0
+
+# The bf16 arm is gated in ULP (measured worst case: 3.0 across three composed ops). bfp8_b
+# re-quantizes every intermediate and shares one exponent per 16-element block, which costs
+# hundreds of bf16 ULP on small elements regardless of op accuracy, so that arm is gated by PCC.
+SITU_GLU_ULP = 6
+SITU_GLU_BF16_PCC = 0.999
+SITU_GLU_BFP8_PCC = 0.99
+
+# Numerics on both sides of the L1/DRAM intermediate split, also covering both dtypes. The
+# assertions below check the output placement and the values, not which branch ran -- output
+# placement is pinned to the input's for both.
+SITU_GLU_CASES = [
+    (torch.Size([1, 1, 512, 3072]), ttnn.bfloat16),  # K3 routed expert (3072) <= 3072 -> L1
+    (torch.Size([1, 1, 512, 6144]), ttnn.bfloat8_b),  # K3 shared expert (6144) > 3072 -> DRAM
+]
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize("input_shape, ttnn_dtype", SITU_GLU_CASES, ids=["hidden_le_3072", "hidden_gt_3072"])
+def test_situ_glu(input_shape, ttnn_dtype, device):
+    torch.manual_seed(0)
+    # Span the saturating and near-linear regions of both halves.
+    gate = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2)
+    # Output placement follows the input, not the possibly-L1 intermediates.
+    assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
+    tt_res = ttnn.to_torch(out)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+
+    is_bfp8 = ttnn_dtype == ttnn.bfloat8_b
+    # Both halves are bounded: |situ_a| <= beta1, |up_half| <= beta2.
+    bound = SITU_GLU_BETA1 * SITU_GLU_BETA2 * (1.0 + (5e-2 if is_bfp8 else 2**-8))
+    max_abs = tt_res.to(torch.float32).abs().max().item()
+    assert max_abs <= bound, f"situ_glu overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
+
+    if is_bfp8:
+        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BFP8_PCC)
+    else:
+        assert_with_ulp(golden, tt_res, ulp_threshold=SITU_GLU_ULP)
+        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+def test_situ_glu_l1_intermediates_fall_back(device):
+    # 8192 tokens at the routed-expert width is ~48 MB per intermediate and three are live at the
+    # peak, which does not fit L1. Forcing the L1 branch on hidden alone made this a hard
+    # allocator failure instead of a DRAM fallback.
+    shape = ttnn.Shape([1, 1, 8192, 3072])
+    gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    up = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.situ_glu(gate, up, SITU_GLU_BETA1, SITU_GLU_BETA2)
+
+    assert out.memory_config().buffer_type == gate.memory_config().buffer_type
+    gate.deallocate()
+    up.deallocate()
+    out.deallocate()
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize(
+    "sub_core_grid",
+    [
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))]),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 4)),
+                ttnn.CoreRange(ttnn.CoreCoord(3, 2), ttnn.CoreCoord(4, 3)),
+            ]
+        ),
+    ],
+    ids=["contiguous", "disjoint"],
+)
+def test_situ_glu_sub_core_grids(device, sub_core_grid):
+    torch.manual_seed(0)
+    # A width under the 3072 L1 cutoff, so this also pins the core restriction's other effect: it
+    # holds the intermediates in the output's memory space instead of taking interleaved L1 on
+    # every core, the restricted-away ones included.
+    shape = torch.Size([1, 1, 512, 3072])
+    gate = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2, sub_core_grids=sub_core_grid)
+
+    assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
+    tt_res = ttnn.to_torch(out)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+    assert_with_ulp(golden, tt_res, ulp_threshold=SITU_GLU_ULP)
+    assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+def test_situ_glu_sub_core_grids_conflict(device, expect_error):
+    shape = torch.Size([1, 1, 32, 32])
+    gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # The composed unaries take only sub_core_grids, so situ_glu resolves sub_device_id into it and
+    # cannot honour both.
+    with expect_error(RuntimeError, "Cannot specify both sub_core_grids and sub_device_id"):
+        ttnn.situ_glu(
+            gate,
+            gate,
+            SITU_GLU_BETA1,
+            SITU_GLU_BETA2,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+            sub_device_id=ttnn.SubDeviceId(0),
+        )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize("via", ["memory_config", "input_placement"])
+def test_situ_glu_sub_core_grids_rejects_interleaved_l1(device, expect_error, via):
+    shape = torch.Size([1, 1, 32, 32])
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
+
+    # An interleaved-L1 buffer takes L1 on every worker core, including the ones a core restriction
+    # exists to stay off. It reaches the output placement two ways -- asked for, or inherited from an
+    # interleaved-L1 input when memory_config is omitted -- so both have to be rejected.
+    l1 = ttnn.L1_MEMORY_CONFIG
+    gate = ttnn.zeros(
+        shape,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=l1 if via == "input_placement" else ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(RuntimeError, "core restriction cannot be combined with an interleaved-L1 output"):
+        ttnn.situ_glu(
+            gate,
+            gate,
+            SITU_GLU_BETA1,
+            SITU_GLU_BETA2,
+            memory_config=l1 if via == "memory_config" else None,
+            sub_core_grids=cores,
+        )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.skipif(is_slow_dispatch(), reason="sub-device managers are unsupported with slow dispatch")
+def test_situ_glu_requires_cores_when_sub_devices_loaded(device, expect_error):
+    shape = torch.Size([1, 1, 32, 32])
+    grid = device.compute_with_storage_grid_size()
+    first = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, 0))})
+    rest = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    manager = device.create_sub_device_manager([ttnn.SubDevice([first]), ttnn.SubDevice([rest])], 0)
+    device.load_sub_device_manager(manager)
+    try:
+        gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        # Unrestricted, the composed ops would take sub-device 0 -- the first strip -- instead of the
+        # full grid, with no error to show it. Make the caller name the cores once the grid is split.
+        with expect_error(RuntimeError, "sub-devices are loaded"):
+            ttnn.situ_glu(gate, gate, SITU_GLU_BETA1, SITU_GLU_BETA2)
+    finally:
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+def test_situ_glu_zero_beta_guard(device, expect_error):
+    shape = torch.Size([1, 1, 32, 32])
+    gate = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    # Both betas are inverted before reaching the SFPU, so neither may be zero.
+    for beta1, beta2 in [(0.0, SITU_GLU_BETA2), (SITU_GLU_BETA1, 0.0)]:
+        with expect_error(RuntimeError, "beta1 and beta2 must be non-zero"):
+            ttnn.situ_glu(gate, gate, beta1, beta2)

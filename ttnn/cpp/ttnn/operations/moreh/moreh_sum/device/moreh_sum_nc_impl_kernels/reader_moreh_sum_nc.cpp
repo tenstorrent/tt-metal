@@ -7,38 +7,34 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 inline uint32_t get_read_tile_id(uint32_t output_tile_id, uint32_t reduce_tile_size, uint32_t inner_tile_size) {
     return ((output_tile_id / inner_tile_size) * reduce_tile_size) + (output_tile_id % inner_tile_size);
 }
 
 void kernel_main() {
-    // compile-time args
-    constexpr auto input_args = TensorAccessorArgs<0>();
-
     // runtime args
-    ArgFetcher arg_fetcher;
-    const auto input_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto num_input_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto dim = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto reduce_tile_size = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto inner_tile_size = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto num_input_tiles = get_arg(args::num_input_tiles);
+    const auto num_output_tiles = get_arg(args::num_output_tiles);
+    const auto start_id = get_arg(args::start_id);
+    const auto dim = get_arg(args::dim);
+    const auto reduce_tile_size = get_arg(args::reduce_tile_size);
+    const auto inner_tile_size = get_arg(args::inner_tile_size);
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = 0;
 
 #ifdef USE_FPU
-    constexpr uint32_t cb_id_in1 = 1;
-    dataflow_kernel_lib::prepare_zero_tile<cb_id_in1>();
+    // Only the float factory accumulates on the FPU and needs a zero tile staged for it; the int32
+    // factory binds no zero buffer, so this block is preprocessed away there.
+    dataflow_kernel_lib::prepare_zero_tile<dfb::zero>();
 #endif
 
-    const auto input_addrg = TensorAccessor(input_args, input_addr);
+    const auto input_addrg = TensorAccessor(tensor::input);
 
     Noc noc;
-    DataflowBuffer dfb_in0_obj(cb_id_in0);
-    const auto in0_tile_bytes = get_tile_size(cb_id_in0);
+    DataflowBuffer dfb_in0_obj(dfb::input);
+    const auto in0_tile_bytes = dfb_in0_obj.get_tile_size();
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         auto read_tile_id = (dim == 0) ? (i) : (get_read_tile_id(i, reduce_tile_size, inner_tile_size));

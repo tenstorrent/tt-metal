@@ -11,12 +11,14 @@
 #include <yaml-cpp/yaml.h>
 
 #include <cabling_generator/cabling_generator.hpp>
+#include <factory_system_descriptor/query.hpp>
 #include <factory_system_descriptor/utils.hpp>
 #include <node/node_types.hpp>
 
 // Include generated protobuf headers
 #include "protobuf/deployment.pb.h"
 #include "protobuf/cluster_config.pb.h"
+#include "protobuf/factory_system_descriptor.pb.h"
 
 namespace tt::scaleout_tools {
 
@@ -440,6 +442,200 @@ TEST(CablingGenerator, PruneDeadChannelsIgnoresUnknownChannel) {
 
     EXPECT_TRUE(gen.prune_dead_channels({bogus}).empty());  // no cable matched
     EXPECT_EQ(gen.get_chip_connections().size(), before);   // FSD unchanged
+}
+
+namespace {
+
+// Build an FSD with the given (hostname, instance_path) hosts, indexed by host_id in order.
+fsd::proto::FactorySystemDescriptor make_fsd_with_paths(
+    const std::vector<std::pair<std::string, std::vector<std::string>>>& hosts) {
+    fsd::proto::FactorySystemDescriptor fsd;
+    for (const auto& [hostname, path] : hosts) {
+        auto* host = fsd.add_hosts();
+        host->set_hostname(hostname);
+        for (const auto& segment : path) {
+            host->add_instance_path(segment);
+        }
+    }
+    return fsd;
+}
+
+// Add an eth connection between two hosts (only host_id matters for hierarchy queries).
+void add_connection(fsd::proto::FactorySystemDescriptor& fsd, uint32_t host_id_a, uint32_t host_id_b) {
+    auto* connection = fsd.mutable_eth_connections()->add_connection();
+    connection->mutable_endpoint_a()->set_host_id(host_id_a);
+    connection->mutable_endpoint_b()->set_host_id(host_id_b);
+}
+
+}  // namespace
+
+TEST(FsdQuery, LongestCommonPrefixByHostId) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"sp_0", "node_0", "h_0"}},
+        {"node1", {"sp_0", "node_0", "h_1"}},
+        {"node2", {"sp_0", "node_1", "h_0"}},
+        {"node3", {"sp_1", "node_0", "h_0"}},
+    });
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.longest_common_prefix(0u, 1u), (std::vector<std::string>{"sp_0", "node_0"}));
+    EXPECT_EQ(query.longest_common_prefix(0u, 2u), (std::vector<std::string>{"sp_0"}));
+    EXPECT_EQ(query.longest_common_prefix(0u, 3u), (std::vector<std::string>{}));
+    // Same host is a prefix of itself.
+    EXPECT_EQ(query.longest_common_prefix(2u, 2u), (std::vector<std::string>{"sp_0", "node_1", "h_0"}));
+    // Order does not matter.
+    EXPECT_EQ(query.longest_common_prefix(1u, 0u), query.longest_common_prefix(0u, 1u));
+}
+
+TEST(FsdQuery, LongestCommonPrefixByHostname) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"sp_0", "node_0"}},
+        {"node1", {"sp_0", "node_1"}},
+    });
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.longest_common_prefix("node0", "node1"), (std::vector<std::string>{"sp_0"}));
+    EXPECT_EQ(query.longest_common_prefix("node0", "node0"), (std::vector<std::string>{"sp_0", "node_0"}));
+}
+
+TEST(FsdQuery, HandlesEmptyAndUnequalLengthPaths) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {}},
+        {"node1", {"sp_0"}},
+        {"node2", {"sp_0", "node_0", "h_0"}},
+    });
+    FsdQuery query(fsd);
+
+    // Empty path shares nothing with anyone.
+    EXPECT_EQ(query.longest_common_prefix(0u, 1u), (std::vector<std::string>{}));
+    // Shorter path is a full prefix of the longer one.
+    EXPECT_EQ(query.longest_common_prefix(1u, 2u), (std::vector<std::string>{"sp_0"}));
+}
+
+TEST(FsdQuery, ThrowsOnUnknownHostIdOrHostname) {
+    auto fsd = make_fsd_with_paths({{"node0", {"sp_0"}}});
+    FsdQuery query(fsd);
+
+    EXPECT_THROW(query.longest_common_prefix(0u, 5u), std::out_of_range);
+    EXPECT_THROW(query.longest_common_prefix("node0", "missing"), std::runtime_error);
+}
+
+TEST(FsdQuery, ThrowsOnDuplicateHostname) {
+    auto fsd = make_fsd_with_paths({{"dup", {"sp_0"}}, {"dup", {"sp_1"}}});
+    EXPECT_THROW(FsdQuery{fsd}, std::runtime_error);
+}
+
+TEST(FsdQuery, HierarchyPartition) {
+    auto fsd = make_fsd_with_paths({
+        {"h0", {"root", "sp_0", "node_0"}},
+        {"h1", {"root", "sp_0", "node_1"}},
+        {"h2", {"root", "sp_1", "node_0"}},
+        {"h3", {"root", "sp_1", "node_1"}},
+    });
+    FsdQuery query(fsd);
+
+    // depth 2 -> partition by (root, sp_x): two subgroups.
+    auto p2 = query.hierarchy_partition(2u);
+    ASSERT_EQ(p2.size(), 2u);
+    EXPECT_EQ(p2[0], (std::vector<uint32_t>{0u, 1u}));  // sp_0
+    EXPECT_EQ(p2[1], (std::vector<uint32_t>{2u, 3u}));  // sp_1
+
+    // depth 3 -> each host is its own subgroup.
+    EXPECT_EQ(query.hierarchy_partition(3u).size(), 4u);
+
+    // depth 1 -> all share "root" -> a single subgroup with every host.
+    auto p1 = query.hierarchy_partition(1u);
+    ASSERT_EQ(p1.size(), 1u);
+    EXPECT_EQ(p1[0], (std::vector<uint32_t>{0u, 1u, 2u, 3u}));
+}
+
+TEST(FsdQuery, HierarchyPartitionHandlesShortPaths) {
+    auto fsd = make_fsd_with_paths({
+        {"h0", {"root", "sp_0"}},
+        {"h1", {"root", "sp_0", "node_1"}},
+        {"h2", {"root"}},
+    });
+    FsdQuery query(fsd);
+
+    // depth 3: h0 (len 2) and h2 (len 1) group by their full path; h1 by its full 3 segments.
+    auto p = query.hierarchy_partition(3u);
+    EXPECT_EQ(p.size(), 3u);
+}
+
+// A graph_instance may reference multiple leaf node_descriptors, so several hosts can sit under the same
+// hierarchy node, sharing the instance_path prefix and differing only in the final (leaf) segment. They
+// must land in the same subgroup at the node-level depth (no one-node-per-leaf-level assumption).
+TEST(FsdQuery, HierarchyPartitionGroupsMultipleLeavesUnderOneNode) {
+    auto fsd = make_fsd_with_paths({
+        {"h0", {"sp_0", "node_0", "node_0"}},  // two leaf nodes under sp_0/node_0
+        {"h1", {"sp_0", "node_0", "node_1"}},
+        {"h2", {"sp_0", "node_1", "node_0"}},
+    });
+    FsdQuery query(fsd);
+
+    // depth 2 = the node level: h0 and h1 (both under sp_0/node_0) share a subgroup; h2 is separate.
+    auto p2 = query.hierarchy_partition(2u);
+    ASSERT_EQ(p2.size(), 2u);
+    EXPECT_EQ(p2[0], (std::vector<uint32_t>{0u, 1u}));  // sp_0/node_0 leaves grouped together
+    EXPECT_EQ(p2[1], (std::vector<uint32_t>{2u}));      // sp_0/node_1
+
+    // An intra-node link (h0<->h1) has LCP depth 2, i.e. the same depth at which they co-locate.
+    add_connection(fsd, 0, 1);
+    FsdQuery query_with_conn(fsd);
+    EXPECT_EQ(query_with_conn.hierarchy_depth(0u, 1u), 2u);
+}
+
+TEST(FsdQuery, GetInstancePath) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"root", "sp_0", "node_0"}},
+        {"node1", {}},
+    });
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.get_instance_path(0u), (std::vector<std::string>{"root", "sp_0", "node_0"}));
+    EXPECT_EQ(query.get_instance_path("node0"), (std::vector<std::string>{"root", "sp_0", "node_0"}));
+    EXPECT_TRUE(query.get_instance_path(1u).empty());
+    EXPECT_THROW(query.get_instance_path(5u), std::out_of_range);
+    EXPECT_THROW(query.get_instance_path("missing"), std::runtime_error);
+}
+
+TEST(FsdQuery, HierarchyDepthIsCommonPrefixLength) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"root", "sp_0", "node_0"}},
+        {"node1", {"root", "sp_0", "node_1"}},
+        {"node2", {"root", "sp_1"}},
+    });
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.hierarchy_depth(0u, 1u), 2u);  // share root, sp_0
+    EXPECT_EQ(query.hierarchy_depth(0u, 2u), 1u);  // share root only
+    EXPECT_EQ(query.hierarchy_depth("node0", "node1"), 2u);
+    EXPECT_EQ(query.hierarchy_depth(0u, 0u), 3u);  // full path with itself
+}
+
+TEST(FsdQuery, MaxDepthAndTiersFromConnections) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"root", "sp_0", "node_0"}},
+        {"node1", {"root", "sp_0", "node_1"}},
+        {"node2", {"root", "sp_1", "node_0"}},
+    });
+    add_connection(fsd, 0, 1);  // depth 2 (root, sp_0)
+    add_connection(fsd, 0, 2);  // depth 1 (root)
+    add_connection(fsd, 1, 2);  // depth 1 (root)
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.max_hierarchy_depth(), 2u);
+    // Distinct tiers, deepest-first; front() is the max depth.
+    EXPECT_EQ(query.hierarchy_tiers_deepest_first(), (std::vector<uint32_t>{2u, 1u}));
+    EXPECT_EQ(query.hierarchy_tiers_deepest_first().front(), query.max_hierarchy_depth());
+}
+
+TEST(FsdQuery, NoConnectionsMeansZeroMaxDepth) {
+    auto fsd = make_fsd_with_paths({{"node0", {"root", "sp_0"}}});
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.max_hierarchy_depth(), 0u);
+    EXPECT_TRUE(query.hierarchy_tiers_deepest_first().empty());
 }
 
 }  // namespace tt::scaleout_tools

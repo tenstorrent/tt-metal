@@ -13,6 +13,7 @@ from loguru import logger
 import ttnn
 
 from ..layers.module import Module
+from . import walltime
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -99,13 +100,15 @@ def load_model(
             "Loading transformer weights from PyTorch state dict. "
             "To use caching, set the TT_DIT_CACHE_DIR environment variable."
         )
-        tt_model.load_torch_state_dict(get_torch_state_dict())
+        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False):
+            tt_model.load_torch_state_dict(get_torch_state_dict())
         ttnn.distributed_context_barrier()
         return
 
     if _cache_is_complete(cache_dir):
         logger.info(f"loading cache at '{cache_dir}'.")
-        tt_model.load(cache_dir)
+        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=True):
+            tt_model.load(cache_dir)
         ttnn.distributed_context_barrier()
         return
 
@@ -113,7 +116,8 @@ def load_model(
         raise MissingCacheError(cache_dir)
 
     logger.info("Cache does not exist. Loading PyTorch state dict.")
-    tt_model.load_torch_state_dict(get_torch_state_dict())
+    with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False):
+        tt_model.load_torch_state_dict(get_torch_state_dict())
 
     # If distributed, ensure that all processes have completed the check whether cache_dir exists,
     # before any rank might proceed to create that dir to save.

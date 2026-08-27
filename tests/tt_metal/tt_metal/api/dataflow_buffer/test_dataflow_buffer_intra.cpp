@@ -5,6 +5,8 @@
 // Intra-scope (self-loop) DFB tests.
 
 #include "dfb_test_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 #include <array>
 #include <map>
@@ -14,12 +16,7 @@ namespace tt::tt_metal {
 
 // legacy intra-Tensix self-loop harness + test
 static void run_intra_tensix_dfb_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    uint32_t entry_size,
-    uint32_t num_entries,
-    uint32_t num_threads) {
-    IDevice* device = mesh_device->get_devices()[0];
-
+    distributed::MeshDevice& mesh_device, uint32_t entry_size, uint32_t num_entries, uint32_t num_threads) {
     experimental::dfb::DataflowBufferConfig dfb_config{
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -97,7 +94,7 @@ static void run_intra_tensix_dfb_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     experimental::ProgramRunArgs run_params;
     run_params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE}};
@@ -106,11 +103,12 @@ static void run_intra_tensix_dfb_program(
     const uint32_t total_size = num_entries * entry_size;
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_size / sizeof(uint32_t));
 
-    const uint32_t dfb_l1_addr = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+    const uint32_t dfb_l1_addr =
+        static_cast<uint32_t>(mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1));
 
-    detail::WriteToDeviceL1(device, logical_core, dfb_l1_addr, input);
+    slow_dispatch::WriteToL1(mesh_device, logical_core, dfb_l1_addr, input);
 
-    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     // Packer increments each word by 1, then unpacker increments it by 1 → +2 per word.
     // This holds for every Neo's ring independently, so the entire L1 region is input + 2.
@@ -120,25 +118,23 @@ static void run_intra_tensix_dfb_program(
     }
 
     std::vector<uint32_t> l1_data;
-    detail::ReadFromDeviceL1(device, logical_core, dfb_l1_addr, total_size, l1_data);
+    slow_dispatch::ReadFromL1(mesh_device, logical_core, dfb_l1_addr, total_size, l1_data);
     EXPECT_EQ(expected, l1_data) << "Intra-tensix DFB L1 mismatch";
 }
 
-TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB4Sx4S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, TensixIntraTest1xDFB4Sx4S) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping intra-tensix DFB test for WH/BH until DFB is backported";
     }
-    run_intra_tensix_dfb_program(this->devices_.at(0), /*entry_size=*/1024, /*num_entries=*/16, /*num_threads=*/4);
+    run_intra_tensix_dfb_program(this->device(), /*entry_size=*/1024, /*num_entries=*/16, /*num_threads=*/4);
 }
 
 // Metal 2.0 intra: DM->Trisc self-loop double-relu
-TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "C2 INTRA-scope DFB self-loop requires Quasar";
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
     constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
     constexpr uint32_t num_entries = 4;
     const m2::NodeCoord node{0, 0};
@@ -153,8 +149,8 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
 
     m2::DataflowBufferSpec dfb_in{
         .unique_id = DFB_IN,
@@ -220,7 +216,7 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
         .work_units = {wu},
     };
 
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
 
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -245,8 +241,8 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     // Positive bf16 inputs → double-relu identity.
     const uint32_t total_bytes = entry_size * num_entries;
     auto input = create_random_vector_of_bfloat16(total_bytes, 1.0f, 0xC2C2);
-    detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
-    m2_writeshard_barrier_uint32(device, in_tensor, input);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
 
     // Finalize early so host can assert INTRA remapper assignment before launch.
     program.impl().finalize_dataflow_buffer_configs();
@@ -262,17 +258,17 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     EXPECT_NE(self_rc.config.intra_shadow_tc_id, self_tc);
     EXPECT_GE(self_rc.config.remapper_pair_index, ::dfb::REMAPPER_ONE_TO_ONE_PAIR_START);
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output;
-    detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
     EXPECT_TRUE(packed_uint32_t_vector_comparison(output, input, [](float a, float b) {
         return std::abs(a - b) < 0.01f;
     })) << "M2 C2 double-relu identity mismatch";
 
     // Capacity is shared (all DFBs use num_entries=4), so only assert the INTRA ClientL/shadow
     // programming — not overlay isolation by capacity fingerprint.
-    const auto live = read_live_tcs(device, CoreCoord(0, 0), /*neo_id=*/0);
+    const auto live = read_live_tcs(this->device(), CoreCoord(0, 0), /*neo_id=*/0);
     ASSERT_GT(live.capacity.size(), self_rc.config.intra_shadow_tc_id);
     EXPECT_EQ(live.capacity[self_tc], num_entries);
     EXPECT_EQ(live.capacity[self_rc.config.intra_shadow_tc_id], 0u);
@@ -280,11 +276,10 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
 
 // Metal 2.0 intra-Tensix self-loop harness + test
 static void run_intra_tensix_dfb_program_2_0(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t entry_size, uint32_t num_threads) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    distributed::MeshDevice& mesh_device, uint32_t entry_size, uint32_t num_threads) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 INTRA test is Quasar-only";
     }
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t num_entries = 16;  // matches legacy
     TT_FATAL(num_entries % num_threads == 0, "num_entries must be divisible by num_threads");
@@ -335,7 +330,7 @@ static void run_intra_tensix_dfb_program_2_0(
         .work_units = {m2::WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
     };
 
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
     // Kernel has no runtime args; pass kernel_spec_name only (matches legacy
     // pattern in main's run_intra_tensix_dfb_program).
@@ -345,31 +340,30 @@ static void run_intra_tensix_dfb_program_2_0(
 
     // DFB is the first L1 allocation in the program → lands at the base L1
     // allocator address. Same trick the legacy intra test uses.
-    const uint32_t dfb_l1_addr = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+    const uint32_t dfb_l1_addr =
+        static_cast<uint32_t>(mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1));
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_bytes / sizeof(uint32_t));
-    detail::WriteToDeviceL1(device, CoreCoord(0, 0), dfb_l1_addr, input);
+    slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, input);
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> expected(input.size());
     std::transform(input.begin(), input.end(), expected.begin(), [](uint32_t v) { return v + 2; });
     std::vector<uint32_t> output;
-    detail::ReadFromDeviceL1(device, CoreCoord(0, 0), dfb_l1_addr, total_bytes, output);
+    slow_dispatch::ReadFromL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, total_bytes, output);
     EXPECT_EQ(expected, output) << "M2 intra-tensix DFB +2 per word mismatch (num_threads=" << num_threads << ")";
 }
 
-TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1S_2_0) {
-    run_intra_tensix_dfb_program_2_0(this->devices_.at(0), /*entry_size=*/1024, /*num_threads=*/1);
+TEST_F(UnitMeshFixture, TensixIntraTest1xDFB1Sx1S_2_0) {
+    run_intra_tensix_dfb_program_2_0(this->device(), /*entry_size=*/1024, /*num_threads=*/1);
 }
 
 // Metal 2.0 intra + remapper coexistence
-TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;
     constexpr uint32_t num_entries = 16;
@@ -401,7 +395,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
 
     // DRAM input tensor for the DM producer.
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
 
     // DM producer: implicit-sync path feeds the remapper ring.
     auto producer = make_dm_dfb_producer(PRODUCER, DFB_REMAPPER, IN_TENSOR, num_entries, /*implicit_sync=*/true);
@@ -445,7 +439,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
         }},
     };
 
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
 
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -528,28 +522,30 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     // claim must come out of the run bit-identical to this snapshot no matter what earlier programs left in
     // them. Comparing against the snapshot is what makes the isolation check exact instead of a guess about
     // which values look like INTRA state.
-    const auto before = read_live_tcs(device, CoreCoord(0, 0), /*neo_id=*/0);
+    const auto before = read_live_tcs(this->device(), CoreCoord(0, 0), /*neo_id=*/0);
     ASSERT_GE(before.capacity.size(), ::dfb::NUM_TILE_COUNTERS_PER_TENSIX);
 
     // Fill DRAM input; DM NOC-reads this into the remapper ring's L1.
     auto input_remapper =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, num_entries * entry_size / sizeof(uint32_t));
-    detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input_remapper);
-    m2_writeshard_barrier_uint32(device, in_tensor, input_remapper);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input_remapper);
+    m2_writeshard_barrier_uint32(this->device(), in_tensor, input_remapper);
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    // Ring L1 address is fixed by finalize, so read it while the program is still owned here: the launch moves
+    // the program into the workload, which invalidates program (and remapper_dfb) once the launch returns.
+    const uint32_t remapper_l1_addr = remapper_dfb->uniform_alloc_addr();
+
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     // Verify remapper ring L1: DM wrote input_remapper; Tensix consumed credits
     // (ALL pattern) but did not overwrite the ring's data.
-    const uint32_t remapper_l1_addr =
-        program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB_REMAPPER))->uniform_alloc_addr();
     std::vector<uint32_t> l1_remapper;
-    detail::ReadFromDeviceL1(device, CoreCoord(0, 0), remapper_l1_addr, num_entries * entry_size, l1_remapper);
+    slow_dispatch::ReadFromL1(this->device(), CoreCoord(0, 0), remapper_l1_addr, num_entries * entry_size, l1_remapper);
     EXPECT_EQ(input_remapper, l1_remapper) << "M2 DM->Tensix strided x ALL remapper ring L1 mismatch";
 
     // space_available is the free-space view (capacity - tiles_available), so a fully drained counter reads
     // tiles_available == 0 and space_available == capacity.
-    const auto live = read_live_tcs(device, CoreCoord(0, 0), /*neo_id=*/0);
+    const auto live = read_live_tcs(this->device(), CoreCoord(0, 0), /*neo_id=*/0);
     ASSERT_GE(live.capacity.size(), ::dfb::NUM_TILE_COUNTERS_PER_TENSIX);
     for (const auto& [tc_id, expected] : claims) {
         EXPECT_EQ(live.capacity[tc_id], expected.capacity) << expected.owner << " TC" << (int)tc_id << " capacity";
@@ -570,12 +566,10 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
 }
 
 // T1: pure INTRA must not corrupt DM-visible overlay tile counters 0-15.
-TEST_F(MeshDeviceFixture, TensixIntraIsolatesOverlayTCs) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Overlay TC isolation is Quasar-only";
     }
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;
     constexpr uint32_t num_entries = 8;
@@ -610,7 +604,8 @@ TEST_F(MeshDeviceFixture, TensixIntraIsolatesOverlayTCs) {
     constexpr uint32_t done_idx = final_base + num_mirrored_dm_tcs * words_per_tc;
     constexpr uint32_t scratch_words = done_idx + 1;
 
-    const uint32_t dfb_l1_addr = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+    const uint32_t dfb_l1_addr =
+        static_cast<uint32_t>(this->device().allocator()->get_base_allocator_addr(HalMemType::L1));
     const uint32_t scratch_l1_addr = dfb_l1_addr + total_bytes;
 
     const m2::DFBSpecName DFB{"intra_dfb"};
@@ -668,7 +663,7 @@ TEST_F(MeshDeviceFixture, TensixIntraIsolatesOverlayTCs) {
         .work_units = {m2::WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
     };
 
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto intra_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB));
@@ -690,18 +685,19 @@ TEST_F(MeshDeviceFixture, TensixIntraIsolatesOverlayTCs) {
 
     // Kernel only exercises TC push/pop credits; L1 payload is untouched.
     std::vector<uint32_t> scratch_zero(scratch_words, 0);
-    detail::WriteToDeviceL1(device, CoreCoord(0, 0), scratch_l1_addr, scratch_zero);
+    slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), scratch_l1_addr, scratch_zero);
 
     // This program owns only Tensix-only counters (ClientL + shadow), so every DM-visible counter must survive
     // the run untouched. The kernel's own baseline is sampled after DFB init; snapshotting here additionally
     // covers init-time aliasing, and comparing exact values avoids inferring corruption from a magic capacity.
-    const auto before = read_live_tcs(device, CoreCoord(0, 0), /*neo_id=*/0);
+    const auto before = read_live_tcs(this->device(), CoreCoord(0, 0), /*neo_id=*/0);
     ASSERT_GE(before.capacity.size(), ::dfb::NUM_TILE_COUNTERS_PER_TENSIX);
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> scratch;
-    detail::ReadFromDeviceL1(device, CoreCoord(0, 0), scratch_l1_addr, scratch_words * sizeof(uint32_t), scratch);
+    slow_dispatch::ReadFromL1(
+        this->device(), CoreCoord(0, 0), scratch_l1_addr, scratch_words * sizeof(uint32_t), scratch);
     ASSERT_EQ(scratch.size(), scratch_words);
     EXPECT_EQ(scratch[0], scratch_magic) << "Pack never wrote overlay isolation scratch";
     EXPECT_EQ(scratch[done_idx], scratch_done) << "Pack never finished overlay isolation scratch";
@@ -745,7 +741,7 @@ TEST_F(MeshDeviceFixture, TensixIntraIsolatesOverlayTCs) {
     // Host-side NEO mirror readback after the drained series: ClientL must be empty, and every DM-visible
     // counter must match the pre-launch snapshot — init sized and reset only ClientL, so anything else moving
     // means a T6 update aliased into the overlay pool.
-    const auto live = read_live_tcs(device, CoreCoord(0, 0), /*neo_id=*/0);
+    const auto live = read_live_tcs(this->device(), CoreCoord(0, 0), /*neo_id=*/0);
     ASSERT_GT(live.capacity.size(), client_l_tc);
     EXPECT_EQ(live.capacity[client_l_tc], entries_per_neo);
     EXPECT_EQ(live.tiles_available[client_l_tc], 0u)

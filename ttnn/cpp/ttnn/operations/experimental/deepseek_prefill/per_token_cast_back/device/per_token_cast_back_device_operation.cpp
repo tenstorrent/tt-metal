@@ -252,6 +252,7 @@ ttnn::Tensor per_token_cast_back(
     const Tensor& input_scale,
     tt::tt_metal::DataType output_dtype,
     const tt::tt_metal::MemoryConfig& output_memory_config,
+    bool narrow_scales_to_bf16,
     bool token_count_aware,
     const std::optional<Tensor>& expert_region_offsets,
     const std::optional<Tensor>& expert_token_counts,
@@ -262,6 +263,7 @@ ttnn::Tensor per_token_cast_back(
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_dtype = output_dtype,
         .output_memory_config = output_memory_config,
+        .narrow_scales_to_bf16 = narrow_scales_to_bf16,
         .token_count_aware = token_count_aware,
         .experts_per_chip = experts_per_chip,
         .scales_from_metadata = scales_from_metadata};

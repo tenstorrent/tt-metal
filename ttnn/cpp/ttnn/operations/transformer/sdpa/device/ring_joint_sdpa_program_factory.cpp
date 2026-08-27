@@ -252,12 +252,12 @@ RingWorkPlan build_ring_work_plan(
         const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
         // Sharded joint: each ring iteration delivers one L/P shard immediately, so process
         // joint K/V on every ring iteration (no need to wait for the full gather to complete).
-        // Replicated joint: Already present full joint K/V is processd after all spatial K/V is consumed.
+        // Replicated joint: process joint when ring_id == ring_size-1
         const bool has_joint_work = derivation.num_joint_k_chunks > 0 && derivation.joint_seq_len != 0;
         // Whether this ring iteration is a candidate to consume joint K/V at all (sharded: every iter;
-        // replicated: only the last, when the full gather has completed).
+        // replicated: when ring_id == ring_size-1, matching the kernel's do_joint_kv condition).
         const bool joint_iter_selected =
-            has_joint_work && (derivation.joint_is_sharded || ring_iter == derivation.ring_size - 1);
+            has_joint_work && (derivation.joint_is_sharded || ring_id == derivation.ring_size - 1);
         // Count only the joint K chunks that carry REAL tokens, mirroring the kernel's
         // kv_chunk_is_beyond_logical_l skip: a joint chunk whose global start tile
         // (ring_id * joint_local_padded_Nt + k * k_chunk_tile_count) is at/after logical_lt is pure
@@ -864,7 +864,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         - for each KV chunk in kv_local_padded_N:
             - on the first ring iteration, read from local input_tensor_k and input_tensor_v
             - otherwise, read from gathered_input_tensor_k and gathered_input_tensor_v
-            - Replicated joint: on the last ring iteration, also read from joint_tensor_k/v (full L).
+            - Replicated joint: when ring_id == ring_size-1, also read from joint_tensor_k/v (full L).
             - Sharded joint: on every ring iteration, read one L_local shard from gathered_joint_k/v
               (or from the local joint_tensor_k/v when ring_id == this device's ring_index).
             - if the KV chunk is from the non-joint input and contains the global token index (logical_n - 1),

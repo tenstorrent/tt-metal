@@ -140,7 +140,9 @@ def run(
 
     start_time = start_measuring_time()
     q = ttnn.experimental.nlp_create_qkv_heads_segformer(input_tensor_a, **op_kwargs)[0]
-    q_torch = mesh_tensor_to_torch(q, device if is_mesh_device else None)
+    q_torch = mesh_tensor_to_torch(
+        q, device if is_mesh_device else None, scatter_placement=input_a_tensor_placement if is_mesh_device else None
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC

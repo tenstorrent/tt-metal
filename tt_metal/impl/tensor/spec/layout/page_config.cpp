@@ -4,7 +4,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
 #include <tt-metalium/shape2d.hpp>
 #include <numeric>

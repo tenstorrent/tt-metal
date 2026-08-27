@@ -36,7 +36,7 @@ void kernel_main() {
     uint32_t width = get_arg_val<uint32_t>(4);      // H (elements per row)
 #endif
 
-    constexpr uint32_t cb_out_fp32 = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t out_block_bytes = get_compile_time_arg_val(1);  // 128 * out_elem_size
     constexpr uint32_t tile_h = get_compile_time_arg_val(2);
     constexpr uint32_t tiles_per_block = get_compile_time_arg_val(3);  // tiles per block (= 4 for 32-wide tiles)
@@ -55,7 +55,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<ACCESSOR_CT_BASE>();
     const auto dst = TensorAccessor(dst_args, dst_addr);
     Noc noc;
-    CircularBuffer cb_out_fp32_obj(cb_out_fp32);
+    CircularBuffer cb_out_obj(cb_out);
 
     const uint32_t blocks_per_row = width >> 7;  // H / 128; one-time shift
 
@@ -134,14 +134,14 @@ void kernel_main() {
         const uint32_t remaining = total_blocks - base;
         const uint32_t real_in_block = remaining < tile_h ? remaining : tile_h;
 
-        cb_out_fp32_obj.wait_front(tiles_per_block);
+        cb_out_obj.wait_front(tiles_per_block);
         uint32_t slot = 0;
         while (slot < real_in_block && current_row < end_row) {
             uint32_t blocks_left_in_row = blocks_per_row - block_idx_in_row;
             uint32_t slots_left = real_in_block - slot;
             uint32_t run = blocks_left_in_row < slots_left ? blocks_left_in_row : slots_left;
             noc.async_write(
-                cb_out_fp32_obj,
+                cb_out_obj,
                 dst,
                 run * out_block_bytes,
                 {.offset_bytes = slot * out_block_bytes},
@@ -154,6 +154,6 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
-        cb_out_fp32_obj.pop_front(tiles_per_block);
+        cb_out_obj.pop_front(tiles_per_block);
     }
 }

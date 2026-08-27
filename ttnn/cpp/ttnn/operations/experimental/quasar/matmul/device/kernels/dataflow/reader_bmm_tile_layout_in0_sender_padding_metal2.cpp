@@ -21,7 +21,16 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
+#if !defined(ARCH_QUASAR)
+// ckernel.h provides mailbox_write/mailbox_base for the batch-sparsity is_batch_valid handoff below.
+// On Quasar it is compute-only (pulls ckernel_addrmod.h -> ckernel_trisc_id.h, which #errors unless
+// COMPILE_FOR_TRISC is set) and cannot be included from this DM kernel. The handoff it feeds is disabled
+// on Quasar anyway (see the guarded mailbox_write block) — the DM-writer -> TRISC-reader mailbox sync is
+// broken there (compute reads its OWN slot -> 0x19 loopback), an ops-owned redesign flagged in
+// rtawfik/quasar-cb-l1-read-api-watcher-test (add51617651). ckernel_defs.h (ThreadId) is self-contained
+// and DM-safe, so it stays unguarded.
 #include "ckernel.h"
+#endif
 #include "ckernel_defs.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -31,10 +40,8 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/dprint.h"  // DEBUG: matmul layer3 hang localization (remove after)
 
 void kernel_main() {
-    DPRINT("IN0 start\n");  // DEBUG: matmul layer3 hang
     uint32_t rt_args_idx = 0;
     // in0 tensor args (in0_tensor_addr is now the tensor::in0 binding)
     uint32_t in0_tensor_start_tile_id = get_arg(args::in0_tensor_start_tile_id);
@@ -209,9 +216,18 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
+#if !defined(ARCH_QUASAR)
                     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_batch_valid);
                     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_batch_valid);
                     ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_batch_valid);
+#else
+                    // Quasar: the DM-writer -> TRISC-reader is_batch_valid mailbox handoff is broken (the
+                    // compute reader reads its own mailbox slot -> 0x19 loopback IB-interrupt). Disabled
+                    // until the ops-owned mailbox-sync redesign lands (see rtawfik/quasar-cb-l1-read-api-
+                    // watcher-test add51617651, which static_asserts the matching read side). This
+                    // batch-sparsity / get_batch_from_reader path is not exercised by resnet.
+                    (void)is_batch_valid;
+#endif
                 }
 
                 if (!is_batch_valid) {
@@ -246,7 +262,6 @@ void kernel_main() {
                         // Operand 0
                         // Common for sharded and interleaved paths
                         cb_in0.reserve_back(in0_block_num_tiles);
-                        DPRINT("IN0R reserved\n");  // DEBUG #48552
 #ifndef IN0_SHARDED
 
                         uint32_t in0_write_offset = 0;
@@ -410,7 +425,6 @@ void kernel_main() {
                         // sets disable_dfb_implicit_sync_for_all, so the loopback read does not stall on
                         // the DFB producer credit. Runs once per in0 block (each bare pair needs it).
                         {
-                            DPRINT("IN0R g_enter\n");  // DEBUG #48552: guard active, before TEN-4746 TDMA
                             static uint32_t ten4746_tdma_scratch[8] __attribute__((aligned(16)));
                             // Convert the scratch's L1 symbol address to a uint32_t L1 offset via uintptr_t:
                             // a direct (uint32_t)ptr is a pointer->smaller-int cast (rejected under
@@ -426,14 +440,11 @@ void kernel_main() {
                                 {.noc_x = my_x[0], .noc_y = my_y[0], .addr = cb_in0.get_write_ptr()},
                                 {});
                             noc.async_read_barrier();
-                            DPRINT("IN0R g_done\n");  // DEBUG #48552: TEN-4746 TDMA read completed (barrier returned)
                         }
 #endif  // ARCH_QUASAR && IN0_SHARDED && SKIP_MCAST && !EXTRACT_SHARD_SUB_BLOCKS
 
                         // Common for sharded and interleaved paths
-                        DPRINT("IN0R pre-push\n");  // DEBUG #48552
                         cb_in0.push_back(in0_block_num_tiles);
-                        DPRINT("IN0R pushed\n");  // DEBUG #48552
                     }
                 }
 #ifdef IN0_SHARDED
@@ -476,5 +487,4 @@ void kernel_main() {
 #endif
     // Drain outstanding NOC writes AND atomics before returning (Metal 2.0 FW epilogue does not).
     noc.async_full_barrier();
-    DPRINT("IN0 end\n");  // DEBUG: matmul layer3 hang
 }

@@ -5,17 +5,20 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_fpu import Fpu
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_fpu import Fpu
-from fuser.fused_loop import FusedLoop, LoopBlockRow
-from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
-from helpers.golden_generators import DataCopyGolden, get_golden_generator
+from fuser.l1_operation import L1Operation
+from fuser.quasar.unpacker.unpack_a import (
+    _uses_upk_to_dest_semaphores,
+    upk_to_dest_math_ack,
+)
+from fuser.tile_loop import LoopBlockRow, TileLoop
 
 
 class DatacopyFpu(Fpu):
-    loop: FusedLoop = LoopBlockRow()
+    loop: TileLoop = LoopBlockRow()
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -29,27 +32,17 @@ class DatacopyFpu(Fpu):
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
         tensor_dst: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        source_tensor = tensor_a
-
-        golden_generator = get_golden_generator(DataCopyGolden)
-        golden_tensor = golden_generator(
-            source_tensor,
-            config.sentinel.golden_math_format,
-            num_faces=operation.tile_shape.total_num_faces(),
-            input_dimensions=compute_unit.src_a.dimensions,
-            face_r_dim=operation.tile_shape.face_r_dim,
-            tile_shape=operation.tile_shape,
+        return self.datacopy_golden(
+            tensor_a, tensor_b, tensor_dst, config, operation, compute_unit
         )
-
-        return (tensor_a, tensor_b, golden_tensor)
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -72,22 +65,21 @@ class DatacopyFpu(Fpu):
 
     def calculate(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         if compute_unit.unpack_to_dest.value:
-            return (
-                "_llk_sync_wait_<p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);\n"
-                "_llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);\n"
-            )
+            if not _uses_upk_to_dest_semaphores(config):
+                return ""
+            return upk_to_dest_math_ack()
 
         return f"_llk_math_eltwise_unary_datacopy_({block.tile_id_block});\n"
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
