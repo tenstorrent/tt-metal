@@ -17,6 +17,12 @@ using tt::tt_fabric::NocUnicastCommandHeader;
 using tt::tt_fabric::WorkerToFabricEdmSender;
 using namespace ttnn::operations::ccl::common;
 
+#ifdef TT_MOE_PROTOCOL_TRACE
+#define TT_MOE_PROTOCOL_DPRINT(...) DPRINT(__VA_ARGS__)
+#else
+#define TT_MOE_PROTOCOL_DPRINT(...)
+#endif
+
 // packet size bytes 4352
 namespace detail {
 
@@ -296,7 +302,9 @@ void kernel_main() {
         auto* expert_token_activations_ptr =
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 
+        TT_MOE_PROTOCOL_DPRINT("QZC WAIT e={} want={}\n", e, compute_sync_semaphore_val);
         compute_sync_sem.wait_min(compute_sync_semaphore_val);
+        TT_MOE_PROTOCOL_DPRINT("QZC ACK e={} want={} count={}\n", e, compute_sync_semaphore_val, token_split_counts[e]);
 
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
@@ -349,7 +357,9 @@ void kernel_main() {
             }
         }
         compute_sync_semaphore_val += compute_cores_per_combine_core;
+        TT_MOE_PROTOCOL_DPRINT("QZC CREDIT_BEGIN e={}\n", e);
         ++db;
+        TT_MOE_PROTOCOL_DPRINT("QZC CREDIT_DONE e={}\n", e);
     }
 
     compute_sync_sem.set(0);
@@ -362,8 +372,10 @@ void kernel_main() {
 
     // In order to ensure that the barrier semaphores land after all of the data has arrived we must wait for the mux
     // cores to send off all of their transactions to the EDM.
+    TT_MOE_PROTOCOL_DPRINT("QZC MUX_WAIT\n");
     detail::mux_channel_writes_flushed<fabric_mux_num_buffers_per_channel, Num_Directions>(
         directions, fabric_connections);
+    TT_MOE_PROTOCOL_DPRINT("QZC MUX_ACK\n");
 
     if (sync_args.is_sync_core) {
         auto* termination_sync_semaphore_ptr =
@@ -406,7 +418,9 @@ void kernel_main() {
         //   each sender on the line sends to exactly N-1 other devices).
         constexpr uint32_t expected_dispatch_device_inc =
             (topology == tt::tt_fabric::Topology::Linear) ? (replicate_group_devices - 1) : replicate_group_devices;
+        TT_MOE_PROTOCOL_DPRINT("QZC GLOBAL_WAIT want={}\n", expected_dispatch_device_inc);
         noc_semaphore_wait(semaphore_ptr, expected_dispatch_device_inc);
+        TT_MOE_PROTOCOL_DPRINT("QZC GLOBAL_ACK want={}\n", expected_dispatch_device_inc);
         noc_semaphore_set(semaphore_ptr, 0);
     } else {
         // get sync core semaphore noc address

@@ -10,7 +10,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <numeric>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -1295,6 +1297,9 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     std::map<std::string, std::string> dm1_defines = {
         {"OUTPUT_SHARD_CORE_MAP", serialize_physical_core_coords(combine_cores, *mesh_device)}};
+    if (const char* trace = std::getenv("TT_MOE_PROTOCOL_TRACE"); trace != nullptr && std::string_view(trace) == "1") {
+        dm1_defines["TT_MOE_PROTOCOL_TRACE"] = "1";
+    }
 
     auto matmul_dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,

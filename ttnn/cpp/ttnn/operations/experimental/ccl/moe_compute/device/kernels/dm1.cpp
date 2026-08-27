@@ -10,6 +10,12 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
 
+#ifdef TT_MOE_PROTOCOL_TRACE
+#define TT_MOE_PROTOCOL_DPRINT(...) DPRINT(__VA_ARGS__)
+#else
+#define TT_MOE_PROTOCOL_DPRINT(...)
+#endif
+
 void kernel_main() {
     constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
     constexpr uint32_t Ht = get_named_compile_time_arg_val("hidden_tiles");
@@ -257,7 +263,9 @@ void kernel_main() {
         // compute_only has no combine writer to coordinate with).
         if constexpr (!compute_only) {
             if (num_expert_chunks == 0) {
+                TT_MOE_PROTOCOL_DPRINT("QZP ZERO_WAIT e={} want={}\n", expert_id, combine_semaphore_val);
                 combine_sem.wait_min(combine_semaphore_val);
+                TT_MOE_PROTOCOL_DPRINT("QZP ZERO_ACK e={} want={}\n", expert_id, combine_semaphore_val);
             }
         }
 
@@ -439,7 +447,14 @@ void kernel_main() {
                 if constexpr (compute_only) {
                     noc1_obj.async_writes_flushed();  // non-posted in compute_only; use NON-posted flush API
                 } else if (chunk == 0) {
+                    if (width_tiles_sent == 0) {
+                        TT_MOE_PROTOCOL_DPRINT(
+                            "QZP WAIT e={} want={} chunks={}\n", expert_id, combine_semaphore_val, num_expert_chunks);
+                    }
                     combine_sem.wait_min(combine_semaphore_val);
+                    if (width_tiles_sent == 0) {
+                        TT_MOE_PROTOCOL_DPRINT("QZP ACK e={} want={}\n", expert_id, combine_semaphore_val);
+                    }
                 }
 
                 uint32_t dest_height_shard = dest_height_shard_start;
@@ -505,6 +520,7 @@ void kernel_main() {
                 matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
         }
         if constexpr (!compute_only) {
+            TT_MOE_PROTOCOL_DPRINT("QZP START e={} inc={}\n", expert_id, height_shard_dim);
             combine_semaphore_inc();
             combine_semaphore_val += height_shard_dim;
         }
@@ -520,7 +536,9 @@ void kernel_main() {
         noc1_obj.async_write_barrier();
     } else {
         // wait for combine to do its final semaphore increment before resetting. Otherwise, leads to hang.
+        TT_MOE_PROTOCOL_DPRINT("QZP FINAL_WAIT want={}\n", combine_semaphore_val);
         combine_sem.wait_min(combine_semaphore_val);
+        TT_MOE_PROTOCOL_DPRINT("QZP FINAL_ACK want={}\n", combine_semaphore_val);
         combine_sem.set(0);
         noc1_obj.async_writes_flushed<NocOptions::POSTED>();
     }

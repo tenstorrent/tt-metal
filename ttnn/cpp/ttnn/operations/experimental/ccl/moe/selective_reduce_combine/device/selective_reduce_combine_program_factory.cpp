@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <ranges>
+#include <string_view>
 #include <vector>
 
 #include <tt-metalium/work_split.hpp>
@@ -558,6 +560,10 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"DEST_CHIP_ID", stringify(dest_chip_id)},
         {"DEST_MESH_ID", stringify(dest_mesh_id)},
         {"DIRECTIONS", stringify(directions)}};
+
+    if (const char* trace = std::getenv("TT_MOE_PROTOCOL_TRACE"); trace != nullptr && std::string_view(trace) == "1") {
+        writer_defines["TT_MOE_PROTOCOL_TRACE"] = "1";
+    }
 
     writer_defines["REPLICATE_GROUP_AXIS"] = std::to_string(axis);
 
