@@ -1314,11 +1314,14 @@
     unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_rope.py
     pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_attention_wan.py
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not 720p and not f81"
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py
+    pytest --timeout 1000 models/tt_dit/tests/encoders/umt5/test_umt5.py -k "wh_glx"
+    pytest --timeout 1000 models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding -k "wh_glx"
   model: wan-2.2-t2v
   model_family: Wan
   skus:
@@ -1326,7 +1329,7 @@
     #   timeout: 150
     #   tier: 1
     wh_galaxy:
-      timeout: 150
+      timeout: 155
       tier: 1
     bh_quietbox_2:
       timeout: 105

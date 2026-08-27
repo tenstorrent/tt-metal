@@ -358,9 +358,9 @@ models:
     bh_p300: 8
     bh_quietbox_2: 42
   unit_tier1:
-    wh_llmbox: 140
+    wh_llmbox: 150
     wh_n150: 110
-    wh_galaxy: 235
+    wh_galaxy: 240
     wh_galaxy_perf: 60
     bh_p150: 20
     bh_quietbox_2: 390
@@ -393,7 +393,6 @@ models:
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
-    wh_galaxy_perf: 125
     bh_galaxy: 470
     bh_sc1: 488
     bh_sc1_high_power: 166
