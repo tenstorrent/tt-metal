@@ -730,6 +730,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     const tt_hlk_desc& desc,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
+    const std::vector<UnpackToDestMode>& unpack_to_dest_mode,
     bool bfp8_pack_precise,
     const tt::ARCH arch,
     uint32_t max_cbs) {
@@ -753,7 +754,20 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
         std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
             return f == DataFormat::Fp8_e4m3;
         })) {
+        const bool has_local_fp32_epoch =
+            arch == tt::ARCH::BLACKHOLE && std::ranges::any_of(unpack_to_dest_mode, [](UnpackToDestMode mode) {
+                return mode != UnpackToDestMode::Default;
+            });
         for (size_t i = 0; i < src_formats.size(); i++) {
+            const bool local_fp32 = desc.buf_dataformat_arr[i] == DataFormat::Float32 && has_local_fp32_epoch;
+            if (local_fp32) {
+                // An explicit FP32 epoch may write any Float32 intermediate
+                // in the kernel, not only the CB that marks the epoch. Preserve
+                // the complete destination mantissa instead of applying the
+                // mixed-FP8 kernel's Float16 pack-source rewrite.
+                src_formats[i] = DataFormat::Float32;
+                continue;
+            }
             if (desc.buf_dataformat_arr[i] == DataFormat::Fp8_e4m3) {
                 continue;
             }
@@ -823,9 +837,17 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
     ExpPrecision exp_prec = tt::get_data_exp_precision(desc.buf_dataformat_arr);
     DataFormat unpack_conditional_dst_format =
         (exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
-    if (options.fp32_dest_acc_en &&
+    DataFormat pack_conditional_dst_format = unpack_conditional_dst_format;
+    const bool has_local_fp32_epoch =
+        arch == tt::ARCH::BLACKHOLE && std::ranges::any_of(options.unpack_to_dest_mode, [](UnpackToDestMode mode) {
+            return mode != UnpackToDestMode::Default;
+        });
+    if ((options.fp32_dest_acc_en || has_local_fp32_epoch) &&
         (tt::is_all_fp32_formats(desc.buf_dataformat_arr) || (exp_prec == ExpPrecision::B))) {
         unpack_conditional_dst_format = DataFormat::Tf32;
+        if (options.fp32_dest_acc_en) {
+            pack_conditional_dst_format = DataFormat::Tf32;
+        }
     }
 
     if (std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
@@ -843,7 +865,13 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         max_cbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);
+        desc,
+        pack_conditional_dst_format,
+        options.fp32_dest_acc_en,
+        options.unpack_to_dest_mode,
+        options.bfp8_pack_precise,
+        arch,
+        max_cbs);
 
     // equalize "unpack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
