@@ -40,3 +40,31 @@ def test_untilize_with_padded_input(mem_config, device):
         raise AssertionError("Output has padding in buffer")
 
     assert_equal(torch_tensor, ttnn.to_torch(untilized))
+
+
+@pytest.mark.parametrize(
+    "shape, output_end",
+    [
+        # W=3200 is 100 tiles (> 32-tile WH heuristic), so this hits the
+        # block-interleaved / width-parallel factory.
+        ([1, 1, 128, 3200], [0, 0, 119, 3167]),
+        # Short and wide: one tile-row, enough width to split across cores.
+        ([1, 1, 32, 1536], [0, 0, 31, 1535]),
+    ],
+)
+def test_untilize_with_unpadding_wide(device, shape, output_end):
+    torch.manual_seed(42)
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+
+    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    tile_tensor = ttnn.from_torch(
+        torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
+    )
+    untilized = ttnn.untilize_with_unpadding(
+        tile_tensor, output_tensor_end=output_end, memory_config=output_memory_config
+    )
+    result = ttnn.to_torch(untilized)
+
+    slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
+    assert_equal(result, torch_tensor[slices])
