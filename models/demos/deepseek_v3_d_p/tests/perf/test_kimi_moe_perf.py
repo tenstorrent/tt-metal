@@ -84,15 +84,21 @@ class _MoEPerfCase:
 
 
 # K2.6: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
-# TODO: cut on a high-power 8x4 galaxy and set expected_ns to start gating. Until then this case
-# measures and reports without asserting, so it cannot go green off an unmeasured baseline.
+#
+# Measured 2026-08-27 on a high-power 8x4 BH galaxy (nominal DDR), warm forward, 24 programs:
+#   6,961,326 ns  run 33061606608 / job 98487445213
+#   7,139,200 ns  run 33061626833 / job 98485843416
+# The value below is the MEAN of those two, not a single run.
 _K2_6 = _MoEPerfCase(
     label="kimi-k2.6",
     config=KimiK26Config,
-    expected_ns=None,
-    # Placeholder, carried from K3 pending this case's own observed spread. K3's 3% was justified by
-    # repeated warm runs on that box; re-check against K2.6's own numbers when the baseline is cut.
-    margin=0.03,
+    expected_ns=7_050_263,
+    # Two samples spanned 2.52% peak to peak (each +/-1.26% of the mean), so 3% would leave only
+    # 1.74pp beyond the spread already observed -- and two samples almost certainly understate the
+    # true spread. 4% keeps ~2.7pp of headroom; sub-nominal DDR doubles it to 8% via
+    # adjust_margin_for_ddr_speed. Tighten to 3% once there are >=3 clean samples to centre on:
+    # a third run was dispatched but died on an mpirun/PRTE daemon loss before measuring.
+    margin=0.04,
     shape_note="384 experts / top-8, 7168 emb",
 )
 
