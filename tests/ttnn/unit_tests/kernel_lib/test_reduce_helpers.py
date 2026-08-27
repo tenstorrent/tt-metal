@@ -7,8 +7,8 @@ The suite intentionally drives the helper itself through a tiny ProgramDescripto
 testing it indirectly through a migrated operation.  Cases marked xfail are positive specifications
 for combinations AccumulateViaAdd does not support yet; an implementation that starts working turns
 those cases into strict XPASS failures so the marker must be removed. Auto-dispatch cases exercise
-both sides of the eight-reduced-tile cutoff and every compile-time gate, including the complete
-AccumulateViaAdd input-policy support matrix.
+the absence of a size cutoff and every compile-time gate, including the complete AccumulateViaAdd
+input-policy support matrix.
 """
 
 from dataclasses import dataclass
@@ -96,9 +96,27 @@ ALWI void run_reduce(
         : reload_id == 4u ? AccumulateReloadMode::CopySeedZeroPair
                           : AccumulateReloadMode::CopySeedPairs;
 
+    const uint32_t row_pitch = layout.row_stride == 0u ? shape.cols : layout.row_stride;
+    const uint32_t in_tiles = shape.rows * row_pitch * shape.batches;
+
+    // Streaming/Bulk consume the chunk, so their caller publishes it again before the next call. The no-pop
+    // policies intentionally reuse the same resident pages: WaitUpfrontNoPop repeats its own wait, while
+    // NoWaitNoPop relies on the single caller-owned wait below and performs no CB synchronization itself.
+    auto prepare_input_for_next_call = [&]() {
+        if constexpr (
+            policy == ReduceInputPolicy::WaitAndPopPerTile || policy == ReduceInputPolicy::BulkWaitBulkPop) {
+            cb_reserve_back(cb_in, in_tiles);
+            cb_push_back(cb_in, in_tiles);
+        }
+    };
+
+    if constexpr (policy == ReduceInputPolicy::NoWaitNoPop) {
+        cb_wait_front(cb_in, in_tiles);
+    }
+
     if constexpr (mean_id != 0u) {
         if constexpr (accumulate_id != 0u) {
-            const uint32_t total_n_reduced = 2u * n_reduced;
+            const uint32_t total_n_reduced = 3u * n_reduced;
             reduce_mean<
                 dim,
                 cb_in,
@@ -114,10 +132,23 @@ ALWI void run_reduce(
                 layout,
                 Accumulate::at(cb_acc, 0).with_reload(reload),
                 partial);
-            const uint32_t row_pitch = layout.row_stride == 0u ? shape.cols : layout.row_stride;
-            const uint32_t in_tiles = shape.rows * row_pitch * shape.batches;
-            cb_reserve_back(cb_in, in_tiles);
-            cb_push_back(cb_in, in_tiles);
+            prepare_input_for_next_call();
+            reduce_mean<
+                dim,
+                cb_in,
+                cb_scaler,
+                cb_acc,
+                policy,
+                reconfig,
+                fp32_mode,
+                algorithm,
+                Accumulate>(
+                shape,
+                total_n_reduced,
+                layout,
+                Accumulate::at(cb_acc, 1).with_reload(reload),
+                partial);
+            prepare_input_for_next_call();
             reduce_mean<
                 dim,
                 cb_in,
@@ -131,7 +162,7 @@ ALWI void run_reduce(
                 shape,
                 total_n_reduced,
                 layout,
-                Accumulate::at_last(cb_acc, 1).with_reload(reload),
+                Accumulate::at_last(cb_acc, 2).with_reload(reload),
                 partial);
         } else {
             reduce_mean<
@@ -157,10 +188,20 @@ ALWI void run_reduce(
             algorithm,
             Accumulate,
             NoOp>(shape, layout, Accumulate::at(cb_acc, 0).with_reload(reload), NoOp{}, partial);
-        const uint32_t row_pitch = layout.row_stride == 0u ? shape.cols : layout.row_stride;
-        const uint32_t in_tiles = shape.rows * row_pitch * shape.batches;
-        cb_reserve_back(cb_in, in_tiles);
-        cb_push_back(cb_in, in_tiles);
+        prepare_input_for_next_call();
+        reduce<
+            pool,
+            dim,
+            cb_in,
+            cb_scaler,
+            cb_acc,
+            policy,
+            reconfig,
+            fp32_mode,
+            algorithm,
+            Accumulate,
+            NoOp>(shape, layout, Accumulate::at(cb_acc, 1).with_reload(reload), NoOp{}, partial);
+        prepare_input_for_next_call();
         reduce<
             pool,
             dim,
@@ -172,7 +213,7 @@ ALWI void run_reduce(
             fp32_mode,
             algorithm,
             Accumulate,
-            NoOp>(shape, layout, Accumulate::at_last(cb_acc, 1).with_reload(reload), NoOp{}, partial);
+            NoOp>(shape, layout, Accumulate::at_last(cb_acc, 2).with_reload(reload), NoOp{}, partial);
     } else {
         reduce<
             pool,
@@ -186,6 +227,12 @@ ALWI void run_reduce(
             algorithm,
             NoAccumulation,
             NoOp>(shape, layout, NoAccumulation{}, NoOp{}, partial);
+    }
+
+    if constexpr (
+        policy == ReduceInputPolicy::WaitUpfrontNoPop || policy == ReduceInputPolicy::NoWaitNoPop) {
+        // Prove the helper left every persistent page resident, as required by both no-pop policies.
+        cb_wait_front(cb_in, in_tiles);
     }
 }
 }  // namespace
@@ -210,8 +257,6 @@ void kernel_main() {
     constexpr uint32_t reload_id = get_compile_time_arg_val(16);
     constexpr uint32_t row_pitch = row_stride == 0u ? Wt : row_stride;
     constexpr uint32_t in_tiles = Ht * row_pitch * NC;
-    constexpr bool pops_input = policy_id <= 1u;
-
     using namespace compute_kernel_lib;
     const auto shape = ReduceInputBlockShape::of(Ht, Wt, NC);
     const auto layout = row_stride == 0u ? ReduceInputMemoryLayout::contiguous()
@@ -570,9 +615,9 @@ def _run_reduce(
 
     result = ttnn.generic_op([input_tensor, output], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
     if accumulate:
-        golden = golden * 2
+        golden = golden * 3
     if pool == "avg" or use_mean:
-        golden = golden / (2 * n_reduced if accumulate and use_mean else n_reduced)
+        golden = golden / (3 * n_reduced if accumulate and use_mean else n_reduced)
     return _read_values(result, dim), golden
 
 
@@ -581,6 +626,16 @@ def _assert_result(got, expected, *, fp32_dest=True):
         torch.testing.assert_close(got, expected, rtol=1e-2, atol=5e-2)
     else:
         torch.testing.assert_close(got, expected, rtol=3e-2, atol=2e-1)
+
+
+def _assert_cross_call_result(got, expected, reload, *, fp32_dest=True):
+    if reload == "copy_uniform" and fp32_dest:
+        # CopySeedUniform deliberately sends the running FP32 DEST value back through the unpack path once per
+        # tile. Its error therefore grows with both the tile count and the number of accumulated chunks; keep
+        # the relaxed tolerance local to this explicitly lower-precision reload strategy.
+        torch.testing.assert_close(got, expected, rtol=2e-2, atol=5e-2)
+    else:
+        _assert_result(got, expected, fp32_dest=fp32_dest)
 
 
 @dataclass(frozen=True)
@@ -697,9 +752,9 @@ def test_accumulate_via_add_reduce_mean_matches_direct_avg(device, dim):
     torch.testing.assert_close(direct, explicit, rtol=0, atol=0)
 
 
-def test_reduce_algorithm_auto_stays_on_reduce_tile_below_cutoff(device):
+def test_reduce_algorithm_auto_uses_add_for_small_reduction(device):
     auto, expected = _run_reduce(device, dim="row", pool="sum", algorithm="auto", Ht=2, Wt=3)
-    explicit, explicit_expected = _run_reduce(device, dim="row", pool="sum", algorithm="reduce_tile", Ht=2, Wt=3)
+    explicit, explicit_expected = _run_reduce(device, dim="row", pool="sum", algorithm="accumulate_via_add", Ht=2, Wt=3)
     _assert_result(auto, expected)
     _assert_result(explicit, explicit_expected)
     torch.testing.assert_close(auto, explicit, rtol=0, atol=0)
@@ -707,11 +762,11 @@ def test_reduce_algorithm_auto_stays_on_reduce_tile_below_cutoff(device):
 
 @pytest.mark.parametrize("dim", DIMS)
 @pytest.mark.parametrize(
-    "reduced_tiles,expected_algorithm",
-    [(7, "reduce_tile"), (8, "accumulate_via_add")],
-    ids=["below-cutoff", "at-cutoff"],
+    "reduced_tiles",
+    [1, 3, 4],
+    ids=["single-tile", "three-tiles", "four-tiles"],
 )
-def test_reduce_algorithm_auto_dispatch_cutoff_for_every_dimension(device, dim, reduced_tiles, expected_algorithm):
+def test_reduce_algorithm_auto_dispatch_has_no_size_cutoff_for_every_dimension(device, dim, reduced_tiles):
     Ht, Wt = (1, reduced_tiles) if dim != "col" else (reduced_tiles, 1)
     auto, expected = _run_reduce(
         device,
@@ -727,7 +782,7 @@ def test_reduce_algorithm_auto_dispatch_cutoff_for_every_dimension(device, dim, 
         dim=dim,
         pool="sum",
         policy="bulk",
-        algorithm=expected_algorithm,
+        algorithm="accumulate_via_add",
         Ht=Ht,
         Wt=Wt,
     )
@@ -740,7 +795,7 @@ def test_reduce_algorithm_auto_dispatch_cutoff_for_every_dimension(device, dim, 
 @pytest.mark.parametrize("policy", POLICIES)
 def test_reduce_algorithm_auto_input_policy_support_matrix(device, dim, policy):
     expected_algorithm = "reduce_tile" if dim == "col" and policy == "stream" else "accumulate_via_add"
-    Ht, Wt = (8, 1) if dim == "col" else (1, 8)
+    Ht, Wt = (4, 1) if dim == "col" else (1, 4)
     auto, expected = _run_reduce(
         device,
         dim=dim,
@@ -808,7 +863,7 @@ def test_reduce_algorithm_auto_happy_path_support_matrix(
         policy=policy,
         algorithm="auto",
         Ht=1,
-        Wt=8,
+        Wt=4,
         input_dtype=input_dtype,
         fp32_dest=True,
         fp32_mode=fp32_mode,
@@ -822,7 +877,7 @@ def test_reduce_algorithm_auto_happy_path_support_matrix(
         policy=policy,
         algorithm=expected_algorithm,
         Ht=1,
-        Wt=8,
+        Wt=4,
         input_dtype=input_dtype,
         fp32_dest=True,
         fp32_mode=fp32_mode,
@@ -1045,7 +1100,56 @@ def test_accumulate_via_add_cross_call_accumulation(device, dim, Ht, Wt, NC, rel
         accumulate=True,
         reload=reload,
     )
-    _assert_result(got, expected)
+    _assert_cross_call_result(got, expected, reload)
+
+
+@pytest.mark.parametrize(
+    "dim,policy",
+    [
+        pytest.param(
+            dim,
+            policy,
+            id=f"{dim}-{policy}",
+            marks=(
+                pytest.mark.xfail(strict=True, reason="REDUCE_COL cannot consume a row-major per-tile stream")
+                if dim == "col" and policy == "stream"
+                else ()
+            ),
+        )
+        for dim in DIMS
+        for policy in POLICIES
+    ],
+)
+@pytest.mark.parametrize("reload", RELOAD_MODES)
+@pytest.mark.parametrize("fp32_dest", [False, True], ids=["bf16-dest", "fp32-dest"])
+def test_accumulate_via_add_cross_call_every_input_policy(device, dim, policy, reload, fp32_dest):
+    Ht, Wt = (4, 2) if dim == "col" else ((2, 4) if dim == "row" else (2, 2))
+    got, expected = _run_reduce(
+        device,
+        dim=dim,
+        policy=policy,
+        Ht=Ht,
+        Wt=Wt,
+        NC=2,
+        fp32_dest=fp32_dest,
+        accumulate=True,
+        reload=reload,
+    )
+    _assert_cross_call_result(got, expected, reload, fp32_dest=fp32_dest)
+
+
+def test_accumulate_via_add_cross_call_large_streaming_bf16_dest(device):
+    got, expected = _run_reduce(
+        device,
+        dim="row",
+        policy="stream",
+        Ht=1,
+        Wt=81,
+        NC=1,
+        fp32_dest=False,
+        accumulate=True,
+    )
+    _assert_cross_call_result(got, expected, "copy_pairs", fp32_dest=False)
 
 
 @pytest.mark.parametrize(
@@ -1070,11 +1174,30 @@ def test_accumulate_via_add_cross_call_mean_finalizes_once(device, dim, Ht, Wt, 
     _assert_result(got, expected)
 
 
-@pytest.mark.parametrize("dim,Ht,Wt", [("row", 2, 3), ("col", 3, 2)])
-def test_accumulate_via_add_cross_call_partial_mask(device, dim, Ht, Wt):
+@pytest.mark.parametrize(
+    "dim,Ht,Wt,policy",
+    [
+        pytest.param(
+            dim,
+            Ht,
+            Wt,
+            policy,
+            id=f"{dim}-{policy}",
+            marks=(
+                pytest.mark.xfail(strict=True, reason="REDUCE_COL cannot consume a row-major per-tile stream")
+                if dim == "col" and policy == "stream"
+                else ()
+            ),
+        )
+        for dim, Ht, Wt in [("row", 2, 3), ("col", 3, 2)]
+        for policy in POLICIES
+    ],
+)
+def test_accumulate_via_add_cross_call_partial_mask(device, dim, Ht, Wt, policy):
     got, expected = _run_reduce(
         device,
         dim=dim,
+        policy=policy,
         Ht=Ht,
         Wt=Wt,
         partial_elems=17,
@@ -1083,11 +1206,29 @@ def test_accumulate_via_add_cross_call_partial_mask(device, dim, Ht, Wt):
     _assert_result(got, expected)
 
 
-@pytest.mark.parametrize("dim,Ht,Wt,row_stride", [("row", 2, 3, 5), ("col", 3, 2, 4)])
-def test_accumulate_via_add_cross_call_padded_row_stride(device, dim, Ht, Wt, row_stride):
+@pytest.mark.parametrize(
+    "dim,Ht,Wt,row_stride,policy",
+    [
+        pytest.param(
+            dim,
+            Ht,
+            Wt,
+            row_stride,
+            policy,
+            id=f"{dim}-{policy}",
+        )
+        for dim, Ht, Wt, row_stride in [("row", 2, 3, 5), ("col", 3, 2, 4)]
+        for policy in POLICIES
+        # Padded streaming is already covered by its dedicated unsupported-contract test. Executing its
+        # cross-call form would violate the CB protocol before pytest could record an expected failure.
+        if policy != "stream"
+    ],
+)
+def test_accumulate_via_add_cross_call_padded_row_stride(device, dim, Ht, Wt, row_stride, policy):
     got, expected = _run_reduce(
         device,
         dim=dim,
+        policy=policy,
         Ht=Ht,
         Wt=Wt,
         row_stride=row_stride,
@@ -1099,15 +1240,20 @@ def test_accumulate_via_add_cross_call_padded_row_stride(device, dim, Ht, Wt, ro
 @pytest.mark.parametrize(
     "dim,Ht,Wt,NC",
     [
-        ("row", 2, 8, 1),
-        ("col", 8, 2, 1),
-        ("scalar", 2, 4, 1),
+        ("row", 2, 4, 1),
+        # Keep the REDUCE_COL streaming fallback single-output: ReduceTile's separate multi-output
+        # cross-call accumulator-page limitation is outside this AccumulateViaAdd dispatch test.
+        ("col", 4, 1, 1),
+        ("scalar", 2, 2, 1),
     ],
 )
-def test_reduce_algorithm_auto_cross_call_accumulation_uses_add_path(device, dim, Ht, Wt, NC):
+@pytest.mark.parametrize("policy", POLICIES)
+def test_reduce_algorithm_auto_cross_call_accumulation_uses_add_path(device, dim, Ht, Wt, NC, policy):
+    expected_algorithm = "reduce_tile" if dim == "col" and policy == "stream" else "accumulate_via_add"
     auto, expected = _run_reduce(
         device,
         dim=dim,
+        policy=policy,
         algorithm="auto",
         Ht=Ht,
         Wt=Wt,
@@ -1117,7 +1263,8 @@ def test_reduce_algorithm_auto_cross_call_accumulation_uses_add_path(device, dim
     explicit, explicit_expected = _run_reduce(
         device,
         dim=dim,
-        algorithm="accumulate_via_add",
+        policy=policy,
+        algorithm=expected_algorithm,
         Ht=Ht,
         Wt=Wt,
         NC=NC,

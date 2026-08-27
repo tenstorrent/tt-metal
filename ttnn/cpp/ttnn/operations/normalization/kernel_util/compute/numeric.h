@@ -207,16 +207,17 @@ inline void row_wise_mean_with_pre_add(uint32_t N, uint32_t num_tiles, uint32_t 
     const auto shape = compute_kernel_lib::ReduceInputBlockShape::row(num_tiles);
     const auto layout = compute_kernel_lib::ReduceInputMemoryLayout::contiguous();
 
-    // Pass 1: sum(in0) -> out. No epilogue; the division happens once, after both passes.
+    // Pass 1: sum(in0) -> out. Preserve the unfinalized partial so pass 2 can fold in sum(in1);
+    // the division and reduction finalization happen once, after both passes.
     compute_kernel_lib::reduce<reduce_type, reduce_dim, in0_dfb_id, scalar_dfb_id, out_dfb_id, policy>(
-        shape, layout, compute_kernel_lib::NoAccumulation{}, detail::no_op, partial);
+        shape, layout, compute_kernel_lib::Accumulate::at(out_dfb_id, /*iteration=*/0), detail::no_op, partial);
     detail::drain_block_padding<input_policy>(in0_dfb_id, num_tiles, block_size);
 
     // Pass 2: sum(in1) folded onto the reloaded pass-1 result, then divide by N.
     compute_kernel_lib::reduce<reduce_type, reduce_dim, in1_dfb_id, scalar_dfb_id, out_dfb_id, policy>(
         shape,
         layout,
-        compute_kernel_lib::Accumulate::at(out_dfb_id, /*iteration=*/1),
+        compute_kernel_lib::Accumulate::at_last(out_dfb_id, /*iteration=*/1),
         [N](uint32_t dst) { detail::scale_dest(dst, generic::bit_cast<uint32_t>(1.0f / N)); },
         partial);
     detail::drain_block_padding<input_policy>(in1_dfb_id, num_tiles, block_size);

@@ -117,8 +117,7 @@ enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNo
  *   - an input policy supported by AccumulateViaAdd (all combinations except
  *     WaitAndPopPerTile with REDUCE_COL),
  *   - a contiguous, tile-aligned input block,
- *   - either NoAccumulation or cross-call Accumulate with BulkWaitBulkPop, and
- *   - at least ACCUMULATE_VIA_ADD_MIN_REDUCED_TILES tiles per output.
+ *   - either NoAccumulation or cross-call Accumulate.
  * Everything else stays on ReduceTile. In particular, callers using prepare_reduce_scaler with a
  * non-unit SUM scaler must select ReduceTile explicitly if they otherwise match the Auto fast path.
  *
@@ -127,8 +126,6 @@ enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNo
  * sfpu_reduce.
  */
 enum class ReduceAlgorithm { Auto, ReduceTile, AccumulateViaAdd };
-
-inline constexpr uint32_t ACCUMULATE_VIA_ADD_MIN_REDUCED_TILES = 8;
 
 /**
  * @brief How AccumulateViaAdd folds a running cross-call accumulator into a later chunk.
