@@ -332,6 +332,8 @@ class RMSNorm2D(LightweightModule):
 
         source_memcfg = x.memory_config()
         compute_memcfg = _head_local_compute_memory_config(x, cores)
+        if source_memcfg.shard_spec is None:
+            raise ValueError("a head-local decode norm with compute cores needs a sharded input to return to")
         placed = _place_without_leaving_subdevice(x, compute_memcfg)
         try:
             normalized = ttnn.rms_norm(
@@ -607,7 +609,24 @@ def _resolve_2d_config(config: RMSNorm2DConfig) -> RMSNorm2DConfig:
         # Decode feeds it `batch * local heads` rows, not the fixed 32 rows a
         # width-sharded L1 recipe would pin, so keep decode interleaved like
         # prefill and let callers opt into an explicit sharded placement.
-        if config.decode_input_memcfg is None:
+        #
+        # **Unless the caller named compute cores**, in which case decode has no
+        # input placement at all and that is deliberate. `Attention2D` relocates
+        # its created heads to `decode_input_memcfg` before calling, and Q and K
+        # arrive on *disjoint* core sets - `nlp_create_qkv_heads_decode` gives Q
+        # the first `batch` cores of the head grid and K the next `batch` - which
+        # the fused QK rotary downstream requires::
+        #
+        #     TT_FATAL: Q and K must not overlap
+        #     rotary_embedding_llama_fused_qk_device_operation.cpp:95
+        #     (is_overlap = q.shard_spec()->grid.intersects(k.shard_spec()->grid))
+        #
+        # Naming any single placement here relocates both onto it and destroys
+        # that disjointness, which is how D-B26's second attempt failed on
+        # `(8, 4)`. Leaving it None makes `_apply_qk_norm` a no-op relocation,
+        # and `_decode_head_local` puts each tensor back exactly where it found
+        # it.
+        if config.decode_input_memcfg is None and config.decode_compute_cores is None:
             to_set["decode_input_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
     else:
         # The canonical column-dispatch Galaxy layout reserves x=0..1. Keep four
@@ -662,13 +681,17 @@ def _resolve_2d_config(config: RMSNorm2DConfig) -> RMSNorm2DConfig:
     if config.prefill_input_memcfg is None:
         to_set["prefill_input_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
 
+    # A head-local decode norm with named compute cores has no decode input
+    # placement to derive these from, deliberately - it returns each tensor to
+    # the placement it arrived in - so they stay None rather than defaulting.
+    decode_default = config.decode_input_memcfg or to_set.get("decode_input_memcfg")
     for field_name, default in (
-        ("decode_residual_memcfg", config.decode_input_memcfg or to_set["decode_input_memcfg"]),
+        ("decode_residual_memcfg", decode_default),
         ("prefill_residual_memcfg", config.prefill_input_memcfg or to_set["prefill_input_memcfg"]),
-        ("decode_output_memcfg", config.decode_input_memcfg or to_set["decode_input_memcfg"]),
+        ("decode_output_memcfg", decode_default),
         ("prefill_output_memcfg", ttnn.DRAM_MEMORY_CONFIG),
     ):
-        if getattr(config, field_name) is None:
+        if getattr(config, field_name) is None and default is not None:
             to_set[field_name] = default
 
     # --- Phase 4: Resolve weight (sharded across columns, replicated across rows) ---

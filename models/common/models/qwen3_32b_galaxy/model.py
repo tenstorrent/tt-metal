@@ -840,15 +840,19 @@ def _head_local_norm_config(
     numerical result; the module's D2 fix made interleaved DRAM the *default*
     for this geometry, which is right for prefill and unplaceable for decode.
 
-    Naming ``attention_heads_memcfg`` is half the fix: it stops Attention2D
-    relocating Q and K at all, so they reach the norm - and leave it - exactly as
-    ``nlp_create_qkv_heads_decode`` wrote them, which is what the rotary
-    downstream expects. It is not sufficient on its own, because those heads are
-    HEIGHT_SHARDED and ``ttnn.rms_norm`` rejects that layout outright
-    (``layernorm_device_operation.cpp:166``, a standing TODO). The kernel
-    therefore runs in a third placement, block-sharded over
-    ``decode_compute_cores``, and `RMSNorm2D` relocates in and out with the
-    sub-device-aware pair. See ``RMSNorm2D._decode_head_local``.
+    The answer is that decode names **no** placement at all and instead names
+    the cores its kernel may run on. ``Attention2D`` relocates the created heads
+    to ``decode_input_memcfg`` before calling, and Q and K arrive on *disjoint*
+    core sets - ``nlp_create_qkv_heads_decode`` gives Q the first ``batch`` cores
+    of the head grid and K the next ``batch`` - which the fused QK rotary
+    downstream requires (``Q and K must not overlap``). Naming any single
+    placement, ``attention_heads_memcfg`` included, relocates both onto it and
+    destroys that. Leaving it unset makes the relocation a no-op, and
+    ``RMSNorm2D`` puts each tensor back exactly where it found it. The kernel
+    itself runs in a third, block-sharded placement over the named worker cores,
+    because the created heads are HEIGHT_SHARDED and ``ttnn.rms_norm`` rejects
+    that layout outright (``layernorm_device_operation.cpp:166``, a standing
+    TODO). See ``RMSNorm2D._decode_head_local``.
 
     Prefill keeps interleaved DRAM: its mode plan is a single sub-device over the
     full grid, its heads are ``[1, local_heads, sequence, head_dim]`` in DRAM
@@ -861,9 +865,10 @@ def _head_local_norm_config(
         eps=eps,
         geometry=RMSNorm2DGeometry.HEAD_LOCAL,
         mesh_device=mesh_device,
-        decode_input_memcfg=decode_placements.attention_heads_memcfg,
+        # Decode names no input or output placement, and that is the point: see
+        # the docstring above and `RMSNorm2D._decode_head_local`. Q and K arrive
+        # on disjoint core sets and must leave on the same ones.
         prefill_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
-        decode_output_memcfg=decode_placements.attention_heads_memcfg,
         prefill_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
         decode_compute_cores=_head_local_decode_norm_cores(),
         compute_kernel_config_prefill=precision.norm_kernel_config,

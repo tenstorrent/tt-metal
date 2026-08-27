@@ -409,15 +409,21 @@ def test_qk_norms_resolve_to_head_local_geometry():
         assert config.eps == params.rms_norm_eps
         # Head-local normalization issues no collective, so it borrows no CCL.
         assert config.tt_ccl is None
-        # Decode names the created heads' own placement. Interleaved DRAM here
-        # aborts on `(8, 4)` before producing any number: an interleaved
-        # `ttnn.rms_norm` splits its rows over the whole compute grid, which the
-        # loaded decode manager does not own (D-B26). Prefill is not partitioned
-        # that way and stays in DRAM.
-        assert config.decode_input_memcfg == decode.attention_heads_memcfg
-        assert config.decode_output_memcfg == decode.attention_heads_memcfg
-        assert config.decode_input_memcfg.is_sharded()
-        # And the third placement: the created heads are HEIGHT_SHARDED, which
+        # Decode names **no** placement, and that is the fix rather than an
+        # omission. Interleaved DRAM aborts on `(8, 4)` before producing any
+        # number - an interleaved `ttnn.rms_norm` splits its rows over the whole
+        # compute grid, which the loaded decode manager does not own (D-B26) -
+        # and any single *sharded* placement relocates Q and K onto the same
+        # cores, which the fused QK rotary refuses:
+        #     TT_FATAL: Q and K must not overlap
+        # `nlp_create_qkv_heads_decode` gives Q the first `batch` cores of
+        # `attention_heads_memcfg`'s grid and K the next `batch`, and they must
+        # leave the norm on those same disjoint slices.
+        assert config.decode_input_memcfg is None
+        assert config.decode_output_memcfg is None
+        assert config.decode_residual_memcfg is None
+        assert decode.attention_heads_memcfg.is_sharded()
+        # The placement the kernel runs in: the created heads are HEIGHT_SHARDED, which
         # `ttnn.rms_norm` rejects outright, so the kernel runs on a one-wide
         # rectangle of worker cores and the norm relocates in and out with the
         # sub-device-aware pair. One core wide keeps the whole 128-column head on
@@ -579,8 +585,9 @@ def test_head_local_qk_norm_agrees_with_the_module_default_by_contract(monkeypat
     # This is D2's unresolved half, named D-B26 here, and agreeing with the
     # default is what carried it.
     assert resolved.prefill_input_memcfg == ttnn.DRAM_MEMORY_CONFIG
-    assert resolved.decode_input_memcfg == decode.attention_heads_memcfg
-    assert resolved.decode_output_memcfg == decode.attention_heads_memcfg
+    assert resolved.decode_input_memcfg is None
+    assert resolved.decode_output_memcfg is None
+    assert resolved.decode_compute_cores is not None
 
     # What the module resolves for a head-local norm that asks for nothing. The
     # point of pinning it is no longer "we agree" but "we know what we are
@@ -595,6 +602,7 @@ def test_head_local_qk_norm_agrees_with_the_module_default_by_contract(monkeypat
     )
     assert default.decode_input_memcfg == ttnn.DRAM_MEMORY_CONFIG
     assert default.decode_input_memcfg != resolved.decode_input_memcfg
+    assert default.decode_compute_cores is None
     assert default.decode_progcfg is None and default.decode_stats_memcfg is None
     # And the module needs no program config for the sharded case: `ttnn.rms_norm`
     # derives a `LayerNormShardedMultiCoreProgramConfig` from the tensor's own

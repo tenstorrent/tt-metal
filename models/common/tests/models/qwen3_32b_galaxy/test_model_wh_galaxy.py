@@ -221,6 +221,34 @@ def _compose_head_local(tensor: ttnn.Tensor, mesh_device: ttnn.MeshDevice, *, ro
     ]
 
 
+def _head_slice_memcfg(heads_memcfg: ttnn.MemoryConfig, *, start: int, count: int) -> ttnn.MemoryConfig:
+    """Return the placement `nlp_create_qkv_heads_decode` gives one of Q/K/V.
+
+    That op takes the head grid it is handed and cuts it row-wise into
+    consecutive `batch`-core slices - Q first, then K, then V - so Q and K land
+    on disjoint cores, which the fused QK rotary requires
+    (``TT_FATAL: Q and K must not overlap``). This reproduces one slice so the
+    Q/K norm can be exercised on the placement it will really see.
+    """
+
+    cores: list[ttnn.CoreCoord] = []
+    for core_range in heads_memcfg.shard_spec.grid.ranges():
+        for y in range(core_range.start.y, core_range.end.y + 1):
+            for x in range(core_range.start.x, core_range.end.x + 1):
+                cores.append(ttnn.CoreCoord(x, y))
+    chosen = cores[start : start + count]
+    assert len(chosen) == count, f"the head grid has {len(cores)} cores, need {start + count}"
+    return ttnn.MemoryConfig(
+        heads_memcfg.memory_layout,
+        heads_memcfg.buffer_type,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in chosen}),
+            heads_memcfg.shard_spec.shape,
+            heads_memcfg.shard_spec.orientation,
+        ),
+    )
+
+
 def _compose_decode_rot_mat(tensor: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
     """Compose a decode `(cos, sin)` table to `[batch, head_dim]`."""
 
@@ -480,9 +508,18 @@ def test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill(me
         attention = model.layers[0].attention
         assert attention._q_norm is not None and attention._k_norm is not None
         heads_memcfg = model.config.decode_placements.attention_heads_memcfg
+        users = model.geometry.users_per_column
         print(f"[qk-norm] decode heads placement: {heads_memcfg}", flush=True)
-        assert attention._q_norm.config.decode_input_memcfg == heads_memcfg
-        assert attention._k_norm.config.decode_input_memcfg == heads_memcfg
+        # Decode names no placement, so `Attention2D`'s relocation is a no-op and
+        # Q and K keep the disjoint core sets `nlp_create_qkv_heads_decode` gave
+        # them - which is what the fused QK rotary downstream demands.
+        assert attention._q_norm.config.decode_input_memcfg is None
+        assert attention._k_norm.config.decode_input_memcfg is None
+        assert attention._q_norm.config.decode_compute_cores is not None
+        q_memcfg = _head_slice_memcfg(heads_memcfg, start=0, count=users)
+        k_memcfg = _head_slice_memcfg(heads_memcfg, start=users, count=users)
+        assert not q_memcfg.shard_spec.grid.intersects(k_memcfg.shard_spec.grid)
+        print(f"[qk-norm] q cores {q_memcfg.shard_spec.grid}  k cores {k_memcfg.shard_spec.grid}", flush=True)
 
         for mode in ("prefill", "decode"):
             model.activate(mode)
@@ -498,8 +535,13 @@ def test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill(me
                     # live ones: the padded rows go through the same kernel, and
                     # a comparison restricted to the live rows would pass a norm
                     # that never touched the rest.
-                    shape = (1, model.geometry.users_per_column, ttnn.TILE_SIZE, params.head_dim)
-                    memcfg = heads_memcfg
+                    #
+                    # Staged on the *slice* of the head grid that create-heads
+                    # would have used for this tensor, not on the whole grid: the
+                    # placement is what the norm has to preserve, so a test that
+                    # stages the whole grid cannot see it fail to.
+                    shape = (1, users, ttnn.TILE_SIZE, params.head_dim)
+                    memcfg = q_memcfg if name == "q_norm" else k_memcfg
                 else:
                     shape = (1, heads, _PREFILL_LENGTH, params.head_dim)
                     memcfg = ttnn.DRAM_MEMORY_CONFIG
@@ -521,6 +563,14 @@ def test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill(me
                     )
                     out = getattr(norm, forward)(staged)
                     print(f"[stage] {mode} {name} returned {tuple(out.shape)} {out.memory_config()}", flush=True)
+                    if mode == "decode":
+                        # The placement, not just the numbers. A norm that hands
+                        # Q and K back on a wider grid overlaps them, and the
+                        # fused QK rotary refuses that - which is how this test's
+                        # first version passed while the block still aborted.
+                        assert out.memory_config().shard_spec.grid == memcfg.shard_spec.grid, (
+                            f"{name} came back on {out.memory_config().shard_spec.grid}, not {memcfg.shard_spec.grid}"
+                        )
                     copies = _compose_head_local(out, mesh_device, rows=shape[1])
                     for index, copy in enumerate(copies):
                         _assert_pcc(
