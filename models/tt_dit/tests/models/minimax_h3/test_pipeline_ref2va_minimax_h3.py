@@ -155,17 +155,18 @@ def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
     )
 
 
-CASE = "mixed"
-EXPECTED_PADDED_LEN = (
-    89856  # measured e2e (a host estimate says 90112); asserted so the case cannot drift off the probed shape
-)
+# Per-case padded sequence length, asserted so a case cannot silently drift off its probed shape.
+# `mixed` measured 89856 e2e (a host estimate says 90112); one_image / video_with_sound are from the
+# ref2va warm-latency measurements. If a case's assert trips, its message prints the actual length.
+_EXPECTED_PADDED_LEN = {"one_image": 46080, "video_with_sound": 81664, "mixed": 89856}
 
 
 @pytest.mark.timeout(10800)
+@pytest.mark.parametrize("case", list(_EXPECTED_PADDED_LEN), ids=list(_EXPECTED_PADDED_LEN))
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
-def test_ref2va_end_to_end(mesh_device, reset_seeds):
-    """Full ``mixed`` generation: geometry agreement across every reference path, plus warm latency."""
-    case = CASE
+def test_ref2va_end_to_end(case, mesh_device, reset_seeds):
+    """Full ref2va generation per reference case (one_image / video_with_sound / mixed): geometry
+    agreement across every reference path, plus warm latency."""
     references = ref2va_references(case)
     pipeline = _pipeline(mesh_device)
 
@@ -187,8 +188,8 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
     assert output.video.min() >= 0.0 and output.video.max() <= 1.0, "decoded video must be in [0, 1]"
     assert torch.isfinite(output.video).all() and torch.isfinite(output.audio).all()
     assert (
-        pipeline.last_padded_len == EXPECTED_PADDED_LEN
-    ), f"{case} ran at padded_len {pipeline.last_padded_len}, not the probed {EXPECTED_PADDED_LEN}"
+        pipeline.last_padded_len == _EXPECTED_PADDED_LEN[case]
+    ), f"{case} ran at padded_len {pipeline.last_padded_len}, not the probed {_EXPECTED_PADDED_LEN[case]}"
 
     frames = to_uint8_frames(output)
     # Artifacts before the checks, so a failing check still leaves frames to inspect.
