@@ -296,7 +296,7 @@ void kernel_main() {
         auto* expert_token_activations_ptr =
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 
-        compute_sync_sem.wait(compute_sync_semaphore_val);
+        compute_sync_sem.wait_min(compute_sync_semaphore_val);
 
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
