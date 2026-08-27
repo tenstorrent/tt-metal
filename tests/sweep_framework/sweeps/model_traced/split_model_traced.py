@@ -127,7 +127,20 @@ def run(
         _kw = {k: v for k, v in op_kwargs.items() if k != "memory_config"}
         _kw["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
         output_tensors = ttnn.split(input_tensor_a, split_size, dim=dim, **_kw)
-    output_tensors = [mesh_tensor_to_torch(t, device if is_mesh_device else None) for t in output_tensors]
+    # Gather with the INPUT's placement: when the traced placement sent us down
+    # replicate_with_topology, every chip holds the same data under a stamped Shard topology, and
+    # the golden below is per-chip. Without this the gather asks whether the per-device bytes happen
+    # to be identical, so one chunk out of 32 can come back mesh-factor times wider than its golden
+    # (seen in CI: chunk 6/32 at [1,1,128,8192] vs [1,1,128,2048] on an 8x4 mesh, while the same
+    # vector passed on another box).
+    output_tensors = [
+        mesh_tensor_to_torch(
+            t,
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
+        for t in output_tensors
+    ]
     e2e_perf = stop_measuring_time(start_time)
 
     # A split is correct only if the whole partition matches: the number of pieces AND each

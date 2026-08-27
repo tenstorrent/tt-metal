@@ -109,6 +109,17 @@ std::vector<EdgeInputTuple> build_ring_edges(std::size_t num_stages) {
     return edges;
 }
 
+// Declaration-ordered node names for the same ring. resolve_graph_layout takes the node
+// list as authoritative, so every endpoint build_ring_edges() references must appear here.
+std::vector<std::string> build_ring_nodes(std::size_t num_stages) {
+    std::vector<std::string> nodes;
+    nodes.reserve(num_stages);
+    for (std::size_t i = 0; i < num_stages; ++i) {
+        nodes.emplace_back(fmt::format("s{}", i));
+    }
+    return nodes;
+}
+
 FabricNodeId fabric_node_at_local_coord(
     const std::vector<SubmeshLayout>& layouts, std::size_t submesh_idx, uint32_t local_row, uint32_t local_col) {
     const auto& chips = layouts.at(submesh_idx).chips;
@@ -259,7 +270,8 @@ TEST_F(ControlPlaneFixture, TestPipelineBuilderCheck) {
         GTEST_SKIP() << "all-1x1 host-rank slices: resolve_graph_layout requires a distinct exit chip per stage";
     }
 
-    const GraphLayoutResult result = resolve_graph_layout(build_ring_edges(layouts.size()), to_submesh_chips(layouts));
+    const GraphLayoutResult result = resolve_graph_layout(
+        build_ring_nodes(layouts.size()), build_ring_edges(layouts.size()), to_submesh_chips(layouts));
 
     for (const auto& edge : result.resolved_edges) {
         const std::size_t src_sub = result.node_to_submesh.at(edge.src);

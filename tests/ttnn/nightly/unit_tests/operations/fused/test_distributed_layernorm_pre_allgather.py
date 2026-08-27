@@ -18,6 +18,8 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_layer_norm_post_all_gather,
 )
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
 
 TEST_PADDING_VALUE = -42
 
@@ -457,6 +459,9 @@ def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
 
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
+    # Module-scoped device: clear first (not disable_and_clear, which turns caching off) or `== 1` is vacuous.
+    device.clear_program_cache()
+
     for i in range(2):
         if i > 0:
             dummy_tensors.append(
@@ -470,9 +475,9 @@ def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
             )
         run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device)
 
-    assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
-        device.num_program_cache_entries()
-    )
+    assert (
+        device.num_program_cache_entries() == 1
+    ), f"Program cache should have exactly one entry, got {device.num_program_cache_entries()}"
 
 
 @pytest.mark.parametrize(

@@ -47,7 +47,7 @@ constexpr auto rm_reconfig_mode =
     compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
 #endif
 
-// Accurate fp32 mean: CT arg 6 routes Float32 SUM through the SFPU (full fp32) instead of the FPU (tf32).
+// Accurate fp32: CT arg 6 routes Float32 through the SFPU (full fp32) instead of the FPU (tf32).
 constexpr auto fp32_mode = get_compile_time_arg_val(6) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
 // One reduce() call over the (ht_in_chunk × wt_in_chunk × NC) block currently staged in cb_tile_in.

@@ -1,5 +1,25 @@
 name: "(TM-Fabric) Fabric Tests"
 
+# Parent workflow for the fabric hardware + perf pipelines. Delegates to two
+# testlist-driven impls:
+#   - tm-fabric-tests-impl.yaml       -> tests/pipeline_reorg/fabric_tests.yaml
+#                                        + fabric-cpu-only-tests-impl.yaml (CPU-only)
+#   - tm-fabric-tests-perf-impl.yaml  -> tests/pipeline_reorg/fabric_perf_tests.yaml
+#
+# Scheduled run (nightly cron) covers CPU-only tests only.
+#
+# workflow_dispatch UX:
+#   * HW SKU selection: one boolean per SKU (run-wh_n300_civ2, run-wh_llmbox_civ2,
+#     run-wh_galaxy, run-bh_loudbox, run-bh_p300, run-bh_quietbox_2). All default
+#     true, so the form is fully checked out of the box. Uncheck the SKUs you don't want; if every HW
+#     SKU box is unchecked, the HW matrix is skipped entirely (no separate
+#     on/off toggle needed).
+#   * hw-test-names / perf-test-names: comma-separated entry-name filters for
+#     power-user narrowing. Every valid entry name is listed inline in each
+#     input's description so it can be copied straight from the Run workflow UI.
+#     If the entry list changes in fabric_tests.yaml / fabric_perf_tests.yaml,
+#     update the matching description here too.
+
 on:
   schedule:
     # Once daily at 07:00 UTC — fabric CPU-only unit tests.
@@ -7,65 +27,77 @@ on:
   workflow_dispatch:
     inputs:
       run-fabric-cpu-only-unit-tests:
-        description: "Run fabric CPU-only unit tests (no hardware needed)"
+        description: "Run on CPU"
         required: false
         default: true
         type: boolean
-      run-wh-n300-fabric-tests:
-        description: "Run Wormhole N300 fabric tests"
+      # HW SKU selection: each checkbox controls whether the HW matrix runs on that SKU.
+      # All default true. If every HW SKU box is unchecked, the HW matrix is skipped
+      # (CPU-only tests still respect their own toggle above).
+      run-wh_n300_civ2:
+        description: "Run on wh_n300_civ2"
         required: false
         default: true
         type: boolean
-      run-wh-t3k-fabric-tests:
-        description: "Run Wormhole T3K fabric tests"
+      run-wh_llmbox_civ2:
+        description: "Run on wh_llmbox_civ2"
         required: false
         default: true
         type: boolean
-      run-wh-t3k-perf-tests:
-        description: "Run Wormhole T3K performance tests"
+      run-wh_galaxy:
+        description: "Run on wh_galaxy"
         required: false
         default: true
         type: boolean
-      run-perf-fabric-bw:
-        description: "Run T3K ubench - Fabric BW performance test"
+      run-bh_loudbox:
+        description: "Run on bh_loudbox"
         required: false
         default: true
         type: boolean
-      run-perf-fabric-mux-bw:
-        description: "Run T3K ubench - Fabric Mux BW performance test"
+      run-bh_p300:
+        description: "Run on bh_p300"
         required: false
         default: true
         type: boolean
-      run-perf-fabric-mux-v2-throughput:
-        description: "Run T3K ubench - Fabric Mux V2 Throughput performance test"
+      run-bh_quietbox_2:
+        description: "Run on bh_quietbox_2"
         required: false
         default: true
         type: boolean
-      run-wh-6u-fabric-tests:
-        description: "Run Wormhole 6U fabric tests"
+      # Keep the "Available names" list below in sync with tests/pipeline_reorg/fabric_tests.yaml.
+      hw-test-names:
+        description: >
+          Filter by test name. Composes on top of the per-SKU checkboxes above.
+          WH N300 scaleout unit tests , t3k fabric tests , t3k UDM tests ,
+          6U fabric quick , 6U multi-process ,
+          BH fabric 1D unit tests , BH fabric 2D fixture unit tests ,
+          BH fabric mux v2 unit tests , BH fabric UDM mode unit tests ,
+          BH ttnn UDM unit tests , BH fabric system health tests ,
+          BH fabric stability nightly tests , BH ccl nightly tests ,
+          BH fabric infra unit tests
+        required: false
+        default: ""
+        type: string
+      run-fabric-perf-tests:
+        description: "Run T3K fabric perf ubench (fabric_perf_tests.yaml)"
         required: false
         default: true
         type: boolean
-      run-bh-multi-card-unit-tests:
-        description: "Run Blackhole multi-card unit tests"
+      perf-enabled-skus:
+        description: "Comma-separated SKUs for the perf matrix (or ALL_SKUS_IN_TESTS)"
         required: false
-        default: true
-        type: boolean
-      bh-runner-loudbox:
-        description: "Run tests on BH-LoudBox"
+        default: "ALL_SKUS_IN_TESTS"
+        type: string
+      # Keep the "Available names" list below in sync with tests/pipeline_reorg/fabric_perf_tests.yaml.
+      perf-test-names:
+        description: >
+          Filter by test name.
+          T3K ubench - Fabric BW && Latency ,
+          T3K ubench - Fabric Mux BW ,
+          T3K ubench - Fabric Mux V2 Throughput
         required: false
-        default: true
-        type: boolean
-      bh-runner-p300:
-        description: "Run tests on P300-viommu"
-        required: false
-        default: true
-        type: boolean
-      bh-runner-quietbox-2:
-        description: 'Run tests on BH-Quietbox-2'
-        required: false
-        default: true
-        type: boolean
+        default: ""
+        type: string
       platform:
         required: false
         type: choice
@@ -122,121 +154,55 @@ jobs:
       tracy: true
       skip-tt-train: true
 
-  generate-fabric-matrix:
-    runs-on: ubuntu-slim
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - id: set-matrix
-        shell: bash
-        run: |
-          matrix_items=()
-
-          # workflow_dispatch: checkbox inputs; schedule: CPU-only nightly; else: all test types.
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            run_cpu_only="${{ inputs.run-fabric-cpu-only-unit-tests }}"
-            run_wh_n300="${{ inputs.run-wh-n300-fabric-tests }}"
-            run_wh_t3k="${{ inputs.run-wh-t3k-fabric-tests }}"
-            run_wh_6u="${{ inputs.run-wh-6u-fabric-tests }}"
-            run_bh="${{ inputs.run-bh-multi-card-unit-tests }}"
-            bh_loudbox="${{ inputs.bh-runner-loudbox }}"
-            bh_p300="${{ inputs.bh-runner-p300 }}"
-            bh_quietbox_2="${{ inputs.bh-runner-quietbox-2 }}"
-          elif [[ "${{ github.event_name }}" == "schedule" ]]; then
-            run_cpu_only="true"
-            run_wh_n300="false"
-            run_wh_t3k="false"
-            run_wh_6u="false"
-            run_bh="false"
-            bh_loudbox="false"
-            bh_p300="false"
-            bh_quietbox_2="false"
-          else
-            # Default to true for workflow_call and push events
-            run_cpu_only="true"
-            run_wh_n300="true"
-            run_wh_t3k="true"
-            run_wh_6u="true"
-            run_bh="true"
-            bh_loudbox="true"
-            bh_p300="true"
-            bh_quietbox_2="true"
-          fi
-
-          if [[ "$run_cpu_only" == "true" ]]; then
-            matrix_items+=('{"test-type":"fabric-cpu-only-unit-tests","run-fabric-cpu-only-unit-tests":true,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
-          fi
-
-          if [[ "$run_wh_n300" == "true" ]]; then
-            matrix_items+=('{"test-type":"wh-n300-fabric-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":true,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
-          fi
-
-          if [[ "$run_wh_t3k" == "true" ]]; then
-            matrix_items+=('{"test-type":"wh-t3k-fabric-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":true,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
-          fi
-
-          if [[ "$run_wh_6u" == "true" ]]; then
-            matrix_items+=('{"test-type":"wh-6u-fabric-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":true,"run-bh-multi-card-unit-tests":false}')
-          fi
-
-          if [[ "$run_bh" == "true" ]]; then
-            # Add blackhole test configurations for each selected runner
-            if [[ "$bh_loudbox" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-loudbox":true,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
-            fi
-            if [[ "$bh_p300" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-loudbox":false,"bh-runner-p300":true,"bh-runner-quietbox-2":false}')
-            fi
-            if [[ "$bh_quietbox_2" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":true}')
-            fi
-          fi
-
-          if [ ${#matrix_items[@]} -eq 0 ]; then
-            echo "ERROR: No test configurations selected. Please select at least one test to run."
-            exit 1
-          fi
-
-          # Convert array to JSON array format
-          matrix_json="["
-          for i in "${!matrix_items[@]}"; do
-            if [ $i -gt 0 ]; then
-              matrix_json+=","
-            fi
-            matrix_json+="${matrix_items[i]}"
-          done
-          matrix_json+="]"
-
-          echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
-          echo "Generated matrix: $matrix_json"
   fabric-tests:
-    needs: [build-artifact, generate-fabric-matrix]
+    needs: build-artifact
     secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-config: ${{ fromJson(needs.generate-fabric-matrix.outputs.matrix) }}
     uses: ./.github/workflows/tm-fabric-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      run-fabric-cpu-only-unit-tests: ${{ matrix.test-config.run-fabric-cpu-only-unit-tests || false }}
-      run-wh-n300-fabric-tests: ${{ matrix.test-config.run-wh-n300-fabric-tests }}
-      run-wh-t3k-fabric-tests: ${{ matrix.test-config.run-wh-t3k-fabric-tests }}
-      run-wh-6u-fabric-tests: ${{ matrix.test-config.run-wh-6u-fabric-tests }}
-      run-bh-multi-card-unit-tests: ${{ matrix.test-config.run-bh-multi-card-unit-tests }}
-      bh-runner-loudbox: ${{ matrix.test-config.bh-runner-loudbox || false }}
-      bh-runner-p300: ${{ matrix.test-config.bh-runner-p300 || false }}
-      bh-runner-quietbox-2: ${{ matrix.test-config.bh-runner-quietbox-2 || false }}
+      # Schedule runs CPU-only only; push / workflow_dispatch default to both.
+      run-fabric-cpu-only-unit-tests: ${{
+        github.event_name == 'schedule'
+        || (github.event_name == 'workflow_dispatch' && inputs.run-fabric-cpu-only-unit-tests != false)
+        || github.event_name == 'push' }}
+      # HW matrix runs when: (a) non-schedule non-dispatch events, or (b) dispatch
+      # with at least one SKU box checked. Unchecking every SKU box on dispatch
+      # skips the HW load-test-matrix and per-SKU legs (CPU-only still respects
+      # its own toggle above).
+      run-fabric-hw-tests: ${{
+        github.event_name == 'schedule' && false
+        || (github.event_name == 'workflow_dispatch' && (
+              inputs.run-wh_n300_civ2 || inputs.run-wh_llmbox_civ2 || inputs.run-wh_galaxy
+              || inputs.run-bh_loudbox || inputs.run-bh_p300 || inputs.run-bh_quietbox_2))
+        || github.event_name == 'push'
+        || github.event_name == 'workflow_call' }}
+      # Assemble enabled-skus from the checked per-SKU booleans on workflow_dispatch;
+      # non-dispatch events (push / workflow_call) preserve ALL_SKUS_IN_TESTS.
+      # Trailing commas are stripped by prepare_test_matrix.py's parse_enabled_skus.
+      enabled-skus: >-
+        ${{ github.event_name == 'workflow_dispatch' && format(
+              '{0}{1}{2}{3}{4}{5}',
+              inputs.run-wh_n300_civ2  && 'wh_n300_civ2,'   || '',
+              inputs.run-wh_llmbox_civ2 && 'wh_llmbox_civ2,' || '',
+              inputs.run-wh_galaxy     && 'wh_galaxy,'      || '',
+              inputs.run-bh_loudbox    && 'bh_loudbox,'     || '',
+              inputs.run-bh_p300       && 'bh_p300,'        || '',
+              inputs.run-bh_quietbox_2 && 'bh_quietbox_2,'  || ''
+            ) || 'ALL_SKUS_IN_TESTS' }}
+      test-names: ${{ inputs.hw-test-names || '' }}
+
   fabric-perf-tests:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-t3k-perf-tests != false || github.event_name == 'push' }}
-    needs: [build-artifact]
+    if: ${{
+      (github.event_name == 'workflow_dispatch' && inputs.run-fabric-perf-tests != false)
+      || github.event_name == 'push' }}
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tm-fabric-tests-perf-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      run-perf-fabric-mux-bw: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-mux-bw != false || github.event_name == 'push' }}
-      run-perf-fabric-mux-v2-throughput: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-mux-v2-throughput != false || github.event_name == 'push' }}
+      enabled-skus: ${{ inputs.perf-enabled-skus || 'ALL_SKUS_IN_TESTS' }}
+      test-names: ${{ inputs.perf-test-names || '' }}

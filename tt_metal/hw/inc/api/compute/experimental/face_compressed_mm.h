@@ -280,9 +280,9 @@ ALWI void pack_init_mutex_ADC(std::uint32_t ocb) { PACK((llk_pack_init_mutex_ADC
  * | Function   | output_tile_index   | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                 | False    |
  */
 // clang-format on
-template <bool out_of_order_output = false>
+template <bool out_of_order_output = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_tile_mutex_ADC(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t output_tile_index = 0) {
-    PACK((llk_pack_mutex_ADC<DST_ACCUM_MODE, out_of_order_output>(ifrom_dst, icb, output_tile_index)));
+    PACK((llk_pack_mutex_ADC<is_fp32_dest_acc_en, out_of_order_output>(ifrom_dst, icb, output_tile_index)));
 }
 
 #endif  // ARCH_BLACKHOLE

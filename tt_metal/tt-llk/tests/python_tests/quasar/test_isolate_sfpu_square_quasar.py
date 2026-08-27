@@ -15,7 +15,7 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
 from helpers.param_config import (
-    generate_sfpu_format_dest_acc_combinations,
+    generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
     runtime,
@@ -53,7 +53,9 @@ SFPU_SQUARE_FORMATS = input_output_formats(
 
 SFPU_SQUARE_COMBINATIONS = [
     (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_SQUARE_FORMATS)
+    for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
+        SFPU_SQUARE_FORMATS
+    )
     for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     for input_dimensions in [[32, 32], [64, 64]]
 ]
@@ -117,6 +119,7 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         dest_acc,
         formats.input_format,
         input_dimensions,
+        unpack_to_srcs=True,
     )
 
     configuration = TestConfig(

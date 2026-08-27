@@ -15,7 +15,6 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
@@ -43,6 +42,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_dispatch_metadata,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 # =====
 # mesh 4x2
@@ -112,42 +112,17 @@ def run_dispatch(
     fp8_scaled_input,
     verbose,
     run_pcc_check,
-    is_ci_env,
-    is_ci_v2_env,
 ):
     """Run the TTNN dispatch op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
     num_experts_per_tok) shape axis."""
     num_devices = mesh_device.get_num_devices()
-    if num_devices >= 8 and not run_pcc_check and use_predictable_data:
-        pytest.skip("8-chip perf only runs with random data")
 
     fp8_input = input_dtype == ttnn.fp8_e4m3
     fp8_output = output_dtype == ttnn.fp8_e4m3
 
-    # Predictable inputs are torch.arange(...), which produces values up to ~1.8M and
-    # overflows fp8_e4m3fn's ±448 range — overflow encodes as NaN, breaking PCC.
-    # Only exercise the fp8 path (input or output) with random (N(0,1)) data that fits in range.
-    if (fp8_output or fp8_input) and use_predictable_data:
-        pytest.skip("predictable inputs overflow fp8_e4m3fn range; run fp8 with random data")
-
-    if (fp8_output or fp8_input) and is_wormhole_b0():
-        pytest.skip("fp8 (input or output) not supported on Wormhole hardware")
-
-    # FP8_E4M3 is a ROW_MAJOR-only tensor spec (no tiled fp8 layout exists), so an fp8 input
-    # tensor can only be ROW_MAJOR. The tile path's input is therefore always bf16.
-    if fp8_input and input_layout == ttnn.TILE_LAYOUT:
-        pytest.skip("FP8_E4M3 input is ROW_MAJOR-only; no tiled fp8 input tensor exists")
-
-    # Row-major dispatch is a pure byte copy (no compute), so it cannot convert dtypes: the input
-    # dtype must equal the output dtype. The tile path has a compute packer and converts freely.
-    if input_layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype != output_dtype:
-        pytest.skip("row_major dispatch requires input dtype == output dtype")
-
-    # 1-link linear/ring coverage is redundant on BH in CI. `1 in shape` selects the 1D
-    # linear/ring meshes; 2D mesh / fabric2d (both dims > 1) and 2-link variants still run.
-    if (is_ci_env or is_ci_v2_env) and is_blackhole() and num_links == 1 and 1 in tuple(mesh_device.shape):
-        pytest.skip("1-link linear/ring coverage does not run on BH in CI")
+    if num_devices >= 8 and not run_pcc_check and use_predictable_data:
+        pytest.skip("8-chip perf only runs with random data")
 
     torch.manual_seed(42)
 
@@ -498,13 +473,71 @@ def dispatch_shape_params():
     return params
 
 
+# Two-link subset of the shared dispatch/combine mesh table. The 1-link rows are redundant
+# coverage here; everything else about the profiles stays owned by ALL_MESH_CONFIGS.
+_MESH_IDS = (
+    "fabric2d-2x1-2link",
+    "fabric2d-torus-y-4x1-2link",
+    "fabric2d-torus-y-8x1-2link",
+    "fabric2d-torus-xy-8x4-2link",
+)
+_MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id in _MESH_IDS]
+assert len(_MESH_CONFIGS) == len(_MESH_IDS), "dispatch mesh configs missing from ALL_MESH_CONFIGS"
+
+
+def _ci_unsupported_param_combos(**params):
+    mesh_device = params["mesh_device"]
+    run_pcc_check = params["run_pcc_check"]
+    use_predictable_data = params["use_predictable_data"]
+    input_layout = params["input_layout"]
+    input_dtype = params["input_dtype"]
+    output_dtype = params["output_dtype"]
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    is_bh = params["is_bh"]
+
+    fp8_input = input_dtype == ttnn.fp8_e4m3
+    fp8_output = output_dtype == ttnn.fp8_e4m3
+
+    num_devices = mesh_device[0] * mesh_device[1]
+    if num_devices >= 8 and not run_pcc_check and use_predictable_data:
+        return True
+
+    if (fp8_output or fp8_input) and use_predictable_data:
+        return True
+
+    if (fp8_output or fp8_input) and not is_bh:
+        return True
+
+    if fp8_input and input_layout == ttnn.TILE_LAYOUT:
+        return True
+
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype != output_dtype:
+        return True
+
+    # Production dispatch runs exactly two dtype/layout pairings; the rest have no coverage value.
+    bf16_tile_combo = not fp8_input and input_layout == ttnn.TILE_LAYOUT and not fp8_output
+    fp8_rm_combo = fp8_input and input_layout == ttnn.ROW_MAJOR_LAYOUT and fp8_output
+    if not (bf16_tile_combo or fp8_rm_combo):
+        return True
+
+    if on_ci:
+        # Perf (no-pcc) variants prove nothing without a correctness check, so direct CI
+        # collection drops them. Perf CI enters through wrapper tests whose
+        # --wrapper-invocation flag bypasses this predicate entirely, so they still run there.
+        if not run_pcc_check:
+            return True
+
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "model_name, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     dispatch_shape_params(),
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    ALL_MESH_CONFIGS,
+    "mesh_device, device_params, num_links",
+    _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
@@ -529,6 +562,7 @@ def dispatch_shape_params():
 @pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch(
     mesh_device,
+    device_params,
     model_name,
     seq_len_per_chip,
     emb_dim,
@@ -536,7 +570,6 @@ def test_ttnn_dispatch(
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     num_links,
-    topology,
     use_predictable_data,
     input_layout,
     input_dtype,
@@ -544,9 +577,8 @@ def test_ttnn_dispatch(
     fp8_scaled_input,
     verbose,
     run_pcc_check,
-    is_ci_env,
-    is_ci_v2_env,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])[0]
     run_dispatch(
         mesh_device,
         model_name,
@@ -564,6 +596,4 @@ def test_ttnn_dispatch(
         fp8_scaled_input,
         verbose,
         run_pcc_check,
-        is_ci_env,
-        is_ci_v2_env,
     )

@@ -2,7 +2,7 @@
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 #
-# sim_wormhole_b0 / sim_blackhole SKUs run the same cmd under the ttsim simulator
+# sim_wh_n150 / sim_bh_p150 SKUs run the same cmd under the ttsim simulator
 # on ubuntu-latest; ttnn-smoke-tests-impl.yaml invokes setup-ttsim for these.
 # See .github/actions/setup-ttsim/action.yml.
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
@@ -12,19 +12,18 @@
   skus:
     wh_n300_civ2:
       timeout: 15
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 15
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 15
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
 
-# Codegen-path coverage for every op ported to tt-dm-codegen (untilize, repeat and gather today).
-# `-k codegen` selects each op's tests that pin the codegen kernels, so a newly ported op joins
-# this entry by appending its unit-test file rather than by adding another job. How an op pins them
-# is the op's own business: untilize and gather call the verification-only entries in
-# ttnn._ttnn.operations.data_movement, since their public APIs take no implementation argument,
-# while repeat still passes implementation="codegen".
+# Codegen-path coverage for every op that has one (untilize, repeat and gather today).
+# `-k codegen` selects each op's tests that pin the codegen kernels, so a newly covered op joins
+# this entry by appending its unit-test file rather than by adding another job. All three pin them
+# through the verification-only entries in ttnn._ttnn.operations.data_movement -- none of the
+# public APIs takes an implementation argument.
 #
 # Those pinned tests are the ones worth gating a merge on: they run the codegen kernels and
 # compare against native on the same input. The generated routing matrices under

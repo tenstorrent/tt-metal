@@ -28,7 +28,7 @@ from ....pipelines.minimax_h3.packing import (
     resolve_canvas_size,
     video_latent_num_frames,
 )
-from ....utils.tensor import bf16_tensor_2dshard, from_torch
+from ....utils.tensor import bf16_tensor_2dshard, from_torch, local_device_to_torch
 from ....utils.test import skip_if_unsupported_num_links
 from .common import (
     GALAXY_RING,
@@ -182,6 +182,6 @@ def test_minimax_h3_transformer_block_perf(
         padded_len // sp_factor,
         HIDDEN_SIZE // tp_factor,
     ), f"unexpected output shape {tuple(tt_out.shape)}"
-    local = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
+    local = local_device_to_torch(tt_out).float()
     assert torch.isfinite(local).all(), "block output contains NaN or Inf"
     logger.info(f"output {tuple(tt_out.shape)}, local shard std={local.std().item():.4f}")

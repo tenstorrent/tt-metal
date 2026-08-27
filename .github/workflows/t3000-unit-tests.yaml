@@ -10,9 +10,7 @@ on:
         type: choice
         options:
           - all
-          - grok
           - dits
-          - deepseek
           - tttv2 modules
           - qwen3_vl
       platform:

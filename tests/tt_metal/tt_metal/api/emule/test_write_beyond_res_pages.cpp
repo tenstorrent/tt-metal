@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run (from the tt-metal repo root, after an emule build):
-//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.CB_Boundary_*"
+//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="UnitMeshFixture.CB_Boundary_*"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -11,7 +11,9 @@
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
 
@@ -26,10 +28,9 @@ namespace tt::tt_metal {
 // flows through __emule_local_l1_to_ptr, where the sanitizer recognizes the
 // address as belonging to a CB region but landing outside the currently-
 // reserved sub-range, and aborts before the memcpy.
-TEST_F(MeshDeviceFixture, CB_Boundary_Violation_SanityCheck) {
+TEST_F(UnitMeshFixture, CB_Boundary_Violation_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -63,7 +64,8 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Violation_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program), ".*CB Boundary Violation: Attempted to access CB 0.*reserved.*");
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        ".*CB Boundary Violation: Attempted to access CB 0.*reserved.*");
 }
 
 // Read-side counterpart. The kernel pushes one page (so the consumer side has
@@ -73,10 +75,9 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Violation_SanityCheck) {
 // on, which on silicon the producer may still be filling. The source address
 // flows through __emule_local_l1_to_ptr; the sanitizer sees the access is
 // outside both windows (write reservation is empty after the push) and aborts.
-TEST_F(MeshDeviceFixture, CB_Boundary_Violation_Read_SanityCheck) {
+TEST_F(UnitMeshFixture, CB_Boundary_Violation_Read_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -109,7 +110,8 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Violation_Read_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program), ".*CB Boundary Violation: Attempted to access CB 0.*Read window.*");
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        ".*CB Boundary Violation: Attempted to access CB 0.*Read window.*");
 }
 
 // Wraparound negative control. Identical setup (3-page CB, write_idx=2, reserve
@@ -126,10 +128,9 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Violation_Read_SanityCheck) {
 // in the parent; a later EXPECT_DEATH fork()s and the child inherits that pool's
 // locked state without its threads, hanging until the watchdog aborts (~124 s).
 // Death-first keeps each fork clean. (See the note in the CB_Reservation test.)
-TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_Violation_SanityCheck) {
+TEST_F(UnitMeshFixture, CB_Boundary_Wraparound_Violation_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -164,7 +165,9 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_Violation_SanityCheck) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_DEATH(detail::LaunchProgram(device, program), ".*CB Boundary Violation: Attempted to access CB 0.*");
+    EXPECT_DEATH(
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        ".*CB Boundary Violation: Attempted to access CB 0.*");
 }
 
 // Wraparound positive control. On a 3-page CB we cycle the write/read pointers
@@ -182,10 +185,9 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_Violation_SanityCheck) {
 // tell "accepted because wrapped correctly" apart from "the check went dormant"
 // — the additive-counter false-negative mode. With 3 pages the window is a
 // strict subset, which the paired Violation test below relies on.)
-TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_NoViolation) {
+TEST_F(UnitMeshFixture, CB_Boundary_Wraparound_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -223,7 +225,7 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Wrapped access is legal and the kernel exits flushed → no sanitizer fires.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -235,10 +237,9 @@ TEST_F(MeshDeviceFixture, CB_Boundary_Wraparound_NoViolation) {
 // The boundary check is only meaningful relative to an active window, so this
 // must NOT abort. This is the exact shape (reserved==0, waited==0) that the old
 // check false-positived across the TT-NN sweeps (expand/reshape/roll/to_memory_config/…).
-TEST_F(MeshDeviceFixture, CB_Boundary_NoActiveWindow_NoViolation) {
+TEST_F(UnitMeshFixture, CB_Boundary_NoActiveWindow_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -269,7 +270,7 @@ TEST_F(MeshDeviceFixture, CB_Boundary_NoActiveWindow_NoViolation) {
 
     // Must NOT abort. If the window check regresses to firing without an active
     // reservation/wait, LaunchProgram SIGABRTs and this test fails.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -278,10 +279,9 @@ TEST_F(MeshDeviceFixture, CB_Boundary_NoActiveWindow_NoViolation) {
 // Produced-region reuse control: a write back into an already-produced page
 // [read_idx, write_idx), outside the active reserve window, must NOT abort (the
 // conv activation-reuse pattern). See SANITIZER_CHECKS.md §7.
-TEST_F(MeshDeviceFixture, CB_Boundary_ProducedRegionReuse_NoViolation) {
+TEST_F(UnitMeshFixture, CB_Boundary_ProducedRegionReuse_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -318,7 +318,7 @@ TEST_F(MeshDeviceFixture, CB_Boundary_ProducedRegionReuse_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Reuse of produced data is legal and the kernel exits flushed → no abort.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -332,10 +332,9 @@ TEST_F(MeshDeviceFixture, CB_Boundary_ProducedRegionReuse_NoViolation) {
 // with the exemption in force this must NOT abort. If the `!cb.globally_allocated`
 // guard regresses, every real sharded/matmul CB (cb_in0_sharded, DRAM-sharded
 // readers) would false-positive — this pins that guard.
-TEST_F(MeshDeviceFixture, CB_Boundary_GloballyAllocated_Exempt_NoViolation) {
+TEST_F(UnitMeshFixture, CB_Boundary_GloballyAllocated_Exempt_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -346,10 +345,13 @@ TEST_F(MeshDeviceFixture, CB_Boundary_GloballyAllocated_Exempt_NoViolation) {
     // Backing L1 buffer makes the CB globally allocated (sharded-style addressing).
     // Single-bank (one buffer page spanning the whole CB) so its bank size equals
     // the CB total_size — a globally-allocated CB must fit inside its backing bank.
-    auto backing = Buffer::create(device, num_pages * page_size, num_pages * page_size, BufferType::L1);
+    auto backing = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_pages * page_size},
+        {.page_size = num_pages * page_size, .buffer_type = BufferType::L1},
+        &this->device());
     CircularBufferConfig cb_config = CircularBufferConfig(num_pages * page_size, {{cb_id, tt::DataFormat::Float16_b}})
                                          .set_page_size(cb_id, page_size)
-                                         .set_globally_allocated_address(*backing);
+                                         .set_globally_allocated_address(*backing->get_reference_buffer());
     CreateCircularBuffer(program, logical_core, cb_config);
 
     std::string kernel_src = R"(
@@ -373,7 +375,7 @@ TEST_F(MeshDeviceFixture, CB_Boundary_GloballyAllocated_Exempt_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort — globally-allocated CBs are exempt from the boundary window check.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

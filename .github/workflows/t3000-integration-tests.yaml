@@ -12,8 +12,6 @@ on:
           - all
           - tteager
           - trace stress
-          - qwenimage
-          - deepseek-modules
       platform:
         required: false
         type: choice
