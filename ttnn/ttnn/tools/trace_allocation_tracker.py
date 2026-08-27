@@ -100,12 +100,16 @@ class TraceAllocationTracker:
         return currently_unsafe
 
     @classmethod
-    def acknowledge_corruptible(cls, tensor) -> int:
+    def acknowledge_corruptible(cls, tensor) -> None:
         """
         Acknowledge that a tensor's backing buffer may intentionally be corrupted.
         This removes the buffer from trace-allocation tracking immediately.
-        Returns the tensor's buffer_unique_id.
+
+        This is a no-op when trace allocation tracking is disabled.
         """
+        if not TRACE_ALLOC_TRACKING:
+            return
+
         import ttnn
 
         if not isinstance(tensor, ttnn.Tensor):
@@ -121,7 +125,6 @@ class TraceAllocationTracker:
 
         remove_unsafe_tracked_id(tensor.device(), buf_id)
         cls._tracebacks.pop(buf_id, None)
-        return buf_id
 
     @classmethod
     def verify_before_replay(cls, mesh_device, trace_id) -> None:
@@ -320,6 +323,6 @@ class TraceAllocationTracker:
         return "\n".join(lines)
 
 
-def acknowledge_corruptible(tensor) -> int:
+def acknowledge_corruptible(tensor) -> None:
     """Acknowledge that a device tensor's buffer may intentionally be corrupted by trace replay."""
-    return TraceAllocationTracker.acknowledge_corruptible(tensor)
+    TraceAllocationTracker.acknowledge_corruptible(tensor)

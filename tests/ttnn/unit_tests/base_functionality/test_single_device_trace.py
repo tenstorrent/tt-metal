@@ -272,7 +272,7 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
         marked = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         marked_id = marked.buffer_unique_id()
         assert marked_id in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
-        assert trace_allocation_tracker.acknowledge_corruptible(marked) == marked_id
+        assert trace_allocation_tracker.acknowledge_corruptible(marked) is None
         assert marked_id not in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
 
         with trace_allocation_tracker.corruptible_allocation_scope(device):
