@@ -1853,8 +1853,24 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # step, so on a reset keep it: permute per slot_remap (condense moves),
         # only taking host tokens for slots freshly prefilled since the last
         # decode submit (their last token came from prefill, not decode).
+        # The async-ahead token keep below adopts tokens/positions that a PREVIOUS request
+        # left in the device trace-input buffers whenever dev_pos matches host_pos (or
+        # host_pos+1). It exists for async scheduling, where the host token state
+        # legitimately lags the device by one step. A model that does not support async
+        # decode never has that lag, so the only thing this can do there is adopt a stale
+        # token from an unrelated earlier request whose positions happen to coincide.
+        # Observed on Qwen3.6-27B p150x4: after >=8 same-shaped requests the reused
+        # host_pos matches the leftover dev_pos, the stale token is adopted as the first
+        # decode input, and the answer is truncated at the second token (early <|im_end|>).
+        # model_capabilities lives on the vLLM adapter class (e.g. Qwen36ForCausalLM),
+        # which subclasses this Generator, so read it off self rather than self.model[0].
+        # TT_FORCE_ASYNC_AHEAD_KEEP=1 restores the previous unconditional behaviour.
+        _async_ok = getattr(self, "model_capabilities", {}).get("supports_async_decode", True)
+        if os.environ.get("TT_FORCE_ASYNC_AHEAD_KEEP") == "1":
+            _async_ok = True
         if (
             on_device_sampling
+            and _async_ok
             and (reset_batch or mode_switched)
             and enable_trace
             and self.trace_inputs_decode[on_device_sampling]
