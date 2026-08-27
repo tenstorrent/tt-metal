@@ -936,6 +936,12 @@ KNOBS = {
     # register sequentially across rows — inexpressible in the
     # position-blind hard-reg web vocabulary without value-aware
     # re-rooting; named successor), modeled 34 vs hand's 30 slots/pair.
+    # MEASURED (laneIC-evidence-20260827, BH, 3 reps ALL cycle-identical,
+    # corr-first 4/4 PASS every session, paired CRAQ 4/4+4/4 at pinned
+    # sim 1d162f0adf67): anchors reproduce EXACT (sem 83640 / hand 67378
+    # both rows), knob sem 75834 both rows -> vs_hand +24.14 -> +12.55,
+    # causal vs same-session off (118841) = -36.19; hand arm byte- AND
+    # cycle-inert under the knob (67378 x3).
     "crossrow-2datum": "-mtt-tensix-optimize-hoisted-prgm-reuse "
     "-mtt-tensix-optimize-crossrow-pairing-stall-words",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
