@@ -24,7 +24,6 @@ from unified_harness import make_cb, single_core, unified_program
 
 KERNEL = "unified_kernels/custom_compute.cpp"
 TILE = 32
-CB_A, CB_B, CB_OUT = 0, 1, 16
 
 
 def run(device, tiles=4, seed=0):
@@ -43,25 +42,20 @@ def run(device, tiles=4, seed=0):
 
     core_ranges, cores = single_core()
 
-    ct_args = []
-    for t in (ta, tb, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
+        nodes=core_ranges,
         cbs=[
             make_cb(CB_A, core_ranges, num_pages=tiles),
             make_cb(CB_B, core_ranges, num_pages=tiles),
             make_cb(CB_OUT, core_ranges, num_pages=tiles),
         ],
-        compile_time_args=ct_args,
         named_compile_time_args=[("tiles", tiles)],
         runtime_args=[t.buffer_address() for t in (ta, tb, tout)],
     )
 
-    out = ttnn.generic_op([ta, tb, tout], program)
+    run_unified_spec(device, spec, {"a": ta, "b": tb, "out": tout})
+    out = tout
     got = ttnn.to_torch(out).to(torch.float32)
 
     # Both references, because ONE of them cannot check what matters.

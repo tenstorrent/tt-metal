@@ -35,11 +35,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import core_block, make_cb, split_evenly, unified_program
+from unified_harness import core_block, dfb, run_unified_spec, split_evenly, unified_program_spec
 
 KERNEL = "unified_kernels/rope.cpp"
 TILE = 32
-CB = dict(x=0, cos=1, sin=2, m=3, rot=4, out=16)
 
 
 def trans_mat():
@@ -98,32 +97,35 @@ def run(device, seq_t, dim_t, chunk, seed=0, cores=1):
     core_ranges, core_list = core_block(ncores)
     shares = split_evenly(nchunks, ncores)
 
-    ct_args = []
     named_ct_args = [("chunk", chunk), ("num_chunks", nchunks)]
-    for t in (tx, tc, ts, tm, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    addrs = [t.buffer_address() for t in (tx, tc, ts, tm, tout)]
-    rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
 
-    cbs = [
-        make_cb(CB["x"], core_ranges, num_pages=chunk),
-        make_cb(CB["cos"], core_ranges, num_pages=chunk),
-        make_cb(CB["sin"], core_ranges, num_pages=chunk),
-        make_cb(CB["m"], core_ranges, num_pages=1),
-        make_cb(CB["rot"], core_ranges, num_pages=chunk),
-        make_cb(CB["out"], core_ranges, num_pages=chunk),
+    dfbs = [
+        dfb("x", chunk),
+        dfb("cos", chunk),
+        dfb("sin", chunk),
+        dfb("m", 1),
+        dfb("rot", chunk),
+        dfb("out", chunk),
     ]
 
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=core_list,
-        cbs=cbs,
-        compile_time_args=ct_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
         named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
+        tensors={"x": tx, "cos": tc, "sin": ts, "m": tm, "out": tout},
+        runtime_arg_names=["chunk_begin", "chunk_count"],
     )
-    out = ttnn.generic_op([tx, tc, ts, tm, tout], program)
+    run_unified_spec(
+        device,
+        spec,
+        {"x": tx, "cos": tc, "sin": ts, "m": tm, "out": tout},
+        runtime_args={
+            "chunk_begin": {c: b for c, (b, _) in zip(core_list, shares)},
+            "chunk_count": {c: n for c, (_, n) in zip(core_list, shares)},
+        },
+    )
+    out = tout
     got = ttnn.to_torch(out).to(torch.float32)[0, 0]
 
     xf = x.to(torch.float32)
