@@ -462,7 +462,10 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
 
 skip_routed_topk_on_sim = pytest.mark.skipif(
     is_blackhole() and bool(os.environ.get("TT_METAL_SIMULATOR")),
-    reason="Large indices topk on BH needs SFPCONFIG instr_mod1=8, unmodeled by ttsim (ttsim-private#798)",
+    reason=(
+        "Large indices topk on BH needs SFPCONFIG instr_mod1=8, unmodeled by ttsim "
+        "(https://github.com/tenstorrent/ttsim-private/issues/798)"
+    ),
 )
 
 
