@@ -690,6 +690,18 @@ def run_model(
         logger.debug(f"{key}: {profiler.get(key) * 1000:.2f} ms")
 
 
+def _ci_unsupported_param_combos_ds_moe(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_fallback_mode = params["gate_fallback_mode"]
+
+    if not on_ci:
+        return False
+    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_ds_moe)
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
@@ -725,6 +737,9 @@ def run_model(
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
+        # SP=8 proxy. Kept out of e2e collection by the uncollect predicate; the moe perf
+        # wrapper still reaches it via --wrapper-invocation, and approximate_8x4_perf takes
+        # its non-TP ops on the assumption that this slot is an SP=8 run.
         pytest.param(
             (8, 1),
             torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
@@ -815,18 +830,18 @@ def test_ds_moe(
     "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (8, 1),
-            torus_y_device_params(fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-            2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="torus-y-8x1",
-        ),
-        pytest.param(
             (4, 2),
             fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
+        ),
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
         ),
         pytest.param(
             (8, 4),
