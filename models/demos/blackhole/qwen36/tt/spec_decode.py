@@ -614,6 +614,11 @@ class SpeculativeDecoder:
         ttnn.deallocate(Hp)
         ttnn.synchronize_device(self.mesh)
         self.decode_time = time.perf_counter() - _t_decode  # spec loop wall-clock (excludes prefill)
+        # The verify advances the GDN conv window only; bring the K per-tap buffers back in step so
+        # whatever runs next on this model (an eager decode, a state snapshot) reads a live shift
+        # register. One-off, and outside the timed loop.
+        for dn in self._gdn:
+            dn.sync_conv_taps()
         self._log_mean_timing()
         self.log_profile(tokens=len(out[:max_new_tokens]))
         return out[:max_new_tokens]

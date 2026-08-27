@@ -505,10 +505,33 @@ class Qwen36Model:
         """Generator mode-change hook; no-op (no prefetcher)."""
         return None
 
-    def _lm_head(self, x):
+    def _lm_head(self, x, out_dtype=None):
         """LM-head matmul. Vocab-sharded mesh: partial logits + all-gather to full replicated.
-        Single device: plain matmul."""
-        logits = ttnn.linear(x, self.lm_head_weight)
+        Single device: plain matmul.
+
+        out_dtype: leave None (default) for the base/verify path — losslessness is defined by the
+        BASE argmax, so that call must stay byte-identical. The MTP drafter passes float32: its
+        argmax only has to rank candidates, and at bf16 4.7-5.5% of draft rejections at 8k/32k were
+        EXACT ties in the drafter's own logits, i.e. tokens thrown away to a rounding coin flip."""
+        kw, ccl_kw = {}, {}
+        if out_dtype is not None:
+            # HiFi2 matches the bfloat8_b weight; fp32 dest accumulation is what actually keeps the
+            # extra bits. packer_l1_acc is off simply because that is the combination measured.
+            kw = dict(
+                dtype=out_dtype,
+                compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                    self.device.arch(),
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                ),
+            )
+            # tt_all_gather defaults its CCL dtype to bfloat16 and TYPECASTS anything else on the
+            # way in. That is load-bearing twice over: it would put the bf16 ties straight back, and
+            # the fp32 -> bf16 cast on this [1,1,1,vocab/tp] tensor actually returns garbage (the
+            # drafter's argmax came back with an out-of-range id). Gather at the head's own dtype.
+            ccl_kw = dict(dtype=out_dtype)
+        logits = ttnn.linear(x, self.lm_head_weight, **kw)
         if self._lmhead_vocab_sharded:
             from models.tt_transformers.tt.ccl import tt_all_gather
 
@@ -519,6 +542,7 @@ class Qwen36Model:
                 cluster_axis=None,
                 dim=len(logits.shape) - 1,
                 topology=self.args.ccl_topology(),
+                **ccl_kw,
             )
         return logits
 
@@ -1508,6 +1532,10 @@ class Qwen36Model:
         ranks. Host copy (not ttnn.clone) so the captured trace's baked-address intermediates can't
         overwrite it (see prefill_traced_bucket_batched)."""
         comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        for dn in gdn:
+            # The fullbatch verify leaves the taps behind its [1,K,C] window mirror (it stopped
+            # refilling them inside the trace); rebuild them before reading. No-op when clean.
+            dn.sync_conv_taps()
         return [
             (
                 ttnn.to_torch(dn.rec_state, mesh_composer=comp),
@@ -1536,7 +1564,10 @@ class Qwen36Model:
                 ttnn.deallocate(cc)
             # The fullbatch verify's carry reads a persistent MIRROR of conv_states, not the taps
             # themselves, so restoring the taps must re-seed it — otherwise the captured trace keeps
-            # carrying whatever state the throwaway warmup/capture pass left in the mirror.
+            # carrying whatever state the throwaway warmup/capture pass left in the mirror. The taps
+            # are the truth again (just written from host), so clear the verify's staleness mark
+            # first or sync_conv_win would push the mirror's values back over them.
+            dn._conv_taps_stale, dn._conv_win_stale = False, True
             dn.sync_conv_win()
 
     def verify_traced(self, draft_tokens, chunk_start, page_table):
@@ -1602,6 +1633,11 @@ class Qwen36Model:
         for dn in self._vfy_gdn:
             dn._verify_slots = dn._slot_bufs
             dn._verify_states = dn._verify_states_buf
+            # The replay advances the [1,K,C] conv window only (the trace no longer refills the K
+            # taps — that was ~10 ms/iteration). Python does not re-run inside execute_trace, so the
+            # per-replay staleness mark has to be set from here.
+            if dn._win_captured:
+                dn._conv_taps_stale, dn._conv_win_stale = True, False
 
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(dev)

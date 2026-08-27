@@ -200,7 +200,10 @@ class Qwen36MTP:
         if sharded_lm_head or getattr(self, "_ondev_argmax", False):
             logits = ttnn.linear(normed, self.lm_head_weight)  # vocab-sharded shard
         else:
-            logits = self._lm_head(normed)
+            # fp32 for the DRAFTER only (the shared base/verify call keeps its default bf16 output —
+            # losslessness is defined by the base argmax). The drafter's argmax consumes these
+            # directly, so bf16 ties that used to discard a good draft are broken correctly.
+            logits = self._lm_head(normed, out_dtype=ttnn.float32)
         ttnn.deallocate(normed)
         return logits, next_hidden
 
