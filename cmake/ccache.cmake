@@ -62,11 +62,7 @@ useCcache()
 # dead-macro-only edit to any header in the closure therefore produces the
 # same key, and ccache serves a stale PCH built from the pre-edit bytes.
 # The embedded metadata then mismatches the on-disk headers, producing the
-# failures above.  (Observed in CI: merge-queue run 33091300710 for PR
-# #54500, which deleted unused trailing #define lines from hal.hpp — a
-# preprocessor-invisible change — and got a stale metal_test_pch .gch from
-# the shared remote cache, failing all cache-miss test TUs with
-# "redefinition of ... dev_msgs ..." errors.)
+# failures above.
 #
 # Per-compiler remedy, applied via tt_configure_ccache_for_pch below:
 #
@@ -102,9 +98,19 @@ function(tt_configure_ccache_for_pch target)
     # GCC (and others): force ccache depend mode on the provider target by
     # injecting CCACHE_DEPEND=1 into the ccache launcher installed by
     # useCcache().  If ccache is not in use, leave the target alone.
+    #
+    # The STATUS messages below are deliberate: this protection fails
+    # *silently* if the launcher shape ever stops matching (e.g. useCcache()
+    # is restructured), and the resulting stale-PCH breakage only shows up
+    # later as baffling redefinition errors in CI.  Keep the injected/skipped
+    # outcome visible in the configure log.
     foreach(lang IN ITEMS C CXX)
         set(launcher "${CMAKE_${lang}_COMPILER_LAUNCHER}")
         if(NOT launcher MATCHES "ccache")
+            message(
+                STATUS
+                "tt_configure_ccache_for_pch: ${target} (${lang}) has no ccache launcher; skipping depend-mode injection"
+            )
             continue()
         endif()
         list(FIND launcher "env" env_index)
@@ -127,6 +133,7 @@ function(tt_configure_ccache_for_pch target)
                 ${lang}_COMPILER_LAUNCHER
                     "${launcher}"
         )
+        message(STATUS "tt_configure_ccache_for_pch: forced CCACHE_DEPEND=1 for ${target} (${lang})")
     endforeach()
 endfunction()
 
