@@ -19,19 +19,19 @@
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
 
-# Codegen-path coverage for every op that has one (untilize, repeat and gather today).
-# `-k codegen` selects each op's tests that pin the codegen kernels, so a newly covered op joins
-# this entry by appending its unit-test file rather than by adding another job. All three pin them
-# through the verification-only entries in ttnn._ttnn.operations.data_movement -- none of the
-# public APIs takes an implementation argument.
+# Codegen-path coverage for every op that has one (untilize, repeat, repeat_interleave and gather
+# today). `-k codegen` selects each op's tests that pin the codegen kernels, so a newly covered op
+# joins this entry by appending its unit-test file rather than by adding another job. All four pin
+# them through the verification-only entries in ttnn._ttnn.operations.data_movement -- none of the
+# four public APIs takes an implementation argument.
 #
 # Those pinned tests are the ones worth gating a merge on: they run the codegen kernels and
 # compare against native on the same input. The generated routing matrices under
 # tests/ttnn/nightly only assert that out-of-scope shapes fall BACK to native, so nothing in
 # them fails when a codegen kernel itself breaks -- and they cost 1-5 minutes per op, which is
-# why they stay in nightly. This selection is 30 tests: 6.6s of pytest warm / 25s cold on an
-# N150, slowest single test 1.6s. The 25-test selection before gather measured 1.9s warm and
-# ~8s cold on the N300 the job actually runs on.
+# why they stay in nightly. This selection is 54 tests. The last measurement -- 49 of them, roughly
+# 35s of wall-clock pytest on an N300 with device bring-up and kernel compiles included -- leaves
+# ample headroom against the job's 5-minute budget.
 #
 # Hardware only, to keep the gate cheap. Codegen kernels are not blocked from ttsim -- untilize's
 # codegen tests pass on both sim SKUs and sanity runs them there -- but the simulator would
@@ -41,6 +41,7 @@
     pytest --timeout 60 -xv
     tests/ttnn/unit_tests/operations/data_movement/test_untilize.py
     tests/ttnn/unit_tests/operations/data_movement/test_repeat.py
+    tests/ttnn/unit_tests/operations/data_movement/test_repeat_interleave.py
     tests/ttnn/unit_tests/operations/data_movement/test_gather.py
     -k codegen
   skus:
