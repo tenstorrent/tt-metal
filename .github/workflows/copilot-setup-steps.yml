@@ -1,50 +1,89 @@
 name: "Copilot Setup Steps"
-# TEMPORARY PROBE 4 - full integration: submodules + build_metal.sh through the wrapper.
+
+# Environment for the GitHub Copilot cloud agent, so it can make a change and
+# verify that it compiles. Authoring guidance lives in AGENTS.md, not here.
+#
+# Deliberately NO `container:`. The agent's runtime stages a git-proxy binary on
+# the host and then resolves it against the container-remapped RUNNER_TEMP
+# (/__w/_temp), so any job container kills the session before it starts:
+#   env: '/__w/_temp/git-proxy': No such file or directory
+#   git-proxy exited before listening on port 26831
+# Verified 2026-08-27 on a scratch repo. Related, still-open reports:
+#   https://github.com/orgs/community/discussions/170315
+#   https://github.com/orgs/community/discussions/184451
+#
+# So the agent stays on the host and builds via .github/scripts/copilot-build.sh,
+# which shells into the CI build image. The host runner is in the `docker` group.
 on:
   workflow_dispatch:
   push:
     paths:
       - .github/workflows/copilot-setup-steps.yml
+      - .github/scripts/copilot-build.sh
+
 jobs:
+  # The job MUST be called 'copilot-setup-steps' to be recognized by GitHub Copilot Agent
   copilot-setup-steps:
     runs-on: tt-ubuntu-2204-large-stable
-    timeout-minutes: 55
+    # Copilot caps this at 59. Submodule checkout is the bulk of it.
+    timeout-minutes: 50
+
+    # Set minimal permissions for setup steps
+    # Copilot Agent receives its own token with appropriate permissions
     permissions:
       contents: read
+
     steps:
-      - name: Checkout with submodules
+      - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          # build_metal.sh cannot configure without these.
           submodules: recursive
-      - name: Report checkout cost
+
+      - name: Verify build prerequisites
         run: |
-          echo "submodules present: $(git submodule status --recursive 2>/dev/null | wc -l)"
-          du -sh third_party 2>/dev/null || true
-      - name: CMake configure through the docker wrapper
-        env:
-          AK: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
-          SK: ${{ secrets.GARAGE_S3_SECRET_KEY }}
+          echo "::group::host"
+          echo "user   : $(whoami) ($(id -u):$(id -g))"
+          echo "groups : $(id -Gn)"
+          echo "docker : $(docker --version 2>/dev/null || echo ABSENT)"
+          echo "submodules: $(git submodule status --recursive | wc -l)"
+          echo "::endgroup::"
+          docker info >/dev/null 2>&1 || {
+            echo "::error::docker daemon unreachable - the agent cannot build without it"
+            exit 1
+          }
+          test -x .github/scripts/copilot-build.sh || {
+            echo "::error::.github/scripts/copilot-build.sh missing or not executable"
+            exit 1
+          }
+
+      - name: Pre-pull CI build image
+        # Pulled here so the agent does not spend session time on it. Normally a
+        # no-op on these runners, which build tt-metal continuously.
         run: |
           IMG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:latest
-          EP=http://garage.garage.svc.cluster.local:3900
-          docker pull -q "$IMG" >/dev/null
-          mkdir -p "${HOME}/.cache/agent-ccache"
           START=$(date +%s)
-          set +e
-          docker run --rm --user "$(id -u):$(id -g)" \
-            -v "${GITHUB_WORKSPACE}:/work" -w /work \
-            -v "${HOME}/.cache/agent-ccache:/ccache" \
-            -e HOME=/tmp -e CCACHE_DIR=/ccache \
-            -e CCACHE_REMOTE_STORAGE="s3://ccache|region=garage|prefix=tt-metal|endpoint_url=${EP}" \
-            -e AWS_ACCESS_KEY_ID="$AK" -e AWS_SECRET_ACCESS_KEY="$SK" \
-            -e AWS_DEFAULT_REGION=garage -e AWS_ENDPOINT_URL_S3="$EP" \
-            "$IMG" bash -lc '
-              git config --global --add safe.directory /work
-              git config --global --add safe.directory "*"
-              ./build_metal.sh --enable-ccache --configure-only 2>&1 | tail -25
-            '
-          RC=$?
-          set -e
-          echo "=== configure exit=$RC after $(( $(date +%s) - START ))s ==="
-          [ $RC -eq 0 ] && echo "CONFIGURE OK - wrapper works end to end" \
-                        || echo "::warning::configure failed rc=$RC (see output above)"
+          docker pull -q "$IMG" >/dev/null && echo "pulled in $(( $(date +%s) - START ))s" \
+            || echo "::warning::could not pull $IMG - the agent will retry on first build"
+          docker image inspect "$IMG" --format 'image ready: {{.Id}} ({{.Created}})' 2>/dev/null || true
+
+      - name: Check ccache credentials
+        # A cold build will not finish inside a session, so surface this loudly.
+        # Referenced at step level: job-level env resolves empty for agent runs.
+        env:
+          ACTIONS_GARAGE_ACCESS_KEY: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
+        run: |
+          if [ -n "${GARAGE_S3_ACCESS_KEY:-}" ]; then
+            echo "Agents secrets present - remote ccache will be used."
+          elif [ -n "${ACTIONS_GARAGE_ACCESS_KEY:-}" ]; then
+            echo "::notice::Actions secrets found (this validation run), but Copilot cannot read them."
+            echo "::notice::Add GARAGE_S3_ACCESS_KEY / GARAGE_S3_SECRET_KEY under Settings ->"
+            echo "::notice::Secrets and variables -> Agents for the agent to get a warm cache."
+          else
+            echo "::warning::No Garage credentials from either source. The agent would build COLD."
+          fi
+
+      - name: Install gh-aw extension
+        uses: github/gh-aw-actions/setup-cli@4f46189e0dfaf63988118c40003c30652d562906 # v0.84.4
+        with:
+          version: v0.84.4
