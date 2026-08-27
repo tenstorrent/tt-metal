@@ -64,7 +64,7 @@ on:
           must be a canonical ghcr ref. Self-hosted works with a ghcr base too.
     outputs:
       image:
-        description: "Pullable ref of the built image; empty when the build was skipped"
+        description: "Pullable ref of the built image; empty when the build was skipped or failed"
         value: ${{ jobs.build-test-image.outputs.image }}
   workflow_dispatch:
     inputs:
@@ -117,7 +117,10 @@ jobs:
     runs-on: ${{ inputs.runner-label }}
     timeout-minutes: 30
     outputs:
-      image: ${{ steps.ref.outputs.image }}
+      # From the publish step, not the ref step. The ref is computed before the
+      # push, so taking it directly would hand a consumer the ref of an image
+      # that failed to push, and the consumer would fail pulling it.
+      image: ${{ steps.published.outputs.image }}
     steps:
       # First, so a bad name or an over-long tag fails before paying for a
       # multi-hundred-MB download.
@@ -259,3 +262,10 @@ jobs:
           provenance: false
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,oci-mediatypes=true
+
+      # Runs only if the push succeeded, so a failed build yields an empty ref
+      # and the consumer falls back to the artifact path instead of pulling a
+      # ref that was never published.
+      - name: Publish the ref
+        id: published
+        run: echo "image=${{ steps.ref.outputs.image }}" | tee -a "$GITHUB_OUTPUT"
