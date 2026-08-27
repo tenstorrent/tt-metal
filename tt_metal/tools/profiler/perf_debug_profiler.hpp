@@ -60,12 +60,14 @@ public:
     void stop();
 
 private:
-    // SIX DRISC FILLERS, each sweeping a sixth of the worker grid and pushing frames straight into its own
-    // D2H socket. The knee is the filler's scan over its slice (FINDINGS N+28/N+34/N+40), so fillers are
-    // the thing to multiply, and every DRAM view with a spare NoC port can host one. Host-facing duty from
+    // EIGHT DRISC FILLERS, each sweeping an eighth of the worker grid and pushing frames straight into its
+    // own D2H socket. The knee is the filler's scan over its slice (FINDINGS N+28/N+34/N+40), so fillers are
+    // the thing to multiply, and every DRAM view with a spare NoC port can host one -- as of the 2026-08
+    // UMD/soc-descriptor state all eight views pick distinct spare ports (the view-7-collides-with-view-0
+    // and view-2-bringup failures that capped this at six no longer reproduce). Host-facing duty from
     // NoC rows y != 0 rides each filler's own static TLB window (configured at bring-up; the socket asks
     // UMD for it in init_sender_tlb), the same path the two y == 0 movers used before direct push.
-    static constexpr uint32_t kNFillers = 6;
+    static constexpr uint32_t kNFillers = 8;
     static constexpr uint32_t kNSockets = kNFillers;
     // Host FIFO per socket: TT_METAL_PERF_DEBUG_FIFO_MB, default 64 MiB (host_fifo_bytes() in the .cpp).
     // This FIFO is the pipeline's ONLY elasticity now that the device-DRAM ring is gone; the default

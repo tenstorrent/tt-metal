@@ -182,7 +182,14 @@ inline __attribute__((always_inline)) void publish_tail() {
 inline __attribute__((always_inline)) void publish_tail_batched(uint32_t words_written) {
     constexpr uint32_t kBatchShift = __builtin_ctz(SPSC_PUBLISH_BATCH_WORDS);
     static_assert((1u << kBatchShift) == SPSC_PUBLISH_BATCH_WORDS, "batch must be a power of two");
-    if (__builtin_expect((wIndex >> kBatchShift) != ((wIndex - words_written) >> kBatchShift), 0)) {
+    // Pressure override: above 3/4 ring, publish every packet. The batch's up-to-63 unpublished words
+    // are invisible to the drainer but count against the producer's own stall bound, so near capacity
+    // the batching converts straight into stalls (measured at the knee: scan-visible peaks 384-448
+    // words while producers blocked at ~506 -- the gap is this batch). g_head_cache only lags the true
+    // head, so the check can only fire early, never late.
+    constexpr uint32_t kPressureWords = RING_CAPACITY - (RING_CAPACITY >> 2);
+    const bool boundary = (wIndex >> kBatchShift) != ((wIndex - words_written) >> kBatchShift);
+    if (__builtin_expect(boundary || wIndex - g_head_cache > kPressureWords, 0)) {
         publish_tail();
     }
 }

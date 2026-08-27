@@ -188,11 +188,11 @@ bool env_flag(const char* name) {
 
 
 
-// DRAM banks (DRAM VIEW ids) the six FILLERS occupy. Default 5, 6, 4, 1, 0, 3 = NoC cores 9-9, 9-5, 9-2,
-// 0-3, 0-0, 9-0. NOT view 7: the N+29 sweep records view 7's unused port as NoC core 0-0, the SAME core
-// view 0 resolves to. Two resident kernels on one core is not a subtle failure, but nothing in
-// pick_unused_dram_logical_core() would have stopped it, so the duplicate-core TT_FATAL in boot_device
-// checks it explicitly for every roster.
+// DRAM banks (DRAM VIEW ids) the FILLERS occupy, one per filler. Views 7 and 2 ride at the end: the N+29
+// sweep recorded view 7's spare port colliding with view 0's (both NoC core 0-0) and view 2 failing
+// bringup outright, so a downgraded roster that drops trailing entries sheds the historically fragile
+// views first. Both boot clean on the current UMD/soc-descriptor state, and the duplicate-core TT_FATAL
+// in boot_device still checks every roster -- nothing in pick_unused_dram_logical_core() would.
 const std::vector<uint32_t>& role_filler_banks() {
     static const std::vector<uint32_t> v = [] {
         std::vector<uint32_t> out;
@@ -210,7 +210,7 @@ const std::vector<uint32_t>& role_filler_banks() {
             }
         }
         if (out.empty()) {
-            out = {5u, 6u, 4u, 1u, 0u, 3u};
+            out = {5u, 6u, 4u, 1u, 0u, 3u, 7u, 2u};
         }
         return out;
     }();
@@ -363,11 +363,6 @@ uint32_t ship_min_pct() {
     return v;
 }
 
-// TT_METAL_PERF_DEBUG_RAW_ONLY=1: a DIAGNOSTIC that locks every filler in HIGH-production mode -- no CV
-// pass ever, every core read whole and shipped RAW every sweep, hysteresis compiled out. It isolates
-// "is the CV round-trip the filler-knee wall" from "does the hysteresis react fast enough", and it is
-// only meaningful against a FIFO sized for the ~2x raw wire (see FIFO_MB below); in the 64 MiB pipeline
-// configuration it reproduces the decode-ack overload the hysteresis exists to prevent.
 // TT_METAL_PERF_DEBUG_FILLER_SLICE_MAP: comma-separated permutation, entry d = which core BAND filler d
 // takes. Unset = identity, which is what the code has always done -- and the bands are row-major slices of
 // the worker grid assigned with no reference to where the filler's own DRAM core sits, so the pairing is
@@ -491,11 +486,6 @@ bool filler_assign_xsplit() {
 // treat a zero-marker capture as "the second tile does not reach this buffer", not as a perf result.
 bool pcie_split() {
     static const bool v = perf_debug::env_flag("TT_METAL_PERF_DEBUG_PCIE_SPLIT");
-    return v;
-}
-
-bool raw_only() {
-    static const bool v = perf_debug::env_flag("TT_METAL_PERF_DEBUG_RAW_ONLY");
     return v;
 }
 
@@ -1800,10 +1790,9 @@ bool PerfDebugProfiler::boot_device(
                 0u,  // retired: GAP_MAX (its ceiling)
                 0u,  // retired: READ_SPLIT
                 // Arg 20: write VC. With the egress NoC alternating on d&1, d&2 splits each NoC's three
-                // pushers across the two unicast request VCs. Arg 21: RAW_ONLY diagnostic. Args 22..31
-                // retired.
+                // pushers across the two unicast request VCs. Args 21..31 retired.
                 (d & 2u) ? 0u : 1u,
-                raw_only() ? 1u : 0u,
+                0u,
                 0u,
                 0u,
                 0u,
@@ -2362,17 +2351,10 @@ void PerfDebugProfiler::stop() {
                     res[170],
                     res[171]);
             }
-            // HIGH-mode telemetry: how often the raw-sweep mode ran and the distribution of the signal that
-            // drives it (per-sweep PEAK unconsumed lane, in eighths of the ring, busy sweeps only).
+            // Distribution of each busy sweep's PEAK unconsumed lane, in eighths of the ring.
             log_info(
                 tt::LogMetal,
-                "[perf-debug profiler] DRISC read mode: raw sweeps {} ({} raw frames; enters {}, fill-exits {}, "
-                "veto-exits {}) | busy-sweep peak-lane/8ths [{} {} {} {} {} {} {} {}]",
-                res[51],
-                res[52],
-                res[48],
-                res[49] - res[50],
-                res[50],
+                "[perf-debug profiler] DRISC busy-sweep peak-lane/8ths [{} {} {} {} {} {} {} {}]",
                 res[53],
                 res[54],
                 res[55],
@@ -2388,6 +2370,23 @@ void PerfDebugProfiler::stop() {
                     "[perf-debug profiler] DRISC control scan: {:.0f} ns/core over {} core-visits",
                     static_cast<double>(scan_cyc) / kCycPerUs * 1000.0 / static_cast<double>(res[63]),
                     res[63]);
+            }
+            // read sub-split: the CV pass and the gather issue are DRISC-serial whatever the NoC does;
+            // only the residual wait shrinks with overlap. Which of the three dominates picks the next
+            // lever (kill the CV pass vs cheaper issue vs more overlap).
+            {
+                const uint64_t c_cv = (static_cast<uint64_t>(res[177]) << 32) | res[176];
+                const uint64_t c_issue = (static_cast<uint64_t>(res[173]) << 32) | res[172];
+                const uint64_t c_rd = c_read > c_cv + c_issue ? c_read - c_cv - c_issue : 0;
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] DRISC read split: cv-pass {:.1f}% of busy | gather-issue {:.1f}% | "
+                    "read-wait {:.1f}% ({} cv reads, {} gather reads)",
+                    pct(c_cv),
+                    pct(c_issue),
+                    pct(c_rd),
+                    res[175],
+                    res[174]);
             }
             // proc sub-split. `proc` is the biggest busy-sweep phase, and it is two unrelated things:
             // a LOCAL scan of the staged control vectors, and a per-live-core 20 B NoC head write-back
