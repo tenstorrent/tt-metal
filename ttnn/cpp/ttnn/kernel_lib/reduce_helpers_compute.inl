@@ -822,7 +822,13 @@ ALWI uint32_t calculate_managed_reduce_scaler_bits(uint32_t reduce_factor) {
         ASSERT(reduce_factor > 0);
         if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
             // REDUCE_SCALAR applies the scaler once per reduced axis, so use 1/sqrt(N).
-            scaler_f = 1.0f / __ieee754_sqrtf(static_cast<float>(reduce_factor));
+            if (__builtin_constant_p(reduce_factor)) {
+                // __builtin_sqrtf is constant-folded when the caller supplies a compile-time shape.
+                // Keep the explicit IEEE implementation for genuinely runtime-shaped reductions.
+                scaler_f = 1.0f / __builtin_sqrtf(static_cast<float>(reduce_factor));
+            } else {
+                scaler_f = 1.0f / __ieee754_sqrtf(static_cast<float>(reduce_factor));
+            }
         } else {
             scaler_f = 1.0f / static_cast<float>(reduce_factor);
         }

@@ -510,12 +510,6 @@ def _single_core() -> ttnn.CoreRangeSet:
     return ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
 
 
-def _runtime_args(values: list[int]) -> ttnn.RuntimeArgs:
-    args = ttnn.RuntimeArgs()
-    args[0][0] = values
-    return args
-
-
 def _sharded_memory_config(shape: tuple[int, int]) -> ttnn.MemoryConfig:
     return ttnn.create_sharded_memory_config(
         shape=shape,
@@ -730,17 +724,15 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
             kernel_source=COMPUTE_KERNEL,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=_single_core(),
-            compile_time_args=[case.calls],
-            runtime_args=_runtime_args(
-                [
-                    case.rows,
-                    case.cols,
-                    case.batches,
-                    case.row_stride,
-                    case.valid_elements,
-                    case.later_valid_elements,
-                ]
-            ),
+            compile_time_args=[
+                case.calls,
+                case.rows,
+                case.cols,
+                case.batches,
+                case.row_stride,
+                case.valid_elements,
+                case.later_valid_elements,
+            ],
             defines=defines,
             config=_compute_config(case),
         ),

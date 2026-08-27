@@ -19,8 +19,25 @@ constexpr uint32_t cb_scaler = 1;
 constexpr uint32_t cb_accumulator = 2;
 constexpr uint32_t cb_output = 16;
 constexpr uint32_t num_calls = get_compile_time_arg_val(0);
+constexpr uint32_t rows = get_compile_time_arg_val(1);
+constexpr uint32_t cols = get_compile_time_arg_val(2);
+constexpr uint32_t batches = get_compile_time_arg_val(3);
+constexpr uint32_t row_stride = get_compile_time_arg_val(4);
+constexpr uint32_t valid_elements = get_compile_time_arg_val(5);
+constexpr uint32_t later_valid_elements = get_compile_time_arg_val(6);
+
+constexpr uint32_t input_tiles = rows * row_stride * batches;
+constexpr auto shape = compute_kernel_lib::ReduceInputBlockShape::of(rows, cols, batches);
+constexpr auto layout = row_stride == cols ? compute_kernel_lib::ReduceInputMemoryLayout::contiguous()
+                                           : compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(row_stride);
 
 static_assert(num_calls >= 1);
+static_assert(rows >= 1);
+static_assert(cols >= 1);
+static_assert(batches >= 1);
+static_assert(row_stride >= cols);
+static_assert(valid_elements <= 32);
+static_assert(later_valid_elements <= 32);
 
 constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[cb_input]);
 constexpr bool uses_sfpu = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, input_format, REDUCE_FP32_MODE>();
@@ -45,13 +62,8 @@ ALWI auto make_accumulation(uint32_t iteration) {
     }
 }
 
-template <uint32_t output_cb>
-ALWI void run_reduce_call(
-    compute_kernel_lib::ReduceInputBlockShape shape,
-    compute_kernel_lib::ReduceInputMemoryLayout layout,
-    uint32_t input_tiles,
-    uint32_t iteration,
-    uint32_t valid_elements) {
+template <uint32_t output_cb, uint32_t call_valid_elements>
+ALWI void run_reduce_call(uint32_t iteration) {
     const auto accumulation = make_accumulation<(num_calls > 1)>(iteration);
 #ifdef REDUCE_POST_MULTIPLIER_BITS
     const PostReduceMultiply post_reduce_op{};
@@ -77,7 +89,7 @@ ALWI void run_reduce_call(
             layout,
             accumulation,
             post_reduce_op,
-            compute_kernel_lib::ReducePartialScaler::from_valid_elements(valid_elements));
+            compute_kernel_lib::ReducePartialScaler::from_valid_elements(call_valid_elements));
     }
 
     constexpr bool helper_pops_input =
@@ -90,21 +102,20 @@ ALWI void run_reduce_call(
     }
 }
 
+template <uint32_t output_cb>
+ALWI void run_reduce_call_for_iteration(uint32_t iteration) {
+    if constexpr (later_valid_elements == 0) {
+        run_reduce_call<output_cb, valid_elements>(iteration);
+    } else if (iteration == 0) {
+        run_reduce_call<output_cb, valid_elements>(iteration);
+    } else {
+        run_reduce_call<output_cb, later_valid_elements>(iteration);
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
-    const uint32_t rows = get_arg_val<uint32_t>(0);
-    const uint32_t cols = get_arg_val<uint32_t>(1);
-    const uint32_t batches = get_arg_val<uint32_t>(2);
-    const uint32_t row_stride = get_arg_val<uint32_t>(3);
-    const uint32_t valid_elements = get_arg_val<uint32_t>(4);
-    const uint32_t later_valid_elements = get_arg_val<uint32_t>(5);
-
-    const uint32_t input_tiles = rows * row_stride * batches;
-    const auto shape = compute_kernel_lib::ReduceInputBlockShape::of(rows, cols, batches);
-    const auto layout = row_stride == cols ? compute_kernel_lib::ReduceInputMemoryLayout::contiguous()
-                                           : compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(row_stride);
-
     constexpr uint32_t first_output_cb = num_calls == 1 ? cb_output : cb_accumulator;
     compute_kernel_hw_startup(cb_input, cb_scaler, first_output_cb);
 #ifdef REDUCE_HELPERS_PROFILE
@@ -118,12 +129,10 @@ void kernel_main() {
 
     for (uint32_t call = 0; call < num_calls; ++call) {
         const bool is_last_call = call == num_calls - 1;
-        const uint32_t call_valid_elements =
-            call == 0 || later_valid_elements == 0 ? valid_elements : later_valid_elements;
         if (is_last_call) {
-            run_reduce_call<cb_output>(shape, layout, input_tiles, call, call_valid_elements);
+            run_reduce_call_for_iteration<cb_output>(call);
         } else {
-            run_reduce_call<cb_accumulator>(shape, layout, input_tiles, call, call_valid_elements);
+            run_reduce_call_for_iteration<cb_accumulator>(call);
         }
     }
 }
