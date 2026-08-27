@@ -80,12 +80,6 @@ void kernel_main() {
     constexpr uint32_t MtNt = get_arg(args::MtNt);  // if 0
     // Don't need batch; same as batch from READER args
 
-#ifdef FUSE_BIAS
-    // in3 block args
-    constexpr uint32_t in3_block_w = get_arg(args::in3_block_w);
-
-    constexpr uint32_t cb_id_in3 = dfb::cb_bias;
-#endif
     constexpr bool fuse_op_reduce_scatter = (bool)get_arg(args::fuse_op_reduce_scatter);
 
     OpSignaler op_signaler;
@@ -108,9 +102,7 @@ void kernel_main() {
     DataflowBuffer cb_out(dfb::cb_out);
     Semaphore sender_sem(sem::in1_sender);
     Semaphore receiver_sem(sem::in1_receiver);
-#ifdef FUSE_BIAS
-    DataflowBuffer cb_in3(dfb::cb_bias);
-#endif
+    auto cb_in3 = construct_nullable_dfb(dfb::cb_bias);
 
     // WRITER
     // Constructed to materialize the tensor::out binding; not read directly -> maybe_unused (matches the
@@ -144,24 +136,25 @@ void kernel_main() {
                     cb_in1.push_back(in1_block_num_tiles);
                 }
 
-#ifdef FUSE_BIAS
-                // Only read bias on first batch, or we have multiple output blocks
-                if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
-                    // Operand 2
-                    cb_in3.reserve_back(in3_block_w);
+                with_nullable_resource(cb_in3, [&](DataflowBuffer& cb_in3) {
+                    constexpr uint32_t in3_block_w = get_arg(args::in3_block_w);
+                    // Only read bias on first batch, or we have multiple output blocks
+                    if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                        // Operand 2
+                        cb_in3.reserve_back(in3_block_w);
 
-                    // Set in1 semaphore value to INVALID
-                    receiver_sem.set(INVALID);
+                        // Set in1 semaphore value to INVALID
+                        receiver_sem.set(INVALID);
 
-                    // Atomic increment source core counter
-                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
+                        // Atomic increment source core counter
+                        sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
 
-                    // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    receiver_sem.wait(VALID);
+                        // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
+                        receiver_sem.wait(VALID);
 
-                    cb_in3.push_back(in3_block_w);
-                }
-#endif
+                        cb_in3.push_back(in3_block_w);
+                    }
+                });
 
 #ifndef OUT_SHARDED
                 // WRITER

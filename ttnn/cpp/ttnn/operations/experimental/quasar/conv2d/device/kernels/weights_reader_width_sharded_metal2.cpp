@@ -31,9 +31,6 @@ void kernel_main() {
     constexpr uint32_t remote_weight_height_blocks = get_arg(args::remote_weight_height_blocks);
     constexpr uint32_t local_weight_height_blocks = get_arg(args::local_weight_height_blocks);
     constexpr uint32_t act_num_blocks_h = get_arg(args::act_num_blocks_h);
-    // Bias presence is carried as the FUSE_BIAS preprocessor define (gates the conditionally-bound
-    // dfb::bias / tensor::bias references at the preprocessor level).
-
     const uint32_t init_weight_start_tile_id = get_arg(args::init_weight_start_tile_id);
     const uint32_t is_active = get_arg(args::is_active);
 
@@ -43,11 +40,10 @@ void kernel_main() {
     const uint32_t weight_tile_nbytes = weight_cb.get_entry_size();
     const auto s_weight = TensorAccessor(tensor::weights);
 
-#ifdef FUSE_BIAS
-    DataflowBuffer bias_cb(dfb::bias);
-    const uint32_t bias_pagesize = bias_cb.get_entry_size();
-    const auto s_bias = TensorAccessor(tensor::bias);
-#endif
+    auto bias_cb = construct_nullable_dfb(dfb::bias);
+    auto s_bias = construct_nullable_tensor(tensor::bias);
+    uint32_t bias_pagesize = 0;
+    with_nullable_resource(bias_cb, [&](DataflowBuffer& bias_cb) { bias_pagesize = bias_cb.get_entry_size(); });
 
     bool to_load_bias = true;
 
@@ -95,22 +91,22 @@ void kernel_main() {
             }
             weight_start_tile_id += weight_next_block_this_core_stride_h;
             if (to_load_bias) {
-#ifdef FUSE_BIAS
-                bias_cb.reserve_back(weight_block_width_ntiles);
-                uint32_t bias_write_offset = 0;
-                for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                    noc.async_read(
-                        s_bias,
-                        bias_cb,
-                        bias_pagesize,
-                        {.page_id = bias_start_tile_id},
-                        {.offset_bytes = bias_write_offset});
-                    bias_write_offset += bias_pagesize;
-                    bias_start_tile_id += 1;
-                }
-                noc.async_read_barrier();
-                bias_cb.push_back(weight_block_width_ntiles);
-#endif
+                with_nullable_resource(bias_cb, s_bias, [&](DataflowBuffer& bias_cb, auto const& s_bias) {
+                    bias_cb.reserve_back(weight_block_width_ntiles);
+                    uint32_t bias_write_offset = 0;
+                    for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
+                        noc.async_read(
+                            s_bias,
+                            bias_cb,
+                            bias_pagesize,
+                            {.page_id = bias_start_tile_id},
+                            {.offset_bytes = bias_write_offset});
+                        bias_write_offset += bias_pagesize;
+                        bias_start_tile_id += 1;
+                    }
+                    noc.async_read_barrier();
+                    bias_cb.push_back(weight_block_width_ntiles);
+                });
                 to_load_bias = false;
             }
         }

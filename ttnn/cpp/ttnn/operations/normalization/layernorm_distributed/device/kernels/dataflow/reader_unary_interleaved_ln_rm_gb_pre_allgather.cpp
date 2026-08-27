@@ -35,12 +35,9 @@ void kernel_main() {
 
     const auto src_a = TensorAccessor(tensor::src);
 
-#ifdef FUSE_PRE_ADD
-    // Residual tiles, added to the input by the compute kernel before the statistics pass.
-    DataflowBuffer dfb_res_buf(dfb::res);
-    const uint32_t src1_tile_bytes = dfb_res_buf.get_tile_size();
-    const auto src_b = TensorAccessor(tensor::res_src);
-#endif
+    // Residual is a coupled tensor + DFB; the handle is reused at each island.
+    auto dfb_res_buf = construct_nullable_dfb(dfb::res);
+    auto src_b = construct_nullable_tensor(tensor::res_src);
 
     uint32_t inp_tile_idx = tile_offset;
 
@@ -49,16 +46,15 @@ void kernel_main() {
             for (uint32_t r = 0; r < blk; r++) {
                 dfb_inp_buf.reserve_back(1);
                 noc.async_read(src_a, dfb_inp_buf, src0_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
-#ifdef FUSE_PRE_ADD
-                dfb_res_buf.reserve_back(1);
-                noc.async_read(src_b, dfb_res_buf, src1_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
-#endif
+                with_nullable_resource(src_b, dfb_res_buf, [&](auto const& src_b, DataflowBuffer& dfb_res_buf) {
+                    dfb_res_buf.reserve_back(1);
+                    noc.async_read(
+                        src_b, dfb_res_buf, dfb_res_buf.get_tile_size(), {.page_id = inp_tile_idx}, {.offset_bytes = 0});
+                });
                 inp_tile_idx++;
                 noc.async_read_barrier();
                 dfb_inp_buf.push_back(1);
-#ifdef FUSE_PRE_ADD
-                dfb_res_buf.push_back(1);
-#endif
+                with_nullable_resource(dfb_res_buf, [](DataflowBuffer const& res_buf) { res_buf.push_back(1); });
             }
         }  // wt loop
     }  // ncht loop

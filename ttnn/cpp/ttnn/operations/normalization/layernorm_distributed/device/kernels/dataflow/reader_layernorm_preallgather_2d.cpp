@@ -47,12 +47,8 @@ void kernel_main() {
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();
 
-#ifdef FUSE_PRE_ADD
-    // Residual tiles, added to the input by the compute kernel before the statistics pass.
-    DataflowBuffer dfb_res_buf(dfb::res);
-    const uint32_t src1_tile_bytes = dfb_res_buf.get_tile_size();
-    const auto src_b = TensorAccessor(tensor::res_src);
-#endif
+    auto dfb_res_buf = construct_nullable_dfb(dfb::res);
+    auto src_b = construct_nullable_tensor(tensor::res_src);
 
     // Generate constant tiles for reduce scalar
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
@@ -70,9 +66,7 @@ void kernel_main() {
         // read input tiles
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_inp_buf.reserve_back(blk);
-#ifdef FUSE_PRE_ADD
-            dfb_res_buf.reserve_back(blk);
-#endif
+            with_nullable_resource(dfb_res_buf, [](DataflowBuffer const& res_buf) { res_buf.reserve_back(blk); });
 
             for (uint32_t r = 0; r < blk; r++) {
                 noc.async_read(
@@ -81,22 +75,20 @@ void kernel_main() {
                     src0_tile_bytes,
                     {.page_id = inp_tile_idx},
                     {.offset_bytes = r * src0_tile_bytes});
-#ifdef FUSE_PRE_ADD
-                noc.async_read(
-                    src_b,
-                    dfb_res_buf,
-                    src1_tile_bytes,
-                    {.page_id = inp_tile_idx},
-                    {.offset_bytes = r * src1_tile_bytes});
-#endif
+                with_nullable_resource(src_b, dfb_res_buf, [&](auto const& src_b, DataflowBuffer const& dfb_res_buf) {
+                    noc.async_read(
+                        src_b,
+                        dfb_res_buf,
+                        dfb_res_buf.get_tile_size(),
+                        {.page_id = inp_tile_idx},
+                        {.offset_bytes = r * dfb_res_buf.get_tile_size()});
+                });
                 inp_tile_idx++;
             }
             noc.async_read_barrier();
 
             dfb_inp_buf.push_back(blk);
-#ifdef FUSE_PRE_ADD
-            dfb_res_buf.push_back(blk);
-#endif
+            with_nullable_resource(dfb_res_buf, [](DataflowBuffer const& res_buf) { res_buf.push_back(blk); });
 
         }  // wt loop
 

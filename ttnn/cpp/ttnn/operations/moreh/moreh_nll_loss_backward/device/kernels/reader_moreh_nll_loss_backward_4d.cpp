@@ -23,23 +23,22 @@ void kernel_main() {
 
     DataflowBuffer dfb_target_obj(dfb::target);
     DataflowBuffer dfb_tmp_weight_obj(dfb::tmp_weight);
-#if defined(WEIGHT)
-    DataflowBuffer dfb_weight_obj(dfb::weight);
-    const auto addrg_weight = TensorAccessor(tensor::weight);
+    auto dfb_weight_obj = construct_nullable_dfb(dfb::weight);
+    auto addrg_weight = construct_nullable_tensor(tensor::weight);
+    auto dfb_weight_scratch_obj = construct_nullable_dfb(dfb::weight_scratch);
+    uint32_t weight_l1_addr = 0;
+    with_nullable_resource(dfb_weight_obj, addrg_weight, dfb_weight_scratch_obj, [&](auto& dfb_weight_obj, auto const& addrg_weight, auto& dfb_weight_scratch_obj) {
+        read_line(dfb_weight_obj, dfb_weight_scratch_obj, addrg_weight, weight_num_tile);
+        dfb_weight_obj.wait_front(weight_num_tile);
+        weight_l1_addr = dfb_weight_obj.get_read_ptr();
+    });
+    CoreLocalMem<volatile uint16_t> weight_l1_ptr(weight_l1_addr);
 
-    DataflowBuffer dfb_weight_scratch_obj(dfb::weight_scratch);
-    read_line(dfb_weight_obj, dfb_weight_scratch_obj, addrg_weight, weight_num_tile);
-
-    dfb_weight_obj.wait_front(weight_num_tile);
-    CoreLocalMem<volatile uint16_t> weight_l1_ptr(dfb_weight_obj.get_read_ptr());
-#endif
-
-#if defined(DIVISOR)
-    const auto addrg_divisor = TensorAccessor(tensor::divisor);
-
-    DataflowBuffer dfb_divisor_obj(dfb::divisor);
-    read_tile(dfb_divisor_obj, addrg_divisor, 0);
-#endif
+    with_nullable_token(tensor::divisor, dfb::divisor, [&](auto const& t, DFBBindingToken const& d) {
+        const auto addrg_divisor = TensorAccessor(t);
+        DataflowBuffer dfb_divisor_obj(d);
+        read_tile(dfb_divisor_obj, addrg_divisor, 0);
+    });
 
     DataflowBuffer dfb_output_grad_obj(dfb::output_grad);
     read_tile(dfb_output_grad_obj, addrg_output_grad, 0);
@@ -67,11 +66,10 @@ void kernel_main() {
                 FP32_DEST_ACC_FTYPE val;
 
                 if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
-#if defined(WEIGHT)
-                    val = fp32_dest_acc_cast(weight_l1_ptr[target_val]);
-#else
-                    val = fp32_dest_acc_cast(1.0f);
-#endif
+                    val = map_nullable_token(
+                        dfb::weight,
+                        [&](DFBBindingToken const&) { return fp32_dest_acc_cast(weight_l1_ptr[target_val]); },
+                        [&] { return fp32_dest_acc_cast(1.0f); });
                 } else {
                     val = fp32_dest_acc_cast(0.0f);
                 }

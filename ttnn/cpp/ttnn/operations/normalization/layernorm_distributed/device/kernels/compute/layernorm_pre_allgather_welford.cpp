@@ -30,14 +30,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-// The Welford pass reads either the raw input or the fused a + b result, depending on whether a
-// residual was supplied. Only the buffer selected here is bound on this build, so the alias is gated
-// at the preprocessor: naming an unbound handle would not compile even on a discarded branch.
-#ifdef FUSE_PRE_ADD
-constexpr auto dfb_inp_id = dfb::fused;  // fused a + b (sized to a few blocks)
-#else
-constexpr auto dfb_inp_id = dfb::in0;
-#endif
+// The Welford pass reads either the fused a + b result or the raw input. fused is present
+// iff residual was supplied; in0 is always real.
+constexpr auto dfb_inp_id = engaged_token_between(dfb::fused, dfb::in0);
 
 void kernel_main() {
     const auto NCHt = get_arg(args::NCHt);
@@ -45,28 +40,18 @@ void kernel_main() {
     namespace generic = kutil::generic;
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto W = get_arg(args::W);
-#ifdef FUSE_PRE_ADD
-    constexpr auto blk = get_arg(args::blk);
-#endif
     // True iff the factory configured the input buffer with UnpackToDestFp32. Used by the
     // non-FUSE branch to gate the welford state re-establishment after the transpose.
     constexpr bool welford_unpack_fp32_active = get_arg(args::welford_unpack_fp32_active) != 0;
 
-#ifdef FUSE_PRE_ADD
-    compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
-#else
-    compute_kernel_hw_startup(dfb_inp_id, dfb_inp_id, dfb::scratch);
-#endif
+    with_nullable_token(
+        dfb::res,
+        [&](DFBBindingToken const& res) { compute_kernel_hw_startup(dfb::in0, res, dfb_inp_id); },
+        [&] { compute_kernel_hw_startup(dfb_inp_id, dfb_inp_id, dfb::scratch); });
 
     DataflowBuffer dfb_out(dfb::out);
     DataflowBuffer dfb_scratch(dfb::scratch);  // scratch for post-Welford transpose
     DataflowBuffer dfb_inp(dfb_inp_id);
-#ifdef FUSE_PRE_ADD
-    DataflowBuffer dfb_in0(dfb::in0);
-    DataflowBuffer dfb_res(dfb::res);                // residual b
-    DataflowBuffer dfb_mean_spill(dfb::mean_spill);  // Welford mean accumulator spill (1 tile)
-    DataflowBuffer dfb_m2_spill(dfb::m2_spill);      // Welford M2 accumulator spill (1 tile)
-#endif
     // Get pointer to the reciprocal LUT, which lives in the memory the recip buffer borrows.
     using recip_lut_t = std::array<uint32_t, W>;
     auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb::recip, 0);
@@ -80,7 +65,21 @@ void kernel_main() {
         constexpr uint32_t dst1 = 1;
         constexpr uint32_t dst2 = 2;
 
-#ifdef FUSE_PRE_ADD
+        with_nullable_token(
+            dfb::res,
+            dfb::fused,
+            dfb::mean_spill,
+            dfb::m2_spill,
+            [&](DFBBindingToken const& res_tok,
+                DFBBindingToken const& /*fused_tok*/,
+                DFBBindingToken const& mean_spill_tok,
+                DFBBindingToken const& m2_spill_tok) {
+        constexpr auto blk = get_arg(args::blk);
+        DataflowBuffer dfb_in0(dfb::in0);
+        DataflowBuffer dfb_res(res_tok);
+        DataflowBuffer dfb_mean_spill(mean_spill_tok);
+        DataflowBuffer dfb_m2_spill(m2_spill_tok);
+
         // Block-interleaved pre-add + Welford. The Welford accumulator lives in the SFPU within a
         // tile_regs scope, but the pre-add must use its own tile_regs scope to pack its result to
         // dfb_inp_id before the Welford pass can transpose-read it back. To bridge those scopes the
@@ -216,7 +215,8 @@ void kernel_main() {
         pack_tile(dst2, dfb::scratch);
         dfb_scratch.push_back(2);
         tile_regs_release();
-#else
+            },
+            [&] {
         reconfig_data_format(dfb_inp_id, dfb_inp_id);
         pack_reconfig_data_format(dfb::scratch);
 
@@ -278,7 +278,7 @@ void kernel_main() {
         pack_tile(dst2, dfb::scratch);
         dfb_scratch.push_back(2);
         tile_regs_release();
-#endif
+            });
 
         reconfig_data_format(dfb::scratch, dfb::scratch);
         pack_reconfig_data_format(dfb::out);

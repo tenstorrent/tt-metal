@@ -11,11 +11,6 @@
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
-    constexpr uint32_t old_running_mean_has_value = get_arg(args::old_running_mean_has_value) == 1;
-    constexpr uint32_t old_running_var_has_value = get_arg(args::old_running_var_has_value) == 1;
-    static_assert(
-        old_running_mean_has_value || old_running_var_has_value,
-        "running_statistics requires at least one of running_mean / running_var");
 
     DataflowBuffer dfb_batch_mean_obj(dfb::batch_mean);
     DataflowBuffer dfb_batch_var_obj(dfb::batch_var);
@@ -38,27 +33,30 @@ void kernel_main() {
         dfb_batch_mean_obj.wait_front(onetile);
         dfb_batch_var_obj.wait_front(onetile);
 
-        if constexpr (old_running_mean_has_value) {
-            sub_tiles_to_cb(dfb::one, dfb::momentum, dfb::tmp1, 0, 0, 0, 0);           // 1 - momentum
-            mul_tiles_to_cb(dfb::momentum, dfb::batch_mean, dfb::tmp2, 0, 0, 0, 0);    // momentum * batch_mean
-            mul_tiles_to_cb(dfb::tmp1, dfb::old_running_mean, dfb::tmp3, 0, 0, 1, 1);  // (1-momentum) * running_mean
-            if constexpr (old_running_var_has_value) {
-                // Var block below will pack to dfb::out.
-                add_tiles_to_cb(dfb::tmp2, dfb::tmp3, dfb::updated_mean, 0, 0, 1, 1);
-            } else {
-                // No var block — this is the last compute in the tile, so pack
-                // the mean result to both dfb::updated_mean and dfb::out.
-                add_tiles_to_two_cbs(dfb::tmp2, dfb::tmp3, dfb::updated_mean, dfb::out, 0, 0, 1, 1);
-            }
-        }
+        with_nullable_token(dfb::old_running_mean, [&](auto const& old_running_mean) {
+            sub_tiles_to_cb(dfb::one, dfb::momentum, dfb::tmp1, 0, 0, 0, 0);     // 1 - momentum
+            mul_tiles_to_cb(dfb::momentum, dfb::batch_mean, dfb::tmp2, 0, 0, 0, 0);  // momentum * batch_mean
+            mul_tiles_to_cb(dfb::tmp1, old_running_mean, dfb::tmp3, 0, 0, 1, 1);  // (1-momentum) * running_mean
+            with_nullable_token(
+                dfb::old_running_var,
+                [&](DFBBindingToken const&) {
+                    // Var block below will pack to dfb::out.
+                    add_tiles_to_cb(dfb::tmp2, dfb::tmp3, dfb::updated_mean, 0, 0, 1, 1);
+                },
+                [&] {
+                    // No var block — this is the last compute in the tile, so pack
+                    // the mean result to both dfb::updated_mean and dfb::out.
+                    add_tiles_to_two_cbs(dfb::tmp2, dfb::tmp3, dfb::updated_mean, dfb::out, 0, 0, 1, 1);
+                });
+        });
 
-        if constexpr (old_running_var_has_value) {
-            sub_tiles_to_cb(dfb::one, dfb::momentum, dfb::tmp1, 0, 0, 0, 0);          // 1 - momentum
-            mul_tiles_to_cb(dfb::momentum, dfb::batch_var, dfb::tmp2, 0, 0, 0, 0);    // momentum * batch_var
-            mul_tiles_to_cb(dfb::tmp1, dfb::old_running_var, dfb::tmp3, 0, 0, 1, 1);  // (1-momentum) * running_var
+        with_nullable_token(dfb::old_running_var, [&](auto const& old_running_var) {
+            sub_tiles_to_cb(dfb::one, dfb::momentum, dfb::tmp1, 0, 0, 0, 0);    // 1 - momentum
+            mul_tiles_to_cb(dfb::momentum, dfb::batch_var, dfb::tmp2, 0, 0, 0, 0);  // momentum * batch_var
+            mul_tiles_to_cb(dfb::tmp1, old_running_var, dfb::tmp3, 0, 0, 1, 1);  // (1-momentum) * running_var
             // Last compute in the tile — pack to both dfb::updated_var and dfb::out.
             add_tiles_to_two_cbs(dfb::tmp2, dfb::tmp3, dfb::updated_var, dfb::out, 0, 0, 1, 1);
-        }
+        });
 
         dfb_batch_mean_obj.pop_front(onetile);
         dfb_batch_var_obj.pop_front(onetile);

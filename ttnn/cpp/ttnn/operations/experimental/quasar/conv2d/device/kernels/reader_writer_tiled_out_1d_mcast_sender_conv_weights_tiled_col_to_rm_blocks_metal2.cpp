@@ -18,7 +18,7 @@
 //   - remaining positional CTAs -> get_arg(args::name); remaining RTAs -> get_arg(args::name)
 //   - DataflowBuffer -> DataflowBuffer (objects passed to conv_reader_common.hpp helpers stay
 //     experimental::CB); get_tile_size(cb) -> cb.get_entry_size()
-//   - dfb::bias / tensor::bias gated behind FUSE_BIAS; dfb::act_second_reader gated behind SPLIT_READER
+//   - dfb::act_second_reader gated behind SPLIT_READER
 
 #include <api/dataflow/dataflow_api.h>
 #include "api/dataflow/dataflow_buffer.h"
@@ -69,9 +69,8 @@ void kernel_main() {
     constexpr bool single_core_processes_multiple_batches = get_arg(args::single_core_processes_multiple_batches) == 1;
 
     [[maybe_unused]] const uint32_t out_start_tile_id_w = get_arg(args::out_start_tile_id_w);
-#ifdef FUSE_BIAS
-    const uint32_t bias_tile_offset = get_arg(args::bias_tile_offset);
-#endif
+    const uint32_t bias_tile_offset = map_nullable_token(
+        dfb::bias, [](DFBBindingToken const&) { return get_arg(args::bias_tile_offset); }, [] { return 0u; });
 
     // Experimental API objects
     Noc noc;
@@ -101,9 +100,7 @@ void kernel_main() {
     DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);
     DataflowBuffer cb_sharded_act_obj(dfb::act_sharded);
 #endif
-#ifdef FUSE_BIAS
-    DataflowBuffer cb_bias_obj(dfb::bias);
-#endif
+    auto cb_bias_obj = construct_nullable_dfb(dfb::bias);
     // Pre-built mcast destination; .addr is updated per mcast call
     McastDst mcast_dst = {
         .noc_x_start = mcast_rect.noc_x_start,
@@ -146,12 +143,10 @@ void kernel_main() {
 #endif
 
     // read in bias if enabled (done only once for all batches)
-#ifdef FUSE_BIAS
-    const uint32_t bias_pagesize =
-        fuse_bias ? cb_bias_obj.get_entry_size() : 0;  // dummy but valid value in case bias is not enabled
-    const auto s_bias = TensorAccessor(tensor::bias);
-    bool load_bias = true;
-#endif
+    auto s_bias = construct_nullable_tensor(tensor::bias);
+    uint32_t bias_pagesize = 0;
+    bool load_bias = is_nullable(dfb::bias);
+    with_nullable_resource(cb_bias_obj, [&](DataflowBuffer& cb_bias_obj) { bias_pagesize = cb_bias_obj.get_entry_size(); });
 
     const uint32_t weight_tile_nbytes = cb_weight_obj.get_entry_size();
     const auto s_weight = TensorAccessor(tensor::weights);
@@ -308,8 +303,7 @@ void kernel_main() {
         }  // for num_blocks_weight_h
         weight_h_offset += weight_inner_block_stride_h;
 
-#ifdef FUSE_BIAS
-        if constexpr (fuse_bias) {
+        with_nullable_resource(cb_bias_obj, s_bias, [&](DataflowBuffer& cb_bias_obj, auto const& s_bias) {
             if (load_bias) {
                 cb_bias_obj.reserve_back(bias_ntiles);
 
@@ -365,8 +359,7 @@ void kernel_main() {
                 cb_bias_obj.push_back(bias_ntiles);
                 load_bias = false;
             }
-        }
-#endif
+        });
 #ifdef SPLIT_READER
         if constexpr (split_reader_enabled) {
             // Increment reader index for the next number of segments (number of segments for other reader)

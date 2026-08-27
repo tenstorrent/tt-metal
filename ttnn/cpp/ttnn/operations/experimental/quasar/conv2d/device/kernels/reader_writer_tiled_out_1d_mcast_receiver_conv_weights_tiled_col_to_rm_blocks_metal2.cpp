@@ -16,7 +16,7 @@
 //   - weights-mcast semaphore RTAs -> Semaphore(sem::weights_mcast_sender / weights_mcast_receiver)
 //   - remaining positional CTAs -> get_arg(args::name); remaining RTAs -> get_arg(args::name)
 //   - DataflowBuffer -> DataflowBuffer (objects passed to conv_reader_common.hpp helpers stay
-//     experimental::CB); dfb::bias gated behind FUSE_BIAS; dfb::act_second_reader behind SPLIT_READER
+//     experimental::CB); dfb::act_second_reader behind SPLIT_READER
 
 #include <api/dataflow/dataflow_api.h>
 #include "api/dataflow/dataflow_buffer.h"
@@ -88,9 +88,7 @@ void kernel_main() {
     DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);
     DataflowBuffer cb_sharded_act_obj(dfb::act_sharded);
 #endif
-#ifdef FUSE_BIAS
-    DataflowBuffer cb_bias_obj(dfb::bias);
-#endif
+    auto cb_bias_obj = construct_nullable_dfb(dfb::bias);
 
 #ifdef SPLIT_READER
     const uint32_t remaining_tiles_to_push =
@@ -118,9 +116,7 @@ void kernel_main() {
 #endif
 
     // read in bias if enabled (done only once for all batches)
-#ifdef FUSE_BIAS
-    bool load_bias = true;
-#endif
+    bool load_bias = is_nullable(dfb::bias);
 
     [[maybe_unused]] uint32_t l1_write_addr_act = 0;
     for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
@@ -214,8 +210,7 @@ void kernel_main() {
             cb_weight_obj.push_back(weight_block_num_tiles);
         }
 
-#ifdef FUSE_BIAS
-        if constexpr (fuse_bias) {
+        with_nullable_resource(cb_bias_obj, [&](DataflowBuffer& cb_bias_obj) {
             if (load_bias) {
                 cb_bias_obj.reserve_back(bias_ntiles);
 
@@ -231,8 +226,7 @@ void kernel_main() {
                 cb_bias_obj.push_back(bias_ntiles);
                 load_bias = false;
             }
-        }
-#endif
+        });
 
 #ifdef SPLIT_READER
         if constexpr (split_reader_enabled) {

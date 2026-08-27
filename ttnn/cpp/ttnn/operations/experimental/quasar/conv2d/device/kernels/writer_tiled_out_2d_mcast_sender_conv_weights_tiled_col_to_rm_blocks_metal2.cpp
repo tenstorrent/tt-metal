@@ -82,9 +82,7 @@ void kernel_main() {
     Semaphore weights_mcast_receiver_sem(sem::weights_mcast_receiver);
     MulticastEndpoint mcast_ep;
     DataflowBuffer cb_weight_obj(dfb::weights);
-#ifdef FUSE_BIAS
-    DataflowBuffer cb_bias_obj(dfb::bias);
-#endif
+    auto cb_bias_obj = construct_nullable_dfb(dfb::bias);
 #ifdef SPLIT_READER
     DataflowBuffer cb_act_second_obj(dfb::act_second_reader);
     DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);
@@ -145,10 +143,9 @@ void kernel_main() {
 #endif
 
     // read in bias if enabled (done only once for all batches)
-#ifdef FUSE_BIAS
-    const uint32_t bias_pagesize = cb_bias_obj.get_entry_size();
-    const auto s_bias = TensorAccessor(tensor::bias);
-#endif
+    auto s_bias = construct_nullable_tensor(tensor::bias);
+    uint32_t bias_pagesize = 0;
+    with_nullable_resource(cb_bias_obj, [&](DataflowBuffer& cb_bias_obj) { bias_pagesize = cb_bias_obj.get_entry_size(); });
 
     bool load_bias = true;
 
@@ -283,9 +280,8 @@ void kernel_main() {
                 }
             }
 #endif
-            if constexpr (fuse_bias) {
+            with_nullable_resource(cb_bias_obj, s_bias, [&](DataflowBuffer& cb_bias_obj, auto const& s_bias) {
                 if (load_bias) {
-#ifdef FUSE_BIAS
                     cb_bias_obj.reserve_back(bias_ntiles);
 
                     uint32_t bias_write_offset = 0;
@@ -339,9 +335,8 @@ void kernel_main() {
 
                     cb_bias_obj.push_back(bias_ntiles);
                     load_bias = false;
-#endif
                 }
-            }
+            });
 
         }  // out_num_blocks_h
 

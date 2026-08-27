@@ -17,36 +17,32 @@ void kernel_main() {
 
     Noc noc;
 
-    // input_grad (out0) and other_grad (out1) are optional outputs. When absent, the host omits
-    // the tensor binding entirely, so tensor::s0 / tensor::s1 do not exist; the HAS_INPUT_GRAD /
-    // HAS_OTHER_GRAD compile-time defines (emitted by the host only when the output is present)
-    // gate the accessor construction and the write block. The out0 / out1 DFBs stay bound 1P+1C.
-#ifdef HAS_INPUT_GRAD
-    const auto s0 = TensorAccessor(tensor::s0);
-    DataflowBuffer dfb_out0(dfb::out0);
-    const auto out0_tile_bytes = dfb_out0.get_entry_size();
-#endif
+    // input_grad (out0) and other_grad (out1) are optional outputs. Construction of both the
+    // tensor accessor and the DFB sat under #ifdef HAS_*_GRAD.
+    auto dfb_out0 = construct_nullable_dfb(dfb::out0);
+    auto dfb_out1 = construct_nullable_dfb(dfb::out1);
+    auto s0 = construct_nullable_tensor(tensor::s0);
+    auto s1 = construct_nullable_tensor(tensor::s1);
 
-#ifdef HAS_OTHER_GRAD
-    const auto s1 = TensorAccessor(tensor::s1);
-    DataflowBuffer dfb_out1(dfb::out1);
-    const auto out1_tile_bytes = dfb_out1.get_entry_size();
-#endif
+    uint32_t out0_tile_bytes = 0;
+    with_nullable_resource(dfb_out0, [&](DataflowBuffer& dfb_out0) { out0_tile_bytes = dfb_out0.get_entry_size(); });
+    uint32_t out1_tile_bytes = 0;
+    with_nullable_resource(dfb_out1, [&](DataflowBuffer& dfb_out1) { out1_tile_bytes = dfb_out1.get_entry_size(); });
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; i++) {
-#ifdef HAS_INPUT_GRAD
-        dfb_out0.wait_front(onetile);
-        noc.async_write(dfb_out0, s0, out0_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
-        noc.async_write_barrier();
-        dfb_out0.pop_front(onetile);
-#endif
+        with_nullable_resource(dfb_out0, s0, [&](DataflowBuffer& dfb_out0, auto const& s0) {
+            dfb_out0.wait_front(onetile);
+            noc.async_write(dfb_out0, s0, out0_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+            noc.async_write_barrier();
+            dfb_out0.pop_front(onetile);
+        });
 
-#ifdef HAS_OTHER_GRAD
-        dfb_out1.wait_front(onetile);
-        noc.async_write(dfb_out1, s1, out1_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
-        noc.async_write_barrier();
-        dfb_out1.pop_front(onetile);
-#endif
+        with_nullable_resource(dfb_out1, s1, [&](DataflowBuffer& dfb_out1, auto const& s1) {
+            dfb_out1.wait_front(onetile);
+            noc.async_write(dfb_out1, s1, out1_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+            noc.async_write_barrier();
+            dfb_out1.pop_front(onetile);
+        });
     }
 }
