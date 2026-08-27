@@ -93,7 +93,7 @@ skipped), so the 1-chip tests exercise the same code, not a second branch.
 | | files | tests |
 |---|---|---|
 | **Attention** | `tt/attention/*`, `tt/rope.py`, `tt/rope_tables.py` | `test_rope_vs_hf`, `test_ring_joint_sp_vs_ref` |
-| **MLP** | `tt/mlp.py` | `test_swiglu_vs_ref`, `test_mlp_vs_ref` |
+| **MLP** | `tt/mlp.py` | `test_swiglu_vs_ref`, `test_dense_mlp_vs_ref` |
 | **Shared — frozen** | `config.py`, `tt/ccl.py`, `utils/`, `configs/`, `reference/`, `tt/checkpoint.py`, `tt/rms_norm.py`, `tt/model_config.py`, `tests/test_factory.py`, `tests/unit/shapes.py`, `conftest.py` | `test_checkpoint_ingest`, `test_reference_model`, `test_rms_norm_vs_ref` |
 
 Neither engineer needs to touch the other's files, and neither needs a decoder layer to test: each
@@ -116,6 +116,15 @@ something was really tested rather than skipped. Currently parked, in the order 
 | QKV + o_proj on `1x4` | a real 4-wide TP axis | column/row-parallel splits and the TP reduce-scatter close |
 | SP=8 on `8x1` | a LoudBox and a logical 8×1 view | the production ring length |
 | full block on `8x4` | Galaxy | SP=8 × TP=4 together, the only shape that tests both axes at once |
+
+The MLP's `8x4` rung IS wired and green: `test_dense_mlp_vs_ref` parametrizes `(8,4)` (auto-skipping
+wherever 32 chips don't fit), with `linear_fabric=True` — the Blackhole Galaxy is a plain mesh with
+no wrap-around links, the same configuration minimax_m3's `(8,4)` tests run, and like those it needs
+`TT_MESH_GRAPH_DESC_PATH=single_bh_galaxy`. It retires the fused gate|up interleave and the
+reduce-scatter close on the real 4-wide TP axis of the 32-chip fabric (verified on a BH Galaxy at
+PCC 0.9996). The MLP test declares **no `1x4` rung**: opening a 1×4 submesh of a Galaxy fails
+fabric-router sync against the full-mesh graph descriptor, and the `8x4` rung already covers the
+4-wide TP axis.
 
 ### The TP-slice rig
 
@@ -144,6 +153,10 @@ pytest models/demos/mistral_medium_d_p/tests/unit/test_rope_vs_hf.py \
        models/demos/mistral_medium_d_p/tests/unit/test_reference_model.py --noconftest
 
 pytest models/demos/mistral_medium_d_p/tests/unit -k 4x1   #  4 chips — BH QuietBox-2
+
+# 32 chips — BH Galaxy (MLP block only today; plain mesh, so the linear descriptor is required)
+TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto \
+  pytest models/demos/mistral_medium_d_p/tests/unit -k 8x4
 ```
 
 Every device test declares its mesh shapes through `tests/test_factory.py::parametrize_mesh_with_fabric`,

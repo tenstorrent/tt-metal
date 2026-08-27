@@ -63,8 +63,8 @@ class MLP:
             up = substate(state_dict, "up_proj")["weight"].transpose(-1, -2)  # [H, I]
             down = substate(state_dict, "down_proj")["weight"].transpose(-1, -2)  # [I, H]
 
-            # Interleave per TP shard so device i holds [gate_i | up_i] contiguously; a plain
-            # cat([gate, up], -1) would give device i the wrong halves once column_parallel splits it.
+            # column_parallel splits the last dim into tp contiguous blocks (block i -> TP col i),
+            # so build block i as [gate_i | up_i] — the layout the forward's gate/up slices expect.
             tp = self.mesh_config.tp
             w13 = (
                 torch.cat(
