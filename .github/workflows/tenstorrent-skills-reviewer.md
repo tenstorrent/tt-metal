@@ -62,7 +62,8 @@ pre-agent-steps:
             gh api --paginate "repos/$EXPR_GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" \
               --jq '.[] | select(.patch != null)
                     | select(.filename | test("(\\.lock\\.yml$|(^|/)(generated|dist|build)/)") | not)
-                    | "diff --git a/\(.filename) b/\(.filename)\n--- a/\(.filename)\n+++ b/\(.filename)\n\(.patch)"' \
+                    | (.previous_filename // .filename) as $a
+                    | "diff --git a/\($a) b/\(.filename)\n--- a/\($a)\n+++ b/\(.filename)\n\(.patch)"' \
               > /tmp/gh-aw/agent/pr-diff.full 2>/tmp/gh-aw/agent/pr-diff.err
             FILES_EXIT=$?
             set -e
