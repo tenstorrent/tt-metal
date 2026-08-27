@@ -221,6 +221,17 @@ def _compose_head_local(tensor: ttnn.Tensor, mesh_device: ttnn.MeshDevice, *, ro
     ]
 
 
+def _cores(grid: ttnn.CoreRangeSet) -> set[tuple[int, int]]:
+    """Flatten a `CoreRangeSet` to `{(x, y)}`; the bindings expose no set algebra."""
+
+    return {
+        (x, y)
+        for core_range in grid.ranges()
+        for y in range(core_range.start.y, core_range.end.y + 1)
+        for x in range(core_range.start.x, core_range.end.x + 1)
+    }
+
+
 def _head_slice_memcfg(heads_memcfg: ttnn.MemoryConfig, *, start: int, count: int) -> ttnn.MemoryConfig:
     """Return the placement `nlp_create_qkv_heads_decode` gives one of Q/K/V.
 
@@ -518,8 +529,11 @@ def test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill(me
         assert attention._q_norm.config.decode_compute_cores is not None
         q_memcfg = _head_slice_memcfg(heads_memcfg, start=0, count=users)
         k_memcfg = _head_slice_memcfg(heads_memcfg, start=users, count=users)
-        assert not q_memcfg.shard_spec.grid.intersects(k_memcfg.shard_spec.grid)
-        print(f"[qk-norm] q cores {q_memcfg.shard_spec.grid}  k cores {k_memcfg.shard_spec.grid}", flush=True)
+        # `CoreRangeSet` has no `intersects` in the Python bindings, so compare
+        # the flattened core sets.
+        assert not _cores(q_memcfg.shard_spec.grid) & _cores(k_memcfg.shard_spec.grid)
+        print(f"[qk-norm] q cores {sorted(_cores(q_memcfg.shard_spec.grid))}", flush=True)
+        print(f"[qk-norm] k cores {sorted(_cores(k_memcfg.shard_spec.grid))}", flush=True)
 
         for mode in ("prefill", "decode"):
             model.activate(mode)
@@ -568,8 +582,10 @@ def test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill(me
                         # Q and K back on a wider grid overlaps them, and the
                         # fused QK rotary refuses that - which is how this test's
                         # first version passed while the block still aborted.
-                        assert out.memory_config().shard_spec.grid == memcfg.shard_spec.grid, (
-                            f"{name} came back on {out.memory_config().shard_spec.grid}, not {memcfg.shard_spec.grid}"
+                        returned = _cores(out.memory_config().shard_spec.grid)
+                        assert returned == _cores(memcfg.shard_spec.grid), (
+                            f"{name} came back on {sorted(returned)}, "
+                            f"not {sorted(_cores(memcfg.shard_spec.grid))}"
                         )
                     copies = _compose_head_local(out, mesh_device, rows=shape[1])
                     for index, copy in enumerate(copies):

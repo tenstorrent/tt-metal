@@ -154,6 +154,11 @@ def validate_galaxy_mesh(name: str, mesh_device: Any) -> None:
         raise ValueError(f"{name} supports Wormhole only, got {mesh_device.arch()}")
 
 
+#: Worker cores a decode collective needs for itself, and which therefore may
+#: not be covered by the tensors it is given. One per fabric link, four links.
+GALAXY_CCL_RESERVED_WORKER_CORES = 4
+
+
 def lm_head_reduce_core_count(padded_local_vocab: int, available_cores: int) -> int:
     """Return the core count the decode LM head all-reduce stages onto.
 
@@ -177,17 +182,40 @@ def lm_head_reduce_core_count(padded_local_vocab: int, available_cores: int) -> 
 
     The production 32 works there because its padded width is 16384 -- 512 tiles,
     which 32 divides. Llama's ring-padded width here is 16128, or 504 tiles, and
-    32 does not divide 504. So this returns the largest core count that both fits
-    the worker envelope and divides the width evenly in tiles: 42 for Llama's 504
-    tiles, 50 for Qwen's 600. Because the buffer is exactly ``GALAXY_COLUMNS``
-    times the width, one divisibility condition covers both.
+    32 does not divide 504. So this returns the largest core count that divides
+    the width evenly in tiles and still leaves the collective room to work.
+    Because the buffer is exactly ``GALAXY_COLUMNS`` times the width, one
+    divisibility condition covers both.
+
+    **The reduction may not take the whole worker envelope.**
+    ``all_reduce_async`` needs worker cores of its own - one per fabric link -
+    and it takes them from what the sub-device has left after the tensors are
+    placed. Filling the envelope leaves it none, and it does not raise; it warns
+    and then segmentation-faults::
+
+        AllGather is being launched on a subdevice with fewer worker cores
+        available than ideal. Ideally 4 cores (1 per link and 4 links) are made
+        available but only 0 are available.
+        all_reduce_async_program_factory.cpp:61
+        Fatal Python error: Segmentation fault
+
+    Measured on `(8, 4)` with Qwen3-32B, whose 19200-wide local logits are 600
+    tiles: 50 divides 600, the search took all 50 worker cores, and the decode
+    LM head crashed the process the first time it ran (D-B27, run `a2_12_block`).
+    Llama-3.3-70B never hit it because 32 does not divide its 504 tiles and the
+    largest divisor under 50 is 42, which happens to leave eight cores free.
+    Reserving explicitly makes that luck into a rule: Llama still resolves 42,
+    Qwen now resolves 40 (15 tiles, 480 columns per core).
     """
 
     tiles = padded_local_vocab // TILE
-    for count in range(min(available_cores, tiles), 0, -1):
+    usable = available_cores - GALAXY_CCL_RESERVED_WORKER_CORES
+    if usable < 1:
+        raise ValueError(f"{available_cores} worker cores cannot host a reduction and its collective")
+    for count in range(min(usable, tiles), 0, -1):
         if tiles % count == 0:
             return count
-    raise ValueError(f"no core count divides {tiles} tiles within {available_cores} cores")
+    raise ValueError(f"no core count divides {tiles} tiles within {usable} cores")
 
 
 def pad_ring_width(value: int) -> int:

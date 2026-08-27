@@ -14,12 +14,14 @@ import torch
 
 import ttnn
 from models.common.models.galaxy.recipes import (
+    GALAXY_CCL_RESERVED_WORKER_CORES,
     GALAXY_MESH_SHAPE,
     RING_ALIGNMENT,
     GalaxyDenseGeometry,
     distributed_norm_decode_memory_config,
     dram_sharded_weight_memory_config,
     galaxy_padded_vocab_size,
+    lm_head_reduce_core_count,
     pad_ring_width,
     prefetch_sender_cores,
     resolve_galaxy_decode_placements,
@@ -85,6 +87,43 @@ def test_geometry_reports_galaxy_aligned_vocabularies():
     # and what stops `all_reduce_async` waiting on a shard that is never full.
     for vocab in (128256, 151936):
         assert (galaxy_padded_vocab_size(vocab) // 8) % (24 * 32) == 0
+
+
+def test_the_lm_head_reduction_leaves_the_collective_worker_cores():
+    """Filling the worker envelope segmentation-faults the decode LM head.
+
+    ``all_reduce_async`` takes worker cores of its own - one per fabric link -
+    from whatever the sub-device has left once the tensors are placed. If the
+    reduction covers every worker core it gets none, and it does not raise::
+
+        AllGather is being launched on a subdevice with fewer worker cores
+        available than ideal. Ideally 4 cores (1 per link and 4 links) are made
+        available but only 0 are available.
+        Fatal Python error: Segmentation fault
+
+    Measured on `(8, 4)` as D-B27: Qwen3-32B's 19200-wide local logits are 600
+    tiles, 50 divides 600, and the unreserved search took all 50. Llama-3.3-70B
+    never hit it - 504 tiles, largest divisor under 50 is 42 - which is luck, not
+    design, and this is the rule that replaces the luck.
+    """
+
+    workers = worker_cores().num_cores()
+    assert workers == 50
+
+    llama_local = galaxy_padded_vocab_size(128256) // 8
+    qwen_local = galaxy_padded_vocab_size(151936) // 8
+    llama_cores = lm_head_reduce_core_count(pad_ring_width(llama_local), workers)
+    qwen_cores = lm_head_reduce_core_count(pad_ring_width(qwen_local), workers)
+
+    # Llama is unchanged by the reservation; Qwen drops from 50 to 40.
+    assert llama_cores == 42
+    assert qwen_cores == 40
+    for cores, local in ((llama_cores, llama_local), (qwen_cores, qwen_local)):
+        assert cores <= workers - GALAXY_CCL_RESERVED_WORKER_CORES
+        # D-B19's invariant, unchanged: a tensor handed to `all_reduce_async`
+        # must have `logical_width == cores * shard_width` exactly.
+        assert pad_ring_width(local) % cores == 0
+        assert (pad_ring_width(local) // cores) % 32 == 0
 
 
 @pytest.mark.parametrize(
