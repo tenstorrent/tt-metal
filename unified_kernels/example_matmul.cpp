@@ -21,10 +21,10 @@ void kernel_main() {
     constexpr uint32_t kCbOut = get_arg(args::cb_out);
     constexpr uint32_t kCbPartials = get_arg(args::cb_partials);
 
-    const auto a = TensorAccessor(tensor::a));
-    const auto b = TensorAccessor(tensor::b));
-    const auto bias = TensorAccessor(tensor::bias));
-    const auto out = TensorAccessor(tensor::out));
+    const auto a = TensorAccessor(tensor::a);
+    const auto b = TensorAccessor(tensor::b);
+    const auto bias = TensorAccessor(tensor::bias);
+    const auto out = TensorAccessor(tensor::out);
 
     u::matmul_init<A, B>(kCbA, kCbB, kCbOut);
 

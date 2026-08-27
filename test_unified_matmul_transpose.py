@@ -50,10 +50,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import dfb, run_unified_spec, single_core, unified_program_spec
 
 KERNEL = "unified_kernels/matmul.cpp"
-CB_IN0, CB_IN1, CB_BIAS, CB_ACC, CB_OUT = 0, 1, 2, 24, 16
 TILE = 32
 
 
@@ -102,18 +101,17 @@ def run(device, rt, ct, kt, k_blocks=1, mode="dst", bias=False, seed=0):
 
     core_ranges, cores = single_core()
     # bias accessor args go LAST, matching the kernel's arg layout.
-    ct_args = []
-    for t in (ta, tb, tout, tbias) if bias else (ta, tb, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    rt_args = [ta.buffer_address(), tb.buffer_address(), tout.buffer_address()]
-    if bias:
-        rt_args.append(tbias.buffer_address())
-    cbs = [
-        make_cb(CB_IN0, core_ranges, num_pages=rt * kt),
-        make_cb(CB_IN1, core_ranges, num_pages=kt * ct),
-        make_cb(CB_ACC, core_ranges, num_pages=rt * ct),
-        make_cb(CB_OUT, core_ranges, num_pages=rt * ct),
-    ] + ([make_cb(CB_BIAS, core_ranges, num_pages=ct)] if bias else [])
+    dfbs = [
+        dfb("in0", rt * kt),
+        dfb("in1", kt * ct),
+        dfb("acc", rt * ct),
+        dfb("out", rt * ct),
+        # Declared even without MM_BIAS: the kernel declares its Storage unconditionally.
+        dfb("bias", ct),
+    ]
+    # The bias tensor is always bound too, for the same reason -- the kernel names
+    # tensor::bias on every projection whether or not the fusion reads it.
+    tensors = {"in0": ta, "in1": tb, "out": tout, "bias": tbias}
     defines = (
         [
             ("MM_RT_DIM", str(rt)),
@@ -126,16 +124,16 @@ def run(device, rt, ct, kt, k_blocks=1, mode="dst", bias=False, seed=0):
         + ([("MM_BIAS", "1")] if bias else [])
     )
 
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=cbs,
-        compile_time_args=ct_args,
-        runtime_args=rt_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
+        tensors=tensors,
         defines=defines,
+        name="matmul_transpose",
     )
-    out = ttnn.generic_op(([ta, tb, tbias, tout] if bias else [ta, tb, tout]), program)
+    run_unified_spec(device, spec, tensors)
+    out = tout
     got = ttnn.to_torch(out).to(torch.float32)[0, 0]
 
     # The truth: a real transpose, summed over the k blocks.

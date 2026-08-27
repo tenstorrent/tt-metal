@@ -519,6 +519,65 @@ error from metal rather than a garbage loop bound. The sentinel has nothing left
 twice back to back on the reserved pair, which is the case that fails if the barrier clears
 its arrival count in the wrong order, and it is bit-identical on both paths.
 
+### 7.4 The wholesale port
+
+Every kernel and every launcher is on the spec path. `unified_program()`, `make_cb()`,
+`make_semaphore()` and `make_runtime_args()` are gone from the harness, and
+`check_runtime_args` / `kRuntimeArgSentinel` are gone from `api.h` -- the sentinel existed
+only to guard a positional runtime-argument list that no longer exists.
+
+**A kernel now has one spelling for everything.** No `#if` selecting a path, no
+`TensorAccessorArgs` offsets, no `get_arg_val` indices:
+
+    constexpr uint32_t num_blocks = get_arg(args::num_blocks);   // compile-time
+    constexpr uint32_t kCbIn      = get_arg(args::cb_in);        // compile-time
+    const uint32_t     out_block  = get_arg(args::out_block);    // runtime
+    const auto         in         = TensorAccessor(tensor::in);
+
+That uniformity came from ttnn's own `redistribute_pages_row_major_reader.cpp`, which reads
+its compile-time args through `get_arg` exactly as it reads its runtime ones. `kernel_args.h`
+has a `constexpr get_arg(CtaVal<T>)` overload for it, and the goal is stated in that header:
+moving an argument between CTA and RTA should be a host-side change with no kernel edit.
+
+**Three defaults and one silent contract, found by porting rather than by reading.**
+
+*Compute silently lost its optimisation level.* `KernelSpec::CompilerOptions::opt_level`
+defaults to O2 for every kernel; the legacy path used O2 for data movement and **O3** for
+compute (`kernel_types.hpp:82` against `:132`). For flash_attention that is not a slowdown but
+a link failure -- constant propagation stops reaching `addr_mod_t::set()`'s inline-asm
+immediate and LTO reports "impossible constraint in 'asm'". Every suite ported before that was
+found had been building compute at O2 with nothing saying so, which would have been measured
+as a model regression rather than a build one.
+
+*A wrong endpoint role is silent on Gen1.* Binding a buffer's data-movement end to thread 0
+while the kernel drives it on thread 1 runs, and passes, bit-identical: Gen1 circular-buffer
+state is per core rather than per RISC, so either DM kernel can drive it whatever the host
+declared. The masks only matter on Gen2. Since the kernel already states the thread in every
+`noc_load<N>` / `noc_store<N>`, the harness now DERIVES the roles from the kernel rather than
+having 24 launchers restate them -- removing the second end of the contract instead of trying
+to check it.
+
+*Metal 2.0 refuses semaphore bindings on compute kernels*, which agrees with what `api.h`
+already documented (§7.3).
+
+*A buffer the kernel DECLARES must be declared by the host*, even where no shape uses it.
+This bit four times -- `matmul`'s bias, `reduction_tree`'s tmp1, `passcost`'s scratch chain,
+`bcast`'s tmp -- so it is the rule, not a special case.
+
+**What the port found in our own code**, all of it latent beforehand: two launchers whose
+buffer NAMES had drifted from their kernels' (under the descriptor path the two sides only had
+to agree on numbers); a buffer format that had to be carried explicitly, caught as 15 numeric
+failures in `matmul_blocked`'s bfloat8 configurations, which is hazard D19 behaving exactly as
+D19 says it does; and `passcost`'s scratch buffers, which had the old CB indices 1..7 hardcoded
+in the kernel against a layout the launcher matched by hand.
+
+**One thing does not work on the spec path: the real-time profiler.** `test_unified_passcost`
+checks out but cannot measure -- its `bench()` registers a program realtime-profiler callback,
+the callback reports itself active, and no records arrive for programs dispatched through
+`MakeMeshWorkloadFromSpec` + `EnqueueMeshWorkload`. The correctness half of that suite passes;
+the timing half does not run. Not diagnosed further, and it blocks any performance comparison
+between the two paths, so it is the first thing to fix after this.
+
 ## 8. What this buys, against the hazard ledger
 
 | hazard | today | after |

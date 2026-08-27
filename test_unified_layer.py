@@ -44,7 +44,7 @@ import ttnn
 import test_unified_attention_proj as proj
 import test_unified_flash as flash
 import test_unified_rope as rope
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import dfb, run_unified_spec, single_core, unified_program_spec
 
 TILE = 32
 EPS = 1e-5
@@ -53,11 +53,6 @@ RMSNORM_KERNEL = "unified_kernels/rmsnorm.cpp"
 MATMUL_KERNEL = "unified_kernels/matmul.cpp"
 ROPE_KERNEL = "unified_kernels/rope.cpp"
 BINARY_KERNEL = "unified_kernels/binary.cpp"
-
-RMS_CB = dict(x=0, w=1, eps=2, inv_n=3, sq=4, mean=5, rsqrt=6, normed=7, out=16)
-ROPE_CB = dict(x=0, cos=1, sin=2, m=3, rot=4, out=16)
-MM_CB = dict(in0=0, in1=1, out=16, acc=24)
-BN_CB = dict(in0=0, in1=1, out=16)
 
 
 def _dram():
@@ -104,61 +99,66 @@ def bf16_pair(v):
 # --- one launch per kernel ------------------------------------------------------------
 
 
-def launch(device, kernel, cbs, ct_args, rt_args, tensors, defines=None, named_ct_args=None):
-    """`cbs` entries are (index, pages) or (index, pages, dtype); the default is bfloat16.
+def launch(device, kernel, cbs, tensors, rt_args=None, defines=None, named_ct_args=None):
+    """`cbs` entries are (name, pages) or (name, pages, dtype); the default is bfloat16.
 
-    A circular buffer's format must match the DRAM tensor it is read from or written to:
-    the page size follows the format (1088 bytes for bfloat8_b, 2048 for bfloat16) and a
-    disagreement reads the wrong bytes rather than failing.
+    A buffer's format must match the DRAM tensor it is read from or written to: the entry
+    size follows the format (1088 bytes for bfloat8_b, 2048 for bfloat16) and a disagreement
+    reads the wrong bytes rather than failing.
+
+    `tensors` is {parameter name: ttnn.Tensor}, and `rt_args` {name: value} -- both named, so
+    neither can drift out of position the way the old positional lists could.
     """
     core_ranges, cores = single_core()
-    args = list(ct_args)
-    for t in tensors:
-        args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=kernel,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=[make_cb(c[0], core_ranges, num_pages=c[1], dtype=(c[2] if len(c) > 2 else ttnn.bfloat16)) for c in cbs],
-        compile_time_args=args,
+        nodes=core_ranges,
+        dfbs=[dfb(c[0], c[1], dtype=(c[2] if len(c) > 2 else ttnn.bfloat16)) for c in cbs],
+        tensors=tensors,
         named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
+        runtime_arg_names=sorted(rt_args or {}),
         defines=defines,
+        name=kernel.split("/")[-1].removesuffix(".cpp"),
     )
-    return ttnn.generic_op(list(tensors), program)
+    run_unified_spec(device, spec, tensors, runtime_args=rt_args, nodes=cores)
+    return tensors["out"]
 
 
 def rmsnorm(device, x, w, ht, wt):
     out = nan_out(device, ht * TILE, wt * TILE, ACT)
     cbs = [
-        (RMS_CB["x"], ht * wt, ACT),
-        (RMS_CB["w"], wt, WGT),
-        (RMS_CB["eps"], 1),
-        (RMS_CB["inv_n"], 1),
-        (RMS_CB["sq"], ht * wt),
-        (RMS_CB["mean"], ht),
-        (RMS_CB["rsqrt"], ht),
-        (RMS_CB["normed"], ht * wt),
-        (RMS_CB["out"], ht * wt, ACT),
+        ("x", ht * wt, ACT),
+        ("w", wt, WGT),
+        ("eps", 1),
+        ("inv_n", 1),
+        ("sq", ht * wt),
+        ("mean", ht),
+        ("rsqrt", ht),
+        ("normed", ht * wt),
+        ("out", ht * wt, ACT),
     ]
     # The last two are the row-chunk range. rmsnorm walks the tensor in chunks of its
     # compile-time ht, and this layer passes the whole height as one chunk -- so one chunk,
     # starting at zero. Omitting them does not fail to compile; it feeds the loop bound
     # whatever is in that argument slot, which is how this hung the device once.
-    rt = [x.buffer_address(), w.buffer_address(), out.buffer_address(), bf16_pair(EPS), 0, 1]
-    return launch(device, RMSNORM_KERNEL, cbs, [], rt, (x, w, out), None, [("ht", ht), ("wt", wt)])
+    # rmsnorm walks the tensor in chunks of its compile-time ht; this layer passes the whole
+    # height as one chunk. Named now, so leaving one out is an error rather than a garbage
+    # loop bound -- which is how this hung the device once.
+    rt = {"eps_bits": bf16_pair(EPS), "chunk_begin": 0, "chunk_count": 1}
+    return launch(device, RMSNORM_KERNEL, cbs, {"x": x, "w": w, "out": out}, rt, None, [("ht", ht), ("wt", wt)])
 
 
 def matmul(device, a, b, rt_dim, ct_dim, kt_dim):
     """Single-shot [rt, kt] @ [kt, ct]; the whole of b lives in L1."""
     out = nan_out(device, rt_dim * TILE, ct_dim * TILE, ACT)
     cbs = [
-        (MM_CB["in0"], rt_dim * kt_dim, ACT),
-        (MM_CB["in1"], kt_dim * ct_dim, WGT),
-        (MM_CB["out"], rt_dim * ct_dim, ACT),
-        (MM_CB["acc"], rt_dim * ct_dim),
+        ("in0", rt_dim * kt_dim, ACT),
+        ("in1", kt_dim * ct_dim, WGT),
+        ("out", rt_dim * ct_dim, ACT),
+        ("acc", rt_dim * ct_dim),
+        # Declared even unfused: matmul.cpp declares its bias Storage unconditionally.
+        ("bias", ct_dim, WGT),
     ]
-    rt = [a.buffer_address(), b.buffer_address(), out.buffer_address()]
     defines = [
         ("MM_RT_DIM", str(rt_dim)),
         ("MM_CT_DIM", str(ct_dim)),
@@ -166,7 +166,8 @@ def matmul(device, a, b, rt_dim, ct_dim, kt_dim):
         ("MM_K_BLOCKS", "1"),
         ("MM_SINGLE_SHOT", "1"),
     ]
-    return launch(device, MATMUL_KERNEL, cbs, [], rt, (a, b, out), defines)
+    # bias is bound even unfused: the kernel names tensor::bias on every projection.
+    return launch(device, MATMUL_KERNEL, cbs, {"in0": a, "in1": b, "out": out, "bias": b}, None, defines)
 
 
 def apply_rope(device, x, cos, sin, m, seq_t, dim_t, chunk):
@@ -174,23 +175,22 @@ def apply_rope(device, x, cos, sin, m, seq_t, dim_t, chunk):
     total = seq_t * dim_t
     assert total % chunk == 0
     cbs = [
-        (ROPE_CB["x"], chunk, ACT),
-        (ROPE_CB["cos"], chunk),
-        (ROPE_CB["sin"], chunk),
-        (ROPE_CB["m"], 1),
-        (ROPE_CB["rot"], chunk),
-        (ROPE_CB["out"], chunk, ACT),
+        ("x", chunk, ACT),
+        ("cos", chunk),
+        ("sin", chunk),
+        ("m", 1),
+        ("rot", chunk),
+        ("out", chunk, ACT),
     ]
     # The last two are the chunk range rope.cpp partitions across cores. One core here, so
     # it owns all of them. Omitting them compiles and feeds the loop a garbage bound.
-    rt = [t.buffer_address() for t in (x, cos, sin, m, out)] + [0, total // chunk]
+    rt = {"chunk_begin": 0, "chunk_count": total // chunk}
     return launch(
         device,
         ROPE_KERNEL,
         cbs,
-        [],
+        {"x": x, "cos": cos, "sin": sin, "m": m, "out": out},
         rt,
-        (x, cos, sin, m, out),
         None,
         [("chunk", chunk), ("num_chunks", total // chunk)],
     )
@@ -200,14 +200,14 @@ def binary(device, a, b, rows, cols, mode=None):
     """Elementwise over rows x cols tiles; mode None is add, "silu_mul" is silu(a) * b."""
     out = nan_out(device, rows * TILE, cols * TILE, ACT)
     tiles = rows * cols
-    cbs = [(BN_CB["in0"], 2 * tiles, ACT), (BN_CB["in1"], 2 * tiles, ACT), (BN_CB["out"], 2 * tiles, ACT)]
+    cbs = [("in0", 2 * tiles, ACT), ("in1", 2 * tiles, ACT), ("out", 2 * tiles, ACT)]
     # The last two are the block range binary.cpp partitions across cores. This layer is
     # one core and one block, so it owns block 0 and there is exactly one of them. Omitting
     # them compiles fine and feeds the loop whatever is in that arg slot -- a hang.
-    rt = [a.buffer_address(), b.buffer_address(), out.buffer_address(), 0, 1]
+    rt = {"block_begin": 0, "block_count": 1}
     defines = [("BN_SILU_MUL", "1")] if mode == "silu_mul" else None
     named = [("num_blocks", 1), ("tiles_per_block", tiles)]
-    return launch(device, BINARY_KERNEL, cbs, [], rt, (a, b, out), defines, named)
+    return launch(device, BINARY_KERNEL, cbs, {"in0": a, "in1": b, "out": out}, rt, defines, named)
 
 
 # --- the host-side layout gap --------------------------------------------------------
