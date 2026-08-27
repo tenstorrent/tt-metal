@@ -80,6 +80,11 @@ Return `more-work-needed` when evidence shows one of these:
   explanation;
 - a required check, artifact, metric, or implementation path from the goal
   contract is missing, failing, stale, or contradicted by another artifact;
+- a stage adds or changes trace capture/replay but has no representative
+  repeated-replay evidence with `TT_METAL_TRACE_ALLOC_TRACKING=1`, accepts a run
+  that excludes program-cache allocations, or leaves a corruptible-buffer
+  acknowledgment without an overwrite-before-use or preserve-before-overwrite
+  invariant;
 - logs or code show a plausible bug in a stage-critical subsystem, such as
   cache ownership, trace replay, token feedback, sampling, precision policy,
   page-table handling, or model output correctness;

@@ -17,6 +17,7 @@ Read only what helps the current task:
 - `models/tt_transformers/tt/generator.py`: canonical decode trace patterns, including host input preparation, persistent device inputs, replay refresh, and split sampling.
 - `models/common/sampling/generator.py` and `models/common/modules/sampling/sampling_1d.py`: common on-device sampling implementations to compare before choosing a token-out sampling path.
 - `models/tt_transformers/tt/model.py`: model-side `prepare_decode_inputs_host` and device-only `ttnn_decode_forward` split.
+- `tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrectness.md`: trace correctness requirements and the trace allocation checker. Read this before accepting a capture/replay path or exempting intentionally shared trace buffers.
 - `advanced_perf_optimizations.md`: deeper examples for TTNN trace capture/replay, multiple command queues, trace plus multi-CQ, and production benchmarking patterns. Search this file for the API or failure mode you are working on before loading it wholesale.
 
 ## Mental Model
@@ -173,6 +174,31 @@ If the fatal is a write, first check for host input creation, lazy weights, cach
 
 If replay uses stale inputs, compare the tensors captured by the model to the tensors refreshed before `execute_trace`. `tt_transformers` solves this by binding model-side trace inputs before capture and only refreshing those exact buffers before replay.
 
+## Trace Allocation Safety Gate
+
+Before accepting a new or changed traced path, launch the representative repeated-replay test in a fresh process with tracking enabled before TTNN is imported:
+
+```bash
+TT_METAL_TRACE_ALLOC_TRACKING=1 python <focused-replay-test>
+```
+
+Exercise every trace variant and the real replay ordering, including alternating traces that share persistent inputs or outputs. Keep program-cache allocations in the acceptance check. `TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=1` is only a diagnostic noise filter; a run that needs it is not passing evidence because late program compilation remains unsafe. When investigating a failure, add `TT_METAL_TRACE_ALLOC_TRACEBACKS=1` and, if needed, set `TT_METAL_TRACE_ALLOC_REFERRER_DEPTH`.
+
+Some multi-trace paths deliberately reuse buffers that another trace may overwrite. Acknowledge those buffers only through the tracker tool:
+
+```python
+from ttnn.tools import trace_allocation_tracker
+
+trace_allocation_tracker.acknowledge_corruptible(tensor)
+
+with trace_allocation_tracker.corruptible_allocation_scope(mesh_device):
+    trace_input = create_trace_input()
+```
+
+Neither API prevents corruption; it only removes the acknowledged allocation from validation. Use it only when the path overwrites an acknowledged input before use and preserves an acknowledged output before another trace can overwrite it. Prefer `acknowledge_corruptible` for specific tensors. The scope form excludes every device allocation made inside it, including implicit and program-cache allocations, so keep it narrow and justify it in the evidence.
+
+Trace IDs are scoped by the active sub-device manager. Capture, end, execute, and release each trace with the intended manager active, and cover manager changes in the replay test when the implementation uses them.
+
 Before accepting any reduced input-refresh scheme, add a focused replay test that runs two decode steps with different token and current-position values, inspects the exact persistent trace input tensors, and asserts the output/logits changed. If page-table refresh is skipped, cover both unchanged and changed page tables.
 
 Before accepting token-out decode, add a focused feedback test that proves the sampled token produced by replay N is the token input consumed by replay N+1. This is separate from teacher forcing; teacher forcing can pass while feedback is stale or host-reconstructed.
@@ -201,6 +227,7 @@ Leave compact evidence that the traced path is real:
 
 - Correctness before and after tracing against the same reference.
 - Repeated replay determinism across several executions.
+- The exact `TT_METAL_TRACE_ALLOC_TRACKING=1` invocation, trace variants and replay ordering covered, and a clean allocation-check result. List every corruptible-buffer acknowledgment with its overwrite-before-use or preserve-before-overwrite invariant.
 - Updated-input replay test proving outputs change when trace inputs are refreshed.
 - For vLLM decode: stale-input validation for token/current-position/page-table refresh, explicit async-overlap setting and proof if enabled, on-device sampling trace evidence, and a passing server smoke run with decode trace enabled.
 - Split-sampling evidence for token-out decode: internal sampling trace enabled, `tt_out_tok` wired to the persistent decode token input, and greedy benchmarks using the fastest correct on-device sampling strategy measured for this mesh.

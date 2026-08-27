@@ -522,6 +522,7 @@ Avoid suppressing advice in the report used to guide optimization. When applicab
 
 - No unnecessary `InterleavedToSharded`, `ShardedToInterleaved`, `reshard`, `tilize`, `untilize`, `to_torch`, or `from_torch` in the optimized runtime path.
 - Decode trace replay still measures the optimized path, not a fallback path.
+- After the final buffer-lifetime, persistent-buffer, trace-key, sampling, or CCL changes, rerun representative repeated replay with `TT_METAL_TRACE_ALLOC_TRACKING=1` as specified by `$tt-enable-tracing`. An optimized path with an unresolved unsafe allocation, an unexplained corruptible-buffer acknowledgment, or acceptance evidence that skips program-cache allocations is incomplete.
 - Program configs and compute-kernel configs are described in the final report or a compact structured summary.
 - If `supports_async_decode=True` is advertised, the split vLLM path has been exercised: `decode_forward(read_from_device=False)`, `read_decode_output(async_read=True)`, and `process_decode_output_host`.
 - On-device sampling returns device tokens/logprobs through decode; host top-1 or argmax fast paths are removed or proven unused by the measured benchmark.
