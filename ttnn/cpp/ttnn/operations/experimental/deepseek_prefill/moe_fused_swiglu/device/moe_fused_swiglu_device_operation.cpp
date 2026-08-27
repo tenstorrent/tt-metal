@@ -4,7 +4,9 @@
 #include "moe_fused_swiglu_device_operation.hpp"
 
 #include <initializer_list>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -46,13 +48,27 @@ void validate_aux_shape(const Tensor& tensor, const char* name) {
 
 void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_arguments, const tensor_args_t& tensor_arguments) {
-    for (const auto& [name, tensor] : std::initializer_list<std::pair<const char*, const Tensor&>>{
-             {"activations", tensor_arguments.activations},
-             {"w_gate", tensor_arguments.w_gate},
-             {"w_up", tensor_arguments.w_up},
-             {"w_down", tensor_arguments.w_down},
-             {"counts", tensor_arguments.counts},
-             {"global_expert_idx_table", tensor_arguments.global_expert_idx_table}}) {
+    TT_FATAL(
+        tensor_arguments.w_gates.size() == operation_arguments.experts_per_chip &&
+            tensor_arguments.w_ups.size() == operation_arguments.experts_per_chip &&
+            tensor_arguments.w_downs.size() == operation_arguments.experts_per_chip,
+        "moe_fused_swiglu: weight lists must hold experts_per_chip ({}) entries (got {}, {}, {})",
+        operation_arguments.experts_per_chip,
+        tensor_arguments.w_gates.size(),
+        tensor_arguments.w_ups.size(),
+        tensor_arguments.w_downs.size());
+    std::vector<std::pair<std::string, const Tensor*>> device_tensors{
+        {"activations", &tensor_arguments.activations},
+        {"counts", &tensor_arguments.counts},
+        {"global_expert_idx_table", &tensor_arguments.global_expert_idx_table}};
+    for (uint32_t e = 0; e < operation_arguments.experts_per_chip; ++e) {
+        device_tensors.emplace_back(fmt::format("w_gate[{}]", e), &tensor_arguments.w_gates[e]);
+        device_tensors.emplace_back(fmt::format("w_up[{}]", e), &tensor_arguments.w_ups[e]);
+        device_tensors.emplace_back(fmt::format("w_down[{}]", e), &tensor_arguments.w_downs[e]);
+    }
+    for (const auto& [name_str, tensor_ptr] : device_tensors) {
+        const char* name = name_str.c_str();
+        const Tensor& tensor = *tensor_ptr;
         validate_device_tensor(tensor, name);
         TT_FATAL(
             tensor.device() == tensor_arguments.activations.device(),
@@ -88,13 +104,18 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         is_dram_interleaved(tensor_arguments.activations), "moe_fused_swiglu: activations must be DRAM interleaved");
 
-    const auto& gate_shape = tensor_arguments.w_gate.logical_shape();
-    const auto& up_shape = tensor_arguments.w_up.logical_shape();
-    const auto& down_shape = tensor_arguments.w_down.logical_shape();
-    for (const auto& [name, weight] : std::initializer_list<std::pair<const char*, const Tensor&>>{
-             {"w_gate", tensor_arguments.w_gate},
-             {"w_up", tensor_arguments.w_up},
-             {"w_down", tensor_arguments.w_down}}) {
+    const auto& gate_shape = tensor_arguments.w_gates[0].logical_shape();
+    const auto& up_shape = tensor_arguments.w_ups[0].logical_shape();
+    const auto& down_shape = tensor_arguments.w_downs[0].logical_shape();
+    std::vector<std::pair<std::string, const Tensor*>> weights;
+    for (uint32_t e = 0; e < operation_arguments.experts_per_chip; ++e) {
+        weights.emplace_back(fmt::format("w_gate[{}]", e), &tensor_arguments.w_gates[e]);
+        weights.emplace_back(fmt::format("w_up[{}]", e), &tensor_arguments.w_ups[e]);
+        weights.emplace_back(fmt::format("w_down[{}]", e), &tensor_arguments.w_downs[e]);
+    }
+    for (const auto& [name_str, weight_ptr] : weights) {
+        const char* name = name_str.c_str();
+        const Tensor& weight = *weight_ptr;
         TT_FATAL(weight.logical_shape().rank() == 2, "moe_fused_swiglu: {} must have rank 2", name);
         TT_FATAL(weight.layout() == tt::tt_metal::Layout::TILE, "moe_fused_swiglu: {} must be TILE layout", name);
         TT_FATAL(
@@ -109,13 +130,34 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
             "moe_fused_swiglu: {} must be DRAM interleaved or DRAM ND-sharded",
             name);
     }
-    TT_FATAL(
-        tensor_arguments.w_gate.dtype() == tensor_arguments.w_up.dtype() &&
-            tensor_arguments.w_gate.dtype() == tensor_arguments.w_down.dtype(),
-        "moe_fused_swiglu: all three weights must have the same dtype (gate={}, up={}, down={})",
-        tensor_arguments.w_gate.dtype(),
-        tensor_arguments.w_up.dtype(),
-        tensor_arguments.w_down.dtype());
+    // One program serves every expert, so a single accessor layout descriptor per role must fit
+    // them all: shape and dtype are pinned to expert 0 and only the base address varies.
+    const auto weights_dtype = tensor_arguments.w_gates[0].dtype();
+    for (const auto& [name_str, weight_ptr] : weights) {
+        TT_FATAL(
+            weight_ptr->dtype() == weights_dtype,
+            "moe_fused_swiglu: {} dtype {} must match w_gate[0] ({})",
+            name_str,
+            weight_ptr->dtype(),
+            weights_dtype);
+    }
+    for (uint32_t e = 1; e < operation_arguments.experts_per_chip; ++e) {
+        TT_FATAL(
+            tensor_arguments.w_gates[e].logical_shape() == gate_shape &&
+                tensor_arguments.w_ups[e].logical_shape() == up_shape &&
+                tensor_arguments.w_downs[e].logical_shape() == down_shape,
+            "moe_fused_swiglu: expert {} weight shapes must match expert 0",
+            e);
+        // The bank walk lives in the accessor layout descriptor, not in the base address, so an
+        // expert placed differently would be read through expert 0's page->bank map and give
+        // silently wrong numbers rather than fail.
+        TT_FATAL(
+            tensor_arguments.w_gates[e].memory_config() == tensor_arguments.w_gates[0].memory_config() &&
+                tensor_arguments.w_ups[e].memory_config() == tensor_arguments.w_ups[0].memory_config() &&
+                tensor_arguments.w_downs[e].memory_config() == tensor_arguments.w_downs[0].memory_config(),
+            "moe_fused_swiglu: expert {} weight memory configs must match expert 0",
+            e);
+    }
     TT_FATAL(
         gate_shape == up_shape,
         "moe_fused_swiglu: gate and up shapes must match (got {} and {})",
@@ -151,9 +193,9 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
         validate_aux_shape(aux, name);
     }
     TT_FATAL(
-        operation_arguments.local_expert_id < tensor_arguments.global_expert_idx_table.logical_shape()[-1],
-        "moe_fused_swiglu: local_expert_id {} is out of range for idx table length {}",
-        operation_arguments.local_expert_id,
+        operation_arguments.experts_per_chip <= tensor_arguments.global_expert_idx_table.logical_shape()[-1],
+        "moe_fused_swiglu: experts_per_chip {} exceeds idx table length {}",
+        operation_arguments.experts_per_chip,
         tensor_arguments.global_expert_idx_table.logical_shape()[-1]);
     TT_FATAL(operation_arguments.m_tiles > 0, "moe_fused_swiglu: input_m_tiles must be positive");
     TT_FATAL(
@@ -272,15 +314,18 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
                 output.logical_shape(),
                 activation_shape);
         }
-        for (const auto& [name, tensor] : std::initializer_list<std::pair<const char*, const Tensor&>>{
-                 {"activations", tensor_arguments.activations},
-                 {"w_gate", tensor_arguments.w_gate},
-                 {"w_up", tensor_arguments.w_up},
-                 {"w_down", tensor_arguments.w_down},
-                 {"counts", tensor_arguments.counts},
-                 {"global_expert_idx_table", tensor_arguments.global_expert_idx_table}}) {
+        std::vector<std::pair<std::string, const Tensor*>> alias_candidates{
+            {"activations", &tensor_arguments.activations},
+            {"counts", &tensor_arguments.counts},
+            {"global_expert_idx_table", &tensor_arguments.global_expert_idx_table}};
+        for (uint32_t e = 0; e < operation_arguments.experts_per_chip; ++e) {
+            alias_candidates.emplace_back(fmt::format("w_gate[{}]", e), &tensor_arguments.w_gates[e]);
+            alias_candidates.emplace_back(fmt::format("w_up[{}]", e), &tensor_arguments.w_ups[e]);
+            alias_candidates.emplace_back(fmt::format("w_down[{}]", e), &tensor_arguments.w_downs[e]);
+        }
+        for (const auto& [name, tensor] : alias_candidates) {
             TT_FATAL(
-                output.buffer()->address() != tensor.buffer()->address(),
+                output.buffer()->address() != tensor->buffer()->address(),
                 "moe_fused_swiglu: output must not alias {}; device readers can overlap output writeback",
                 name);
         }
@@ -336,12 +381,12 @@ namespace ttnn::prim {
 
 ttnn::Tensor moe_fused_swiglu(
     const ttnn::Tensor& activations,
-    const ttnn::Tensor& w_gate,
-    const ttnn::Tensor& w_up,
-    const ttnn::Tensor& w_down,
+    const std::vector<ttnn::Tensor>& w_gates,
+    const std::vector<ttnn::Tensor>& w_ups,
+    const std::vector<ttnn::Tensor>& w_downs,
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
-    uint32_t local_expert_id,
+    uint32_t experts_per_chip,
     uint32_t m_tiles,
     uint32_t grid_x,
     uint32_t grid_y,
@@ -355,7 +400,7 @@ ttnn::Tensor moe_fused_swiglu(
     using OperationType = operations::experimental::deepseek_prefill::moe_fused_swiglu::MoeFusedSwiGluDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            .local_expert_id = local_expert_id,
+            .experts_per_chip = experts_per_chip,
             .m_tiles = m_tiles,
             .grid_x = grid_x,
             .grid_y = grid_y,
@@ -366,9 +411,9 @@ ttnn::Tensor moe_fused_swiglu(
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{
             .activations = activations,
-            .w_gate = w_gate,
-            .w_up = w_up,
-            .w_down = w_down,
+            .w_gates = w_gates,
+            .w_ups = w_ups,
+            .w_downs = w_downs,
             .counts = counts,
             .global_expert_idx_table = global_expert_idx_table,
             .optional_output = optional_output,

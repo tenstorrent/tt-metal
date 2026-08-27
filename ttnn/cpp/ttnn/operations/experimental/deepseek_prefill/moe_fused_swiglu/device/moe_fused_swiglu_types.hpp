@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <tuple>
+#include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 
@@ -19,7 +20,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu {
 using unified_routed_expert_ffn::RoutedExpertActivation;
 
 struct OperationArguments {
-    uint32_t local_expert_id = 0;
+    uint32_t experts_per_chip = 1;
     uint32_t m_tiles = 0;
     uint32_t grid_x = 0;
     uint32_t grid_y = 0;
@@ -31,7 +32,7 @@ struct OperationArguments {
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "local_expert_id",
+        "experts_per_chip",
         "m_tiles",
         "grid_x",
         "grid_y",
@@ -43,7 +44,7 @@ struct OperationArguments {
 
     auto attribute_values() const {
         return std::forward_as_tuple(
-            local_expert_id,
+            experts_per_chip,
             m_tiles,
             grid_x,
             grid_y,
@@ -57,9 +58,12 @@ struct OperationArguments {
 
 struct TensorArguments {
     Tensor activations;
-    Tensor w_gate;
-    Tensor w_up;
-    Tensor w_down;
+    // One weight tensor per local expert. Expert 0 is the layout representative:
+    // the program is built once and the kernels reuse a single accessor layout
+    // descriptor per role, varying only the per-expert base address.
+    std::vector<Tensor> w_gates;
+    std::vector<Tensor> w_ups;
+    std::vector<Tensor> w_downs;
     Tensor counts;
     Tensor global_expert_idx_table;
     std::optional<Tensor> optional_output;

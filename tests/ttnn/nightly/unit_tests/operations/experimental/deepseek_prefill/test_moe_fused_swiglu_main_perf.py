@@ -56,7 +56,9 @@ REPS = int(os.environ.get("MOE_FUSED_SWIGLU_PERF_REPS", "9"))
 # Kimi K2.6 can route all 8 tokens from each of its 640 tokens on this chip to
 # one expert, so a 5K dispatch group requires a 5120-row expert region.
 GLOBAL_EXPERT_ID = 137
-LOCAL_EXPERT_ID = 3
+# The op loops every local expert it is handed. This sweep times ONE, so the lists hold one entry
+# and the idx table maps local 0 to the expert the counts vector actually fills.
+LOCAL_EXPERT_ID = 0
 
 
 class KimiK3SituConfig:
@@ -210,7 +212,6 @@ def test_5k_cpp_binding_perf_matrix(
                 ids,
                 output,
                 mailbox,
-                local_expert_id=LOCAL_EXPERT_ID,
                 input_m_tiles=CAPACITY // TILE,
                 compute_kernel_config=descriptor_config,
                 core_grid=core_grid,
@@ -228,10 +229,11 @@ def test_5k_cpp_binding_perf_matrix(
         def run_op(count):
             op(
                 x,
-                *weights,
+                [weights[0]],
+                [weights[1]],
+                [weights[2]],
                 count_tensors[count],
                 ids,
-                LOCAL_EXPERT_ID,
                 input_m_tiles=CAPACITY // TILE,
                 compute_kernel_config=config,
                 core_grid=core_grid,
