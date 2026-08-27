@@ -130,8 +130,7 @@
 #define ROUTING_PATH_SIZE_1D 1024  // 64 chips × 16 bytes
 // 2D uncompressed size is too large to fit in L1 memory
 #define COMPRESSED_ROUTING_PATH_SIZE_1D 0     // sizeof(intra_mesh_routing_path_t<1, true>)
-#define COMPRESSED_ROUTING_PATH_SIZE_2D \
-    1028  // 2D union slot: max(legacy compressed 1024, indexed_route_vectors_t 1028)
+#define COMPRESSED_ROUTING_PATH_SIZE_2D 1028  // 2D union slot: max(legacy compressed 1024, route_table_2d_t 1028)
 // Union: 1D and 2D routing tables share the same offset
 #define MEM_TENSIX_ROUTING_PATH_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
 #define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE  // 516

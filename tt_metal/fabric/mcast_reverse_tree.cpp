@@ -145,11 +145,11 @@ std::optional<McastReverseTree> build_mcast_reverse_tree(
 
 std::uint8_t mcast_action_bit(RoutingDirection direction) {
     switch (direction) {
-        case RoutingDirection::N: return IndexedMeshRoutingFields::ACTION_NORTH;
-        case RoutingDirection::S: return IndexedMeshRoutingFields::ACTION_SOUTH;
-        case RoutingDirection::E: return IndexedMeshRoutingFields::ACTION_EAST;
-        case RoutingDirection::W: return IndexedMeshRoutingFields::ACTION_WEST;
-        case RoutingDirection::Z: return IndexedMeshRoutingFields::ACTION_Z;
+        case RoutingDirection::N: return Routing2DCodec::ACTION_NORTH;
+        case RoutingDirection::S: return Routing2DCodec::ACTION_SOUTH;
+        case RoutingDirection::E: return Routing2DCodec::ACTION_EAST;
+        case RoutingDirection::W: return Routing2DCodec::ACTION_WEST;
+        case RoutingDirection::Z: return Routing2DCodec::ACTION_Z;
         default: return 0;
     }
 }
@@ -198,9 +198,9 @@ std::optional<std::vector<std::uint16_t>> pack_mcast_reverse_tree(const McastRev
         std::uint8_t output_code = 0;
         if (tree.axis_dim == 0) {
             switch (edge.parent_output) {
-                case RoutingDirection::N: output_code = IndexedMeshRoutingFields::Y2_NORTH; break;
-                case RoutingDirection::S: output_code = IndexedMeshRoutingFields::Y2_SOUTH; break;
-                case RoutingDirection::Z: output_code = IndexedMeshRoutingFields::Y2_Z; break;
+                case RoutingDirection::N: output_code = Routing2DCodec::Y2_NORTH; break;
+                case RoutingDirection::S: output_code = Routing2DCodec::Y2_SOUTH; break;
+                case RoutingDirection::Z: output_code = Routing2DCodec::Y2_Z; break;
                 default:
                     return fail(fmt::format(
                         "edge into row {} leaves its parent {}, which the Y axis cannot encode",
@@ -209,8 +209,8 @@ std::optional<std::vector<std::uint16_t>> pack_mcast_reverse_tree(const McastRev
             }
         } else {
             switch (edge.parent_output) {
-                case RoutingDirection::E: output_code = IndexedMeshRoutingFields::X2_EAST; break;
-                case RoutingDirection::W: output_code = IndexedMeshRoutingFields::X2_WEST; break;
+                case RoutingDirection::E: output_code = Routing2DCodec::X2_EAST; break;
+                case RoutingDirection::W: output_code = Routing2DCodec::X2_WEST; break;
                 default:
                     return fail(fmt::format(
                         "edge into row {} leaves its parent {}, which the X axis cannot encode -- X carries no express "
@@ -284,15 +284,16 @@ std::vector<RoutingDirection> mcast_root_output_directions(
     const auto x_size = static_cast<std::uint32_t>(x_topo.axis_len);
 
     // Runs the worker's encoder over a table laid out exactly as the device sees it.
-    std::vector<std::uint8_t> table(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES, 0);
-    if (!embed_mcast_reverse_trees(mesh_graph, mesh_id, y_topo, x_topo, root_y, root_x, table.data(), failure)) {
+    std::vector<std::uint8_t> route_table_2d(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
+    if (!embed_mcast_reverse_trees(
+            mesh_graph, mesh_id, y_topo, x_topo, root_y, root_x, route_table_2d.data(), failure)) {
         return {};
     }
 
     std::vector<std::uint8_t> maps(y_size + x_size, 0);
-    encode_indexed_mcast_maps(
+    encode_2d_mcast_maps(
         maps.data(),
-        table.data(),
+        route_table_2d.data(),
         y_size,
         x_size,
         static_cast<std::uint32_t>(root_y),
@@ -302,7 +303,7 @@ std::vector<RoutingDirection> mcast_root_output_directions(
         static_cast<std::uint32_t>(e_hops),
         static_cast<std::uint32_t>(w_hops));
 
-    const std::uint8_t root_action = maps[root_y] & IndexedMeshRoutingFields::ACTION_ETH_MASK;
+    const std::uint8_t root_action = maps[root_y] & Routing2DCodec::ACTION_ETH_MASK;
 
     // Inverted through mcast_action_bit rather than a second bit-to-direction table.
     std::vector<RoutingDirection> directions;
@@ -323,7 +324,7 @@ bool embed_one_axis(
     MeshId mesh_id,
     const AxisRouteTopology& topo,
     int root,
-    std::uint8_t* table,
+    std::uint8_t* route_table_2d,
     std::uint32_t offset,
     const char* axis_label,
     std::string* failure) {
@@ -352,7 +353,7 @@ bool embed_one_axis(
         return false;
     }
 
-    const auto expected = IndexedMeshRoutingFields::mcast_tree_edge_count(static_cast<std::uint32_t>(topo.axis_len));
+    const auto expected = Routing2DCodec::mcast_tree_edge_count(static_cast<std::uint32_t>(topo.axis_len));
     if (packed->size() != expected) {
         if (failure != nullptr) {
             *failure = fmt::format(
@@ -361,9 +362,9 @@ bool embed_one_axis(
         return false;
     }
 
-    std::uint8_t* region = table + offset;
+    std::uint8_t* region = route_table_2d + offset;
     for (std::uint32_t i = 0; i < expected; i++) {
-        IndexedMeshRoutingFields::set_mcast_tree_edge(region, i, (*packed)[i]);
+        Routing2DCodec::set_mcast_tree_edge(region, i, (*packed)[i]);
     }
     return true;
 }
@@ -377,21 +378,21 @@ bool embed_mcast_reverse_trees(
     const AxisRouteTopology& x_topo,
     int my_y,
     int my_x,
-    std::uint8_t* table,
+    std::uint8_t* route_table_2d,
     std::string* failure) {
     const auto y_size = static_cast<std::uint32_t>(y_topo.axis_len);
     const auto x_size = static_cast<std::uint32_t>(x_topo.axis_len);
 
-    if (!IndexedMeshRoutingFields::hybrid_region_fits(y_size, x_size)) {
+    if (!Routing2DCodec::hybrid_region_fits(y_size, x_size)) {
         if (failure != nullptr) {
             *failure = fmt::format(
-                "[{},{}] needs {} B of vectors plus {} B of reverse trees, over the {} B union slot; "
+                "[{},{}] needs {} B of 2D action maps plus {} B of reverse trees, over the {} B union slot; "
                 "routing_l1_info_t must grow first",
                 y_size,
                 x_size,
-                IndexedMeshRoutingFields::vectors_region_bytes(y_size, x_size),
-                IndexedMeshRoutingFields::mcast_tree_region_bytes(y_size, x_size),
-                IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES);
+                Routing2DCodec::vectors_region_bytes(y_size, x_size),
+                Routing2DCodec::mcast_tree_region_bytes(y_size, x_size),
+                Routing2DCodec::ROUTE_TABLE_BYTES);
         }
         return false;
     }
@@ -401,8 +402,8 @@ bool embed_mcast_reverse_trees(
                mesh_id,
                y_topo,
                my_y,
-               table,
-               IndexedMeshRoutingFields::mcast_tree_y_offset(y_size, x_size),
+               route_table_2d,
+               Routing2DCodec::mcast_tree_y_offset(y_size, x_size),
                "Y",
                failure) &&
            embed_one_axis(
@@ -410,8 +411,8 @@ bool embed_mcast_reverse_trees(
                mesh_id,
                x_topo,
                my_x,
-               table,
-               IndexedMeshRoutingFields::mcast_tree_x_offset(y_size, x_size),
+               route_table_2d,
+               Routing2DCodec::mcast_tree_x_offset(y_size, x_size),
                "X",
                failure);
 }

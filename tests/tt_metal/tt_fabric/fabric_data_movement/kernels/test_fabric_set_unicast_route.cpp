@@ -18,7 +18,7 @@ using namespace tt::tt_fabric;
 //
 // The 2D arm still references fabric_set_route and therefore does NOT compile. That is tracked as C1:
 // the two tests that consume it (Fabric2DFixture TestSetUnicastRoute / ...IdleEth) are DISABLED_
-// pending a reference re-based on the indexed action maps. Re-enabling them requires rewriting this
+// pending a reference re-based on the 2D action maps. Re-enabling them requires rewriting this
 // function first.
 #ifdef FABRIC_2D
 void fabric_set_unicast_route(
