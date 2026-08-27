@@ -1040,6 +1040,23 @@ def test_qwen3_32b_galaxy_decode_bisection_8x4_qwen3_32b_b32_s128(mesh_device: t
             _report_quantized_pcc(stages["after layer 0"], after_layer[0], "decode after layer 0 user 0")
             _report_quantized_pcc(stages["final norm"], normed_host[0], "decode final norm user 0")
             _report_quantized_pcc(stages["attention out"], attention_host[0], "decode attention out user 0")
+            # And the cross-comparison. The magnitudes line up one step apart -
+            # the device's final norm peaks near the reference's *residual* -
+            # so ask directly whether the two outputs of
+            # `RMSNorm2D.decode_forward` are being read in the wrong order here.
+            # If they are, the low readings are this test's defect and not the
+            # model's; the logits, which are computed from `normed`, already say
+            # the model is right.
+            _report_pcc(stages["final norm"], after_layer[0], "probe cross reference final norm vs device residual")
+            _report_pcc(stages["after layer 0"], normed_host[0], "probe cross reference after layer 0 vs device normed")
+            print(
+                f"[probe] composed shapes: residual {tuple(after_layer.shape)} normed {tuple(normed_host.shape)}; "
+                f"|ref| after-layer-0 {float(stages['after layer 0'].abs().max()):.4g} "
+                f"final-norm {float(stages['final norm'].abs().max()):.4g}; "
+                f"|dev| residual {float(after_layer[0].abs().max()):.4g} "
+                f"normed {float(normed_host[0].abs().max()):.4g}",
+                flush=True,
+            )
 
             logits = model.lm_head.decode_forward(_relocate(normed, model.config.lm_head_config.decode_input_memcfg))
             actual = _logits(logits, params.vocab_size, mesh_device)
