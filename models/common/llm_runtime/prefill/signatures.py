@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from models.common.llm_runtime.prefill.plan import PrefillRequest
@@ -178,10 +178,16 @@ def build_trace_signature(
 def capture_schema_fingerprint(prepared: PreparedPrefill) -> tuple[Any, ...]:
     """Describe the sampling-free hidden trace allocation."""
 
+    hidden_signature = replace(
+        prepared.trace_signature,
+        sampling_path="logits",
+        penalties_enabled=False,
+        logprobs_enabled=False,
+    )
     return (
         "prefill-hidden-v2",
-        prepared.trace_signature,
-        tuple(field for field, value in prepared.trace_signature.key_material() if value is not None),
+        hidden_signature,
+        tuple(field for field, value in hidden_signature.key_material() if value is not None),
     )
 
 
