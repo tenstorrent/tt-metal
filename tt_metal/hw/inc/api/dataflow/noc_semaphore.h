@@ -124,7 +124,15 @@ class Semaphore {
 public:
     // l1_offset_ holds the physical L1 offset of the semaphore word.
     explicit TT_SEM_INLINE Semaphore(uint32_t semaphore_id) :
-        l1_offset_(sem_l1_offset(semaphore_id)), scope_(sem_scope_of(semaphore_id)) {}
+        l1_offset_(sem_l1_offset(semaphore_id))
+#if defined(ARCH_QUASAR)
+        ,
+        scope_(sem_scope_of(semaphore_id))
+#endif
+    {
+        // Gen1 hardcodes scope_ above; trip if the host ever bakes anything else.
+        ASSERT(sem_scope_of(semaphore_id) == scope_);
+    }
 
     /**
      * @brief Increment the semaphore by the specified value.
@@ -439,7 +447,14 @@ public:
 
 private:
     uintptr_t l1_offset_;  // physical L1 offset of the semaphore word (cached-alias address)
-    SemScope scope_;       // host-chosen mechanism (from the codegen table)
+#if defined(ARCH_QUASAR)
+    SemScope scope_;  // host-chosen mechanism (from the codegen table)
+#else
+    // Gen1: ResolveSemaphoreScope is Gen2-gated and always resolves LOCAL_NONATOMIC, so the
+    // mechanism is a compile-time constant here. Keeping it out of the object leaves the class
+    // exactly the size and shape it has always been, so Gen1 codegen is untouched.
+    static constexpr SemScope scope_ = SemScope::LOCAL_NONATOMIC;
+#endif
 
     // Local access pointer for reads / non-atomic writes.
     TT_SEM_INLINE volatile tt_l1_ptr uint32_t* local_ptr() const {
