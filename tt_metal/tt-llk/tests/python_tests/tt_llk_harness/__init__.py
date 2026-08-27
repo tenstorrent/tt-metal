@@ -61,11 +61,13 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
     TILE_DIM,
-    get_golden_generator,
     golden_registry,
     register_golden,
     round_to_dest_width,
 )
+
+# NOTE: ``get_golden_generator`` is deliberately absent from that list. See the
+# ``__getattr__`` at the bottom of this module.
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
@@ -191,3 +193,30 @@ __all__ = [
     "goldens",
     "params",
 ]
+
+
+# --- Names the harness rebinds at runtime -------------------------------------
+#
+# ``TestConfig.setup_mode`` swaps ``helpers.golden_generators.get_golden_generator``
+# during ``pytest_configure``: a stand-in generator under ``--compile-producer``,
+# a caching proxy under ``--stimuli-only`` / ``--use-stimuli``. This package is
+# imported *earlier* than that — a consumer's rootdir ``conftest.py`` declares
+# ``pytest_plugins = ["tt_llk_harness.plugin"]``, which imports it — so binding
+# the name eagerly would freeze the pre-swap function.
+#
+# The damage from that is quiet: ``tt_llk_harness.goldens.get_golden_generator``
+# would see the swap while the flat ``__all__`` name would not, so two spellings
+# this module presents as equivalent would disagree. An out-of-tree suite would
+# compute real goldens under ``--compile-producer`` instead of the stand-in, and
+# ``--stimuli-only`` would fail inside the proxy.
+#
+# Resolving through ``__getattr__`` defers the lookup to attribute-access time,
+# which for a consumer's test module is collection time — after
+# ``pytest_configure``, same as for in-tree tests.
+_REBOUND_AT_RUNTIME = frozenset({"get_golden_generator"})
+
+
+def __getattr__(name: str):
+    if name in _REBOUND_AT_RUNTIME:
+        return getattr(goldens, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

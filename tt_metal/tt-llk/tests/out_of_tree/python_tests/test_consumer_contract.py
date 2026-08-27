@@ -154,6 +154,42 @@ def test_catalogue_aliases_import_both_ways():
     assert DataCopyGolden is tt_llk_harness.goldens.DataCopyGolden
 
 
+def test_names_the_harness_rebinds_are_resolved_at_call_time():
+    """The facade must not freeze a name the harness swaps during configure.
+
+    ``TestConfig.setup_mode`` replaces
+    ``helpers.golden_generators.get_golden_generator`` in ``pytest_configure``
+    — a stand-in under ``--compile-producer``, a caching proxy under
+    ``--stimuli-only``. The facade is imported before that, when the consumer's
+    conftest loads the plugin, so an eager ``from ... import`` would keep the
+    pre-swap function and the two spellings this module presents as equivalent
+    would silently disagree: ``goldens.get_golden_generator`` would follow the
+    swap, the flat name would not.
+
+    The visible damage is an out-of-tree suite computing real goldens under
+    ``--compile-producer`` instead of the stand-in.
+    """
+    import helpers.golden_generators as implementation
+    import tt_llk_harness
+
+    original = implementation.get_golden_generator
+
+    def stand_in(*args, **kwargs):  # what setup_mode installs
+        return "stand-in"
+
+    implementation.get_golden_generator = stand_in
+    try:
+        assert tt_llk_harness.get_golden_generator is stand_in, (
+            "the flat facade name is frozen to the pre-swap function; it must "
+            "resolve through __getattr__ at call time"
+        )
+        assert tt_llk_harness.goldens.get_golden_generator is stand_in
+    finally:
+        implementation.get_golden_generator = original
+
+    assert tt_llk_harness.get_golden_generator is original
+
+
 def test_every_exported_name_resolves():
     """``__all__`` is the contract; nothing in it may be a dangling re-export.
 
@@ -219,6 +255,7 @@ SANCTIONED_IMPLEMENTATION_IMPORTS = {
     "python_tests/test_consumer_contract.py": {
         "import helpers",
         "import helpers.golden_generators as goldens_mod",
+        "import helpers.golden_generators as implementation",
         "import helpers.llk_pytest_plugin as plugin",
     },
 }

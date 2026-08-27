@@ -1271,9 +1271,7 @@ class TestConfig:
         # and ``prepend=False`` yields the same token sequence while deciding
         # opposite precedence against the in-tree ``helpers/src``. Labels cannot
         # be confused with flags, which all start with ``-I``.
-        header_tokens = TestConfig._as_include_flags(self.include_dirs) + list(
-            TestConfig.INCLUDES
-        )
+        header_tokens = self._header_include_tokens()
         header_prepend = [
             flag
             for flag in TestConfig.EXTRA_INCLUDE_PREPEND
@@ -1310,11 +1308,23 @@ class TestConfig:
         """
         return self._compose_compile_options(list(TestConfig.INCLUDES))
 
-    def resolve_compile_options(self) -> tuple[str, str, str]:
-        include_tokens = TestConfig._as_include_flags(self.include_dirs) + list(
+    def _header_include_tokens(self) -> List[str]:
+        """Header ``-I`` tokens this variant compiles with, in search order.
+
+        Per-variant dirs first, then the process-wide ``INCLUDES``.
+
+        ``generate_variant_hash`` reads the same helper on purpose. The variant
+        id has to describe what actually reaches the compiler, so if these two
+        ever disagree the cache key stops matching the binary — which is silent,
+        because ``prepare`` does not rebuild in CONSUME mode. Keep them sharing
+        one definition rather than two copies of the expression.
+        """
+        return TestConfig._as_include_flags(self.include_dirs) + list(
             TestConfig.INCLUDES
         )
-        return self._compose_compile_options(include_tokens)
+
+    def resolve_compile_options(self) -> tuple[str, str, str]:
+        return self._compose_compile_options(self._header_include_tokens())
 
     def _compose_compile_options(self, include_tokens: list) -> tuple[str, str, str]:
         if (
