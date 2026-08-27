@@ -40,6 +40,7 @@
 namespace ttnn::prim {
 
 using namespace operations::wavelet;
+using wavelet_program_utils::add_generated_scheme_include_path;
 using wavelet_program_utils::checked_u32;
 using wavelet_program_utils::core_range_set;
 using wavelet_program_utils::CoreChunkWork;
@@ -573,6 +574,7 @@ void add_narrow_tile_circular_buffer(
         {"LWT_SCHEME_TYPE", compute_scheme_type},
         {"LWT_INLINE_TERMINAL_SCALE", "1"},
     };
+    add_generated_scheme_include_path(compute_descriptor);
     compute_descriptor.config = tt::tt_metal::ComputeConfigDescriptor{
         .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .fp32_dest_acc_en = true,
@@ -850,6 +852,7 @@ void add_narrow_tile_circular_buffer(
         {"ILWT_SCHEME_TYPE", compute_scheme_type},
         {"ILWT_INLINE_INVERSE_SCALE", "1"},
     };
+    add_generated_scheme_include_path(compute_descriptor);
     compute_descriptor.config = tt::tt_metal::ComputeConfigDescriptor{
         .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .fp32_dest_acc_en = true,
