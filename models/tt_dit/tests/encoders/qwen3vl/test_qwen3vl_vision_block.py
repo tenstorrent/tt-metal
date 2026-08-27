@@ -29,7 +29,6 @@ from .common import (
     SPATIAL_MERGE_SIZE,
     VISION_PARAMS,
     resolve_parallel,
-    skip_if_sp_misaligned,
     sp_shard,
     vision_config,
 )
@@ -74,7 +73,6 @@ def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     grid = torch.tensor(GRIDS[name], dtype=torch.long)
     total = sum(t * h * w for t, h, w in GRIDS[name])
-    skip_if_sp_misaligned(total, submesh, sp_axis)
 
     assert HEAD_DIM == 72 and HEAD_DIM % 32 != 0, "the whole padding question presumes a misaligned 72"
     assert math.ceil(HEAD_DIM / 32) * 32 == PADDED_HEAD_DIM
@@ -107,9 +105,9 @@ def test_block_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     tt_cos, tt_sin = vision_rope_tensors(grid, head_dim=HEAD_DIM, spatial_merge_size=SPATIAL_MERGE_SIZE)
     out = block.forward(
         sp_shard(x, submesh, sp_axis),
-        pos_embeds=(sp_shard(tt_cos, submesh, sp_axis), sp_shard(tt_sin, submesh, sp_axis)),
+        pos_embeds=(sp_shard(tt_cos, submesh, sp_axis, value=1.0), sp_shard(tt_sin, submesh, sp_axis)),
         cu_seqlens=cu_seqlens,
     )
-    actual = tensor.to_torch(out, mesh_axes=[sp_axis, None])
+    actual = tensor.to_torch(out, mesh_axes=[sp_axis, None])[:total]
 
     assert_quality(golden, actual, pcc=0.99)

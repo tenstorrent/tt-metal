@@ -73,7 +73,7 @@ import ttnn
 from ....encoders.qwen3vl.loader_minimax_h3 import MINIMAX_H3_TEXT_ENCODER_LAYER as TAP
 from ....encoders.qwen3vl.loader_minimax_h3 import build_minimax_h3_text_encoder
 from ....encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
-from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, vision_cu_seqlens
+from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, pad_vision_sp_rows, vision_cu_seqlens
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
@@ -544,7 +544,10 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
 @pytest.mark.timeout(10800)  # `check` computes the slow fp32 reference; `perf` skips it
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "tp_axis", "num_links"),
-    [pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1")],
+    [
+        pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1"),
+        pytest.param((4, 32), (4, 32), 0, 2, id="4x32"),
+    ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -576,8 +579,8 @@ def test_fused_conditioner_two_refs_real_weights(
     conditioner, mesh_device, submesh_shape, tp_axis, num_links, check_pcc
 ):
     """The `ref2va` conditioner with TWO reference images, on released weights, with the vision tower
-    run under **tp8_sp4 + windowed SDPA** -- the pipeline's configuration -- feeding the TP=8 causal
-    decoder.
+    run under windowed SDPA -- tp8_sp4 on (4, 8), tp32_sp4 on (4, 32) -- feeding the causal decoder
+    at the same TP.
 
     Where the fl2va sibling is a single image (one block, tower replicated), this exercises the parts
     only a multi-reference request reaches: the tower's **windowed multi-block SP attention** (two grid
@@ -585,17 +588,22 @@ def test_fused_conditioner_two_refs_real_weights(
     128x128 and 128x170 grids are the exact `two_refs` case validated in the block and tower tests
     (38,144 patches -> 4,096 + 5,440 = 9,536 merged image tokens).
 
-    On the (4, 8) mesh the tower assigns TP to the size-8 axis and SP to the size-4 axis (tp8_sp4),
-    matching `pipeline_minimax_h3`; the decoder takes TP=8 on the same size-8 axis. Golden route and
+    TP is the wide mesh axis (size 8 on Galaxy, size 32 on quad) and SP is the size-4 axis, matching
+    the existing `tp8_axis1` layout rather than the DiT preset (TP=4 on axis 0). Golden route and
     per-row gate are identical to the fl2va sibling -- see it for why the gate is per-row and why the
     massive-activation-row check is the part that currently fails.
     """
+    logger.info(f"test_fused_conditioner_two_refs_real_weights: tp_axis={tp_axis}, submesh_shape={submesh_shape}")
     path, reference = conditioner
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     shape = tuple(submesh.shape)
-    tp_factor = shape[tp_axis]  # 8 (axis 1)
-    tower_sp_axis = 1 - tp_axis  # 0
-    tower_sp_factor = shape[tower_sp_axis]  # 4
+    tp_factor = shape[tp_axis]
+    tower_sp_axis = 1 - tp_axis
+    tower_sp_factor = shape[tower_sp_axis]
+
+    logger.info(
+        f"test_fused_conditioner_two_refs_real_weights: tp_factor={tp_factor}, tower_sp_axis={tower_sp_axis}, tower_sp_factor={tower_sp_factor}"
+    )
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(path)
     processor = transformers.AutoImageProcessor.from_pretrained(path)
@@ -604,6 +612,8 @@ def test_fused_conditioner_two_refs_real_weights(
     assert grid.tolist() == [[1, 128, 128], [1, 128, 170]], f"unexpected two_refs grid: {grid.tolist()}"
     merge = reference.visual.config.spatial_merge_size**2
     per_image_tokens = [int(grid[i].prod()) // merge for i in range(grid.shape[0])]
+
+    logger.info(f"test_fused_conditioner_two_refs_real_weights: per_image_tokens={per_image_tokens}")
 
     # Presentation in encode_prompt order: one "<Picture i>: " label + vision block per reference, then
     # the prompt verbatim -- no chat template, no special tokens.
@@ -652,8 +662,8 @@ def test_fused_conditioner_two_refs_real_weights(
         reference.visual,
         submesh,
         parallel_config=EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),  # TP=8 on the size-8 axis
-            sequence_parallel=ParallelFactor(mesh_axis=tower_sp_axis, factor=tower_sp_factor),  # SP=4 on size-4
+            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
+            sequence_parallel=ParallelFactor(mesh_axis=tower_sp_axis, factor=tower_sp_factor),
         ),
         ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
     )
@@ -668,8 +678,8 @@ def test_fused_conditioner_two_refs_real_weights(
         # and re-shards internally, so the tower->decoder handoff is unchanged here; Phase 3 would drop
         # that gather via an all-to-all reshard on this shared axis.
         parallel_config=EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),  # TP=8 on the size-8 axis
-            sequence_parallel=ParallelFactor(factor=tower_sp_factor, mesh_axis=tower_sp_axis),  # SP=4 on size-4
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+            sequence_parallel=ParallelFactor(factor=tower_sp_factor, mesh_axis=tower_sp_axis),
         ),
         ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
         is_fsdp=False,
@@ -704,9 +714,10 @@ def test_fused_conditioner_two_refs_real_weights(
         t0 = time.time()
         # vision tower: host build + H2D
         vc, vs = tower.prepare_rope(grid)
-        tt_patches = bf16_tensor(pixel_values.float(), **sp)
-        tt_pos = bf16_tensor(tower.prepare_pos_embeds(grid), **sp)
-        tt_vcos, tt_vsin = bf16_tensor(vc, **sp), bf16_tensor(vs, **sp)
+        tt_patches = bf16_tensor(pad_vision_sp_rows(pixel_values.float(), tower_sp_factor), **sp)
+        tt_pos = bf16_tensor(pad_vision_sp_rows(tower.prepare_pos_embeds(grid), tower_sp_factor), **sp)
+        tt_vcos = bf16_tensor(pad_vision_sp_rows(vc, tower_sp_factor, value=1.0), **sp)
+        tt_vsin = bf16_tensor(pad_vision_sp_rows(vs, tower_sp_factor), **sp)
         ttnn.synchronize_device(submesh)
         t1 = time.time()
         # vision tower: forward (windowed multi-block SP attention)
