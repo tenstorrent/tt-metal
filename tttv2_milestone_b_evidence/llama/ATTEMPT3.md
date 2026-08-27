@@ -715,3 +715,15 @@ for 80 layers: the residual's PCC against fp32 is the *floor*, not the gate.
 
 Identical across three fresh processes to the last digit. See `REPORT.md`
 §A3.1 for why that particular property is the one worth reporting.
+| 35-37 | `logs3/a3_35..37_prefill2048_run*.log` | **prefill 2048, three fresh processes** | **1 passed** each, bit-identical: logits 0.9996201066107949, K 0.9999333561149281, V 0.9997581361217711 |
+
+## Result 35-37 — prefill 2048 completes step 2
+
+The 2048 case is a separate test rather than a parametrization because the recipe
+family is keyed by sequence length: it resolves a different attention program
+config, a different SDPA geometry and a different collective plan. All three
+resolved and all three are correct, three times, identically.
+
+**Step 2 is complete**: decode at batch 32, single-row prefill at 128 and at 2048,
+and the K and V cache contents after each - all at PCC >= 0.99 against an
+independent Hugging Face reference, three runs in fresh processes.

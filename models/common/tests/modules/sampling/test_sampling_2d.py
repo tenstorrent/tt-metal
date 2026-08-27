@@ -95,9 +95,30 @@ def test_config_rejects_unaligned_local_vocabulary(expect_error):
         _resolve_sampling2d_config(_config(vocab_size=151936, padded_vocab_size=151936, mesh_device=_galaxy_mesh()))
 
 
-def test_config_rejects_excess_padded_vocabulary(expect_error):
-    with expect_error(ValueError, "minimal Galaxy-aligned"):
-        _resolve_sampling2d_config(_config(vocab_size=151936, padded_vocab_size=152320, mesh_device=_galaxy_mesh()))
+def test_config_accepts_ring_exact_padding_and_rejects_more_than_one_shard(expect_error):
+    """Padding beyond the minimum is legal; padding beyond a shard per row is not.
+
+    This test used to require *exactly* the minimal Galaxy-aligned width, and that
+    rejected the only width the Galaxy decode chain can run. `all_reduce_async`'s
+    reduction kernel waits for a full shard on every output core, so the LM head's
+    reduced logits must be an exact multiple of `cores * shard_width`; Qwen3-32B's
+    minimal 152064 is not, and its ring-exact width is 153600. See D-B19.
+
+    So the bound moved rather than disappeared: at least the minimum, and less than
+    one extra vocabulary shard per mesh row.
+    """
+
+    # Qwen3-32B's ring-exact width, which the old rule rejected.
+    _resolve_sampling2d_config(_config(vocab_size=151936, padded_vocab_size=153600, mesh_device=_galaxy_mesh()))
+    # One tile past the minimum is legal too.
+    _resolve_sampling2d_config(_config(vocab_size=151936, padded_vocab_size=152320, mesh_device=_galaxy_mesh()))
+    # A whole extra shard per mesh row is a geometry mistake, not a padding choice.
+    with expect_error(ValueError, "more than one"):
+        _resolve_sampling2d_config(_config(vocab_size=151936, padded_vocab_size=154112, mesh_device=_galaxy_mesh()))
+    # No case is written for "below the minimum": any width that is a multiple of
+    # the vocabulary shards and at least `vocab_size` is at least the minimum by
+    # construction, and the smaller ones are already rejected by the divisibility
+    # and tile-alignment checks above.
 
 
 def test_mutable_device_state_uses_lazy_buffers_with_2d_mappers():

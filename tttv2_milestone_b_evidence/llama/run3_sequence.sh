@@ -12,7 +12,7 @@ D="$(cd "$(dirname "$0")" && pwd)"
 while read -r deadline pytimeout logname node; do
     case "${deadline:-}" in ''|\#*) continue ;; esac
     MB_DEADLINE="$deadline" MB_PYTEST_TIMEOUT="$pytimeout" \
-        bash "$D/run3.sh" "$logname" "$node" -o faulthandler_timeout=600
+        bash "$D/run3.sh" "$logname" "$node" -o faulthandler_timeout=${MB_FAULTHANDLER:-600}
     echo "--- $logname rc=$?"
 done < "$1"
 echo "=== sequence complete"

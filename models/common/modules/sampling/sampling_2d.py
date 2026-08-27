@@ -451,11 +451,27 @@ def _resolve_sampling2d_config(config: Sampling2DConfig) -> Sampling2DConfig:
     if local_vocab % ttnn.TILE_SIZE != 0:
         raise ValueError(f"local padded vocabulary width must be tile aligned, got {local_vocab}")
     required_multiple = vocab_shards * ttnn.TILE_SIZE
-    expected_padded_vocab_size = ((config.vocab_size + required_multiple - 1) // required_multiple) * required_multiple
-    if padded_vocab_size != expected_padded_vocab_size:
+    minimum_padded_vocab_size = ((config.vocab_size + required_multiple - 1) // required_multiple) * required_multiple
+    # A *multiple* of the vocabulary-shard tile, not the *minimal* one. This used
+    # to demand exactly the minimum, and that forbade the only width the Galaxy
+    # decode chain can run: `all_reduce_async`'s reduction kernel waits for a full
+    # shard on every output core, so the LM head's reduced logits must be an exact
+    # multiple of `cores * shard_width`, and Llama's minimal padding leaves 501
+    # tiles per device - a width no usable core count divides. See D-B19 and
+    # `galaxy_padded_vocab_size`, which pads to a ring-exact width.
+    #
+    # The check still fails closed on a nonsense width: padding may not add a whole
+    # extra vocabulary shard per mesh row. The masking that makes the padding
+    # harmless is `LMHead2D`'s -inf invalid-logits mask, upstream of here.
+    if padded_vocab_size < minimum_padded_vocab_size:
         raise ValueError(
-            f"padded_vocab_size must be the minimal Galaxy-aligned width {expected_padded_vocab_size}, "
+            f"padded_vocab_size must be at least the Galaxy-aligned width {minimum_padded_vocab_size}, "
             f"got {padded_vocab_size}"
+        )
+    if padded_vocab_size >= minimum_padded_vocab_size + required_multiple * vocab_shards:
+        raise ValueError(
+            f"padded_vocab_size {padded_vocab_size} pads vocab_size {config.vocab_size} by more than one "
+            f"vocabulary shard per mesh row; that is a geometry mistake, not a padding choice"
         )
 
     memory_config = config.sampling_memory_config or ttnn.DRAM_MEMORY_CONFIG
