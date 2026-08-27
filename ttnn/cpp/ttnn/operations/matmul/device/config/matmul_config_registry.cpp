@@ -1165,7 +1165,8 @@ void record_resolution(
     domain_stats.resolution_attempts.fetch_add(1, std::memory_order_relaxed);
     domain_stats.reasons[index(resolution.reason)].fetch_add(1, std::memory_order_relaxed);
     if (resolution.reason == ResolutionReason::CertifiedMatch &&
-        (resolution.recipe != nullptr || resolution.descriptor != nullptr)) {
+        (resolution.recipe != nullptr || resolution.descriptor != nullptr ||
+         (resolution.predicted_program_config.has_value() && resolution.predicted_key.has_value()))) {
         domain_stats.certified_hits.fetch_add(1, std::memory_order_relaxed);
     }
     switch (action) {

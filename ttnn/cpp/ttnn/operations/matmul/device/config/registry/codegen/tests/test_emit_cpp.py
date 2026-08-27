@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import subprocess
 from pathlib import Path
 
 CODEGEN_DIR = Path(__file__).resolve().parents[1]
@@ -422,6 +423,80 @@ def test_active_online_program_config_model_validates_emits_and_has_reference_pa
         raise AssertionError("fixed-point score envelope overflow must fail closed")
 
 
+def test_emitted_runtime_uses_gbdt_only_for_unseen_shapes(tmp_path: Path) -> None:
+    lock = fixture()
+    add_program_config_exact_entry(lock)
+    lock["online_program_config_models"] = [active_online_model(lock)]
+    lock["program_config_only_evidence"]["authorizes_exact_entries"] = True
+    lock["program_config_only_evidence"]["proof_sha256"] = emitter.program_config_only_evidence_hash(
+        lock["program_config_only_evidence"]
+    )
+    resign(lock)
+    checked = emitter.validate_lock(lock)
+    header, source = emitter.emit(checked)
+    generated_header = tmp_path / "matmul_registry_data.hpp"
+    generated_source = tmp_path / "matmul_registry_data.cpp"
+    generated_header.write_bytes(header)
+    generated_source.write_bytes(source)
+
+    test_source = tmp_path / "unseen_shape_contract.cpp"
+    test_source.write_text(
+        r"""#include <span>
+
+#include "matmul_registry_data.hpp"
+#include "ttnn/operations/matmul/device/config/registry/matmul_program_config_model.hpp"
+
+int main() {
+    namespace compact = ttnn::operations::matmul::registry::compact;
+    namespace generated = ttnn::operations::matmul::registry::generated;
+    const auto exact_entries = generated::program_config_exact_entries();
+    const auto models = generated::online_models();
+    if (exact_entries.size() != 1 || models.size() != 1) {
+        return 1;
+    }
+    const auto& model = models.front();
+    const auto binding = generated::metadata().online_model_bundle_binding_sha256;
+    const auto training_key = exact_entries.front().key;
+
+    const auto exact = compact::lookup_program_config(training_key, exact_entries, model, binding);
+    if (exact.source != compact::ProgramConfigLookupSource::Exact) {
+        return 2;
+    }
+    const auto missing_exact = compact::lookup_program_config(
+        training_key, std::span<const compact::ProgramConfigExactEntry>{}, model, binding);
+    if (missing_exact.source != compact::ProgramConfigLookupSource::None) {
+        return 3;
+    }
+
+    auto unseen_key = training_key;
+    --unseen_key.logical_m;
+    const auto unseen = compact::lookup_program_config(
+        unseen_key, std::span<const compact::ProgramConfigExactEntry>{}, model, binding);
+    return unseen.source == compact::ProgramConfigLookupSource::Gbdt ? 0 : 4;
+}
+""",
+        encoding="utf-8",
+    )
+    executable = tmp_path / "unseen_shape_contract"
+    repository_root = Path(__file__).resolve().parents[10]
+    subprocess.run(
+        [
+            "c++",
+            "-std=c++20",
+            f"-I{repository_root / 'ttnn' / 'cpp'}",
+            f"-I{tmp_path}",
+            str(generated_source),
+            str(test_source),
+            "-o",
+            str(executable),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run([str(executable)], check=True, capture_output=True, text=True)
+
+
 def test_absent_and_explicit_empty_online_models_emit_disabled_cpp() -> None:
     absent = fixture()
     explicit = fixture()
@@ -792,6 +867,14 @@ def test_unsupported_schema_is_rejected(expect_error) -> None:
     lock["lock_schema_version"] += 1
     resign(lock)
     with expect_error(emitter.LockValidationError, "schema version is unsupported"):
+        emitter.validate_lock(lock)
+
+
+def test_unsupported_promotion_policy_is_rejected(expect_error) -> None:
+    lock = fixture()
+    lock["policy_version"] = "unreviewed-promotion-policy"
+    resign(lock)
+    with expect_error(emitter.LockValidationError, "policy_version is unsupported"):
         emitter.validate_lock(lock)
 
 

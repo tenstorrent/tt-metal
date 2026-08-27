@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -311,6 +312,20 @@ constexpr bool model_shape_is_near_training_data(
     return false;
 }
 
+// Training landmarks are an exclusion set for online inference. Their measured
+// winners belong in the typed exact table; if an exact entry was not promoted,
+// the runtime must fall through rather than substitute a model prediction for
+// a known training shape.
+constexpr bool model_shape_is_training_landmark(
+    const KeyDescriptor& key, const ProgramConfigGbdtModel& model) noexcept {
+    const auto requested = TrainingShapeLandmark{
+        .logical_m = key.logical_m,
+        .logical_k = key.logical_k,
+        .logical_n = key.logical_n,
+    };
+    return std::binary_search(model.training_shapes.begin(), model.training_shapes.end(), requested);
+}
+
 constexpr bool model_supports(
     const KeyDescriptor& key,
     const ProgramConfigGbdtModel& model,
@@ -343,6 +358,7 @@ constexpr bool model_supports(
            key.logical_m >= support.minimum_m && key.logical_m <= support.maximum_m &&
            key.logical_k >= support.minimum_k && key.logical_k <= support.maximum_k &&
            key.logical_n >= support.minimum_n && key.logical_n <= support.maximum_n &&
+           !model_shape_is_training_landmark(key, model) &&
            model_shape_is_near_training_data(key, model);
 }
 
@@ -496,9 +512,9 @@ constexpr std::optional<std::int64_t> score_program_config_candidate(
 }
 
 // The runtime contract in one function: exact canonical key first, then GBDT
-// over emitted legal program configs, then an empty result so TTNN's existing
-// heuristic remains authoritative. Lower model scores are better; ties use the
-// stable candidate ID.
+// for a supported non-landmark shape over emitted legal program configs, then
+// an empty result so TTNN's existing heuristic remains authoritative. Lower
+// model scores are better; ties use the stable candidate ID.
 inline ProgramConfigLookupResult lookup_program_config(
     const KeyDescriptor& key,
     const std::span<const ProgramConfigExactEntry> exact_entries,

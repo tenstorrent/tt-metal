@@ -79,6 +79,11 @@ def test_build_facts_reject_duplicates(expect_error) -> None:
         attestation.parse_facts(["build_type=Release", "build_type=Debug"])
 
 
+def test_unity_mode_is_bound_into_production_build_identity() -> None:
+    matmul_cmake = Path(__file__).resolve().parents[5] / "CMakeLists.txt"
+    assert "tt_unity_builds=${TT_UNITY_BUILDS}" in matmul_cmake.read_text(encoding="utf-8")
+
+
 def test_device_attestation_binary_contract_is_frozen() -> None:
     facts = {
         "architecture": 1,

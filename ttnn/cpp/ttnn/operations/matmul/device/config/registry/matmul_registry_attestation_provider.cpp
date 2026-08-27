@@ -18,7 +18,9 @@ DeviceAttestationResult production_device_attestation(const tt::tt_metal::distri
         if (!device.is_initialized()) {
             return {.status = DeviceAttestationStatus::DeviceUninitialized};
         }
-        if (device.arch() != tt::ARCH::BLACKHOLE) {
+        auto& context = tt::tt_metal::MetalContext::instance(tt::tt_metal::extract_context_id(&device));
+        const auto& cluster = context.get_cluster();
+        if (cluster.arch() != tt::ARCH::BLACKHOLE) {
             return {.status = DeviceAttestationStatus::UnsupportedArchitecture};
         }
         if (device.num_devices() != 1 || device.num_rows() != 1 || device.num_cols() != 1) {
@@ -32,8 +34,6 @@ DeviceAttestationResult production_device_attestation(const tt::tt_metal::distri
             return {.status = DeviceAttestationStatus::NotOneChip};
         }
         const auto chip_id = static_cast<tt::ChipId>(device_ids.front());
-        auto& context = tt::tt_metal::MetalContext::instance(tt::tt_metal::extract_context_id(&device));
-        const auto& cluster = context.get_cluster();
 
         AttestationBoardClass board_class;
         switch (cluster.get_board_type(chip_id)) {
@@ -62,7 +62,7 @@ DeviceAttestationResult production_device_attestation(const tt::tt_metal::distri
         const auto physical_grid = device.grid_size();
         const auto logical_grid = device.logical_grid_size();
         const auto dram_grid = device.dram_grid_size();
-        return derive_device_attestation(DeviceAttestationFacts{
+        auto result = derive_device_attestation(DeviceAttestationFacts{
             .architecture = AttestationArchitecture::Blackhole,
             .board_class = board_class,
             .cluster_class = cluster_class,
@@ -95,6 +95,10 @@ DeviceAttestationResult production_device_attestation(const tt::tt_metal::distri
             .ethernet_firmware_major = ethernet_firmware.has_value() ? ethernet_firmware->major : 0,
             .ethernet_firmware_minor = ethernet_firmware.has_value() ? ethernet_firmware->minor : 0,
             .ethernet_firmware_patch = ethernet_firmware.has_value() ? ethernet_firmware->patch : 0});
+        if (result.status == DeviceAttestationStatus::Success) {
+            result.attestation.architecture = static_cast<std::uint32_t>(cluster.arch());
+        }
+        return result;
     } catch (...) {
         return {.status = DeviceAttestationStatus::QueryFailed};
     }

@@ -339,7 +339,7 @@ registry::RegistryRequestInspection registry::inspect_registry_request(
         .device =
             DeviceRequest{
                 .attestation_status = inspection.device_attestation.status,
-                .architecture = static_cast<std::uint32_t>(device_a->arch()),
+                .architecture = inspection.device_attestation.attestation.architecture,
                 .board_capability_class = inspection.device_attestation.attestation.board_capability_class,
                 .device_count = static_cast<std::uint32_t>(device_a->num_devices()),
                 .mesh_rows = static_cast<std::uint32_t>(device_a->num_rows()),

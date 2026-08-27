@@ -596,7 +596,8 @@ TEST(MatmulConfigRegistry, OnlineProgramConfigLookupUsesExactBeforeGbdt) {
 }
 
 TEST(MatmulConfigRegistry, OnlineGbdtScoresOnlyLegalProgramConfigsAndFallsBackOnNoCandidate) {
-    auto key = compact_entry().key;
+    const auto training_key = compact_entry().key;
+    auto key = training_key;
     key.logical_m -= 1;
 
     std::array candidates{
@@ -635,7 +636,9 @@ TEST(MatmulConfigRegistry, OnlineGbdtScoresOnlyLegalProgramConfigsAndFallsBackOn
     };
     const std::array trees{compact::GbdtTree{.node_offset = 0, .node_count = 3}};
     const std::array training_shapes{compact::TrainingShapeLandmark{
-        .logical_m = key.logical_m, .logical_k = key.logical_k, .logical_n = key.logical_n}};
+        .logical_m = training_key.logical_m,
+        .logical_k = training_key.logical_k,
+        .logical_n = training_key.logical_n}};
     const compact::ProgramConfigGbdtModel model{
         .schema_version = 1,
         .enabled = true,
@@ -667,6 +670,23 @@ TEST(MatmulConfigRegistry, OnlineGbdtScoresOnlyLegalProgramConfigsAndFallsBackOn
     EXPECT_EQ(selected.source, compact::ProgramConfigLookupSource::Gbdt);
     ASSERT_TRUE(selected.program_config.has_value());
     EXPECT_EQ(selected.program_config->compute_grid_x, 8);
+
+    const auto missing_exact = compact::lookup_program_config(
+        training_key, {}, model, compact_metadata().online_model_bundle_binding_sha256);
+    EXPECT_EQ(missing_exact.source, compact::ProgramConfigLookupSource::None);
+    EXPECT_FALSE(missing_exact.program_config.has_value());
+
+    const auto exact_descriptor = compact_entry();
+    const std::array exact_entries{compact::ProgramConfigExactEntry{
+        .entry_id = exact_descriptor.entry_id,
+        .key = training_key,
+        .program_config = compact::exact_program_config(exact_descriptor.replay),
+    }};
+    const auto exact = compact::lookup_program_config(
+        training_key, exact_entries, model, compact_metadata().online_model_bundle_binding_sha256);
+    EXPECT_EQ(exact.source, compact::ProgramConfigLookupSource::Exact);
+    ASSERT_TRUE(exact.program_config.has_value());
+    EXPECT_EQ(*exact.program_config, exact_entries[0].program_config);
 
     auto insufficient_margin = model;
     insufficient_margin.minimum_score_margin = 21;
@@ -703,7 +723,7 @@ TEST(MatmulConfigRegistry, OnlineModelRejectsDuplicateProgramConfigsFromHiddenKn
     };
     const std::array trees{compact::GbdtTree{.node_offset = 0, .node_count = 1}};
     const std::array training_shapes{compact::TrainingShapeLandmark{
-        .logical_m = key.logical_m, .logical_k = key.logical_k, .logical_n = key.logical_n}};
+        .logical_m = key.logical_m + 1, .logical_k = key.logical_k, .logical_n = key.logical_n}};
     const compact::ProgramConfigGbdtModel model{
         .schema_version = 1,
         .enabled = true,
@@ -780,6 +800,11 @@ TEST(MatmulConfigRegistry, OnlineModelSupportRejectsNoncanonicalAndOverflowingPa
         .maximum_normalized_shape_distance_ppm = 250'000,
         .training_shapes = training_shapes,
     };
+    EXPECT_TRUE(compact::model_shape_is_training_landmark(key, model));
+    EXPECT_FALSE(compact::model_supports(key, model, compact_metadata().online_model_bundle_binding_sha256));
+
+    --key.logical_m;
+    EXPECT_FALSE(compact::model_shape_is_training_landmark(key, model));
     EXPECT_TRUE(compact::model_supports(key, model, compact_metadata().online_model_bundle_binding_sha256));
 
     key.padded_n += key.input_b.tile_width;
@@ -961,7 +986,7 @@ TEST(MatmulConfigRegistry, ResolverRunsExactThenGbdtAndAbstainsOutsideModelConte
     };
     const std::array trees{compact::GbdtTree{.node_offset = 0, .node_count = 3}};
     const std::array training_shapes{compact::TrainingShapeLandmark{
-        .logical_m = key->logical_m, .logical_k = key->logical_k, .logical_n = key->logical_n}};
+        .logical_m = key->logical_m + 1, .logical_k = key->logical_k, .logical_n = key->logical_n}};
     auto model = compact::ProgramConfigGbdtModel{
         .schema_version = 1,
         .enabled = true,
@@ -1120,7 +1145,7 @@ TEST(MatmulConfigRegistry, LegacyExplicitCkcExactEvidenceCannotActivateProgramCo
     };
     const std::array trees{compact::GbdtTree{.node_offset = 0, .node_count = 1}};
     const std::array training_shapes{compact::TrainingShapeLandmark{
-        .logical_m = entries[0].key.logical_m,
+        .logical_m = entries[0].key.logical_m + 1,
         .logical_k = entries[0].key.logical_k,
         .logical_n = entries[0].key.logical_n}};
     const compact::ProgramConfigGbdtModel model{
@@ -2374,6 +2399,37 @@ TEST(MatmulConfigRegistry, TelemetryIsBoundedAndResettable) {
     snapshot = stats_snapshot();
     EXPECT_EQ(snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)].resolution_attempts, 0);
     EXPECT_TRUE(std::ranges::all_of(snapshot.distributed_observations, [](const auto count) { return count == 0; }));
+}
+
+TEST(MatmulConfigRegistry, TypedExactHitRecordsCertifiedTelemetry) {
+    reset_stats_for_testing();
+    const auto request = exact_request();
+    const auto descriptor = compact_entry();
+    const std::array exact_entries{compact::ProgramConfigExactEntry{
+        .entry_id = descriptor.entry_id,
+        .key = descriptor.key,
+        .program_config = compact::exact_program_config(descriptor.replay),
+    }};
+    const auto selected = resolve_with_compact_table_for_testing(
+        Mode::On,
+        request,
+        Eligibility{.call = request.call},
+        compact_metadata(),
+        {},
+        compatible_digests(),
+        {},
+        exact_entries);
+    ASSERT_EQ(selected.reason, ResolutionReason::CertifiedMatch);
+    ASSERT_TRUE(selected.predicted_program_config.has_value());
+    ASSERT_TRUE(selected.predicted_key.has_value());
+    record_resolution(Mode::On, request.call.domain, selected, ExecutionAction::ApplyRecipe);
+
+    const auto snapshot = stats_snapshot();
+    const auto& dense = snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)];
+    EXPECT_EQ(dense.resolution_attempts, 1);
+    EXPECT_EQ(dense.certified_hits, 1);
+    EXPECT_EQ(dense.selected_hits, 1);
+    reset_stats_for_testing();
 }
 
 TEST(MatmulConfigRegistry, SelectedPublicExecutionErrorCircuitBreaksWithoutCompletionOrRetry) {

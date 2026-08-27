@@ -84,6 +84,7 @@ struct DeviceAttestationFacts {
 };
 
 struct DeviceAttestation {
+    std::uint32_t architecture = 0;
     std::uint32_t board_capability_class = 0;
     compact::Sha256 topology_sha256{};
     compact::Sha256 runtime_capability_sha256{};

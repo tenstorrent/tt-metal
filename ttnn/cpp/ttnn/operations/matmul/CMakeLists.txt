@@ -61,6 +61,7 @@ foreach(
         enable_tracy=${ENABLE_TRACY}
         tt_enable_light_metal_trace=${TT_ENABLE_LIGHT_METAL_TRACE}
         tt_enable_lto=${TT_ENABLE_LTO}
+        tt_unity_builds=${TT_UNITY_BUILDS}
         tt_metal_skip_linking=${TT_METAL_SKIP_LINKING}
         tt_metal_use_emule=${TT_METAL_USE_EMULE}
         tt_umd_build_simulation=${TT_UMD_BUILD_SIMULATION}

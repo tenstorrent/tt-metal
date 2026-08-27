@@ -21,6 +21,7 @@ from typing import Any
 
 ARTIFACT_KIND = "ttnn_matmul_registry_lock"
 GENERATOR_VERSION = "ttnn-matmul-lock-emitter-v1"
+POLICY_VERSION = "matmul-promotion-v2"
 LOCK_SCHEMA_VERSION = 1
 KEY_SCHEMA_VERSION = 1
 REPLAY_SCHEMA_VERSION = 2
@@ -1140,7 +1141,8 @@ def validate_lock(value: Any) -> dict[str, Any]:
         or lock["replay_schema_version"] != REPLAY_SCHEMA_VERSION
     ):
         raise LockValidationError("lock schema version is unsupported")
-    _string(lock["policy_version"], "$.policy_version")
+    if _string(lock["policy_version"], "$.policy_version") != POLICY_VERSION:
+        raise LockValidationError("$.policy_version is unsupported")
     for name in ("semantic_source_sha256", "build_identity_sha256", "runtime_capability_sha256", "content_sha256"):
         _hex(lock[name], 64, f"$.{name}")
     if lock["content_sha256"] != content_sha256(lock):
