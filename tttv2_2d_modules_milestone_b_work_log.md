@@ -985,3 +985,39 @@ Evidence: `tttv2_milestone_b_evidence/llama/REPORT.md` §"Attempt 3", run-by-run
 - **Paged decode works on this partition**, which closes the step-3/step-7
   dependency attempt 2 recorded: `from_pretrained` has no contiguous option, so
   every 80-layer path is paged whether step 3 wants it or not.
+
+## 2026-08-27 — `mb-qwen`, attempt 2 (device)
+
+Mesh healthy, 32/32 in `/sys/class/tenstorrent`; `test_partition_wh_galaxy.py`
+5 passed in 12.93 s. `HF_HOME` inherited from the shell pointed one directory too
+deep (`.../hf_data/hub`, a cache holding only Mistral), under which every Qwen
+test *skips*; every harness script here exports `/localdev/ctr-apbernal/hf_data`.
+
+Ported Llama's six model-code fixes into the Qwen package (prefetch registration,
+fused-QK rotary default, decode LM head on the ring, `_relocate`'s one-hop
+interleaved target, the checkpoint loader seam, demo output printing), then found
+and fixed two defects that are Qwen-only because Llama has no per-head Q/K norm
+and a differently sized vocabulary:
+
+* **D-B26** — the head-local Q/K decode norm was unplaceable. Interleaved
+  `ttnn.rms_norm` spreads over the whole compute grid (`Kernel group cores do not
+  match sub device cores`); the created heads are HEIGHT_SHARDED, which the op
+  rejects; and naming any single sharded placement relocates Q and K onto the
+  same cores, which the fused QK rotary rejects (`Q and K must not overlap`).
+  Resolved by naming only the *cores* the kernel may use and returning each
+  tensor to the placement it arrived in. Milestone A's D2, other half.
+* **D-B27** — `lm_head_reduce_core_count` gave Qwen all 50 worker cores, leaving
+  `all_reduce_async` none for its fabric links; it warns and then
+  segmentation-faults. Now reserves four. Llama still resolves 42, Qwen 40.
+
+Step-5 gate met, three fresh processes, bit-identical:
+
+```text
+prefill 128 logits                       0.999303669584255
+prefill 128 cache K / V (users 0,8,16,24) 0.9998897994661545 / 0.9998944730661905
+decode position 128 logits (u0,8,16,24)  0.999360219056066
+decode 128 cache K / V  (users 0,8,16,24) 0.9998896420783983 / 0.9998939662639094
+per-head Q/K norm, all 32 devices        prefill 0.99998 / decode 0.99999
+```
+
+Full account: `tttv2_milestone_b_evidence/qwen/REPORT.md`.
