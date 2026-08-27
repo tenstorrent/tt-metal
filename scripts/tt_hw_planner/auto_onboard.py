@@ -28,6 +28,8 @@ downstream `up --auto` pipeline uses module-tree decomposition for it
 
 from __future__ import annotations
 
+import os
+
 import ast
 import json
 import re
@@ -271,9 +273,20 @@ def _validate_proposal(
             "use_module_tree must be true (this is what lets the backend "
             "work without a hand-written sibling template demo)"
         )
-    mtks = obj.get("model_type_keys") or []
+    cid = obj.get("canonical_hf_id")
+    if isinstance(cid, str) and cid and (os.path.isabs(cid) or os.path.exists(cid)):
+        # A machine-local path is not a model identity: persisted into the registry
+        # it names a directory that exists on one machine and nowhere else. Targets
+        # addressed by path (a local model dir, or a component of a composite) hit
+        # this, so drop it rather than baking the path into tracked source.
+        obj["canonical_hf_id"] = None
+    mtks = [k for k in (obj.get("model_type_keys") or []) if str(k).strip()]
+    obj["model_type_keys"] = mtks
     if not isinstance(mtks, list) or not mtks:
-        errors.append("model_type_keys must be a non-empty list")
+        errors.append(
+            "model_type_keys must be a non-empty list of real keys (a blank key would "
+            "match every model whose config has no model_type)"
+        )
     elif new_model_type and new_model_type.lower() not in [str(k).lower() for k in mtks]:
         errors.append(f"model_type_keys must include {new_model_type!r}; got {mtks}")
     name = obj.get("name")
